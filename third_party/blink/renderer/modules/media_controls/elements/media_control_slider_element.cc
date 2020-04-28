@@ -69,7 +69,7 @@ class MediaControlSliderElement::MediaControlSliderElementResizeObserverDelegate
     element_->NotifyElementSizeChanged();
   }
 
-  void Trace(blink::Visitor* visitor) override {
+  void Trace(Visitor* visitor) override {
     visitor->Trace(element_);
     ResizeObserver::Delegate::Trace(visitor);
   }
@@ -86,12 +86,12 @@ MediaControlSliderElement::MediaControlSliderElement(
       segment_highlight_before_(nullptr),
       segment_highlight_after_(nullptr),
       resize_observer_(ResizeObserver::Create(
-          GetDocument(),
+          GetDocument().domWindow(),
           MakeGarbageCollected<MediaControlSliderElementResizeObserverDelegate>(
               this))) {
   setType(input_type_names::kRange);
   setAttribute(html_names::kStepAttr, "any");
-  resize_observer_->observe(this);
+  OnControlsShown();
 }
 
 Element& MediaControlSliderElement::GetTrackElement() {
@@ -146,9 +146,7 @@ void MediaControlSliderElement::SetAfterSegmentPosition(
 }
 
 int MediaControlSliderElement::TrackWidth() {
-  LayoutBoxModelObject* box = MediaControlsImpl::IsModern()
-                                  ? GetTrackElement().GetLayoutBoxModelObject()
-                                  : GetLayoutBoxModelObject();
+  LayoutBoxModelObject* box = GetTrackElement().GetLayoutBoxModelObject();
   return box ? box->OffsetWidth().Round() : 0;
 }
 
@@ -165,11 +163,19 @@ void MediaControlSliderElement::NotifyElementSizeChanged() {
                         TrackWidth(), ZoomFactor());
 }
 
-void MediaControlSliderElement::Trace(blink::Visitor* visitor) {
+void MediaControlSliderElement::Trace(Visitor* visitor) {
   visitor->Trace(segment_highlight_before_);
   visitor->Trace(segment_highlight_after_);
   visitor->Trace(resize_observer_);
   MediaControlInputElement::Trace(visitor);
+}
+
+void MediaControlSliderElement::OnControlsShown() {
+  resize_observer_->observe(this);
+}
+
+void MediaControlSliderElement::OnControlsHidden() {
+  resize_observer_->disconnect();
 }
 
 }  // namespace blink

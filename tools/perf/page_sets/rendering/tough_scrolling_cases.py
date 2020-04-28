@@ -43,6 +43,7 @@ class ScrollingText10000Page(ToughFastScrollingPage):
   BASE_NAME = 'text_10000_pixels_per_second'
   URL = 'file://../tough_scrolling_cases/text.html'
   SPEED_IN_PIXELS_PER_SECOND = 10000
+  TAGS = ToughFastScrollingPage.TAGS + [story_tags.REPRESENTATIVE_MOBILE]
 
 
 class ScrollingText20000Page(ToughFastScrollingPage):
@@ -170,6 +171,10 @@ class ScrollingCanvas5000Page(ToughFastScrollingPage):
   BASE_NAME = 'canvas_05000_pixels_per_second'
   URL = 'file://../tough_scrolling_cases/canvas.html'
   SPEED_IN_PIXELS_PER_SECOND = 5000
+  TAGS = ToughFastScrollingPage.TAGS + [
+    story_tags.REPRESENTATIVE_MOBILE,
+    story_tags.REPRESENTATIVE_MAC_DESKTOP
+  ]
 
 
 class ScrollingCanvas10000Page(ToughFastScrollingPage):
@@ -206,4 +211,3 @@ class ScrollingCanvas90000Page(ToughFastScrollingPage):
   BASE_NAME = 'canvas_90000_pixels_per_second'
   URL = 'file://../tough_scrolling_cases/canvas.html'
   SPEED_IN_PIXELS_PER_SECOND = 90000
-  TAGS = ToughFastScrollingPage.TAGS + [story_tags.REPRESENTATIVE_WIN_DESKTOP]

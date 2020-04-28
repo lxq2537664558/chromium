@@ -13,9 +13,9 @@
 #include "base/containers/circular_deque.h"
 #include "base/location.h"
 #include "base/memory/ptr_util.h"
-#include "base/message_loop/message_loop.h"
 #include "base/run_loop.h"
 #include "base/single_thread_task_runner.h"
+#include "base/test/task_environment.h"
 #include "base/threading/thread_task_runner_handle.h"
 #include "jingle/glue/thread_wrapper.h"
 #include "net/base/io_buffer.h"
@@ -94,7 +94,7 @@ class FakeSocket : public P2PDatagramSocket {
       memcpy(read_buffer_->data(), &data[0], data.size());
       net::CompletionRepeatingCallback cb = read_callback_;
       read_callback_.Reset();
-      read_buffer_ = NULL;
+      read_buffer_.reset();
       cb.Run(size);
     } else {
       incoming_packets_.push_back(data);
@@ -253,9 +253,8 @@ class TCPChannelTester : public base::RefCountedThreadSafe<TCPChannelTester> {
       input_buffer_->set_offset(input_buffer_->capacity() - kMessageSize);
 
       result = host_socket_->Read(
-          input_buffer_.get(),
-          kMessageSize,
-          base::Bind(&TCPChannelTester::OnRead, base::Unretained(this)));
+          input_buffer_.get(), kMessageSize,
+          base::BindOnce(&TCPChannelTester::OnRead, base::Unretained(this)));
       HandleReadResult(result);
     };
   }
@@ -316,7 +315,7 @@ class PseudoTcpAdapterTest : public testing::Test {
 
   std::unique_ptr<PseudoTcpAdapter> host_pseudotcp_;
   std::unique_ptr<PseudoTcpAdapter> client_pseudotcp_;
-  base::MessageLoop message_loop_;
+  base::test::SingleThreadTaskEnvironment task_environment_;
 };
 
 TEST_F(PseudoTcpAdapterTest, DataTransfer) {

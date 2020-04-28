@@ -33,6 +33,7 @@ class COMPONENT_EXPORT(UI_BASE_IME_WIN) InputMethodWinTSF
   void OnCaretBoundsChanged(const TextInputClient* client) override;
   void CancelComposition(const TextInputClient* client) override;
   void DetachTextInputClient(TextInputClient* client) override;
+  bool IsInputLocaleCJK() const override;
   bool IsCandidatePopupOpen() const override;
 
   // Overridden from InputMethodBase:
@@ -40,12 +41,12 @@ class COMPONENT_EXPORT(UI_BASE_IME_WIN) InputMethodWinTSF
                                  TextInputClient* focused) override;
   void OnDidChangeFocusedClient(TextInputClient* focused_before,
                                 TextInputClient* focused) override;
+  void ConfirmCompositionText(bool reset_engine, bool keep_selection) override;
+
+  void ShowVirtualKeyboardIfEnabled() override;
 
  private:
   class TSFEventObserver;
-
-  // Asks the client to confirm current composition text.
-  void ConfirmCompositionText();
 
   // TSF event router and observer.
   std::unique_ptr<TSFEventObserver> tsf_event_observer_;

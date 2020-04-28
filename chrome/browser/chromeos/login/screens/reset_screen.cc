@@ -4,18 +4,26 @@
 
 #include "chrome/browser/chromeos/login/screens/reset_screen.h"
 
+#include "ash/public/cpp/login_screen.h"
+#include "ash/public/cpp/scoped_guest_button_blocker.h"
 #include "base/bind.h"
 #include "base/command_line.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/task/post_task.h"
 #include "base/values.h"
+#include "build/branding_buildflags.h"
 #include "chrome/browser/browser_process.h"
+#include "chrome/browser/browser_process_platform_part.h"
+#include "chrome/browser/browser_process_platform_part_chromeos.h"
+#include "chrome/browser/chromeos/login/enrollment/auto_enrollment_controller.h"
 #include "chrome/browser/chromeos/login/screens/error_screen.h"
 #include "chrome/browser/chromeos/login/screens/network_error.h"
-#include "chrome/browser/chromeos/login/screens/reset_view.h"
 #include "chrome/browser/chromeos/login/ui/login_display_host.h"
+#include "chrome/browser/chromeos/policy/browser_policy_connector_chromeos.h"
 #include "chrome/browser/chromeos/reset/metrics.h"
+#include "chrome/browser/chromeos/settings/cros_settings.h"
 #include "chrome/browser/chromeos/tpm_firmware_update.h"
+#include "chrome/browser/ui/webui/chromeos/login/reset_screen_handler.h"
 #include "chrome/common/pref_names.h"
 #include "chromeos/constants/chromeos_switches.h"
 #include "chromeos/dbus/dbus_thread_manager.h"
@@ -79,6 +87,23 @@ void StartTPMFirmwareUpdate(
   SessionManagerClient::Get()->StartTPMFirmwareUpdate(mode_string);
 }
 
+// Checks if powerwash is allowed based on update modes and passes the result
+// to |callback|.
+void OnUpdateModesAvailable(
+    base::OnceCallback<void(bool, base::Optional<tpm_firmware_update::Mode>)>
+        callback,
+    const std::set<tpm_firmware_update::Mode>& modes) {
+  using tpm_firmware_update::Mode;
+  for (Mode mode : {Mode::kPowerwash, Mode::kCleanup}) {
+    if (modes.count(mode) == 0)
+      continue;
+
+    std::move(callback).Run(true, mode);
+    return;
+  }
+  std::move(callback).Run(false, base::nullopt);
+}
+
 }  // namespace
 
 // static
@@ -87,10 +112,46 @@ void ResetScreen::SetTpmFirmwareUpdateCheckerForTesting(
   g_tpm_firmware_update_checker = checker;
 }
 
+// static
+void ResetScreen::CheckIfPowerwashAllowed(
+    base::OnceCallback<void(bool, base::Optional<tpm_firmware_update::Mode>)>
+        callback) {
+  if (g_browser_process->platform_part()
+          ->browser_policy_connector_chromeos()
+          ->IsEnterpriseManaged()) {
+    // Powerwash is allowed by default, if the policy is loaded. Admin can
+    // explicitly forbid powerwash. If the policy is not loaded yet, we
+    // consider by default that the device is not allowed to powerwash.
+    bool is_powerwash_allowed = false;
+    CrosSettings::Get()->GetBoolean(kDevicePowerwashAllowed,
+                                    &is_powerwash_allowed);
+    if (is_powerwash_allowed) {
+      std::move(callback).Run(true, base::nullopt);
+      return;
+    }
+
+    // Check if powerwash is only allowed by the admin specifically for the
+    // purpose of installing a TPM firmware update.
+    tpm_firmware_update::GetAvailableUpdateModes(
+        base::BindOnce(&OnUpdateModesAvailable, base::Passed(&callback)),
+        base::TimeDelta());
+    return;
+  }
+
+  // Devices that are still in OOBE may be subject to forced re-enrollment (FRE)
+  // and thus pending for enterprise management. These should not be allowed to
+  // powerwash either. Note that taking consumer device ownership has the side
+  // effect of dropping the FRE requirement if it was previously in effect.
+  std::move(callback).Run(
+      AutoEnrollmentController::GetFRERequirement() !=
+          AutoEnrollmentController::FRERequirement::kExplicitlyRequired,
+      base::nullopt);
+}
+
 ResetScreen::ResetScreen(ResetView* view,
                          ErrorScreen* error_screen,
                          const base::RepeatingClosure& exit_callback)
-    : BaseScreen(OobeScreen::SCREEN_OOBE_RESET),
+    : BaseScreen(ResetView::kScreenId, OobeScreenPriority::SCREEN_RESET),
       view_(view),
       error_screen_(error_screen),
       exit_callback_(exit_callback),
@@ -98,23 +159,18 @@ ResetScreen::ResetScreen(ResetView* view,
           g_tpm_firmware_update_checker
               ? *g_tpm_firmware_update_checker
               : base::BindRepeating(
-                    &tpm_firmware_update::GetAvailableUpdateModes)),
-      weak_ptr_factory_(this) {
+                    &tpm_firmware_update::GetAvailableUpdateModes)) {
   DCHECK(view_);
   if (view_) {
     view_->Bind(this);
     view_->SetScreenState(ResetView::State::kRestartRequired);
     view_->SetIsRollbackAvailable(false);
-    view_->SetIsRollbackChecked(false);
+    view_->SetIsRollbackRequested(false);
     view_->SetIsTpmFirmwareUpdateAvailable(false);
     view_->SetIsTpmFirmwareUpdateChecked(false);
     view_->SetIsTpmFirmwareUpdateEditable(true);
     view_->SetTpmFirmwareUpdateMode(tpm_firmware_update::Mode::kPowerwash);
-    view_->SetIsConfirmational(false);
-    view_->SetIsOfficialBuild(false);
-#if defined(OFFICIAL_BUILD)
-    view_->SetIsOfficialBuild(true);
-#endif
+    view_->SetShouldShowConfirmationDialog(false);
   }
 }
 
@@ -132,9 +188,16 @@ void ResetScreen::RegisterPrefs(PrefRegistrySimple* registry) {
       static_cast<int>(tpm_firmware_update::Mode::kNone));
 }
 
-void ResetScreen::Show() {
+void ResetScreen::ShowImpl() {
   if (view_)
     view_->Show();
+
+  // Guest sugn-in button should be disabled as sign-in is not possible while
+  // reset screen is shown.
+  if (!scoped_guest_button_blocker_) {
+    scoped_guest_button_blocker_ =
+        ash::LoginScreen::Get()->GetScopedGuestButtonBlocker();
+  }
 
   reset::DialogViewType dialog_type =
       reset::DIALOG_VIEW_TYPE_SIZE;  // used by UMA metrics.
@@ -160,8 +223,8 @@ void ResetScreen::Show() {
   } else {
     chromeos::DBusThreadManager::Get()
         ->GetUpdateEngineClient()
-        ->CanRollbackCheck(base::Bind(&ResetScreen::OnRollbackCheck,
-                                      weak_ptr_factory_.GetWeakPtr()));
+        ->CanRollbackCheck(base::BindOnce(&ResetScreen::OnRollbackCheck,
+                                          weak_ptr_factory_.GetWeakPtr()));
   }
 
   if (dialog_type < reset::DIALOG_VIEW_TYPE_SIZE) {
@@ -206,9 +269,11 @@ void ResetScreen::Show() {
   prefs->CommitPendingWrite();
 }
 
-void ResetScreen::Hide() {
+void ResetScreen::HideImpl() {
   if (view_)
     view_->Hide();
+
+  scoped_guest_button_blocker_.reset();
 }
 
 void ResetScreen::OnViewDestroyed(ResetView* view) {
@@ -242,8 +307,10 @@ void ResetScreen::OnCancel() {
     return;
   }
   // Hide Rollback view for the next show.
-  if (view_ && view_->GetIsRollbackAvailable() && view_->GetIsRollbackChecked())
+  if (view_ && view_->GetIsRollbackAvailable() &&
+      view_->GetIsRollbackRequested()) {
     OnToggleRollback();
+  }
   DBusThreadManager::Get()->GetUpdateEngineClient()->RemoveObserver(this);
   exit_callback_.Run();
 }
@@ -255,16 +322,16 @@ void ResetScreen::OnPowerwash() {
   }
 
   if (view_)
-    view_->SetIsConfirmational(false);
+    view_->SetShouldShowConfirmationDialog(false);
 
-  if (view_ && view_->GetIsRollbackChecked() &&
+  if (view_ && view_->GetIsRollbackRequested() &&
       !view_->GetIsRollbackAvailable()) {
     NOTREACHED()
         << "Rollback was checked but not available. Starting powerwash.";
   }
 
   if (view_ && view_->GetIsRollbackAvailable() &&
-      view_->GetIsRollbackChecked()) {
+      view_->GetIsRollbackRequested()) {
     view_->SetScreenState(ResetView::State::kRevertPromise);
     DBusThreadManager::Get()->GetUpdateEngineClient()->AddObserver(this);
     VLOG(1) << "Starting Rollback";
@@ -302,41 +369,41 @@ void ResetScreen::OnRestart() {
 void ResetScreen::OnToggleRollback() {
   // Hide Rollback if visible.
   if (view_ && view_->GetIsRollbackAvailable() &&
-      view_->GetIsRollbackChecked()) {
+      view_->GetIsRollbackRequested()) {
     VLOG(1) << "Hiding rollback view on reset screen";
-    view_->SetIsRollbackChecked(false);
+    view_->SetIsRollbackRequested(false);
     return;
   }
 
   // Show Rollback if available.
   VLOG(1) << "Requested rollback availability"
           << view_->GetIsRollbackAvailable();
-  if (view_->GetIsRollbackAvailable() && !view_->GetIsRollbackChecked()) {
+  if (view_->GetIsRollbackAvailable() && !view_->GetIsRollbackRequested()) {
     UMA_HISTOGRAM_ENUMERATION(
         "Reset.ChromeOS.PowerwashDialogShown",
         reset::DIALOG_SHORTCUT_OFFERING_ROLLBACK_AVAILABLE,
         reset::DIALOG_VIEW_TYPE_SIZE);
-    view_->SetIsRollbackChecked(true);
+    view_->SetIsRollbackRequested(true);
   }
 }
 
 void ResetScreen::OnShowConfirm() {
   reset::DialogViewType dialog_type =
-      view_->GetIsRollbackChecked()
+      view_->GetIsRollbackRequested()
           ? reset::DIALOG_SHORTCUT_CONFIRMING_POWERWASH_AND_ROLLBACK
           : reset::DIALOG_SHORTCUT_CONFIRMING_POWERWASH_ONLY;
   UMA_HISTOGRAM_ENUMERATION("Reset.ChromeOS.PowerwashDialogShown", dialog_type,
                             reset::DIALOG_VIEW_TYPE_SIZE);
 
-  view_->SetIsConfirmational(true);
+  view_->SetShouldShowConfirmationDialog(true);
 }
 
 void ResetScreen::OnConfirmationDismissed() {
-  view_->SetIsConfirmational(false);
+  view_->SetConfirmationDialogClosed();
 }
 
 void ResetScreen::ShowHelpArticle(HelpAppLauncher::HelpTopic topic) {
-#if defined(OFFICIAL_BUILD)
+#if BUILDFLAG(GOOGLE_CHROME_BRANDING)
   VLOG(1) << "Trying to view help article " << topic;
   if (!help_app_.get()) {
     help_app_ = new HelpAppLauncher(
@@ -347,17 +414,17 @@ void ResetScreen::ShowHelpArticle(HelpAppLauncher::HelpTopic topic) {
 }
 
 void ResetScreen::UpdateStatusChanged(
-    const UpdateEngineClient::Status& status) {
-  VLOG(1) << "Update status change to " << status.status;
-  if (status.status == UpdateEngineClient::UPDATE_STATUS_ERROR ||
-      status.status ==
-          UpdateEngineClient::UPDATE_STATUS_REPORTING_ERROR_EVENT) {
+    const update_engine::StatusResult& status) {
+  VLOG(1) << "Update status operation change to " << status.current_operation();
+  if (status.current_operation() == update_engine::Operation::ERROR ||
+      status.current_operation() ==
+          update_engine::Operation::REPORTING_ERROR_EVENT) {
     view_->SetScreenState(ResetView::State::kError);
     // Show error screen.
     error_screen_->SetUIState(NetworkError::UI_STATE_ROLLBACK_ERROR);
     error_screen_->Show();
-  } else if (status.status ==
-             UpdateEngineClient::UPDATE_STATUS_UPDATED_NEED_REBOOT) {
+  } else if (status.current_operation() ==
+             update_engine::Operation::UPDATED_NEED_REBOOT) {
     PowerManagerClient::Get()->RequestRestart(
         power_manager::REQUEST_RESTART_FOR_UPDATE, "login reset screen update");
   }
@@ -366,13 +433,18 @@ void ResetScreen::UpdateStatusChanged(
 // Invoked from call to CanRollbackCheck upon completion of the DBus call.
 void ResetScreen::OnRollbackCheck(bool can_rollback) {
   VLOG(1) << "Callback from CanRollbackCheck, result " << can_rollback;
+  policy::BrowserPolicyConnectorChromeOS* connector =
+      g_browser_process->platform_part()->browser_policy_connector_chromeos();
+
+  const bool rollback_available =
+      !connector->IsEnterpriseManaged() && can_rollback;
   reset::DialogViewType dialog_type =
-      can_rollback ? reset::DIALOG_SHORTCUT_OFFERING_ROLLBACK_AVAILABLE
-                   : reset::DIALOG_SHORTCUT_OFFERING_ROLLBACK_UNAVAILABLE;
+      rollback_available ? reset::DIALOG_SHORTCUT_OFFERING_ROLLBACK_AVAILABLE
+                         : reset::DIALOG_SHORTCUT_OFFERING_ROLLBACK_UNAVAILABLE;
   UMA_HISTOGRAM_ENUMERATION("Reset.ChromeOS.PowerwashDialogShown", dialog_type,
                             reset::DIALOG_VIEW_TYPE_SIZE);
 
-  view_->SetIsRollbackAvailable(can_rollback);
+  view_->SetIsRollbackAvailable(rollback_available);
 }
 
 void ResetScreen::OnTPMFirmwareUpdateAvailableCheck(

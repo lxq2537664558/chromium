@@ -6,47 +6,25 @@
 
 #include <utility>
 
-#include "ash/public/interfaces/constants.mojom.h"
-#include "content/public/common/service_manager_connection.h"
-#include "services/service_manager/public/cpp/connector.h"
-#include "services/service_manager/public/cpp/service_filter.h"
+TestSessionController::TestSessionController() = default;
+TestSessionController::~TestSessionController() = default;
 
-TestSessionController::TestSessionController() {
-  CHECK(content::ServiceManagerConnection::GetForProcess())
-      << "ServiceManager is uninitialized. Did you forget to create a "
-         "content::TestServiceManagerContext?";
-  content::ServiceManagerConnection::GetForProcess()
-      ->GetConnector()
-      ->OverrideBinderForTesting(
-          service_manager::ServiceFilter::ByName(ash::mojom::kServiceName),
-          ash::mojom::SessionController::Name_,
-          base::BindRepeating(&TestSessionController::Bind,
-                              base::Unretained(this)));
-}
+void TestSessionController::SetClient(ash::SessionControllerClient* client) {}
 
-TestSessionController::~TestSessionController() {
-  content::ServiceManagerConnection::GetForProcess()
-      ->GetConnector()
-      ->ClearBinderOverrideForTesting(
-          service_manager::ServiceFilter::ByName(ash::mojom::kServiceName),
-          ash::mojom::SessionController::Name_);
-}
-
-void TestSessionController::SetClient(
-    ash::mojom::SessionControllerClientPtr client) {}
-
-void TestSessionController::SetSessionInfo(ash::mojom::SessionInfoPtr info) {
-  last_session_info_ = info->Clone();
+void TestSessionController::SetSessionInfo(const ash::SessionInfo& info) {
+  last_session_info_ = info;
 }
 
 void TestSessionController::UpdateUserSession(
-    ash::mojom::UserSessionPtr user_session) {
-  last_user_session_ = user_session->Clone();
-  update_user_session_count_++;
+    const ash::UserSession& user_session) {
+  last_user_session_ = user_session;
+  ++update_user_session_count_;
 }
 
 void TestSessionController::SetUserSessionOrder(
-    const std::vector<uint32_t>& user_session_order) {}
+    const std::vector<uint32_t>& user_session_order) {
+  ++set_user_session_order_count_;
+}
 
 void TestSessionController::PrepareForLock(PrepareForLockCallback callback) {
   std::move(callback).Run();
@@ -93,8 +71,8 @@ void TestSessionController::ShowMultiprofilesSessionAbortedDialog(
 
 void TestSessionController::AddSessionActivationObserverForAccountId(
     const AccountId& account_id,
-    ash::mojom::SessionActivationObserverPtr observer) {}
+    ash::SessionActivationObserver* observer) {}
 
-void TestSessionController::Bind(mojo::ScopedMessagePipeHandle handle) {
-  binding_.Bind(ash::mojom::SessionControllerRequest(std::move(handle)));
-}
+void TestSessionController::RemoveSessionActivationObserverForAccountId(
+    const AccountId& account_id,
+    ash::SessionActivationObserver* observer) {}

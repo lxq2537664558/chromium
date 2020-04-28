@@ -6,15 +6,11 @@
 #define CHROME_BROWSER_UI_WEBUI_SETTINGS_SETTINGS_UI_H_
 
 #include "base/macros.h"
-#include "base/time/time.h"
 #include "chrome/browser/profiles/profile.h"
-#include "content/public/browser/web_contents_observer.h"
+#include "chrome/browser/ui/webui/webui_load_timer.h"
 #include "content/public/browser/web_ui_controller.h"
 
-class Profile;
-
 namespace content {
-class WebUIDataSource;
 class WebUIMessageHandler;
 }  // namespace content
 
@@ -25,8 +21,7 @@ class PrefRegistrySyncable;
 namespace settings {
 
 // The WebUI handler for chrome://settings.
-class SettingsUI : public content::WebUIController,
-                   public content::WebContentsObserver {
+class SettingsUI : public content::WebUIController {
  public:
   static void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry);
 
@@ -34,24 +29,19 @@ class SettingsUI : public content::WebUIController,
   ~SettingsUI() override;
 
 #if defined(OS_CHROMEOS)
-  // Initializes the WebUI message handlers for OS-specific settings.
-  static void InitOSWebUIHandlers(Profile* profile,
-                                  content::WebUI* web_ui,
-                                  content::WebUIDataSource* html_source);
+  // Initializes the WebUI message handlers for CrOS-specific settings that are
+  // still shown in the browser settings UI.
+  void InitBrowserSettingsWebUIHandlers();
 #endif  // defined(OS_CHROMEOS)
-
-  // content::WebContentsObserver:
-  void DidStartNavigation(
-      content::NavigationHandle* navigation_handle) override;
-  void DocumentLoadedInFrame(
-      content::RenderFrameHost* render_frame_host) override;
-  void DocumentOnLoadCompletedInMainFrame() override;
 
  private:
   void AddSettingsPageUIHandler(
       std::unique_ptr<content::WebUIMessageHandler> handler);
 
-  base::Time load_start_time_;
+  // Makes a request to show a HaTS survey.
+  void TryShowHatsSurveyWithTimeout();
+
+  WebuiLoadTimer webui_load_timer_;
 
   DISALLOW_COPY_AND_ASSIGN(SettingsUI);
 };

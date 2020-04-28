@@ -14,7 +14,7 @@ cr.define('gpu', function() {
       // to the console to help with quick-iteration debugging.
       this.debugMode_ = (chrome.send === undefined && console.log);
       if (this.debugMode_) {
-        var browserBridgeTests = document.createElement('script');
+        const browserBridgeTests = document.createElement('script');
         browserBridgeTests.src = './gpu_internals/browser_bridge_tests.js';
         document.body.appendChild(browserBridgeTests);
       }
@@ -54,13 +54,13 @@ cr.define('gpu', function() {
      * browser will reply asynchronously via the provided callback.
      */
     callAsync(submessage, args, callback) {
-      var requestId = this.nextRequestId_;
+      const requestId = this.nextRequestId_;
       this.nextRequestId_ += 1;
       this.pendingCallbacks_[requestId] = callback;
       if (!args) {
         chrome.send('callAsync', [requestId.toString(), submessage]);
       } else {
-        var allArgs = [requestId.toString(), submessage].concat(args);
+        const allArgs = [requestId.toString(), submessage].concat(args);
         chrome.send('callAsync', allArgs);
       }
     }
@@ -72,7 +72,7 @@ cr.define('gpu', function() {
       if (this.pendingCallbacks_[requestId] === undefined) {
         throw new Error('requestId ' + requestId + ' is not pending');
       }
-      var callback = this.pendingCallbacks_[requestId];
+      const callback = this.pendingCallbacks_[requestId];
       callback(args);
       delete this.pendingCallbacks_[requestId];
     }
@@ -124,7 +124,7 @@ cr.define('gpu', function() {
       this.callAsync(
           'requestLogMessages', undefined,
           (function(messages) {
-            if (messages.length != this.logMessages_.length) {
+            if (messages.length !== this.logMessages_.length) {
               this.logMessages_ = messages;
               cr.dispatchSimpleEvent(this, 'logMessagesChange');
             }
@@ -145,8 +145,8 @@ cr.define('gpu', function() {
      */
     isSandboxedForTesting() {
       for (i = 0; i < this.gpuInfo_.basicInfo.length; ++i) {
-        var info = this.gpuInfo_.basicInfo[i];
-        if (info.description == 'Sandboxed') {
+        const info = this.gpuInfo_.basicInfo[i];
+        if (info.description === 'Sandboxed') {
           return info.value;
         }
       }

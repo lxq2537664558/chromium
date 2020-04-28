@@ -4,7 +4,6 @@
 
 #include "ash/public/cpp/caption_buttons/frame_size_button.h"
 
-#include "ash/frame/ash_frame_caption_controller.h"
 #include "ash/public/cpp/caption_buttons/frame_caption_button_container_view.h"
 #include "ash/public/cpp/vector_icons/vector_icons.h"
 #include "ash/public/cpp/window_properties.h"
@@ -38,7 +37,7 @@ class TestWidgetDelegate : public views::WidgetDelegateView {
   bool CanMaximize() const override { return true; }
   bool CanMinimize() const override { return true; }
 
-  ash::FrameCaptionButtonContainerView* caption_button_container() {
+  FrameCaptionButtonContainerView* caption_button_container() {
     return caption_button_container_;
   }
 
@@ -57,8 +56,8 @@ class TestWidgetDelegate : public views::WidgetDelegateView {
   void ViewHierarchyChanged(
       const views::ViewHierarchyChangedDetails& details) override {
     if (details.is_add && details.child == this) {
-      caption_button_container_ = new FrameCaptionButtonContainerView(
-          GetWidget(), &caption_controller_);
+      caption_button_container_ =
+          new FrameCaptionButtonContainerView(GetWidget());
 
       // Set arbitrary images for the button icons and assign the default
       // caption button size.
@@ -76,8 +75,7 @@ class TestWidgetDelegate : public views::WidgetDelegateView {
   }
 
   // Not owned.
-  ash::FrameCaptionButtonContainerView* caption_button_container_;
-  AshFrameCaptionController caption_controller_;
+  FrameCaptionButtonContainerView* caption_button_container_;
   bool resizable_;
 
   DISALLOW_COPY_AND_ASSIGN(TestWidgetDelegate);
@@ -95,7 +93,7 @@ class FrameSizeButtonTest : public AshTestBase {
   }
 
   // Returns true if the window has |state_type|.
-  bool HasStateType(mojom::WindowStateType state_type) const {
+  bool HasStateType(WindowStateType state_type) const {
     return window_state()->GetStateType() == state_type;
   }
 
@@ -114,8 +112,8 @@ class FrameSizeButtonTest : public AshTestBase {
         views::Widget::InitParams::TYPE_WINDOW_FRAMELESS);
     params.delegate = delegate;
     params.bounds = gfx::Rect(10, 10, 100, 100);
-    params.context = CurrentContext();
-    widget->Init(params);
+    params.context = GetContext();
+    widget->Init(std::move(params));
     widget->Show();
 
     return widget;
@@ -126,8 +124,7 @@ class FrameSizeButtonTest : public AshTestBase {
     AshTestBase::SetUp();
 
     TestWidgetDelegate* delegate = new TestWidgetDelegate(resizable_);
-    window_state_ =
-        ash::wm::GetWindowState(CreateWidget(delegate)->GetNativeWindow());
+    window_state_ = WindowState::Get(CreateWidget(delegate)->GetNativeWindow());
 
     FrameCaptionButtonContainerView::TestApi test(
         delegate->caption_button_container());
@@ -139,8 +136,8 @@ class FrameSizeButtonTest : public AshTestBase {
     close_button_ = test.close_button();
   }
 
-  ash::wm::WindowState* window_state() { return window_state_; }
-  const ash::wm::WindowState* window_state() const { return window_state_; }
+  WindowState* window_state() { return window_state_; }
+  const WindowState* window_state() const { return window_state_; }
 
   views::FrameCaptionButton* minimize_button() { return minimize_button_; }
   views::FrameCaptionButton* size_button() { return size_button_; }
@@ -148,7 +145,7 @@ class FrameSizeButtonTest : public AshTestBase {
 
  private:
   // Not owned.
-  ash::wm::WindowState* window_state_;
+  WindowState* window_state_;
   views::FrameCaptionButton* minimize_button_;
   views::FrameCaptionButton* size_button_;
   views::FrameCaptionButton* close_button_;
@@ -216,7 +213,7 @@ TEST_F(FrameSizeButtonTest, ButtonDrag) {
   generator->MoveMouseTo(CenterPointInScreen(close_button()));
   generator->ReleaseLeftButton();
   base::RunLoop().RunUntilIdle();
-  EXPECT_TRUE(HasStateType(mojom::WindowStateType::RIGHT_SNAPPED));
+  EXPECT_TRUE(HasStateType(WindowStateType::kRightSnapped));
 
   // Snap left.
   generator->MoveMouseTo(CenterPointInScreen(size_button()));
@@ -224,7 +221,7 @@ TEST_F(FrameSizeButtonTest, ButtonDrag) {
   generator->MoveMouseTo(CenterPointInScreen(minimize_button()));
   generator->ReleaseLeftButton();
   base::RunLoop().RunUntilIdle();
-  EXPECT_TRUE(HasStateType(mojom::WindowStateType::LEFT_SNAPPED));
+  EXPECT_TRUE(HasStateType(WindowStateType::kLeftSnapped));
 
   // 2) Test with scroll gestures.
   // Snap right.
@@ -232,14 +229,14 @@ TEST_F(FrameSizeButtonTest, ButtonDrag) {
                                    CenterPointInScreen(close_button()),
                                    base::TimeDelta::FromMilliseconds(100), 3);
   base::RunLoop().RunUntilIdle();
-  EXPECT_TRUE(HasStateType(mojom::WindowStateType::RIGHT_SNAPPED));
+  EXPECT_TRUE(HasStateType(WindowStateType::kRightSnapped));
 
   // Snap left.
   generator->GestureScrollSequence(CenterPointInScreen(size_button()),
                                    CenterPointInScreen(minimize_button()),
                                    base::TimeDelta::FromMilliseconds(100), 3);
   base::RunLoop().RunUntilIdle();
-  EXPECT_TRUE(HasStateType(mojom::WindowStateType::LEFT_SNAPPED));
+  EXPECT_TRUE(HasStateType(WindowStateType::kLeftSnapped));
 
   // 3) Test with tap gestures.
   const float touch_default_radius =
@@ -249,12 +246,12 @@ TEST_F(FrameSizeButtonTest, ButtonDrag) {
   generator->MoveMouseTo(CenterPointInScreen(size_button()));
   generator->PressMoveAndReleaseTouchTo(CenterPointInScreen(close_button()));
   base::RunLoop().RunUntilIdle();
-  EXPECT_TRUE(HasStateType(mojom::WindowStateType::RIGHT_SNAPPED));
+  EXPECT_TRUE(HasStateType(WindowStateType::kRightSnapped));
   // Snap left.
   generator->MoveMouseTo(CenterPointInScreen(size_button()));
   generator->PressMoveAndReleaseTouchTo(CenterPointInScreen(minimize_button()));
   base::RunLoop().RunUntilIdle();
-  EXPECT_TRUE(HasStateType(mojom::WindowStateType::LEFT_SNAPPED));
+  EXPECT_TRUE(HasStateType(WindowStateType::kLeftSnapped));
   ui::GestureConfiguration::GetInstance()->set_default_radius(
       touch_default_radius);
 }
@@ -274,7 +271,7 @@ TEST_F(FrameSizeButtonTest, SnapLeftOvershootMinimize) {
   generator->MoveMouseBy(-minimize_button()->width(), 0);
   generator->ReleaseLeftButton();
   base::RunLoop().RunUntilIdle();
-  EXPECT_TRUE(HasStateType(mojom::WindowStateType::LEFT_SNAPPED));
+  EXPECT_TRUE(HasStateType(WindowStateType::kLeftSnapped));
 }
 
 // Test that right clicking the size button has no effect.
@@ -356,7 +353,7 @@ TEST_F(FrameSizeButtonTest, ResetButtonsAfterClick) {
   // Release the mouse, snapping the window left.
   generator->ReleaseLeftButton();
   base::RunLoop().RunUntilIdle();
-  EXPECT_TRUE(HasStateType(mojom::WindowStateType::LEFT_SNAPPED));
+  EXPECT_TRUE(HasStateType(WindowStateType::kLeftSnapped));
 
   // None of the buttons should stay pressed and the buttons should have their
   // regular icons.
@@ -388,7 +385,7 @@ TEST_F(FrameSizeButtonTest, ResetButtonsAfterClick) {
   // Release the mouse. The window should stay snapped left.
   generator->ReleaseLeftButton();
   base::RunLoop().RunUntilIdle();
-  EXPECT_TRUE(HasStateType(mojom::WindowStateType::LEFT_SNAPPED));
+  EXPECT_TRUE(HasStateType(WindowStateType::kLeftSnapped));
 
   // The buttons should stay unpressed and the buttons should now have their
   // regular icons.
@@ -495,7 +492,7 @@ TEST_F(FrameSizeButtonTestRTL, ButtonDrag) {
   // Releasing should snap the window right.
   generator->ReleaseLeftButton();
   base::RunLoop().RunUntilIdle();
-  EXPECT_TRUE(HasStateType(mojom::WindowStateType::RIGHT_SNAPPED));
+  EXPECT_TRUE(HasStateType(WindowStateType::kRightSnapped));
 
   // None of the buttons should stay pressed and the buttons should have their
   // regular icons.

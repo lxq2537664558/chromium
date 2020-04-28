@@ -207,8 +207,7 @@ class CORE_EXPORT LayoutMultiColumnSet final : public LayoutBlockFlow {
   void StyleDidChange(StyleDifference, const ComputedStyle* old_style) override;
   void UpdateLayout() override;
 
-  void ComputeIntrinsicLogicalWidths(LayoutUnit& min_logical_width,
-                                     LayoutUnit& max_logical_width) const final;
+  MinMaxSizes ComputeIntrinsicLogicalWidths() const final;
 
   void AttachToFlowThread();
   void DetachFromFlowThread();
@@ -240,7 +239,7 @@ class CORE_EXPORT LayoutMultiColumnSet final : public LayoutBlockFlow {
   LayoutMultiColumnSet(LayoutFlowThread*);
 
  private:
-  LayoutRect LocalVisualRectIgnoringVisibility() const final;
+  PhysicalRect LocalVisualRectIgnoringVisibility() const final;
 
   void InsertedIntoTree() final;
   void WillBeRemovedFromTree() final;
@@ -250,10 +249,10 @@ class CORE_EXPORT LayoutMultiColumnSet final : public LayoutBlockFlow {
   void ComputeLogicalHeight(LayoutUnit logical_height,
                             LayoutUnit logical_top,
                             LogicalExtentComputedValues&) const override;
-  PositionWithAffinity PositionForPoint(const LayoutPoint&) const override;
+  PositionWithAffinity PositionForPoint(const PhysicalOffset&) const override;
 
   void PaintObject(const PaintInfo&,
-                   const LayoutPoint& paint_offset) const override;
+                   const PhysicalOffset& paint_offset) const override;
 
   void ComputeVisualOverflow(bool recompute_floats) final;
 

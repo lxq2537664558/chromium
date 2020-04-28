@@ -32,8 +32,8 @@ let isScanningForTest;
 /** @type {!MockFileSystem} */
 const fileSystem = new MockFileSystem('volume-id');
 
-/** @type {!MockDirectoryEntry} */
-const directory1 = new MockDirectoryEntry(fileSystem, '/TestDirectory');
+/** @type {!DirectoryEntry} */
+const directory1 = MockDirectoryEntry.create(fileSystem, '/TestDirectory');
 
 /** @type {!MockEntry} */
 const entry1 = new MockEntry(fileSystem, '/Test1.jpg');
@@ -97,15 +97,17 @@ function setUp() {
 
   isScanningForTest = false;
 
-  directoryModel = /** @type {!DirectoryModel} */ ({
-    __proto__: cr.EventTarget.prototype,
-    getFileList: function() {
+  class TestDirectoryModel extends cr.EventTarget {
+    getFileList() {
       return fileListModel;
-    },
-    isScanning: function() {
+    }
+    isScanning() {
       return isScanningForTest;
-    },
-  });
+    }
+  }
+
+  /** @suppress {checkTypes} */
+  directoryModel = /** @type {!DirectoryModel} */ (new TestDirectoryModel());
 
   const fakeVolumeManager = /** @type {!VolumeManager} */ ({
     getVolumeInfo: function(entry) {

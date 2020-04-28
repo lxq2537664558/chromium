@@ -13,17 +13,27 @@
 #include "base/strings/stringprintf.h"
 #include "base/values.h"
 #include "chrome/browser/chromeos/login/login_wizard.h"
-#include "chrome/browser/chromeos/login/mixin_based_in_process_browser_test.h"
 #include "chrome/browser/chromeos/login/oobe_screen.h"
 #include "chrome/browser/chromeos/login/screens/recommend_apps/recommend_apps_fetcher.h"
 #include "chrome/browser/chromeos/login/screens/recommend_apps/recommend_apps_fetcher_delegate.h"
+#include "chrome/browser/chromeos/login/screens/recommend_apps/scoped_test_recommend_apps_fetcher_factory.h"
 #include "chrome/browser/chromeos/login/test/js_checker.h"
+#include "chrome/browser/chromeos/login/test/local_policy_test_server_mixin.h"
+#include "chrome/browser/chromeos/login/test/login_manager_mixin.h"
+#include "chrome/browser/chromeos/login/test/oobe_base_test.h"
+#include "chrome/browser/chromeos/login/test/oobe_screen_exit_waiter.h"
 #include "chrome/browser/chromeos/login/test/oobe_screen_waiter.h"
+#include "chrome/browser/chromeos/login/test/user_policy_mixin.h"
 #include "chrome/browser/chromeos/login/ui/login_display_host.h"
 #include "chrome/browser/chromeos/login/wizard_controller.h"
+#include "chrome/browser/policy/profile_policy_connector.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
+#include "chrome/browser/ui/webui/chromeos/login/gaia_screen_handler.h"
 #include "chrome/browser/ui/webui/chromeos/login/oobe_ui.h"
+#include "chrome/browser/ui/webui/chromeos/login/recommend_apps_screen_handler.h"
+#include "chromeos/constants/chromeos_features.h"
+#include "components/account_id/account_id.h"
 #include "components/arc/arc_prefs.h"
 #include "components/prefs/pref_service.h"
 #include "content/public/test/browser_test_utils.h"
@@ -31,11 +41,6 @@
 namespace chromeos {
 
 namespace {
-
-chromeos::OobeUI* GetOobeUI() {
-  auto* host = chromeos::LoginDisplayHost::default_host();
-  return host ? host->GetOobeUI() : nullptr;
-}
 
 struct FakeAppInfo {
  public:
@@ -67,7 +72,7 @@ class FakeRecommendAppsFetcher : public RecommendAppsFetcher {
     EXPECT_TRUE(started_);
     base::Value app_list(base::Value::Type::LIST);
     for (const auto& app : apps) {
-      app_list.GetList().emplace_back(app.ToValue());
+      app_list.Append(app.ToValue());
     }
     delegate_->OnLoadSuccess(app_list);
   }
@@ -100,37 +105,41 @@ class FakeRecommendAppsFetcher : public RecommendAppsFetcher {
 
 }  // namespace
 
-class RecommendAppsScreenTest : public InProcessBrowserTest {
+class RecommendAppsScreenTest : public OobeBaseTest {
  public:
-  RecommendAppsScreenTest() = default;
+  RecommendAppsScreenTest() {
+    // To reuse existing wizard controller in the flow.
+    feature_list_.InitAndEnableFeature(
+        chromeos::features::kOobeScreensPriority);
+  }
   ~RecommendAppsScreenTest() override = default;
 
+  // OobeBaseTest:
   void SetUpOnMainThread() override {
-    ShowLoginWizard(OobeScreen::SCREEN_TEST_NO_WINDOW);
+    OobeBaseTest::SetUpOnMainThread();
+    recommend_apps_fetcher_factory_ =
+        std::make_unique<ScopedTestRecommendAppsFetcherFactory>(
+            base::BindRepeating(
+                &RecommendAppsScreenTest::CreateRecommendAppsFetcher,
+                base::Unretained(this)));
 
-    fetcher_factory_callback_ = base::BindRepeating(
-        &RecommendAppsScreenTest::CreateRecommendAppsFetcher,
-        base::Unretained(this));
-    RecommendAppsFetcher::SetFactoryCallbackForTesting(
-        &fetcher_factory_callback_);
-
-    auto recommend_apps_screen = std::make_unique<RecommendAppsScreen>(
-        GetOobeUI()->GetRecommendAppsScreenView(),
-        base::BindRepeating(&RecommendAppsScreenTest::HandleScreenExit,
-                            base::Unretained(this)));
-    recommend_apps_screen_ = recommend_apps_screen.get();
-    WizardController::default_controller()
-        ->screen_manager()
-        ->SetScreenForTesting(std::move(recommend_apps_screen));
-
-    InProcessBrowserTest::SetUpOnMainThread();
+    recommend_apps_screen_ = RecommendAppsScreen::Get(
+        WizardController::default_controller()->screen_manager());
+    recommend_apps_screen_->set_exit_callback_for_testing(base::BindRepeating(
+        &RecommendAppsScreenTest::HandleScreenExit, base::Unretained(this)));
   }
   void TearDownOnMainThread() override {
-    RecommendAppsFetcher::SetFactoryCallbackForTesting(nullptr);
-    fetcher_factory_callback_.Reset();
     recommend_apps_fetcher_ = nullptr;
+    recommend_apps_fetcher_factory_.reset();
 
-    InProcessBrowserTest::TearDownOnMainThread();
+    OobeBaseTest::TearDownOnMainThread();
+  }
+
+  void ShowRecommendAppsScreen() {
+    login_manager_.LoginAsNewReguarUser();
+    OobeScreenExitWaiter(GaiaView::kScreenId).Wait();
+    LoginDisplayHost::default_host()->StartWizard(
+        RecommendAppsScreenView::kScreenId);
   }
 
   void WaitForScreenExit() {
@@ -200,6 +209,8 @@ class RecommendAppsScreenTest : public InProcessBrowserTest {
   base::Optional<RecommendAppsScreen::Result> screen_result_;
   FakeRecommendAppsFetcher* recommend_apps_fetcher_ = nullptr;
 
+  LoginManagerMixin login_manager_{&mixin_host_};
+
  private:
   void HandleScreenExit(RecommendAppsScreen::Result result) {
     ASSERT_FALSE(screen_result_.has_value());
@@ -218,23 +229,25 @@ class RecommendAppsScreenTest : public InProcessBrowserTest {
     return fetcher;
   }
 
-  // The callback passed to
-  // RecommendAppsFetcher::SetFactoryCallbackForTesting(). Bound to
-  // CreateRecommendAppsFetcher().
-  RecommendAppsFetcher::FactoryCallback fetcher_factory_callback_;
+  std::unique_ptr<ScopedTestRecommendAppsFetcherFactory>
+      recommend_apps_fetcher_factory_;
 
   base::OnceClosure screen_exit_callback_;
+
+  base::test::ScopedFeatureList feature_list_;
 };
 
 IN_PROC_BROWSER_TEST_F(RecommendAppsScreenTest, BasicSelection) {
-  recommend_apps_screen_->Show();
+  ShowRecommendAppsScreen();
 
-  OobeScreenWaiter screen_waiter(OobeScreen::SCREEN_RECOMMEND_APPS);
+  OobeScreenWaiter screen_waiter(RecommendAppsScreenView::kScreenId);
   screen_waiter.set_assert_next_screen();
   screen_waiter.Wait();
 
   // Wait for loading screen.
-  test::OobeJS().CreateVisibilityWaiter(true, {"recommend-apps-loading"});
+  test::OobeJS()
+      .CreateVisibilityWaiter(true, {"recommend-apps-loading"})
+      ->Wait();
   test::OobeJS().ExpectHidden("recommend-apps-screen");
 
   std::vector<FakeAppInfo> test_apps = {
@@ -243,7 +256,9 @@ IN_PROC_BROWSER_TEST_F(RecommendAppsScreenTest, BasicSelection) {
       FakeAppInfo("test.app.foo.app3", "Test app 3")};
   recommend_apps_fetcher_->SimulateSuccess(test_apps);
 
-  test::OobeJS().CreateVisibilityWaiter(true, {"recommend-apps-screen"});
+  test::OobeJS()
+      .CreateVisibilityWaiter(true, {"recommend-apps-screen"})
+      ->Wait();
   test::OobeJS().ExpectHidden("recommend-apps-loading");
 
   const std::string webview_path =
@@ -252,9 +267,6 @@ IN_PROC_BROWSER_TEST_F(RecommendAppsScreenTest, BasicSelection) {
       "recommend-apps-screen", "recommend-apps-install-button"};
   const std::initializer_list<base::StringPiece> skip_button = {
       "recommend-apps-screen", "recommend-apps-skip-button"};
-  const std::initializer_list<base::StringPiece> retry_button = {
-      "recommend-apps-screen", "recommend-apps-retry-button"};
-
   test::OobeJS().ExpectDisabledPath(install_button);
 
   test::OobeJS()
@@ -266,14 +278,12 @@ IN_PROC_BROWSER_TEST_F(RecommendAppsScreenTest, BasicSelection) {
   test::OobeJS().ExpectDisabledPath(install_button);
   test::OobeJS().ExpectPathDisplayed(true, skip_button);
   test::OobeJS().ExpectEnabledPath(skip_button);
-  test::OobeJS().ExpectPathDisplayed(false, retry_button);
 
   ASSERT_TRUE(ToggleAppsSelection(
       webview_path, "['test.app.foo.app1', 'test.app.foo.app2']"));
 
   test::OobeJS().CreateEnabledWaiter(true, install_button)->Wait();
   test::OobeJS().ExpectEnabledPath(skip_button);
-  test::OobeJS().ExpectPathDisplayed(false, retry_button);
 
   test::OobeJS().TapOnPath(install_button);
 
@@ -288,20 +298,22 @@ IN_PROC_BROWSER_TEST_F(RecommendAppsScreenTest, BasicSelection) {
   ASSERT_TRUE(fast_reinstall_packages);
 
   base::Value expected_pref_value(base::Value::Type::LIST);
-  expected_pref_value.GetList().emplace_back("test.app.foo.app1");
-  expected_pref_value.GetList().emplace_back("test.app.foo.app2");
+  expected_pref_value.Append("test.app.foo.app1");
+  expected_pref_value.Append("test.app.foo.app2");
   EXPECT_EQ(expected_pref_value, *fast_reinstall_packages);
 }
 
 IN_PROC_BROWSER_TEST_F(RecommendAppsScreenTest, SelectionChange) {
-  recommend_apps_screen_->Show();
+  ShowRecommendAppsScreen();
 
-  OobeScreenWaiter screen_waiter(OobeScreen::SCREEN_RECOMMEND_APPS);
+  OobeScreenWaiter screen_waiter(RecommendAppsScreenView::kScreenId);
   screen_waiter.set_assert_next_screen();
   screen_waiter.Wait();
 
   // Wait for loading screen.
-  test::OobeJS().CreateVisibilityWaiter(true, {"recommend-apps-loading"});
+  test::OobeJS()
+      .CreateVisibilityWaiter(true, {"recommend-apps-loading"})
+      ->Wait();
   test::OobeJS().ExpectHidden("recommend-apps-screen");
 
   std::vector<FakeAppInfo> test_apps = {
@@ -310,7 +322,9 @@ IN_PROC_BROWSER_TEST_F(RecommendAppsScreenTest, SelectionChange) {
       FakeAppInfo("test.app.foo.app3", "Test app 3")};
   recommend_apps_fetcher_->SimulateSuccess(test_apps);
 
-  test::OobeJS().CreateVisibilityWaiter(true, {"recommend-apps-screen"});
+  test::OobeJS()
+      .CreateVisibilityWaiter(true, {"recommend-apps-screen"})
+      ->Wait();
   test::OobeJS().ExpectHidden("recommend-apps-loading");
 
   const std::string webview_path =
@@ -319,8 +333,6 @@ IN_PROC_BROWSER_TEST_F(RecommendAppsScreenTest, SelectionChange) {
       "recommend-apps-screen", "recommend-apps-install-button"};
   const std::initializer_list<base::StringPiece> skip_button = {
       "recommend-apps-screen", "recommend-apps-skip-button"};
-  const std::initializer_list<base::StringPiece> retry_button = {
-      "recommend-apps-screen", "recommend-apps-retry-button"};
 
   test::OobeJS().ExpectDisabledPath(install_button);
 
@@ -333,14 +345,12 @@ IN_PROC_BROWSER_TEST_F(RecommendAppsScreenTest, SelectionChange) {
   test::OobeJS().ExpectDisabledPath(install_button);
   test::OobeJS().ExpectPathDisplayed(true, skip_button);
   test::OobeJS().ExpectEnabledPath(skip_button);
-  test::OobeJS().ExpectPathDisplayed(false, retry_button);
 
   ASSERT_TRUE(ToggleAppsSelection(
       webview_path, "['test.app.foo.app1', 'test.app.foo.app2']"));
 
   test::OobeJS().CreateEnabledWaiter(true, install_button)->Wait();
   test::OobeJS().ExpectEnabledPath(skip_button);
-  test::OobeJS().ExpectPathDisplayed(false, retry_button);
 
   ASSERT_TRUE(ToggleAppsSelection(webview_path, "['test.app.foo.app1']"));
 
@@ -357,19 +367,21 @@ IN_PROC_BROWSER_TEST_F(RecommendAppsScreenTest, SelectionChange) {
   ASSERT_TRUE(fast_reinstall_packages);
 
   base::Value expected_pref_value(base::Value::Type::LIST);
-  expected_pref_value.GetList().emplace_back("test.app.foo.app2");
+  expected_pref_value.Append("test.app.foo.app2");
   EXPECT_EQ(expected_pref_value, *fast_reinstall_packages);
 }
 
 IN_PROC_BROWSER_TEST_F(RecommendAppsScreenTest, SkipWithSelectedApps) {
-  recommend_apps_screen_->Show();
+  ShowRecommendAppsScreen();
 
-  OobeScreenWaiter screen_waiter(OobeScreen::SCREEN_RECOMMEND_APPS);
+  OobeScreenWaiter screen_waiter(RecommendAppsScreenView::kScreenId);
   screen_waiter.set_assert_next_screen();
   screen_waiter.Wait();
 
   // Wait for loading screen.
-  test::OobeJS().CreateVisibilityWaiter(true, {"recommend-apps-loading"});
+  test::OobeJS()
+      .CreateVisibilityWaiter(true, {"recommend-apps-loading"})
+      ->Wait();
   test::OobeJS().ExpectHidden("recommend-apps-screen");
 
   std::vector<FakeAppInfo> test_apps = {
@@ -378,7 +390,9 @@ IN_PROC_BROWSER_TEST_F(RecommendAppsScreenTest, SkipWithSelectedApps) {
       FakeAppInfo("test.app.foo.app3", "Test app 3")};
   recommend_apps_fetcher_->SimulateSuccess(test_apps);
 
-  test::OobeJS().CreateVisibilityWaiter(true, {"recommend-apps-screen"});
+  test::OobeJS()
+      .CreateVisibilityWaiter(true, {"recommend-apps-screen"})
+      ->Wait();
   test::OobeJS().ExpectHidden("recommend-apps-loading");
 
   const std::string webview_path =
@@ -387,8 +401,6 @@ IN_PROC_BROWSER_TEST_F(RecommendAppsScreenTest, SkipWithSelectedApps) {
       "recommend-apps-screen", "recommend-apps-install-button"};
   const std::initializer_list<base::StringPiece> skip_button = {
       "recommend-apps-screen", "recommend-apps-skip-button"};
-  const std::initializer_list<base::StringPiece> retry_button = {
-      "recommend-apps-screen", "recommend-apps-retry-button"};
 
   test::OobeJS().ExpectDisabledPath(install_button);
 
@@ -401,13 +413,11 @@ IN_PROC_BROWSER_TEST_F(RecommendAppsScreenTest, SkipWithSelectedApps) {
   test::OobeJS().ExpectDisabledPath(install_button);
   test::OobeJS().ExpectPathDisplayed(true, skip_button);
   test::OobeJS().ExpectEnabledPath(skip_button);
-  test::OobeJS().ExpectPathDisplayed(false, retry_button);
 
   ASSERT_TRUE(ToggleAppsSelection(webview_path, "['test.app.foo.app2']"));
 
   test::OobeJS().CreateEnabledWaiter(true, install_button)->Wait();
   test::OobeJS().ExpectEnabledPath(skip_button);
-  test::OobeJS().ExpectPathDisplayed(false, retry_button);
 
   test::OobeJS().TapOnPath(skip_button);
 
@@ -424,14 +434,16 @@ IN_PROC_BROWSER_TEST_F(RecommendAppsScreenTest, SkipWithSelectedApps) {
 }
 
 IN_PROC_BROWSER_TEST_F(RecommendAppsScreenTest, SkipWithNoAppsSelected) {
-  recommend_apps_screen_->Show();
+  ShowRecommendAppsScreen();
 
-  OobeScreenWaiter screen_waiter(OobeScreen::SCREEN_RECOMMEND_APPS);
+  OobeScreenWaiter screen_waiter(RecommendAppsScreenView::kScreenId);
   screen_waiter.set_assert_next_screen();
   screen_waiter.Wait();
 
   // Wait for loading screen.
-  test::OobeJS().CreateVisibilityWaiter(true, {"recommend-apps-loading"});
+  test::OobeJS()
+      .CreateVisibilityWaiter(true, {"recommend-apps-loading"})
+      ->Wait();
   test::OobeJS().ExpectHidden("recommend-apps-screen");
 
   std::vector<FakeAppInfo> test_apps = {
@@ -440,7 +452,9 @@ IN_PROC_BROWSER_TEST_F(RecommendAppsScreenTest, SkipWithNoAppsSelected) {
       FakeAppInfo("test.app.foo.app3", "Test app 3")};
   recommend_apps_fetcher_->SimulateSuccess(test_apps);
 
-  test::OobeJS().CreateVisibilityWaiter(true, {"recommend-apps-screen"});
+  test::OobeJS()
+      .CreateVisibilityWaiter(true, {"recommend-apps-screen"})
+      ->Wait();
   test::OobeJS().ExpectHidden("recommend-apps-loading");
 
   const std::string webview_path =
@@ -449,8 +463,6 @@ IN_PROC_BROWSER_TEST_F(RecommendAppsScreenTest, SkipWithNoAppsSelected) {
       "recommend-apps-screen", "recommend-apps-install-button"};
   const std::initializer_list<base::StringPiece> skip_button = {
       "recommend-apps-screen", "recommend-apps-skip-button"};
-  const std::initializer_list<base::StringPiece> retry_button = {
-      "recommend-apps-screen", "recommend-apps-retry-button"};
 
   test::OobeJS().ExpectDisabledPath(install_button);
 
@@ -463,19 +475,16 @@ IN_PROC_BROWSER_TEST_F(RecommendAppsScreenTest, SkipWithNoAppsSelected) {
   test::OobeJS().ExpectDisabledPath(install_button);
   test::OobeJS().ExpectPathDisplayed(true, skip_button);
   test::OobeJS().ExpectEnabledPath(skip_button);
-  test::OobeJS().ExpectPathDisplayed(false, retry_button);
 
   ASSERT_TRUE(ToggleAppsSelection(webview_path, "['test.app.foo.app2']"));
 
   test::OobeJS().CreateEnabledWaiter(true, install_button)->Wait();
   test::OobeJS().ExpectEnabledPath(skip_button);
-  test::OobeJS().ExpectPathDisplayed(false, retry_button);
 
   ASSERT_TRUE(ToggleAppsSelection(webview_path, "['test.app.foo.app2']"));
 
   test::OobeJS().CreateEnabledWaiter(false, install_button)->Wait();
   test::OobeJS().ExpectEnabledPath(skip_button);
-  test::OobeJS().ExpectPathDisplayed(false, retry_button);
 
   test::OobeJS().TapOnPath(skip_button);
 
@@ -492,21 +501,25 @@ IN_PROC_BROWSER_TEST_F(RecommendAppsScreenTest, SkipWithNoAppsSelected) {
 }
 
 IN_PROC_BROWSER_TEST_F(RecommendAppsScreenTest, InstallWithNoAppsSelected) {
-  recommend_apps_screen_->Show();
+  ShowRecommendAppsScreen();
 
-  OobeScreenWaiter screen_waiter(OobeScreen::SCREEN_RECOMMEND_APPS);
+  OobeScreenWaiter screen_waiter(RecommendAppsScreenView::kScreenId);
   screen_waiter.set_assert_next_screen();
   screen_waiter.Wait();
 
   // Wait for loading screen.
-  test::OobeJS().CreateVisibilityWaiter(true, {"recommend-apps-loading"});
+  test::OobeJS()
+      .CreateVisibilityWaiter(true, {"recommend-apps-loading"})
+      ->Wait();
   test::OobeJS().ExpectHidden("recommend-apps-screen");
 
   std::vector<FakeAppInfo> test_apps = {
       FakeAppInfo("test.app.foo.app1", "Test app 1")};
   recommend_apps_fetcher_->SimulateSuccess(test_apps);
 
-  test::OobeJS().CreateVisibilityWaiter(true, {"recommend-apps-screen"});
+  test::OobeJS()
+      .CreateVisibilityWaiter(true, {"recommend-apps-screen"})
+      ->Wait();
   test::OobeJS().ExpectHidden("recommend-apps-loading");
 
   const std::string webview_path =
@@ -534,33 +547,33 @@ IN_PROC_BROWSER_TEST_F(RecommendAppsScreenTest, InstallWithNoAppsSelected) {
 }
 
 IN_PROC_BROWSER_TEST_F(RecommendAppsScreenTest, NoRecommendedApps) {
-  recommend_apps_screen_->Show();
+  ShowRecommendAppsScreen();
 
-  OobeScreenWaiter screen_waiter(OobeScreen::SCREEN_RECOMMEND_APPS);
+  OobeScreenWaiter screen_waiter(RecommendAppsScreenView::kScreenId);
   screen_waiter.set_assert_next_screen();
   screen_waiter.Wait();
 
   // Wait for loading screen.
-  test::OobeJS().CreateVisibilityWaiter(true, {"recommend-apps-loading"});
+  test::OobeJS()
+      .CreateVisibilityWaiter(true, {"recommend-apps-loading"})
+      ->Wait();
   test::OobeJS().ExpectHidden("recommend-apps-screen");
 
   recommend_apps_fetcher_->SimulateSuccess(std::vector<FakeAppInfo>());
 
-  test::OobeJS().CreateVisibilityWaiter(true, {"recommend-apps-screen"});
+  test::OobeJS()
+      .CreateVisibilityWaiter(true, {"recommend-apps-screen"})
+      ->Wait();
   test::OobeJS().ExpectHidden("recommend-apps-loading");
 
   const std::initializer_list<base::StringPiece> install_button = {
       "recommend-apps-screen", "recommend-apps-install-button"};
   const std::initializer_list<base::StringPiece> skip_button = {
       "recommend-apps-screen", "recommend-apps-skip-button"};
-  const std::initializer_list<base::StringPiece> retry_button = {
-      "recommend-apps-screen", "recommend-apps-retry-button"};
 
   test::OobeJS().CreateDisplayedWaiter(true, skip_button)->Wait();
   test::OobeJS().ExpectEnabledPath(skip_button);
-  test::OobeJS().ExpectPathDisplayed(false, install_button);
-  test::OobeJS().ExpectPathDisplayed(false, retry_button);
-  test::OobeJS().ExpectPathDisplayed(false, retry_button);
+  test::OobeJS().ExpectDisabledPath(install_button);
 
   test::OobeJS().TapOnPath(skip_button);
 
@@ -577,14 +590,16 @@ IN_PROC_BROWSER_TEST_F(RecommendAppsScreenTest, NoRecommendedApps) {
 }
 
 IN_PROC_BROWSER_TEST_F(RecommendAppsScreenTest, ParseError) {
-  recommend_apps_screen_->Show();
+  ShowRecommendAppsScreen();
 
-  OobeScreenWaiter screen_waiter(OobeScreen::SCREEN_RECOMMEND_APPS);
+  OobeScreenWaiter screen_waiter(RecommendAppsScreenView::kScreenId);
   screen_waiter.set_assert_next_screen();
   screen_waiter.Wait();
 
   // Wait for loading screen.
-  test::OobeJS().CreateVisibilityWaiter(true, {"recommend-apps-loading"});
+  test::OobeJS()
+      .CreateVisibilityWaiter(true, {"recommend-apps-loading"})
+      ->Wait();
   test::OobeJS().ExpectHidden("recommend-apps-screen");
 
   recommend_apps_fetcher_->SimulateParseError();
@@ -594,112 +609,27 @@ IN_PROC_BROWSER_TEST_F(RecommendAppsScreenTest, ParseError) {
   EXPECT_EQ(0, recommend_apps_fetcher_->retries());
 }
 
-IN_PROC_BROWSER_TEST_F(RecommendAppsScreenTest, SkipOnLoadError) {
-  recommend_apps_screen_->Show();
+class RecommendAppsScreenManagedTest : public RecommendAppsScreenTest {
+ protected:
+  const LoginManagerMixin::TestUserInfo test_user_{
+      AccountId::FromUserEmailGaiaId("user@example.com", "1111")};
+  UserPolicyMixin user_policy_mixin_{&mixin_host_, test_user_.account_id};
+};
 
-  OobeScreenWaiter screen_waiter(OobeScreen::SCREEN_RECOMMEND_APPS);
-  screen_waiter.set_assert_next_screen();
-  screen_waiter.Wait();
+IN_PROC_BROWSER_TEST_F(RecommendAppsScreenManagedTest, SkipDueToManagedUser) {
+  // Mark user as managed.
+  user_policy_mixin_.RequestPolicyUpdate();
 
-  // Wait for loading screen.
-  test::OobeJS().CreateVisibilityWaiter(true, {"recommend-apps-loading"});
-  test::OobeJS().ExpectHidden("recommend-apps-screen");
-
-  recommend_apps_fetcher_->SimulateLoadError();
-
-  test::OobeJS().CreateVisibilityWaiter(true, {"recommend-apps-screen"});
-  test::OobeJS().ExpectHidden("recommend-apps-loading");
-
-  const std::initializer_list<base::StringPiece> install_button = {
-      "recommend-apps-screen", "recommend-apps-install-button"};
-  const std::initializer_list<base::StringPiece> skip_button = {
-      "recommend-apps-screen", "recommend-apps-skip-button"};
-  const std::initializer_list<base::StringPiece> retry_button = {
-      "recommend-apps-screen", "recommend-apps-retry-button"};
-
-  test::OobeJS().CreateDisplayedWaiter(true, skip_button)->Wait();
-  test::OobeJS().ExpectEnabledPath(skip_button);
-  test::OobeJS().CreateDisplayedWaiter(true, retry_button)->Wait();
-  test::OobeJS().ExpectEnabledPath(retry_button);
-  test::OobeJS().ExpectPathDisplayed(false, install_button);
-
-  test::OobeJS().TapOnPath(skip_button);
-
-  WaitForScreenExit();
-  EXPECT_EQ(RecommendAppsScreen::Result::SKIPPED, screen_result_.value());
-  EXPECT_EQ(0, recommend_apps_fetcher_->retries());
-
-  const base::Value* fast_reinstall_packages =
-      ProfileManager::GetActiveUserProfile()->GetPrefs()->Get(
-          arc::prefs::kArcFastAppReinstallPackages);
-  ASSERT_TRUE(fast_reinstall_packages);
-  EXPECT_EQ(base::Value(base::Value::Type::LIST), *fast_reinstall_packages);
-}
-
-IN_PROC_BROWSER_TEST_F(RecommendAppsScreenTest, RetryOnLoadError) {
-  recommend_apps_screen_->Show();
-
-  OobeScreenWaiter screen_waiter(OobeScreen::SCREEN_RECOMMEND_APPS);
-  screen_waiter.set_assert_next_screen();
-  screen_waiter.Wait();
-
-  // Wait for loading screen.
-  test::OobeJS().CreateVisibilityWaiter(true, {"recommend-apps-loading"});
-  test::OobeJS().ExpectHidden("recommend-apps-screen");
-
-  recommend_apps_fetcher_->SimulateLoadError();
-
-  test::OobeJS().CreateVisibilityWaiter(true, {"recommend-apps-screen"});
-  test::OobeJS().ExpectHidden("recommend-apps-loading");
-
-  const std::initializer_list<base::StringPiece> install_button = {
-      "recommend-apps-screen", "recommend-apps-install-button"};
-  const std::initializer_list<base::StringPiece> skip_button = {
-      "recommend-apps-screen", "recommend-apps-skip-button"};
-  const std::initializer_list<base::StringPiece> retry_button = {
-      "recommend-apps-screen", "recommend-apps-retry-button"};
-
-  test::OobeJS().CreateDisplayedWaiter(true, skip_button)->Wait();
-  test::OobeJS().ExpectEnabledPath(skip_button);
-  test::OobeJS().CreateDisplayedWaiter(true, retry_button)->Wait();
-  test::OobeJS().ExpectEnabledPath(retry_button);
-  test::OobeJS().ExpectPathDisplayed(false, install_button);
-
-  test::OobeJS().TapOnPath(retry_button);
-
-  EXPECT_EQ(1, recommend_apps_fetcher_->retries());
-
-  test::OobeJS().CreateVisibilityWaiter(false, {"recommend-apps-screen"});
-  test::OobeJS().ExpectVisible("recommend-apps-loading");
-
-  std::vector<FakeAppInfo> test_apps = {
-      FakeAppInfo("test.app.foo.app1", "Test app 1")};
-  recommend_apps_fetcher_->SimulateSuccess(test_apps);
-
-  test::OobeJS().CreateVisibilityWaiter(true, {"recommend-apps-screen"});
-  test::OobeJS().ExpectHidden("recommend-apps-loading");
-
-  const std::string webview_path =
-      test::GetOobeElementPath({"recommend-apps-screen", "app-list-view"});
-  test::OobeJS()
-      .CreateDisplayedWaiter(true, {"recommend-apps-screen", "app-list-view"})
-      ->Wait();
-  ASSERT_TRUE(WaitForAppListSize(webview_path, test_apps.size()));
-
-  test::OobeJS().ExpectPathDisplayed(true, install_button);
-  test::OobeJS().ExpectDisabledPath(install_button);
-  test::OobeJS().ExpectPathDisplayed(true, skip_button);
-  test::OobeJS().ExpectEnabledPath(skip_button);
-  test::OobeJS().ExpectPathDisplayed(false, retry_button);
-
-  EXPECT_FALSE(screen_result_.has_value());
-  EXPECT_EQ(1, recommend_apps_fetcher_->retries());
-
-  const base::Value* fast_reinstall_packages =
-      ProfileManager::GetActiveUserProfile()->GetPrefs()->Get(
-          arc::prefs::kArcFastAppReinstallPackages);
-  ASSERT_TRUE(fast_reinstall_packages);
-  EXPECT_EQ(base::Value(base::Value::Type::LIST), *fast_reinstall_packages);
+  login_manager_.LoginWithDefaultContext(test_user_);
+  OobeScreenExitWaiter(GaiaView::kScreenId).Wait();
+  if (!screen_result_.has_value()) {
+    // Skip screens to the tested one.
+    LoginDisplayHost::default_host()->StartWizard(
+        RecommendAppsScreenView::kScreenId);
+    WaitForScreenExit();
+  }
+  EXPECT_EQ(screen_result_.value(),
+            RecommendAppsScreen::Result::NOT_APPLICABLE);
 }
 
 }  // namespace chromeos

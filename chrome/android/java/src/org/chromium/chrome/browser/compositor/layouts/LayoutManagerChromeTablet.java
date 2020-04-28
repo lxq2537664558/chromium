@@ -13,8 +13,9 @@ import org.chromium.chrome.browser.compositor.layouts.content.TabContentManager;
 import org.chromium.chrome.browser.compositor.overlays.strip.StripLayoutHelperManager;
 import org.chromium.chrome.browser.contextualsearch.ContextualSearchManagementDelegate;
 import org.chromium.chrome.browser.tab.Tab;
+import org.chromium.chrome.browser.tab.TabCreationState;
+import org.chromium.chrome.browser.tab.TabLaunchType;
 import org.chromium.chrome.browser.tabmodel.TabCreatorManager;
-import org.chromium.chrome.browser.tabmodel.TabLaunchType;
 import org.chromium.chrome.browser.tabmodel.TabModel;
 import org.chromium.chrome.browser.tabmodel.TabModelSelector;
 import org.chromium.chrome.browser.tabmodel.TabModelSelectorTabObserver;
@@ -36,11 +37,9 @@ public class LayoutManagerChromeTablet extends LayoutManagerChrome {
     /**
      * Creates an instance of a {@link LayoutManagerChromePhone}.
      * @param host                     A {@link LayoutManagerHost} instance.
-     * @param overviewModeDelegate     OverviewModeController to delegate tab switcher behavior.
      */
-    public LayoutManagerChromeTablet(
-            LayoutManagerHost host, OverviewModeController overviewModeDelegate) {
-        super(host, false, overviewModeDelegate);
+    public LayoutManagerChromeTablet(LayoutManagerHost host) {
+        super(host, false, null);
         Context context = host.getContext();
 
         mTabStripLayoutHelperManager =
@@ -152,8 +151,9 @@ public class LayoutManagerChromeTablet extends LayoutManagerChrome {
     protected LayoutManagerTabModelObserver createTabModelObserver() {
         return new LayoutManagerTabModelObserver() {
             @Override
-            public void didAddTab(Tab tab, @TabLaunchType int launchType) {
-                super.didAddTab(tab, launchType);
+            public void didAddTab(
+                    Tab tab, @TabLaunchType int launchType, @TabCreationState int creationState) {
+                super.didAddTab(tab, launchType, creationState);
                 updateTitle(getTabById(tab.getId()));
             }
         };

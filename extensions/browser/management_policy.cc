@@ -3,6 +3,7 @@
 // found in the LICENSE file.
 
 #include "extensions/browser/management_policy.h"
+#include "base/logging.h"
 
 namespace extensions {
 
@@ -153,6 +154,11 @@ bool ManagementPolicy::ShouldForceUninstall(const Extension* extension,
                                             base::string16* error) const {
   return ApplyToProviderList(&Provider::ShouldForceUninstall, "Uninstalling",
                              false, extension, error);
+}
+
+bool ManagementPolicy::ShouldRepairIfCorrupted(const Extension* extension) {
+  return MustRemainEnabled(extension, nullptr) ||
+         MustRemainInstalled(extension, nullptr);
 }
 
 void ManagementPolicy::UnregisterAllProviders() {

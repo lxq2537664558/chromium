@@ -14,7 +14,6 @@
 #include "base/strings/string16.h"
 #include "base/time/time.h"
 #include "components/omnibox/browser/autocomplete_controller.h"
-#include "components/omnibox/browser/autocomplete_controller_delegate.h"
 #include "components/omnibox/browser/autocomplete_input.h"
 #include "components/omnibox/browser/autocomplete_match.h"
 #include "components/omnibox/browser/omnibox_controller.h"
@@ -37,15 +36,6 @@ class Image;
 
 class OmniboxEditModel {
  public:
-  // Did the Omnibox focus originate via the user clicking on the Omnibox, on
-  // the Fakebox or the Search button?
-  enum FocusSource {
-    INVALID = 0,
-    OMNIBOX = 1,
-    FAKEBOX = 2,
-    SEARCH_BUTTON = 3
-  };
-
   struct State {
     State(bool user_input_in_progress,
           const base::string16& user_text,
@@ -54,7 +44,7 @@ class OmniboxEditModel {
           metrics::OmniboxEventProto::KeywordModeEntryMethod
               keyword_mode_entry_method,
           OmniboxFocusState focus_state,
-          FocusSource focus_source,
+          OmniboxFocusSource focus_source,
           const AutocompleteInput& autocomplete_input);
     State(const State& other);
     ~State();
@@ -66,7 +56,7 @@ class OmniboxEditModel {
     metrics::OmniboxEventProto::KeywordModeEntryMethod
         keyword_mode_entry_method;
     OmniboxFocusState focus_state;
-    FocusSource focus_source;
+    OmniboxFocusSource focus_source;
     const AutocompleteInput autocomplete_input;
    private:
     DISALLOW_ASSIGN(State);
@@ -98,9 +88,11 @@ class OmniboxEditModel {
 
   OmniboxClient* client() const { return client_.get(); }
 
+  metrics::OmniboxEventProto::PageClassification GetPageClassification() const;
+
   // Returns the current state.  This assumes we are switching tabs, and changes
   // the internal state appropriately.
-  const State GetStateForTabSwitch();
+  State GetStateForTabSwitch() const;
 
   // Resets the tab state, then restores local state from |state|. |state| may
   // be nullptr if there is no saved state.
@@ -128,8 +120,22 @@ class OmniboxEditModel {
   // case, will not be modified.
   //
   // |sel_min| gives the minimum of the selection, e.g. min(sel_start, sel_end).
-  // |text| is the currently selected text. If the copied text is interpreted
-  // as a URL, |write_url| is set to true and |url_from_text| set to the URL.
+  // |text| is the currently selected text, and may be modified by this method.
+  // |url_from_text| is the GURL interpretation of the selected text, and may
+  // be used for drag-and-drop models or writing hyperlink data types to
+  // system clipboards.
+  //
+  // If the copied text is interpreted as a URL:
+  //  - |write_url| is set to true.
+  //  - |url_from_text| is set to the URL.
+  //  - |text| is set to the URL's spec. The output will be pure ASCII and
+  //    %-escaped, since canonical URLs are always encoded to ASCII.
+  //
+  // If the copied text is *NOT* interpreted as a URL:
+  //  - |write_url| is set to false.
+  //  - |url_from_text| may be modified, but might not contain a valid GURL.
+  //  - |text| is full UTF-16 and not %-escaped. This is because we are not
+  //    interpreting |text| as a URL, so we leave the Unicode characters as-is.
   void AdjustTextForCopy(int sel_min,
                          base::string16* text,
                          GURL* url_from_text,
@@ -196,20 +202,27 @@ class OmniboxEditModel {
       const base::string16& text,
       base::TimeTicks match_selection_timestamp = base::TimeTicks());
 
-  // Returns true if |text| classifies as a Search rather than a URL.
-  bool ClassifiesAsSearch(const base::string16& text) const;
+  // Sets |match| and |alternate_nav_url| based on classifying |text|.
+  // |alternate_nav_url| may be nullptr.
+  void ClassifyString(const base::string16& text,
+                      AutocompleteMatch* match,
+                      GURL* alternate_nav_url) const;
 
   // Asks the browser to load the popup's currently selected item, using the
-  // supplied disposition.  This may close the popup. If |for_drop| is true,
-  // it indicates the input is being accepted as part of a drop operation and
-  // the transition should be treated as LINK (so that it won't trigger the
-  // URL to be autocompleted).
+  // supplied disposition.  This may close the popup.
   void AcceptInput(
       WindowOpenDisposition disposition,
-      bool for_drop,
       base::TimeTicks match_selection_timestamp = base::TimeTicks());
 
-  // Asks the browser to load the item at |index|, with the given properties.
+  // Executes the |pedal| associated with given match.
+  void ExecutePedal(const AutocompleteMatch& match,
+                    base::TimeTicks match_selection_timestamp);
+
+  // Asks the browser to load |match|. |index| is only used for logging, and
+  // can be kNoMatch if the popup was closed, or if none of the suggestions
+  // in the popup were used (in the unusual no-default-match case). In that
+  // case, an artificial result set with only |match| will be logged.
+  //
   // OpenMatch() needs to know the original text that drove this action.  If
   // |pasted_text| is non-empty, this is a Paste-And-Go/Search action, and
   // that's the relevant input text.  Otherwise, the relevant input text is
@@ -240,8 +253,8 @@ class OmniboxEditModel {
     return focus_state_ == OMNIBOX_FOCUS_VISIBLE;
   }
 
-  FocusSource focus_source() const { return focus_source_; }
-  void set_focus_source(FocusSource focus_source) {
+  OmniboxFocusSource focus_source() const { return focus_source_; }
+  void set_focus_source(OmniboxFocusSource focus_source) {
     focus_source_ = focus_source;
   }
 
@@ -252,6 +265,10 @@ class OmniboxEditModel {
   bool is_keyword_selected() const {
     return !is_keyword_hint_ && !keyword_.empty();
   }
+
+  // A stronger version of is_keyword_selected(), which depends on there
+  // being input after the keyword.
+  bool InExplicitExperimentalKeywordMode();
 
   // Accepts the current keyword hint as a keyword. It always returns true for
   // caller convenience. |entry_method| indicates how the user entered
@@ -282,6 +299,11 @@ class OmniboxEditModel {
   // Called when the view is gaining focus.  |control_down| is whether the
   // control key is down (at the time we're gaining focus).
   void OnSetFocus(bool control_down);
+
+  // Shows On-Focus Suggestions (ZeroSuggest) if no query is currently running
+  // and the popup is closed. This can be called multiple times without harm,
+  // since it will early-exit if an earlier request is in progress (or done).
+  void ShowOnFocusSuggestionsIfAutocompleteIdle();
 
   // Sets the visibility of the caret in the omnibox, if it has focus. The
   // visibility of the caret is reset to visible if either
@@ -328,23 +350,27 @@ class OmniboxEditModel {
   // negative for moving up, positive for moving down. Virtual for testing.
   virtual void OnUpOrDownKeyPressed(int count);
 
+  // If no query is in progress, starts working on an autocomplete query.
+  // Returns true if started; false otherwise.
+  bool MaybeStartQueryForPopup();
+
   // Called when any relevant data changes.  This rolls together several
   // separate pieces of data into one call so we can update all the UI
   // efficiently:
   //   |text| is either the new temporary text from the user manually selecting
-  //     a different match, or the inline autocomplete text.  We distinguish by
-  //     checking if |destination_for_temporary_text_change| is NULL.
+  //     a different match, or the inline autocomplete text.
+  //   |is_temporary_text| is true if |text| contains the temporary text for
+  //     a match, and is false if |text| contains the inline autocomplete text.
   //   |destination_for_temporary_text_change| is NULL (if temporary text should
   //     not change) or the pre-change destination URL (if temporary text should
   //     change) so we can save it off to restore later.
   //   |keyword| is the keyword to show a hint for if |is_keyword_hint| is true,
   //     or the currently selected keyword if |is_keyword_hint| is false (see
   //     comments on keyword_ and is_keyword_hint_).
-  void OnPopupDataChanged(
-      const base::string16& text,
-      GURL* destination_for_temporary_text_change,
-      const base::string16& keyword,
-      bool is_keyword_hint);
+  void OnPopupDataChanged(const base::string16& text,
+                          bool is_temporary_text,
+                          const base::string16& keyword,
+                          bool is_keyword_hint);
 
   // Called by the OmniboxView after something changes, with details about what
   // state changes occured.  Updates internal state, updates the popup if
@@ -367,7 +393,12 @@ class OmniboxEditModel {
   // Name of the histogram tracking cut or copy omnibox commands.
   static const char kCutOrCopyAllTextHistogram[];
 
-  OmniboxView* view() { return view_; }
+  // Just forwards the call to the OmniboxView referred within.
+  void SetAccessibilityLabel(const AutocompleteMatch& match);
+
+  // Reverts the edit box from a temporary text back to the original user text.
+  // Also resets the popup to the initial state.
+  void RevertTemporaryTextAndPopup();
 
  private:
   friend class OmniboxControllerTest;
@@ -418,15 +449,11 @@ class OmniboxEditModel {
   base::string16 MaybeStripKeyword(const base::string16& text) const;
   base::string16 MaybePrependKeyword(const base::string16& text) const;
 
-  // If there's a selected match, copies it into |match|. Else, returns the
-  // default match for the current text, as well as the alternate nav URL, if
-  // |alternate_nav_url| is non-NULL and there is such a URL.
+  // Copies a match corresponding to the current text into |match|, and
+  // populates |alternate_nav_url| as well if it's not nullptr. If the popup
+  // is closed, the match is generated from the autocomplete classifier.
   void GetInfoForCurrentText(AutocompleteMatch* match,
                              GURL* alternate_nav_url) const;
-
-  // Reverts the edit box from a temporary text back to the original user text.
-  // If |revert_popup| is true then the popup will be reverted as well.
-  void RevertTemporaryText(bool revert_popup);
 
   // Accepts current keyword if the user just typed a space at the end of
   // |new_text|.  This handles both of the following cases:
@@ -446,18 +473,6 @@ class OmniboxEditModel {
   // Checks if a given character is a valid space character for accepting
   // keyword.
   static bool IsSpaceCharForAcceptingKeyword(wchar_t c);
-
-  // Classify the current page being viewed as, for example, the new tab
-  // page or a normal web page.  Used for logging omnibox events for
-  // UMA opted-in users.  Examines the user's profile to determine if the
-  // current page is the user's home page.
-  metrics::OmniboxEventProto::PageClassification ClassifyPage() const;
-
-  // Sets |match| and |alternate_nav_url| based on classifying |text|.
-  // |alternate_nav_url| may be NULL.
-  void ClassifyString(const base::string16& text,
-                      AutocompleteMatch* match,
-                      GURL* alternate_nav_url) const;
 
   // Sets the state of user_input_in_progress_. Returns whether said state
   // changed, so that the caller can evoke NotifyObserversInputInProgress().
@@ -487,7 +502,7 @@ class OmniboxEditModel {
   // Used to keep track whether the input currently in progress originated by
   // focusing in the Omnibox, Fakebox or Search button. This will be INVALID if
   // no input is in progress or the Omnibox is not focused.
-  FocusSource focus_source_;
+  OmniboxFocusSource focus_source_ = OmniboxFocusSource::INVALID;
 
   // Display-only text representing the current page. This could be any of:
   //  - The same as |url_for_editing_| if Steady State Elisions is OFF.

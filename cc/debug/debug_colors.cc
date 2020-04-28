@@ -2,9 +2,10 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "base/logging.h"
-
 #include "cc/debug/debug_colors.h"
+
+#include "base/check_op.h"
+#include "base/notreached.h"
 
 namespace cc {
 
@@ -36,14 +37,6 @@ SkColor DebugColors::ContentLayerBorderColor() {
 }
 int DebugColors::ContentLayerBorderWidth(float device_scale_factor) {
   return Scale(2, device_scale_factor);
-}
-
-// Masking layers are pale blue and wide.
-SkColor DebugColors::MaskingLayerBorderColor() {
-  return SkColorSetARGB(48, 128, 255, 255);
-}
-int DebugColors::MaskingLayerBorderWidth(float device_scale_factor) {
-  return Scale(20, device_scale_factor);
 }
 
 // Other container layers are yellow.
@@ -194,6 +187,25 @@ SkColor DebugColors::PaintRectFillColor(int step) {
   return FadedGreen(60, step);
 }
 
+static SkColor FadedBlue(int initial_value, int step) {
+  DCHECK_GE(step, 0);
+  DCHECK_LE(step, DebugColors::kFadeSteps);
+  int value = step * initial_value / DebugColors::kFadeSteps;
+  return SkColorSetARGB(value, 0, 0, 255);
+}
+/// Layout Shift rects in blue.
+SkColor DebugColors::LayoutShiftRectBorderColor() {
+  return SkColorSetARGB(0, 0, 0, 255);
+}
+int DebugColors::LayoutShiftRectBorderWidth() {
+  // We don't want any border showing for the layout shift debug rects so we set
+  // the border width to be equal to 0.
+  return 0;
+}
+SkColor DebugColors::LayoutShiftRectFillColor(int step) {
+  return FadedBlue(60, step);
+}
+
 // Property-changed rects in blue.
 SkColor DebugColors::PropertyChangedRectBorderColor() {
   return SkColorSetARGB(255, 0, 0, 255);
@@ -257,6 +269,17 @@ SkColor DebugColors::NonFastScrollableRectFillColor() {
   return SkColorSetARGB(30, 238, 163, 59);
 }
 
+// Main-thread scrolling reason rects in yellow-orange.
+SkColor DebugColors::MainThreadScrollingReasonRectBorderColor() {
+  return SkColorSetARGB(255, 200, 100, 0);
+}
+int DebugColors::MainThreadScrollingReasonRectBorderWidth() {
+  return 2;
+}
+SkColor DebugColors::MainThreadScrollingReasonRectFillColor() {
+  return SkColorSetARGB(30, 200, 100, 0);
+}
+
 // Animation bounds are lime-green.
 SkColor DebugColors::LayerAnimationBoundsBorderColor() {
   return SkColorSetARGB(255, 112, 229, 0);
@@ -297,6 +320,28 @@ SkColor DebugColors::MemoryDisplayTextColor() {
 // Paint time display in green (similar to paint times in the WebInspector)
 SkColor DebugColors::PaintTimeDisplayTextAndGraphColor() {
   return SkColorSetRGB(75, 155, 55);
+}
+
+SkColor DebugColors::NonLCDTextHighlightColor(LCDTextDisallowedReason reason) {
+  switch (reason) {
+    case LCDTextDisallowedReason::kNone:
+      return SK_ColorTRANSPARENT;
+    case LCDTextDisallowedReason::kSetting:
+      return SkColorSetARGB(96, 128, 255, 0);
+    case LCDTextDisallowedReason::kBackgroundColorNotOpaque:
+      return SkColorSetARGB(96, 128, 128, 0);
+    case LCDTextDisallowedReason::kContentsNotOpaque:
+      return SkColorSetARGB(96, 255, 0, 0);
+    case LCDTextDisallowedReason::kNonIntegralTranslation:
+      return SkColorSetARGB(96, 255, 128, 0);
+    case LCDTextDisallowedReason::kNonIntegralXOffset:
+    case LCDTextDisallowedReason::kNonIntegralYOffset:
+      return SkColorSetARGB(96, 255, 0, 128);
+    case LCDTextDisallowedReason::kWillChangeTransform:
+      return SkColorSetARGB(96, 128, 0, 255);
+  }
+  NOTREACHED();
+  return SK_ColorTRANSPARENT;
 }
 
 }  // namespace cc

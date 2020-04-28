@@ -11,12 +11,13 @@
 
 #include "base/callback.h"
 #include "base/optional.h"
+#include "components/sync/engine/non_blocking_sync_common.h"
 #include "components/sync/model/entity_change.h"
 #include "components/sync/model/model_type_change_processor.h"
 
 namespace syncer {
 
-class ConflictResolution;
+enum class ConflictResolution;
 class DataBatch;
 struct DataTypeActivationRequest;
 struct EntityData;
@@ -118,6 +119,11 @@ class ModelTypeSyncBridge {
   // on the same or different clients, but to keep things simple, it probably
   // should be. Storage keys are kept in memory at steady state, so each model
   // type should strive to keep these keys as small as possible.
+  // Returning an empty string means the remote creation should be ignored (i.e.
+  // it contains invalid data).
+  // TODO(crbug.com/1057947): introduce a dedicated method to validate data from
+  // the server to solve the inconsistency with bridges that don't support
+  // GetStorageKey() and with remote updates which are not creations.
   virtual std::string GetStorageKey(const EntityData& entity_data) = 0;
 
   // Whether or not the bridge is capable of producing a client tag from
@@ -150,7 +156,7 @@ class ModelTypeSyncBridge {
   // guaranteed not to match (both be deleted or have identical specifics). A
   // default implementation chooses the server data unless it is a deletion.
   virtual ConflictResolution ResolveConflict(
-      const EntityData& local_data,
+      const std::string& storage_key,
       const EntityData& remote_data) const;
 
   // Similar to ApplySyncChanges() but called by the processor when sync
@@ -161,6 +167,16 @@ class ModelTypeSyncBridge {
   // to implement deletion by other means).
   virtual void ApplyStopSyncChanges(
       std::unique_ptr<MetadataChangeList> delete_metadata_change_list);
+
+  // Called only when some items in a commit haven't been committed due to an
+  // error.
+  virtual void OnCommitAttemptErrors(
+      const syncer::FailedCommitResponseDataList& error_response_list);
+
+  // Called only when a commit failed due to server error. The commit will
+  // automatically be retried, so most implementations don't need to handle
+  // this.
+  virtual void OnCommitAttemptFailed(SyncCommitError commit_error);
 
   // Returns an estimate of memory usage attributed to sync (that is, excludes
   // the actual model). Because the resulting UMA metrics are often used to

@@ -26,7 +26,7 @@ enum class AnchorMode {
   // Rectangle for the popover alert. Only used when |_anchorMode| is VIEW.
   CGRect _rect;
   // View for the popovert alert. Only used when |_anchorMode| is VIEW.
-  UIView* _view;
+  __weak UIView* _view;
 
   // Bar button item for the popover alert.  Only used when |_anchorMode| is
   // BAR_BUTTON_ITEM.
@@ -38,11 +38,13 @@ enum class AnchorMode {
 @implementation ActionSheetCoordinator
 
 - (instancetype)initWithBaseViewController:(UIViewController*)viewController
+                                   browser:(Browser*)browser
                                      title:(NSString*)title
                                    message:(NSString*)message
                                       rect:(CGRect)rect
                                       view:(UIView*)view {
   self = [super initWithBaseViewController:viewController
+                                   browser:browser
                                      title:title
                                    message:message];
   if (self) {
@@ -56,10 +58,12 @@ enum class AnchorMode {
 }
 
 - (instancetype)initWithBaseViewController:(UIViewController*)viewController
+                                   browser:(Browser*)browser
                                      title:(NSString*)title
                                    message:(NSString*)message
                              barButtonItem:(UIBarButtonItem*)barButtonItem {
   self = [super initWithBaseViewController:viewController
+                                   browser:browser
                                      title:title
                                    message:message];
   if (self) {
@@ -91,6 +95,17 @@ enum class AnchorMode {
   }
 
   return alert;
+}
+
+- (void)updateAttributedText {
+  // Use setValue to access unexposed attributed strings for title and message.
+  if (self.attributedTitle) {
+    [self.alertController setValue:_attributedTitle forKey:@"attributedTitle"];
+  }
+  if (self.attributedMessage) {
+    [self.alertController setValue:_attributedMessage
+                            forKey:@"attributedMessage"];
+  }
 }
 
 @end

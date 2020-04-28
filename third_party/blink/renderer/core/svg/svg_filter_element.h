@@ -42,8 +42,7 @@ class CORE_EXPORT SVGFilterElement final : public SVGElement,
   USING_GARBAGE_COLLECTED_MIXIN(SVGFilterElement);
 
  public:
-  DECLARE_NODE_FACTORY(SVGFilterElement);
-  void Trace(blink::Visitor*) override;
+  void Trace(Visitor*) override;
 
   explicit SVGFilterElement(Document&);
   ~SVGFilterElement() override;

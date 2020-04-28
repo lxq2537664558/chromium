@@ -43,10 +43,6 @@ namespace blink {
 
 class SVGAnimatedPathLength final : public SVGAnimatedNumber {
  public:
-  static SVGAnimatedPathLength* Create(SVGGeometryElement* context_element) {
-    return MakeGarbageCollected<SVGAnimatedPathLength>(context_element);
-  }
-
   explicit SVGAnimatedPathLength(SVGGeometryElement* context_element)
       : SVGAnimatedNumber(context_element,
                           svg_names::kPathLengthAttr,
@@ -79,13 +75,14 @@ void SVGGeometryElement::SvgAttributeChanged(const QualifiedName& attr_name) {
   SVGGraphicsElement::SvgAttributeChanged(attr_name);
 }
 
-void SVGGeometryElement::Trace(blink::Visitor* visitor) {
+void SVGGeometryElement::Trace(Visitor* visitor) {
   visitor->Trace(path_length_);
   SVGGraphicsElement::Trace(visitor);
 }
 
 bool SVGGeometryElement::isPointInFill(SVGPointTearOff* point) const {
-  GetDocument().UpdateStyleAndLayoutForNode(this);
+  GetDocument().UpdateStyleAndLayoutForNode(this,
+                                            DocumentUpdateReason::kJavaScript);
 
   // FIXME: Eventually we should support isPointInFill for display:none
   // elements.
@@ -99,7 +96,8 @@ bool SVGGeometryElement::isPointInFill(SVGPointTearOff* point) const {
 }
 
 bool SVGGeometryElement::isPointInStroke(SVGPointTearOff* point) const {
-  GetDocument().UpdateStyleAndLayoutForNode(this);
+  GetDocument().UpdateStyleAndLayoutForNode(this,
+                                            DocumentUpdateReason::kJavaScript);
 
   // FIXME: Eventually we should support isPointInStroke for display:none
   // elements.
@@ -120,9 +118,17 @@ bool SVGGeometryElement::isPointInStroke(SVGPointTearOff* point) const {
         layout_shape.ComputeNonScalingStrokeTransform();
     path.Transform(transform);
     local_point = transform.MapPoint(local_point);
+
+    // Un-scale to get back to the root-transform (cheaper than re-computing
+    // the root transform from scratch).
+    AffineTransform root_transform;
+    root_transform.Scale(layout_shape.StyleRef().EffectiveZoom())
+        .Multiply(transform);
+    return path.StrokeContains(local_point, stroke_data, root_transform);
   }
   // Path::StrokeContains will reject points with a non-finite component.
-  return path.StrokeContains(local_point, stroke_data);
+  return path.StrokeContains(local_point, stroke_data,
+                             layout_shape.ComputeRootTransform());
 }
 
 Path SVGGeometryElement::ToClipPath() const {
@@ -135,16 +141,22 @@ Path SVGGeometryElement::ToClipPath() const {
   return path;
 }
 
-float SVGGeometryElement::getTotalLength() {
-  GetDocument().UpdateStyleAndLayoutForNode(this);
+float SVGGeometryElement::getTotalLength(ExceptionState& exception_state) {
+  GetDocument().UpdateStyleAndLayoutForNode(this,
+                                            DocumentUpdateReason::kJavaScript);
 
-  if (!GetLayoutObject())
+  if (!GetLayoutObject()) {
+    exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError,
+                                      "This element is non-rendered element.");
     return 0;
+  }
+
   return AsPath().length();
 }
 
 SVGPointTearOff* SVGGeometryElement::getPointAtLength(float length) {
-  GetDocument().UpdateStyleAndLayoutForNode(this);
+  GetDocument().UpdateStyleAndLayoutForNode(this,
+                                            DocumentUpdateReason::kJavaScript);
 
   FloatPoint point;
   if (GetLayoutObject()) {

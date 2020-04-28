@@ -10,9 +10,9 @@
 #include "base/location.h"
 #include "base/single_thread_task_runner.h"
 #include "base/threading/thread_task_runner_handle.h"
+#include "build/build_config.h"
+#include "remoting/base/logging.h"
 #include "remoting/base/url_request.h"
-#include "remoting/protocol/http_ice_config_request.h"
-#include "remoting/protocol/jingle_info_request.h"
 #include "remoting/protocol/port_allocator_factory.h"
 #include "third_party/webrtc/rtc_base/socket_address.h"
 
@@ -20,6 +20,7 @@
 #include "jingle/glue/thread_wrapper.h"
 #include "net/url_request/url_request_context_getter.h"
 #include "remoting/protocol/chromium_port_allocator_factory.h"
+#include "remoting/protocol/remoting_ice_config_request.h"
 #endif  // !defined(OS_NACL)
 
 namespace remoting {
@@ -31,6 +32,29 @@ namespace {
 constexpr base::TimeDelta kMinimumIceConfigLifetime =
     base::TimeDelta::FromHours(1);
 
+void PrintIceConfig(const IceConfig& ice_config) {
+  HOST_LOG << "IceConfig: {";
+  HOST_LOG << "  stun: [";
+  for (auto& stun_server : ice_config.stun_servers) {
+    HOST_LOG << "    " << stun_server.ToString() << ",";
+  }
+  HOST_LOG << "  ]";
+  HOST_LOG << "  turn: [";
+  for (auto& turn_server : ice_config.turn_servers) {
+    HOST_LOG << "    {";
+    HOST_LOG << "      username: " << turn_server.credentials.username;
+    HOST_LOG << "      password: " << turn_server.credentials.password;
+    for (auto& port : turn_server.ports) {
+      HOST_LOG << "      port: " << port.address.ToString();
+    }
+    HOST_LOG << "    },";
+  }
+  HOST_LOG << "  ]";
+  HOST_LOG << "  expiration time: " << ice_config.expiration_time;
+  HOST_LOG << "  max_bitrate_kbps: " << ice_config.max_bitrate_kbps;
+  HOST_LOG << "}";
+}
+
 }  // namespace
 
 #if !defined(OS_NACL)
@@ -38,8 +62,7 @@ constexpr base::TimeDelta kMinimumIceConfigLifetime =
 scoped_refptr<TransportContext> TransportContext::ForTests(TransportRole role) {
   jingle_glue::JingleThreadWrapper::EnsureForCurrentMessageLoop();
   return new protocol::TransportContext(
-      nullptr, std::make_unique<protocol::ChromiumPortAllocatorFactory>(),
-      nullptr,
+      std::make_unique<protocol::ChromiumPortAllocatorFactory>(), nullptr,
       protocol::NetworkSettings(
           protocol::NetworkSettings::NAT_TRAVERSAL_OUTGOING),
       role);
@@ -47,13 +70,11 @@ scoped_refptr<TransportContext> TransportContext::ForTests(TransportRole role) {
 #endif  // !defined(OS_NACL)
 
 TransportContext::TransportContext(
-    SignalStrategy* signal_strategy,
     std::unique_ptr<PortAllocatorFactory> port_allocator_factory,
     std::unique_ptr<UrlRequestFactory> url_request_factory,
     const NetworkSettings& network_settings,
     TransportRole role)
-    : signal_strategy_(signal_strategy),
-      port_allocator_factory_(std::move(port_allocator_factory)),
+    : port_allocator_factory_(std::move(port_allocator_factory)),
       url_request_factory_(std::move(url_request_factory)),
       network_settings_(network_settings),
       role_(role) {}
@@ -72,18 +93,23 @@ void TransportContext::GetIceConfig(const GetIceConfigCallback& callback) {
   if (ice_config_request_[relay_mode_]) {
     pending_ice_config_callbacks_[relay_mode_].push_back(callback);
   } else {
+    HOST_LOG << "Using cached ICE Config.";
+    PrintIceConfig(ice_config_[relay_mode_]);
     callback.Run(ice_config_[relay_mode_]);
   }
 }
 
 void TransportContext::EnsureFreshIceConfig() {
   // Check if request is already pending.
-  if (ice_config_request_[relay_mode_])
+  if (ice_config_request_[relay_mode_]) {
+    HOST_LOG << "ICE Config request is already pending.";
     return;
+  }
 
-  // Don't need to make jingleinfo request if both STUN and Relay are disabled.
+  // Don't need to make ICE config request if both STUN and Relay are disabled.
   if ((network_settings_.flags & (NetworkSettings::NAT_TRAVERSAL_STUN |
                                   NetworkSettings::NAT_TRAVERSAL_RELAY)) == 0) {
+    HOST_LOG << "Skipping ICE Config request as STUN and RELAY are disabled";
     return;
   }
 
@@ -93,19 +119,15 @@ void TransportContext::EnsureFreshIceConfig() {
     std::unique_ptr<IceConfigRequest> request;
     switch (relay_mode_) {
       case RelayMode::TURN:
-        if (ice_config_url_.empty()) {
-          LOG(WARNING) << "ice_config_url isn't set.";
-          return;
-        }
-        request.reset(new HttpIceConfigRequest(
-            url_request_factory_.get(), ice_config_url_, oauth_token_getter_));
-        break;
-      case RelayMode::GTURN:
-        request.reset(new JingleInfoRequest(signal_strategy_));
+#if defined(OS_NACL)
+        NOTREACHED() << "TURN is not supported on NACL";
+#else
+        request = std::make_unique<RemotingIceConfigRequest>();
+#endif
         break;
     }
     ice_config_request_[relay_mode_] = std::move(request);
-    ice_config_request_[relay_mode_]->Send(base::Bind(
+    ice_config_request_[relay_mode_]->Send(base::BindOnce(
         &TransportContext::OnIceConfig, base::Unretained(this), relay_mode_));
   }
 }
@@ -114,6 +136,9 @@ void TransportContext::OnIceConfig(RelayMode relay_mode,
                                    const IceConfig& ice_config) {
   ice_config_[relay_mode] = ice_config;
   ice_config_request_[relay_mode].reset();
+
+  HOST_LOG << "Using newly requested ICE Config:";
+  PrintIceConfig(ice_config);
 
   auto& callback_list = pending_ice_config_callbacks_[relay_mode];
   while (!callback_list.empty()) {

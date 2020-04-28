@@ -10,7 +10,9 @@
 #include <vector>
 
 #include "base/macros.h"
+#include "base/optional.h"
 #include "printing/backend/cups_connection.h"
+#include "printing/backend/cups_deleters.h"
 #include "printing/backend/cups_printer.h"
 #include "printing/printing_context.h"
 
@@ -47,6 +49,9 @@ class PRINTING_EXPORT PrintingContextChromeos : public PrintingContext {
 
   CupsConnection connection_;
   std::unique_ptr<CupsPrinter> printer_;
+  std::vector<ScopedCupsOption> cups_options_;
+  bool send_user_info_;
+  std::string username_;
 
   DISALLOW_COPY_AND_ASSIGN(PrintingContextChromeos);
 };

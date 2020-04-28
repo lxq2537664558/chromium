@@ -28,6 +28,7 @@
 #include "base/macros.h"
 #include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/dom/pseudo_element.h"
+#include "third_party/blink/renderer/platform/wtf/casting.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
 
 namespace blink {
@@ -52,7 +53,7 @@ class CORE_EXPORT FirstLetterPseudoElement final : public PseudoElement {
   void UpdateTextFragments();
 
   void AttachLayoutTree(AttachContext&) override;
-  void DetachLayoutTree(const AttachContext& = AttachContext()) override;
+  void DetachLayoutTree(bool performing_reattach) override;
   Node* InnerNodeForHitTesting() const override;
 
  private:
@@ -64,8 +65,12 @@ class CORE_EXPORT FirstLetterPseudoElement final : public PseudoElement {
   DISALLOW_COPY_AND_ASSIGN(FirstLetterPseudoElement);
 };
 
-DEFINE_ELEMENT_TYPE_CASTS(FirstLetterPseudoElement,
-                          IsFirstLetterPseudoElement());
+template <>
+struct DowncastTraits<FirstLetterPseudoElement> {
+  static bool AllowFrom(const Node& node) {
+    return node.IsFirstLetterPseudoElement();
+  }
+};
 
 }  // namespace blink
 

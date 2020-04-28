@@ -13,10 +13,10 @@
 #include "chrome/browser/extensions/extension_apitest.h"
 #include "chrome/browser/extensions/lazy_background_page_test_util.h"
 #include "chrome/browser/renderer_context_menu/render_view_context_menu_test_util.h"
-#include "chrome/browser/sessions/session_tab_helper.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/test/base/ui_test_utils.h"
+#include "components/sessions/content/session_tab_helper.h"
 #include "content/public/test/browser_test_utils.h"
 #include "extensions/browser/api/file_system/file_system_api.h"
 #include "extensions/browser/event_router.h"
@@ -90,26 +90,26 @@ IN_PROC_BROWSER_TEST_F(NativeBindingsApiTest, DeclarativeEvents) {
   ASSERT_TRUE(listener.WaitUntilSatisfied());
 
   // The extension's page action should currently be hidden.
-  ExtensionAction* page_action =
-      ExtensionActionManager::Get(profile())->GetPageAction(*extension);
+  ExtensionAction* action =
+      ExtensionActionManager::Get(profile())->GetExtensionAction(*extension);
   content::WebContents* web_contents =
       browser()->tab_strip_model()->GetActiveWebContents();
-  int tab_id = SessionTabHelper::IdForTab(web_contents).id();
-  EXPECT_FALSE(page_action->GetIsVisible(tab_id));
-  EXPECT_TRUE(page_action->GetDeclarativeIcon(tab_id).IsEmpty());
+  int tab_id = sessions::SessionTabHelper::IdForTab(web_contents).id();
+  EXPECT_FALSE(action->GetIsVisible(tab_id));
+  EXPECT_TRUE(action->GetDeclarativeIcon(tab_id).IsEmpty());
 
   // Navigating to example.com should show the page action.
   ui_test_utils::NavigateToURL(
       browser(), embedded_test_server()->GetURL(
                      "example.com", "/native_bindings/simple.html"));
   base::RunLoop().RunUntilIdle();
-  EXPECT_TRUE(page_action->GetIsVisible(tab_id));
-  EXPECT_FALSE(page_action->GetDeclarativeIcon(tab_id).IsEmpty());
+  EXPECT_TRUE(action->GetIsVisible(tab_id));
+  EXPECT_FALSE(action->GetDeclarativeIcon(tab_id).IsEmpty());
 
   // And the extension should be notified of the click.
   ExtensionTestMessageListener clicked_listener("clicked and removed", false);
   ExtensionActionAPI::Get(profile())->DispatchExtensionActionClicked(
-      *page_action, web_contents, extension);
+      *action, web_contents, extension);
   ASSERT_TRUE(clicked_listener.WaitUntilSatisfied());
 }
 

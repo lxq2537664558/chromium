@@ -20,7 +20,7 @@ namespace search_box {
 class SearchBoxViewBase;
 }  // namespace search_box
 
-namespace app_list {
+namespace ash {
 
 class AppListItem;
 class AppListModel;
@@ -45,15 +45,11 @@ class APP_LIST_EXPORT AppListMainView
 
   void ShowAppListWhenReady();
 
-  void ResetForShow();
-
-  void Close();
-
   void ModelChanged();
 
   SearchBoxView* search_box_view() const { return search_box_view_; }
 
-  // If |drag_and_drop_host| is not NULL it will be called upon drag and drop
+  // If |drag_and_drop_host| is not nullptr it will be called upon drag and drop
   // operations outside the application list.
   void SetDragAndDropHostOfCurrentAppList(
       ApplicationDragAndDropHost* drag_and_drop_host);
@@ -82,6 +78,10 @@ class APP_LIST_EXPORT AppListMainView
   // Called when the app represented by |result| is installed.
   void OnResultInstalled(SearchResult* result);
 
+  // AppListModelObserver overrides:
+  void OnAppListStateChanged(AppListState new_state,
+                             AppListState old_state) override;
+
  private:
   // Adds the ContentsView.
   void AddContentsViews();
@@ -101,14 +101,14 @@ class APP_LIST_EXPORT AppListMainView
   SearchModel* search_model_;  // Unowned; ownership is handled by |delegate_|.
 
   // Created by AppListView. Owned by views hierarchy.
-  SearchBoxView* search_box_view_;
+  SearchBoxView* search_box_view_ = nullptr;
 
-  ContentsView* contents_view_;       // Owned by views hierarchy.
-  AppListView* const app_list_view_;  // Owned by views hierarchy.
+  ContentsView* contents_view_ = nullptr;  // Owned by views hierarchy.
+  AppListView* const app_list_view_;       // Owned by views hierarchy.
 
   DISALLOW_COPY_AND_ASSIGN(AppListMainView);
 };
 
-}  // namespace app_list
+}  // namespace ash
 
 #endif  // ASH_APP_LIST_VIEWS_APP_LIST_MAIN_VIEW_H_

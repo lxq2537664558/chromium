@@ -2,13 +2,12 @@
      Use of this source code is governed by a BSD-style license that can be
      found in the LICENSE file. -->
 
+<link rel="import" href="chrome://resources/cr_elements/cr_button/cr_button.html">
 <link rel="import" href="chrome://resources/cr_elements/cr_icons_css.html">
-<link rel="import" href="chrome://resources/cr_elements/paper_button_style_css.html">
 <link rel="import" href="chrome://resources/cr_elements/shared_style_css.html">
 <link rel="import" href="chrome://resources/polymer/v1_0/iron-flex-layout/iron-flex-layout-classes.html">
 <link rel="import" href="chrome://resources/polymer/v1_0/iron-icon/iron-icon.html">
 <link rel="import" href="chrome://resources/polymer/v1_0/iron-iconset-svg/iron-iconset-svg.html">
-<link rel="import" href="chrome://resources/polymer/v1_0/paper-button/paper-button.html">
 <link rel="import" href="chrome://resources/polymer/v1_0/paper-styles/color.html">
 
 <iron-iconset-svg name="oobe-buttons-20" size="20">
@@ -40,32 +39,37 @@
   Note, that slotted element must have separate DOM node (i.e. a separate div).
 
   Example:
-    <oobe-icon-button inverse>
-      <div i18n-content="oobeOKButtonText"></div>
+    <oobe-icon-button inverse text-key="oobeOKButtonText">
     </oobe-icon-button>
+
+  Button text can be also changed by specifying element for "text" slot.
 
   Attributes:
     'disabled' - button is disabled when the attribute is set.
     (See crbug.com/900640)
     'inverse' - makes text white and background blue.
-    'label-for-aria' - accessibility label.
+    'text-key' - ID of localized string to be used as button text.
     'border' - adds border to the button.
+    'label-for-aria' - accessibility label, override usual behavior
+                       (string specified by text-key is used as aria-label).
 -->
 <dom-module id="oobe-text-button">
   <template>
     <style include="iron-flex iron-flex-alignment iron-positioning"></style>
     <link rel="stylesheet" href="oobe_iron_flex_layout_fix.css">
-    <style include="paper-button-style cr-icons cr-shared-style"></style>
+    <style include="cr-icons cr-shared-style"></style>
     <link rel="stylesheet" href="oobe_fonts.css">
     <link rel="stylesheet" href="oobe_text_buttons.css">
-    <paper-button id="textButton" on-tap="onClick_" disabled="[[disabled]]"
-        inverse$="[[inverse]]" aria-label$="[[labelForAria]]"
-        border$="[[border]]" android$="[[android]]">
+    <cr-button id="textButton" on-tap="onClick_" disabled="[[disabled]]"
+        inverse$="[[inverse]]" aria-label$="[[labelForAriaText_]]"
+        border$="[[border]]">
       <div id="container"
           class="flex layout horizontal center center-justified self-stretch">
-        <slot></slot>
+        <slot name="text">
+          <div class="fallback">[[i18nDynamic(locale, textKey)]]</div>
+        </slot>
       </div>
-    </paper-button>
+    </cr-button>
   </template>
 </dom-module>
 
@@ -74,40 +78,45 @@
   Text is blue, background is white.
 
   Example:
-    <oobe-back-button on-tap="handleOnTap_"></oobe-back-button>
+    <oobe-back-button on-click="handleOnClick_"></oobe-back-button>
 
-  (Note that there is no space between opening and closing tag.)
+    The content of button can be overridden from default "Back" and "Next"
+    by specifying text-key property or setting text via "text" slot:
 
-  Content is optional, "Back" and "Next" will be used if not specified.
-    <oobe-back-button on-tap="handleOnTap_">
-      Continue
+    <oobe-back-button on-click="handleOnClick_" text-key="continueButton">
+    </oobe-back-button>
+
+    or
+
+    <oobe-back-button on-click="handleOnClick_">
+      <div slot="text">[[i18nDynamic(locale, 'continueButton')]]</div>
     </oobe-back-button>
 
   Attributes:
     'disabled' - button is disabled when the attribute is set.
     (See crbug.com/900640)
-    'label-for-aria' - accessibility label.
+    'text-key' - ID of localized string to be used as button text.
 -->
 <dom-module id="oobe-back-button">
   <template>
     <style include="iron-flex iron-flex-alignment iron-positioning"></style>
     <link rel="stylesheet" href="oobe_iron_flex_layout_fix.css">
-    <style include="paper-button-style cr-icons cr-shared-style"></style>
+    <style include="cr-icons cr-shared-style"></style>
     <link rel="stylesheet" href="oobe_fonts.css">
     <link rel="stylesheet" href="oobe_text_buttons.css">
     <link rel="stylesheet" href="oobe_back_button.css">
-    <paper-button id="button" on-tap="onClick_" disabled="[[disabled]]"
-        aria-label$="[[labelForAria]]">
+    <cr-button id="button" on-click="onClick_" disabled="[[disabled]]"
+        aria-label$="[[labelForAria_]]">
       <div class="flex horizontal layout start center">
         <hd-iron-icon
             icon1x="oobe-buttons-20:arrow-forward"
             icon2x="oobe-buttons-40:arrow-forward">
         </hd-iron-icon>
-        <slot>
-          <div id="text" i18n-content="back"></div>
+        <slot name="text">
+          <div class="fallback">[[i18nDynamic(locale, textKey)]]</div>
         </slot>
       </div>
-    </paper-button>
+    </cr-button>
   </template>
 </dom-module>
 
@@ -115,22 +124,22 @@
   <template>
     <style include="iron-flex iron-flex-alignment iron-positioning"></style>
     <link rel="stylesheet" href="oobe_iron_flex_layout_fix.css">
-    <style include="paper-button-style cr-icons cr-shared-style"></style>
+    <style include="cr-icons cr-shared-style"></style>
     <link rel="stylesheet" href="oobe_fonts.css">
     <link rel="stylesheet" href="oobe_text_buttons.css">
     <link rel="stylesheet" href="oobe_next_button.css">
-    <paper-button id="button" on-tap="onClick_" disabled="[[disabled]]"
-        class="action-button">
+    <cr-button id="button" on-tap="onClick_" disabled="[[disabled]]"
+        aria-label$="[[labelForAria_]]" class="action-button">
       <div class="flex horizontal layout start center">
-        <slot>
-          <div id="text" i18n-content="next"></div>
+        <slot name="text">
+          <div class="fallback">[[i18nDynamic(locale, textKey)]]</div>
         </slot>
         <hd-iron-icon
             icon1x="oobe-buttons-20:arrow-forward"
             icon2x="oobe-buttons-40:arrow-forward">
         </hd-iron-icon>
       </div>
-    </paper-button>
+    </cr-button>
   </template>
 </dom-module>
 
@@ -138,33 +147,42 @@
   Material design button that shows an icon and displays text.
 
   Example:
+    <oobe-welcome-secondary-button icon="close" text-key="offlineLoginCloseBtn">
+    </oobe-welcome-secondary-button>
+
+    or
+
     <oobe-welcome-secondary-button icon="close">
-      <div i18n-content="oobeCloseButtonText"></div>
+      <div slot="text">[[i18nDynamic(locale, 'offlineLoginCloseBtn')]]</div>
     </oobe-welcome-secondary-button>
 
   Attributes:
+    'text-key' - ID of localized string to be used as button text.
     1x and 2x icons:
       'icon1x' - a name of icon from material design set to show on button.
       'icon2x' - a name of icon from material design set to show on button.
-    'label-for-aria' - accessibility label.
+    'label-for-aria' - accessibility label, override usual behavior
+                       (string specified by text-key  is used as aria-label).
 -->
 <dom-module id="oobe-welcome-secondary-button">
   <template>
     <style include="iron-flex iron-flex-alignment iron-positioning"></style>
     <link rel="stylesheet" href="oobe_iron_flex_layout_fix.css">
-    <style include="paper-button-style cr-icons cr-shared-style"></style>
+    <style include="cr-icons cr-shared-style"></style>
     <link rel="stylesheet" href="oobe_fonts.css">
     <link rel="stylesheet" href="oobe_text_buttons.css">
     <link rel="stylesheet" href="oobe_welcome_secondary_button.css">
-    <paper-button id="button" aria-label$="[[labelForAria]]">
+    <cr-button id="button" aria-label$="[[labelForAriaText_]]">
       <div id="container" class="flex vertical layout center self-stretch">
         <div class="flex layout horizontal center self-stretch center-justified">
           <hd-iron-icon id="icon" icon1x="[[icon1x]]" icon2x="[[icon2x]]"
               class="oobe-icon" hidden>
           </hd-iron-icon>
-          <slot></slot>
+          <slot name="text">
+            <div class="fallback">[[i18nDynamic(locale, textKey)]]</div>
+          </slot>
         </div>
       </div>
-    </paper-button>
+    </cr-button>
   </template>
 </dom-module>

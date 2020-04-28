@@ -82,20 +82,20 @@ class ArcNotificationViewTest : public AshTestBase {
     notification_view_.reset(static_cast<ArcNotificationView*>(
         message_center::MessageViewFactory::Create(*notification)));
     notification_view_->set_owned_by_client();
-    surface_ = std::make_unique<MockArcNotificationSurface>(
-        kDefaultNotificationKey, Shell::Get()->aura_env());
+    surface_ =
+        std::make_unique<MockArcNotificationSurface>(kDefaultNotificationKey);
     notification_view_->content_view_->SetSurface(surface_.get());
     UpdateNotificationViews(*notification);
 
     views::Widget::InitParams init_params(
         views::Widget::InitParams::TYPE_WINDOW_FRAMELESS);
-    init_params.context = CurrentContext();
+    init_params.context = GetContext();
     init_params.parent = Shell::GetPrimaryRootWindow()->GetChildById(
         desks_util::GetActiveDeskContainerId());
     init_params.ownership =
         views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET;
     views::Widget* widget = new views::Widget();
-    widget->Init(init_params);
+    widget->Init(std::move(init_params));
     widget->SetContentsView(notification_view_.get());
     widget->SetSize(notification_view_->GetPreferredSize());
     widget->Show();

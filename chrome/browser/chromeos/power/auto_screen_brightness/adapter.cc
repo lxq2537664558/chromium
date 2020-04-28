@@ -19,6 +19,7 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chromeos/constants/chromeos_features.h"
+#include "chromeos/dbus/power/power_manager_client.h"
 #include "chromeos/dbus/power_manager/backlight.pb.h"
 #include "components/prefs/pref_service.h"
 
@@ -43,6 +44,8 @@ const char* BrightnessChangeCauseToString(
       return "BrightneningThresholdExceeded";
     case Adapter::BrightnessChangeCause::kDarkeningThresholdExceeded:
       return "DarkeningThresholdExceeded";
+    case Adapter::BrightnessChangeCause::kUpdateAfterLidReopen:
+      return "UpdateAfterLidReopen";
     // |kImmediateBrightneningThresholdExceeded| and
     // |kImmediateDarkeningThresholdExceeded| are deprecated, and shouldn't show
     // up.
@@ -85,20 +88,25 @@ Adapter::Adapter(Profile* profile,
                  BrightnessMonitor* brightness_monitor,
                  Modeller* modeller,
                  ModelConfigLoader* model_config_loader,
-                 MetricsReporter* metrics_reporter,
-                 chromeos::PowerManagerClient* power_manager_client)
+                 MetricsReporter* metrics_reporter)
     : Adapter(profile,
               als_reader,
               brightness_monitor,
               modeller,
               model_config_loader,
               metrics_reporter,
-              power_manager_client,
               base::DefaultTickClock::GetInstance()) {}
 
 Adapter::~Adapter() = default;
 
+void Adapter::Init() {
+  // Deferred to Init() because it can result in a virtual method being called.
+  power_manager_client_observer_.Add(PowerManagerClient::Get());
+}
+
 void Adapter::OnAmbientLightUpdated(int lux) {
+  const base::TimeTicks now = tick_clock_->NowTicks();
+
   // Ambient light data is only used when adapter is initialized to success.
   // |log_als_values_| may not be available to use when adapter is being
   // initialized.
@@ -107,7 +115,21 @@ void Adapter::OnAmbientLightUpdated(int lux) {
 
   DCHECK(log_als_values_);
 
-  const base::TimeTicks now = tick_clock_->NowTicks();
+  // We may have no prior lid event received, if lux value is > 0, then it's
+  // safe to assume the lid is open.
+  if (!is_lid_closed_.has_value())
+    is_lid_closed_ = lux == 0;
+
+  // We do not record ALS value if lid is closed.
+  if (*is_lid_closed_) {
+    VLOG(1) << "ABAdapter ALS ignored while lid-closed";
+    return;
+  }
+
+  if (now - lid_reopen_time_ < lid_open_delay_time_) {
+    VLOG(1) << "ABAdapter ALS ignored soon after lid-reopened";
+    return;
+  }
 
   log_als_values_->SaveToBuffer({ConvertToLog(lux), now});
 
@@ -173,6 +195,13 @@ void Adapter::OnUserBrightnessChanged(double old_brightness_percent,
     const base::Optional<AlsAvgStdDev> log_als_avg_stddev =
         decision_at_first_recent_user_brightness_request->log_als_avg_stddev;
 
+    const std::string log_als =
+        log_als_avg_stddev ? base::StringPrintf("%.4f", log_als_avg_stddev->avg)
+                           : "";
+    VLOG(1) << "ABAdapter user brightness change: "
+            << "brightness=" << FormatToPrint(old_brightness_percent) << "->"
+            << FormatToPrint(new_brightness_percent) << " log_als=" << log_als;
+
     OnBrightnessChanged(
         *first_recent_user_brightness_request_time, new_brightness_percent,
         log_als_avg_stddev ? base::Optional<double>(log_als_avg_stddev->avg)
@@ -182,36 +211,7 @@ void Adapter::OnUserBrightnessChanged(double old_brightness_percent,
   if (!metrics_reporter_)
     return;
 
-  DCHECK(als_init_status_);
-
-  switch (*als_init_status_) {
-    case AlsReader::AlsInitStatus::kSuccess:
-      DCHECK(!params_.metrics_key.empty());
-      if (params_.metrics_key == "eve") {
-        metrics_reporter_->OnUserBrightnessChangeRequested(
-            MetricsReporter::UserAdjustment::kEve);
-        return;
-      }
-      if (params_.metrics_key == "atlas") {
-        metrics_reporter_->OnUserBrightnessChangeRequested(
-            MetricsReporter::UserAdjustment::kAtlas);
-        return;
-      }
-      metrics_reporter_->OnUserBrightnessChangeRequested(
-          MetricsReporter::UserAdjustment::kSupportedAls);
-      return;
-    case AlsReader::AlsInitStatus::kDisabled:
-    case AlsReader::AlsInitStatus::kMissingPath:
-      metrics_reporter_->OnUserBrightnessChangeRequested(
-          MetricsReporter::UserAdjustment::kNoAls);
-      return;
-    case AlsReader::AlsInitStatus::kIncorrectConfig:
-      metrics_reporter_->OnUserBrightnessChangeRequested(
-          MetricsReporter::UserAdjustment::kUnsupportedAls);
-      return;
-    case AlsReader::AlsInitStatus::kInProgress:
-      NOTREACHED() << "ALS should have been initialized with a valid value.";
-  }
+  metrics_reporter_->OnUserBrightnessChangeRequested();
 }
 
 void Adapter::OnUserBrightnessChangeRequested() {
@@ -233,6 +233,14 @@ void Adapter::OnUserBrightnessChangeRequested() {
     decision_at_first_recent_user_brightness_request_ =
         CanAdjustBrightness(now);
     first_recent_user_brightness_request_time_ = now;
+    model_iteration_count_at_user_brightness_change_ = model_.iteration_count;
+  }
+
+  if (!adapter_disabled_by_user_adjustment_) {
+    // It's possible a new curve arrives after a user brighntess change disables
+    // the adapter, in that case we don't want to reset the |new_model_arrived_|
+    // because we could use this model after the adapter is re-enabled.
+    new_model_arrived_ = false;
   }
 
   if (params_.user_adjustment_effect != UserAdjustmentEffect::kContinueAuto) {
@@ -248,33 +256,36 @@ void Adapter::OnModelTrained(const MonotoneCubicSpline& brightness_curve) {
   if (adapter_status_ == Status::kDisabled)
     return;
 
-  personal_curve_.emplace(brightness_curve);
+  model_.personal_curve = brightness_curve;
+  ++model_.iteration_count;
+  new_model_arrived_ = true;
+  VLOG(1) << "ABAdapter new model arrived";
 }
 
-void Adapter::OnModelInitialized(
-    const base::Optional<MonotoneCubicSpline>& global_curve,
-    const base::Optional<MonotoneCubicSpline>& personal_curve) {
+void Adapter::OnModelInitialized(const Model& model) {
   DCHECK(!model_initialized_);
 
   model_initialized_ = true;
-
-  if (global_curve)
-    global_curve_.emplace(*global_curve);
-  if (personal_curve)
-    personal_curve_.emplace(*personal_curve);
+  model_ = model;
+  new_model_arrived_ = true;
 
   UpdateStatus();
 }
 
 void Adapter::OnModelConfigLoaded(base::Optional<ModelConfig> model_config) {
-  DCHECK(!model_config_exists_.has_value());
+  DCHECK(!enabled_by_model_configs_.has_value());
 
-  model_config_exists_ = model_config.has_value();
+  enabled_by_model_configs_ = model_config.has_value();
 
-  if (model_config_exists_.value()) {
+  if (enabled_by_model_configs_.value()) {
     InitParams(model_config.value());
   }
 
+  UpdateStatus();
+}
+
+void Adapter::PowerManagerBecameAvailable(bool service_is_ready) {
+  power_manager_service_available_ = service_is_ready;
   UpdateStatus();
 }
 
@@ -287,6 +298,23 @@ void Adapter::SuspendDone(const base::TimeDelta& /* sleep_duration */) {
 
   if (params_.user_adjustment_effect == UserAdjustmentEffect::kPauseAuto)
     adapter_disabled_by_user_adjustment_ = false;
+
+  VLOG(1) << "ABAdapter suspend done with "
+          << (new_model_arrived_ ? "new" : "no new") << " model";
+}
+
+void Adapter::LidEventReceived(chromeos::PowerManagerClient::LidState state,
+                               const base::TimeTicks& /* timestamp */) {
+  is_lid_closed_ = state == chromeos::PowerManagerClient::LidState::CLOSED;
+  if (!*is_lid_closed_) {
+    lid_reopen_time_ = tick_clock_->NowTicks();
+    VLOG(1) << "ABAdapter Adapter received lid-reopened event";
+    return;
+  }
+
+  if (log_als_values_) {
+    log_als_values_->ClearBuffer();
+  }
 }
 
 Adapter::Status Adapter::GetStatusForTesting() const {
@@ -299,12 +327,12 @@ bool Adapter::IsAppliedForTesting() const {
 }
 
 base::Optional<MonotoneCubicSpline> Adapter::GetGlobalCurveForTesting() const {
-  return global_curve_;
+  return model_.global_curve;
 }
 
 base::Optional<MonotoneCubicSpline> Adapter::GetPersonalCurveForTesting()
     const {
-  return personal_curve_;
+  return model_.personal_curve;
 }
 
 base::Optional<AlsAvgStdDev> Adapter::GetAverageAmbientWithStdDevForTesting(
@@ -332,11 +360,10 @@ std::unique_ptr<Adapter> Adapter::CreateForTesting(
     Modeller* modeller,
     ModelConfigLoader* model_config_loader,
     MetricsReporter* metrics_reporter,
-    chromeos::PowerManagerClient* power_manager_client,
     const base::TickClock* tick_clock) {
-  return base::WrapUnique(new Adapter(
-      profile, als_reader, brightness_monitor, modeller, model_config_loader,
-      metrics_reporter, power_manager_client, tick_clock));
+  return base::WrapUnique(new Adapter(profile, als_reader, brightness_monitor,
+                                      modeller, model_config_loader,
+                                      metrics_reporter, tick_clock));
 }
 
 Adapter::Adapter(Profile* profile,
@@ -345,43 +372,39 @@ Adapter::Adapter(Profile* profile,
                  Modeller* modeller,
                  ModelConfigLoader* model_config_loader,
                  MetricsReporter* metrics_reporter,
-                 chromeos::PowerManagerClient* power_manager_client,
                  const base::TickClock* tick_clock)
     : profile_(profile),
-      als_reader_observer_(this),
-      brightness_monitor_observer_(this),
-      modeller_observer_(this),
-      model_config_loader_observer_(this),
-      power_manager_client_observer_(this),
       metrics_reporter_(metrics_reporter),
-      power_manager_client_(power_manager_client),
-      tick_clock_(tick_clock),
-      weak_ptr_factory_(this) {
+      tick_clock_(tick_clock) {
   DCHECK(profile);
   DCHECK(als_reader);
   DCHECK(brightness_monitor);
   DCHECK(modeller);
   DCHECK(model_config_loader);
-  DCHECK(power_manager_client);
 
   als_reader_observer_.Add(als_reader);
   brightness_monitor_observer_.Add(brightness_monitor);
   modeller_observer_.Add(modeller);
   model_config_loader_observer_.Add(model_config_loader);
-  power_manager_client_observer_.Add(power_manager_client);
 
-  power_manager_client_->WaitForServiceToBeAvailable(
-      base::BindOnce(&Adapter::OnPowerManagerServiceAvailable,
-                     weak_ptr_factory_.GetWeakPtr()));
+  const int lid_open_delay_time_seconds = GetFieldTrialParamByFeatureAsInt(
+      features::kAutoScreenBrightness, "lid_open_delay_time_seconds",
+      lid_open_delay_time_.InSeconds());
+
+  if (lid_open_delay_time_seconds > 0) {
+    lid_open_delay_time_ =
+        base::TimeDelta::FromSeconds(lid_open_delay_time_seconds);
+  }
 }
 
 void Adapter::InitParams(const ModelConfig& model_config) {
-  if (!base::FeatureList::IsEnabled(features::kAutoScreenBrightness)) {
-    adapter_status_ = Status::kDisabled;
+  params_.metrics_key = model_config.metrics_key;
+  if (!base::FeatureList::IsEnabled(features::kAutoScreenBrightness) ||
+      !model_config.enabled) {
+    enabled_by_model_configs_ = false;
     return;
   }
 
-  params_.metrics_key = model_config.metrics_key;
   params_.brightening_log_lux_threshold = GetFieldTrialParamByFeatureAsDouble(
       features::kAutoScreenBrightness, "brightening_log_lux_threshold",
       params_.brightening_log_lux_threshold);
@@ -394,41 +417,17 @@ void Adapter::InitParams(const ModelConfig& model_config) {
       features::kAutoScreenBrightness, "stabilization_threshold",
       params_.stabilization_threshold);
 
-  const int model_curve = base::GetFieldTrialParamByFeatureAsInt(
-      features::kAutoScreenBrightness, "model_curve", 2);
-  if (model_curve < 0 || model_curve > 2) {
-    adapter_status_ = Status::kDisabled;
-    LogParameterError(ParameterError::kAdapterError);
-    return;
-  }
-  params_.model_curve = static_cast<ModelCurve>(model_curve);
+  params_.auto_brightness_als_horizon = base::TimeDelta::FromSeconds(
+      model_config.auto_brightness_als_horizon_seconds);
 
-  const int auto_brightness_als_horizon_seconds =
-      GetFieldTrialParamByFeatureAsInt(
-          features::kAutoScreenBrightness,
-          "auto_brightness_als_horizon_seconds",
-          model_config.auto_brightness_als_horizon_seconds);
-
-  if (auto_brightness_als_horizon_seconds <= 0) {
-    adapter_status_ = Status::kDisabled;
-    LogParameterError(ParameterError::kAdapterError);
-    return;
-  }
-
-  params_.auto_brightness_als_horizon =
-      base::TimeDelta::FromSeconds(auto_brightness_als_horizon_seconds);
   log_als_values_ = std::make_unique<AmbientLightSampleBuffer>(
       params_.auto_brightness_als_horizon);
-
-  // TODO(jiameng): move this to device config once we complete experiments.
-  if (model_config.metrics_key == "atlas") {
-    params_.user_adjustment_effect = UserAdjustmentEffect::kContinueAuto;
-  }
 
   const int user_adjustment_effect_as_int = GetFieldTrialParamByFeatureAsInt(
       features::kAutoScreenBrightness, "user_adjustment_effect",
       static_cast<int>(params_.user_adjustment_effect));
   if (user_adjustment_effect_as_int < 0 || user_adjustment_effect_as_int > 2) {
+    enabled_by_model_configs_ = false;
     LogParameterError(ParameterError::kAdapterError);
     return;
   }
@@ -437,11 +436,8 @@ void Adapter::InitParams(const ModelConfig& model_config) {
 
   UMA_HISTOGRAM_ENUMERATION("AutoScreenBrightness.UserAdjustmentEffect",
                             params_.user_adjustment_effect);
-}
-
-void Adapter::OnPowerManagerServiceAvailable(bool service_is_ready) {
-  power_manager_service_available_ = service_is_ready;
-  UpdateStatus();
+  VLOG(1) << "ABAdapter user adjustment effect: "
+          << static_cast<int>(params_.user_adjustment_effect);
 }
 
 void Adapter::UpdateStatus() {
@@ -455,6 +451,7 @@ void Adapter::UpdateStatus() {
       *als_init_status_ == AlsReader::AlsInitStatus::kSuccess;
   if (!als_success) {
     adapter_status_ = Status::kDisabled;
+    SetMetricsReporterDeviceClass();
     return;
   }
 
@@ -463,14 +460,16 @@ void Adapter::UpdateStatus() {
 
   if (!*brightness_monitor_success_) {
     adapter_status_ = Status::kDisabled;
+    SetMetricsReporterDeviceClass();
     return;
   }
 
   if (!model_initialized_)
     return;
 
-  if (!global_curve_) {
+  if (!model_.global_curve) {
     adapter_status_ = Status::kDisabled;
+    SetMetricsReporterDeviceClass();
     return;
   }
 
@@ -479,18 +478,64 @@ void Adapter::UpdateStatus() {
 
   if (!*power_manager_service_available_) {
     adapter_status_ = Status::kDisabled;
+    SetMetricsReporterDeviceClass();
     return;
   }
 
-  if (!model_config_exists_.has_value())
+  if (!enabled_by_model_configs_.has_value())
     return;
 
-  if (!model_config_exists_.value()) {
+  if (!enabled_by_model_configs_.value()) {
     adapter_status_ = Status::kDisabled;
+    SetMetricsReporterDeviceClass();
     return;
   }
 
   adapter_status_ = Status::kSuccess;
+  SetMetricsReporterDeviceClass();
+}
+
+void Adapter::SetMetricsReporterDeviceClass() {
+  if (!metrics_reporter_)
+    return;
+
+  DCHECK_NE(adapter_status_, Status::kInitializing);
+  DCHECK(als_init_status_);
+
+  switch (*als_init_status_) {
+    case AlsReader::AlsInitStatus::kSuccess:
+      if (params_.metrics_key == "eve") {
+        metrics_reporter_->SetDeviceClass(MetricsReporter::DeviceClass::kEve);
+        return;
+      }
+      if (params_.metrics_key == "atlas") {
+        metrics_reporter_->SetDeviceClass(MetricsReporter::DeviceClass::kAtlas);
+        return;
+      }
+      if (params_.metrics_key == "nocturne") {
+        metrics_reporter_->SetDeviceClass(
+            MetricsReporter::DeviceClass::kNocturne);
+        return;
+      }
+      if (params_.metrics_key == "kohaku") {
+        metrics_reporter_->SetDeviceClass(
+            MetricsReporter::DeviceClass::kKohaku);
+        return;
+      }
+      metrics_reporter_->SetDeviceClass(
+          MetricsReporter::DeviceClass::kSupportedAls);
+      return;
+    case AlsReader::AlsInitStatus::kDisabled:
+    case AlsReader::AlsInitStatus::kMissingPath:
+      metrics_reporter_->SetDeviceClass(MetricsReporter::DeviceClass::kNoAls);
+      return;
+    case AlsReader::AlsInitStatus::kIncorrectConfig:
+      metrics_reporter_->SetDeviceClass(
+          MetricsReporter::DeviceClass::kUnsupportedAls);
+      return;
+    case AlsReader::AlsInitStatus::kInProgress:
+      NOTREACHED() << "ALS should have been initialized with a valid value.";
+  }
 }
 
 Adapter::AdapterDecision Adapter::CanAdjustBrightness(base::TimeTicks now) {
@@ -513,18 +558,19 @@ Adapter::AdapterDecision Adapter::CanAdjustBrightness(base::TimeTicks now) {
 
   // Do not change brightness if it's set by the policy, but do not completely
   // disable the model as the policy could change.
-  if (profile_->GetPrefs()->GetInteger(
-          ash::prefs::kPowerAcScreenBrightnessPercent) >= 0 ||
-      profile_->GetPrefs()->GetInteger(
-          ash::prefs::kPowerBatteryScreenBrightnessPercent) >= 0) {
-    decision.no_brightness_change_cause =
-        NoBrightnessChangeCause::kBrightnessSetByPolicy;
-    return decision;
+  auto* prefs = profile_->GetPrefs();
+  if (prefs) {
+    if (prefs->GetInteger(ash::prefs::kPowerAcScreenBrightnessPercent) >= 0 ||
+        prefs->GetInteger(ash::prefs::kPowerBatteryScreenBrightnessPercent) >=
+            0) {
+      decision.no_brightness_change_cause =
+          NoBrightnessChangeCause::kBrightnessSetByPolicy;
+      return decision;
+    }
   }
 
-  if (params_.model_curve == ModelCurve::kPersonal && !personal_curve_) {
-    decision.no_brightness_change_cause =
-        NoBrightnessChangeCause::kMissingPersonalCurve;
+  if (!new_model_arrived_) {
+    decision.no_brightness_change_cause = NoBrightnessChangeCause::kNoNewModel;
     return decision;
   }
 
@@ -532,6 +578,22 @@ Adapter::AdapterDecision Adapter::CanAdjustBrightness(base::TimeTicks now) {
   if (now - als_init_time_ < params_.auto_brightness_als_horizon) {
     decision.no_brightness_change_cause =
         NoBrightnessChangeCause::kWaitingForInitialAls;
+    return decision;
+  }
+
+  if (!lid_reopen_time_.is_null()) {
+    if (now - lid_reopen_time_ < lid_open_delay_time_) {
+      decision.no_brightness_change_cause =
+          NoBrightnessChangeCause::kWaitingForReopenAls;
+      return decision;
+    }
+
+    decision.brightness_change_cause =
+        BrightnessChangeCause::kUpdateAfterLidReopen;
+
+    // Reset |lid_reopen_time_| after the first brightness change following a
+    // lid-open event.
+    lid_reopen_time_ = base::TimeTicks();
     return decision;
   }
 
@@ -599,13 +661,20 @@ Adapter::AdapterDecision Adapter::CanAdjustBrightness(base::TimeTicks now) {
 void Adapter::AdjustBrightness(BrightnessChangeCause cause,
                                double log_als_avg) {
   const double brightness = GetBrightnessBasedOnAmbientLogLux(log_als_avg);
+  if (current_brightness_ &&
+      std::abs(brightness - *current_brightness_) < kTol) {
+    VLOG(1) << "ABAdapter model brightness change canceled: "
+            << "brightness=" << FormatToPrint(*current_brightness_) + "->"
+            << FormatToPrint(brightness);
+    return;
+  }
 
   power_manager::SetBacklightBrightnessRequest request;
   request.set_percent(brightness);
   request.set_transition(
-      power_manager::SetBacklightBrightnessRequest_Transition_GRADUAL);
+      power_manager::SetBacklightBrightnessRequest_Transition_SLOW);
   request.set_cause(power_manager::SetBacklightBrightnessRequest_Cause_MODEL);
-  power_manager_client_->SetScreenBrightness(request);
+  PowerManagerClient::Get()->SetScreenBrightness(request);
 
   const base::TimeTicks brightness_change_time = tick_clock_->NowTicks();
   if (!latest_model_brightness_change_time_.is_null()) {
@@ -621,6 +690,10 @@ void Adapter::AdjustBrightness(BrightnessChangeCause cause,
   UMA_HISTOGRAM_ENUMERATION("AutoScreenBrightness.BrightnessChange.Cause",
                             cause);
 
+  UMA_HISTOGRAM_COUNTS_1000(
+      "AutoScreenBrightness.BrightnessChange.ModelIteration",
+      model_.iteration_count);
+
   WriteLogMessages(log_als_avg, brightness, cause);
   model_brightness_change_counter_++;
 
@@ -630,18 +703,15 @@ void Adapter::AdjustBrightness(BrightnessChangeCause cause,
 double Adapter::GetBrightnessBasedOnAmbientLogLux(
     double ambient_log_lux) const {
   DCHECK_EQ(adapter_status_, Status::kSuccess);
-  switch (params_.model_curve) {
-    case ModelCurve::kGlobal:
-      return global_curve_->Interpolate(ambient_log_lux);
-    case ModelCurve::kPersonal:
-      DCHECK(personal_curve_);
-      return personal_curve_->Interpolate(ambient_log_lux);
-    default:
-      // We use the latest curve available.
-      if (personal_curve_)
-        return personal_curve_->Interpolate(ambient_log_lux);
-      return global_curve_->Interpolate(ambient_log_lux);
+  // We use the latest curve available.
+  if (model_.personal_curve) {
+    VLOG(1) << "ABAdapter using personal curve for brightness change: \n"
+            << model_.personal_curve->ToString();
+    return model_.personal_curve->Interpolate(ambient_log_lux);
   }
+  VLOG(1) << "ABAdapter using global curve for brightness change: \n"
+          << model_.global_curve->ToString();
+  return model_.global_curve->Interpolate(ambient_log_lux);
 }
 
 void Adapter::OnBrightnessChanged(base::TimeTicks now,
@@ -679,14 +749,12 @@ void Adapter::WriteLogMessages(double new_log_als,
           : "";
 
   const std::string old_brightness =
-      current_brightness_
-          ? base::StringPrintf("%.4f", current_brightness_.value()) + "%->"
-          : "";
+      current_brightness_ ? FormatToPrint(current_brightness_.value()) + "->"
+                          : "";
 
-  VLOG(1) << "Screen brightness change #" << model_brightness_change_counter_
-          << ": "
-          << "brightness=" << old_brightness
-          << base::StringPrintf("%.4f", new_brightness) << "%"
+  VLOG(1) << "ABAdapter screen brightness change #"
+          << model_brightness_change_counter_ << ": "
+          << "brightness=" << old_brightness << FormatToPrint(new_brightness)
           << " cause=" << BrightnessChangeCauseToString(cause)
           << " log_als=" << old_log_als
           << base::StringPrintf("%.4f", new_log_als);
@@ -782,6 +850,11 @@ void Adapter::LogAdapterDecision(
     base::UmaHistogramCounts1000(histogram_prefix + "Unknown.AlsStd",
                                  logged_stddev);
   }
+
+  // Log model iteration count.
+  base::UmaHistogramCounts1000(
+      histogram_prefix + "ModelIteration",
+      model_iteration_count_at_user_brightness_change_);
 }
 
 }  // namespace auto_screen_brightness

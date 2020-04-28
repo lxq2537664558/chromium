@@ -5,34 +5,33 @@
 #include <vector>
 
 #include "base/macros.h"
+#include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/views/payments/payment_request_browsertest_base.h"
 #include "chrome/browser/ui/views/payments/payment_request_dialog_view_ids.h"
 #include "chrome/test/base/ui_test_utils.h"
-#include "components/autofill/core/browser/autofill_profile.h"
 #include "components/autofill/core/browser/autofill_test_utils.h"
-#include "components/autofill/core/browser/credit_card.h"
+#include "components/autofill/core/browser/data_model/autofill_profile.h"
+#include "components/autofill/core/browser/data_model/credit_card.h"
 #include "components/web_modal/web_contents_modal_dialog_manager.h"
 #include "content/public/test/browser_test_utils.h"
 
 namespace payments {
 
-class PaymentRequestPaymentResponseAutofillPaymentInstrumentTest
+class PaymentRequestPaymentResponseAutofillPaymentAppTest
     : public PaymentRequestBrowserTestBase {
  protected:
-  PaymentRequestPaymentResponseAutofillPaymentInstrumentTest() {}
+  PaymentRequestPaymentResponseAutofillPaymentAppTest() {}
 
  private:
-  DISALLOW_COPY_AND_ASSIGN(
-      PaymentRequestPaymentResponseAutofillPaymentInstrumentTest);
+  DISALLOW_COPY_AND_ASSIGN(PaymentRequestPaymentResponseAutofillPaymentAppTest);
 };
 
 // Tests that the PaymentResponse contains all the required fields for an
-// Autofill payment instrument.
-IN_PROC_BROWSER_TEST_F(
-    PaymentRequestPaymentResponseAutofillPaymentInstrumentTest,
-    TestPaymentResponse) {
+// Autofill payment app.
+IN_PROC_BROWSER_TEST_F(PaymentRequestPaymentResponseAutofillPaymentAppTest,
+                       TestPaymentResponse) {
   NavigateTo("/payment_request_no_shipping_test.html");
   // Setup a credit card with an associated billing address.
   autofill::AutofillProfile billing_address = autofill::test::GetFullProfile();
@@ -47,10 +46,15 @@ IN_PROC_BROWSER_TEST_F(
   PayWithCreditCardAndWait(base::ASCIIToUTF16("123"));
 
   // Test that the card details were sent to the merchant.
-  ExpectBodyContains({"\"cardNumber\": \"4111111111111111\"",
-                      "\"cardSecurityCode\": \"123\"",
-                      "\"cardholderName\": \"Test User\"",
-                      "\"expiryMonth\": \"11\"", "\"expiryYear\": \"2022\""});
+  ExpectBodyContains(
+      {"\"cardNumber\": \"4111111111111111\"", "\"cardSecurityCode\": \"123\"",
+       "\"cardholderName\": \"Test User\"",
+       base::StringPrintf(
+           "\"expiryMonth\": \"%s\"",
+           base::UTF16ToUTF8(card.Expiration2DigitMonthAsString()).c_str()),
+       base::StringPrintf(
+           "\"expiryYear\": \"%s\"",
+           base::UTF16ToUTF8(card.Expiration4DigitYearAsString()).c_str())});
 
   // Test that the billing address was sent to the merchant.
   ExpectBodyContains(
@@ -170,7 +174,7 @@ IN_PROC_BROWSER_TEST_F(
   views::View* list_view = dialog_view()->GetViewByID(
       static_cast<int>(DialogViewID::CONTACT_INFO_SHEET_LIST_VIEW));
   DCHECK(list_view);
-  ClickOnDialogViewAndWait(list_view->child_at(1));
+  ClickOnDialogViewAndWait(list_view->children()[1]);
 
   ExpectBodyContains({"\"payerName\": \"Jane A. Smith\"",
                       "\"payerEmail\": \"jsmith@example.com\"",

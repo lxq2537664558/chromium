@@ -182,63 +182,6 @@ TEST(RasterSourceTest, AnalyzeIsSolidScaled) {
   }
 }
 
-TEST(RasterSourceTest, MultiPaintWorkletImages) {
-  gfx::Size layer_bounds(512, 512);
-
-  std::unique_ptr<FakeRecordingSource> recording_source =
-      FakeRecordingSource::CreateFilledRecordingSource(layer_bounds);
-
-  scoped_refptr<TestPaintWorkletInput> input1 =
-      base::MakeRefCounted<TestPaintWorkletInput>(gfx::SizeF(32.0f, 32.0f));
-  scoped_refptr<TestPaintWorkletInput> input2 =
-      base::MakeRefCounted<TestPaintWorkletInput>(gfx::SizeF(64.0f, 64.0f));
-  scoped_refptr<TestPaintWorkletInput> input3 =
-      base::MakeRefCounted<TestPaintWorkletInput>(gfx::SizeF(100.0f, 100.0f));
-
-  PaintImage discardable_image[2][2];
-  discardable_image[0][0] = CreatePaintWorkletPaintImage(input1);
-  discardable_image[0][1] = CreatePaintWorkletPaintImage(input2);
-  discardable_image[1][1] = CreatePaintWorkletPaintImage(input3);
-
-  recording_source->add_draw_image(discardable_image[0][0], gfx::Point(0, 0));
-  recording_source->add_draw_image(discardable_image[0][1], gfx::Point(260, 0));
-  recording_source->add_draw_image(discardable_image[1][1],
-                                   gfx::Point(260, 260));
-  recording_source->Rerecord();
-
-  scoped_refptr<RasterSource> raster = recording_source->CreateRasterSource();
-
-  // Tile sized iterators. These should find only one image.
-  {
-    std::vector<const DrawImage*> images;
-    raster->GetDiscardableImagesInRect(gfx::Rect(0, 0, 256, 256), &images);
-    EXPECT_EQ(1u, images.size());
-    EXPECT_EQ(discardable_image[0][0], images[0]->paint_image());
-  }
-  // Shifted tile sized iterators. These should find only one image.
-  {
-    std::vector<const DrawImage*> images;
-    raster->GetDiscardableImagesInRect(gfx::Rect(260, 260, 256, 256), &images);
-    EXPECT_EQ(1u, images.size());
-    EXPECT_EQ(discardable_image[1][1], images[0]->paint_image());
-  }
-  // Ensure there's no discardable pixel refs in the empty cell
-  {
-    std::vector<const DrawImage*> images;
-    raster->GetDiscardableImagesInRect(gfx::Rect(0, 256, 256, 256), &images);
-    EXPECT_EQ(0u, images.size());
-  }
-  // Layer sized iterators. These should find three images.
-  {
-    std::vector<const DrawImage*> images;
-    raster->GetDiscardableImagesInRect(gfx::Rect(0, 0, 512, 512), &images);
-    EXPECT_EQ(3u, images.size());
-    EXPECT_EQ(discardable_image[0][0], images[0]->paint_image());
-    EXPECT_EQ(discardable_image[0][1], images[1]->paint_image());
-    EXPECT_EQ(discardable_image[1][1], images[2]->paint_image());
-  }
-}
-
 TEST(RasterSourceTest, PixelRefIteratorDiscardableRefsOneTile) {
   gfx::Size layer_bounds(512, 512);
 
@@ -266,19 +209,25 @@ TEST(RasterSourceTest, PixelRefIteratorDiscardableRefsOneTile) {
 
   // Tile sized iterators. These should find only one pixel ref.
   {
+    gfx::ColorSpace target_color_space = gfx::ColorSpace::CreateSRGB();
     std::vector<const DrawImage*> images;
     raster->GetDiscardableImagesInRect(gfx::Rect(0, 0, 256, 256), &images);
     EXPECT_EQ(1u, images.size());
-    DrawImage image(*images[0], 1.f, PaintImage::kDefaultFrameIndex);
+    DrawImage image(*images[0], 1.f, PaintImage::kDefaultFrameIndex,
+                    target_color_space);
     EXPECT_EQ(discardable_image[0][0], images[0]->paint_image());
+    EXPECT_EQ(target_color_space, image.target_color_space());
   }
   // Shifted tile sized iterators. These should find only one pixel ref.
   {
+    gfx::ColorSpace target_color_space = gfx::ColorSpace::CreateXYZD50();
     std::vector<const DrawImage*> images;
     raster->GetDiscardableImagesInRect(gfx::Rect(260, 260, 256, 256), &images);
     EXPECT_EQ(1u, images.size());
-    DrawImage image(*images[0], 1.f, PaintImage::kDefaultFrameIndex);
+    DrawImage image(*images[0], 1.f, PaintImage::kDefaultFrameIndex,
+                    target_color_space);
     EXPECT_EQ(discardable_image[1][1], images[0]->paint_image());
+    EXPECT_EQ(target_color_space, image.target_color_space());
   }
   // Ensure there's no discardable pixel refs in the empty cell
   {
@@ -305,7 +254,6 @@ TEST(RasterSourceTest, RasterFullContents) {
   std::unique_ptr<FakeRecordingSource> recording_source =
       FakeRecordingSource::CreateFilledRecordingSource(layer_bounds);
   recording_source->SetBackgroundColor(SK_ColorBLACK);
-  recording_source->SetClearCanvasWithDebugColor(false);
 
   // Because the caller sets content opaque, it also promises that it
   // has at least filled in layer_bounds opaquely.
@@ -371,7 +319,6 @@ TEST(RasterSourceTest, RasterPartialContents) {
   std::unique_ptr<FakeRecordingSource> recording_source =
       FakeRecordingSource::CreateFilledRecordingSource(layer_bounds);
   recording_source->SetBackgroundColor(SK_ColorGREEN);
-  recording_source->SetClearCanvasWithDebugColor(false);
 
   // First record everything as white.
   PaintFlags white_flags;
@@ -466,7 +413,6 @@ TEST(RasterSourceTest, RasterPartialClear) {
       FakeRecordingSource::CreateFilledRecordingSource(layer_bounds);
   recording_source->SetBackgroundColor(SK_ColorGREEN);
   recording_source->SetRequiresClear(true);
-  recording_source->SetClearCanvasWithDebugColor(false);
 
   // First record everything as white.
   const unsigned alpha_dark = 10u;
@@ -513,7 +459,6 @@ TEST(RasterSourceTest, RasterPartialClear) {
       FakeRecordingSource::CreateFilledRecordingSource(layer_bounds);
   recording_source_light->SetBackgroundColor(SK_ColorGREEN);
   recording_source_light->SetRequiresClear(true);
-  recording_source_light->SetClearCanvasWithDebugColor(false);
 
   // Record everything as a slightly lighter white.
   const unsigned alpha_light = 18u;
@@ -557,7 +502,6 @@ TEST(RasterSourceTest, RasterContentsTransparent) {
       FakeRecordingSource::CreateFilledRecordingSource(layer_bounds);
   recording_source->SetBackgroundColor(SK_ColorTRANSPARENT);
   recording_source->SetRequiresClear(true);
-  recording_source->SetClearCanvasWithDebugColor(false);
   recording_source->Rerecord();
 
   scoped_refptr<RasterSource> raster = recording_source->CreateRasterSource();
@@ -610,12 +554,11 @@ TEST(RasterSourceTest, RasterTransformWithoutRecordingScale) {
   StrictMock<MockCanvas> mock_canvas;
   Sequence s;
 
-  SkMatrix m;
-  m.setScale(1.f / recording_scale, 1.f / recording_scale);
+  SkScalar scale = 1.f / recording_scale;
 
   // The recording source has no ops, so will only do the setup.
   EXPECT_CALL(mock_canvas, willSave()).InSequence(s);
-  EXPECT_CALL(mock_canvas, didConcat(m)).InSequence(s);
+  EXPECT_CALL(mock_canvas, didScale(scale, scale)).InSequence(s);
   EXPECT_CALL(mock_canvas, willRestore()).InSequence(s);
 
   gfx::Size small_size(50, 50);

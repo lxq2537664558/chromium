@@ -40,9 +40,8 @@ void FlatTreeTraversal::AssertFlatTreeNodeDataUpdated(
     int& assigned_nodes_in_slot_count,
     int& nodes_which_have_assigned_slot_count) {
   for (Node& node : NodeTraversal::StartsAt(root)) {
-    if (node.IsElementNode()) {
-      Element& element = ToElement(node);
-      if (ShadowRoot* shadow_root = element.ShadowRootIfV1()) {
+    if (auto* element = DynamicTo<Element>(node)) {
+      if (ShadowRoot* shadow_root = element->ShadowRootIfV1()) {
         DCHECK(!shadow_root->NeedsSlotAssignmentRecalc());
         AssertFlatTreeNodeDataUpdated(*shadow_root,
                                       assigned_nodes_in_slot_count,
@@ -134,13 +133,13 @@ Node* FlatTreeTraversal::V0ResolveDistributionStartingAt(
                       : sibling->previousSibling())) {
     if (!IsActiveV0InsertionPoint(*sibling))
       return const_cast<Node*>(sibling);
-    const V0InsertionPoint& insertion_point = ToV0InsertionPoint(*sibling);
+    const auto& insertion_point = To<V0InsertionPoint>(*sibling);
     if (Node* found = (direction == kTraversalDirectionForward
                            ? insertion_point.FirstDistributedNode()
                            : insertion_point.LastDistributedNode()))
       return found;
-    DCHECK(IsHTMLShadowElement(insertion_point) ||
-           (IsHTMLContentElement(insertion_point) &&
+    DCHECK(IsA<HTMLShadowElement>(insertion_point) ||
+           (IsA<HTMLContentElement>(insertion_point) &&
             !insertion_point.HasChildren()));
   }
   return nullptr;
@@ -174,15 +173,6 @@ Node* FlatTreeTraversal::TraverseSiblings(const Node& node,
 Node* FlatTreeTraversal::TraverseSiblingsForV1HostChild(
     const Node& node,
     TraversalDirection direction) {
-  if (!RuntimeEnabledFeatures::FastFlatTreeTraversalEnabled()) {
-    HTMLSlotElement* slot = node.AssignedSlot();
-    if (!slot)
-      return nullptr;
-    return direction == kTraversalDirectionForward
-               ? slot->AssignedNodeNextTo(node)
-               : slot->AssignedNodePreviousTo(node);
-  }
-
   ShadowRoot* shadow_root = node.ParentElementShadowRoot();
   DCHECK(shadow_root);
   if (!shadow_root->HasSlotAssignment()) {

@@ -7,7 +7,7 @@
 
 #include <memory>
 
-#include "ios/web/public/favicon_url.h"
+#include "ios/web/public/favicon/favicon_url.h"
 #include "url/gurl.h"
 
 namespace web {
@@ -53,12 +53,6 @@ struct TestLoadPageInfo {
 struct TestChangeLoadingProgressInfo {
   WebState* web_state = nullptr;
   double progress;
-};
-
-// Arguments passed to |NavigationItemsPruned|.
-struct TestNavigationItemsPrunedInfo {
-  WebState* web_state = nullptr;
-  int count;
 };
 
 // Arguments passed to |TitleWasSet|.

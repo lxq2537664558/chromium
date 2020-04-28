@@ -10,7 +10,9 @@
 
 #include "base/base_export.h"
 #include "base/macros.h"
+#include "base/optional.h"
 #include "base/profiler/profile_builder.h"
+#include "base/profiler/sampling_profiler_thread_token.h"
 #include "base/synchronization/waitable_event.h"
 #include "base/threading/platform_thread.h"
 #include "base/time/time.h"
@@ -34,14 +36,20 @@ class StackSamplerTestDelegate;
 //   // To process the profiles, use a custom ProfileBuilder subclass:
 //   class SubProfileBuilder : public base::ProfileBuilder {...}
 //
+//   // Then create the profiler:
+//   base::StackSamplingProfiler profiler(base::PlatformThread::CurrentId(),
+//       params, std::make_unique<SubProfileBuilder>(...));
+//
 //   // On Android the |sampler| is not implemented in base. So, client can pass
 //   // in |sampler| to use while profiling.
-//   base::StackSamplingProfiler profiler(base::PlatformThread::CurrentId()),
+//   base::StackSamplingProfiler profiler(base::PlatformThread::CurrentId(),
 //       params, std::make_unique<SubProfileBuilder>(...), <optional> sampler);
 //
+//   // Then start the profiling.
 //   profiler.Start();
 //   // ... work being done on the target thread here ...
-//   profiler.Stop();  // optional, stops collection before complete per params
+//   // Optionally stop collection before complete per params.
+//   profiler.Stop();
 //
 // The default SamplingParams causes stacks to be recorded in a single profile
 // at a 10Hz interval for a total of 30 seconds. All of these parameters may be
@@ -80,18 +88,16 @@ class BASE_EXPORT StackSamplingProfiler {
   //
   // The caller must ensure that this object gets destroyed before the thread
   // exits.
-  StackSamplingProfiler(PlatformThreadId thread_id,
+  StackSamplingProfiler(SamplingProfilerThreadToken thread_token,
                         const SamplingParams& params,
                         std::unique_ptr<ProfileBuilder> profile_builder,
                         StackSamplerTestDelegate* test_delegate = nullptr);
 
   // Same as above function, with custom |sampler| implementation. The sampler
   // on Android is not implemented in base.
-  StackSamplingProfiler(PlatformThreadId thread_id,
-                        const SamplingParams& params,
+  StackSamplingProfiler(const SamplingParams& params,
                         std::unique_ptr<ProfileBuilder> profile_builder,
-                        std::unique_ptr<StackSampler> sampler,
-                        StackSamplerTestDelegate* test_delegate = nullptr);
+                        std::unique_ptr<StackSampler> sampler);
 
   // Stops any profiling currently taking place before destroying the profiler.
   // This will block until profile_builder_'s OnProfileCompleted function has
@@ -113,7 +119,7 @@ class BASE_EXPORT StackSamplingProfiler {
 
   // Adds an auxiliary unwinder to handle additional, non-native-code unwind
   // scenarios.
-  void AddAuxUnwinder(Unwinder* unwinder);
+  void AddAuxUnwinder(std::unique_ptr<Unwinder> unwinder);
 
   // Test peer class. These functions are purely for internal testing of
   // StackSamplingProfiler; DO NOT USE within tests outside of this directory.
@@ -150,8 +156,24 @@ class BASE_EXPORT StackSamplingProfiler {
   // the target thread.
   class SamplingThread;
 
+  // Friend the global function from sample_metadata.cc so that it can call into
+  // the function below.
+  friend void ApplyMetadataToPastSamplesImpl(TimeTicks period_start,
+                                             TimeTicks period_end,
+                                             int64_t name_hash,
+                                             Optional<int64_t> key,
+                                             int64_t value);
+
+  // Apply metadata to already recorded samples. See the
+  // ApplyMetadataToPastSamples() docs in sample_metadata.h.
+  static void ApplyMetadataToPastSamples(TimeTicks period_start,
+                                         TimeTicks period_end,
+                                         int64_t name_hash,
+                                         Optional<int64_t> key,
+                                         int64_t value);
+
   // The thread whose stack will be sampled.
-  PlatformThreadId thread_id_;
+  SamplingProfilerThreadToken thread_token_;
 
   const SamplingParams params_;
 
@@ -165,6 +187,10 @@ class BASE_EXPORT StackSamplingProfiler {
   // thread sampling starts.
   std::unique_ptr<StackSampler> sampler_;
 
+  // If an AuxUnwinder is added before Start() it will be saved here until it
+  // can be passed to the sampling thread when thread sampling starts.
+  std::unique_ptr<Unwinder> pending_aux_unwinder_;
+
   // This starts "signaled", is reset when sampling begins, and is signaled
   // when that sampling is complete and the profile_builder_'s
   // OnProfileCompleted function has executed.
@@ -173,9 +199,6 @@ class BASE_EXPORT StackSamplingProfiler {
   // An ID uniquely identifying this profiler to the sampling thread. This
   // will be an internal "null" value when no collection has been started.
   int profiler_id_;
-
-  // Stored until it can be passed to the StackSampler created in Start().
-  StackSamplerTestDelegate* const test_delegate_;
 
   DISALLOW_COPY_AND_ASSIGN(StackSamplingProfiler);
 };

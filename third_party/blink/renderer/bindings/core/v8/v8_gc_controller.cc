@@ -31,8 +31,6 @@
 #include "third_party/blink/renderer/bindings/core/v8/v8_gc_controller.h"
 
 #include <algorithm>
-#include <unordered_map>
-#include <unordered_set>
 
 #include "third_party/blink/public/platform/blame_context.h"
 #include "third_party/blink/public/platform/platform.h"
@@ -46,9 +44,11 @@
 #include "third_party/blink/renderer/core/dom/node.h"
 #include "third_party/blink/renderer/core/html/imports/html_imports_controller.h"
 #include "third_party/blink/renderer/core/inspector/inspector_trace_events.h"
+#include "third_party/blink/renderer/platform/bindings/script_forbidden_scope.h"
 #include "third_party/blink/renderer/platform/bindings/wrapper_type_info.h"
 #include "third_party/blink/renderer/platform/heap/heap_stats_collector.h"
-#include "third_party/blink/renderer/platform/histogram.h"
+#include "third_party/blink/renderer/platform/heap/unified_heap_controller.h"
+#include "third_party/blink/renderer/platform/instrumentation/histogram.h"
 #include "third_party/blink/renderer/platform/instrumentation/tracing/trace_event.h"
 #include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "third_party/blink/renderer/platform/wtf/allocator/partitions.h"
@@ -61,8 +61,8 @@ Node* V8GCController::OpaqueRootForGC(v8::Isolate*, Node* node) {
   if (node->isConnected())
     return &node->GetDocument().MasterDocument();
 
-  if (node->IsAttributeNode()) {
-    Node* owner_element = ToAttr(node)->ownerElement();
+  if (auto* attr = DynamicTo<Attr>(node)) {
+    Node* owner_element = attr->ownerElement();
     if (!owner_element)
       return node;
     node = owner_element;
@@ -80,12 +80,6 @@ bool IsDOMWrapperClassId(uint16_t class_id) {
   return class_id == WrapperTypeInfo::kNodeClassId ||
          class_id == WrapperTypeInfo::kObjectClassId ||
          class_id == WrapperTypeInfo::kCustomWrappableId;
-}
-
-size_t UsedHeapSize(v8::Isolate* isolate) {
-  v8::HeapStatistics heap_statistics;
-  isolate->GetHeapStatistics(&heap_statistics);
-  return heap_statistics.used_heap_size();
 }
 
 bool IsNestedInV8GC(ThreadState* thread_state, v8::GCType type) {
@@ -111,57 +105,24 @@ void V8GCController::GcPrologue(v8::Isolate* isolate,
           Platform::Current()->GetTopLevelBlameContext())
     blame_context->Enter();
 
-  // TODO(haraken): A GC callback is not allowed to re-enter V8. This means
-  // that it's unsafe to run Oilpan's GC in the GC callback because it may
-  // run finalizers that call into V8. To avoid the risk, we should post
-  // a task to schedule the Oilpan's GC.
-  // (In practice, there is no finalizer that calls into V8 and thus is safe.)
-
   v8::HandleScope scope(isolate);
   switch (type) {
     case v8::kGCTypeScavenge:
-      TRACE_EVENT_BEGIN1("devtools.timeline,v8", "MinorGC",
-                         "usedHeapSizeBefore", UsedHeapSize(isolate));
-      if (ThreadState::Current())
-        ThreadState::Current()->WillStartV8GC(BlinkGC::kV8MinorGC);
-      break;
-    case v8::kGCTypeMarkSweepCompact:
-      if (ThreadState::Current())
-        ThreadState::Current()->WillStartV8GC(BlinkGC::kV8MajorGC);
-
-      TRACE_EVENT_BEGIN2("devtools.timeline,v8", "MajorGC",
-                         "usedHeapSizeBefore", UsedHeapSize(isolate), "type",
-                         "atomic pause");
       break;
     case v8::kGCTypeIncrementalMarking:
-      if (ThreadState::Current())
-        ThreadState::Current()->WillStartV8GC(BlinkGC::kV8MajorGC);
-
-      TRACE_EVENT_BEGIN2("devtools.timeline,v8", "MajorGC",
-                         "usedHeapSizeBefore", UsedHeapSize(isolate), "type",
-                         "incremental marking");
+    case v8::kGCTypeMarkSweepCompact:
+      if (ThreadState::Current()) {
+        // Finish Oilpan's complete sweeping before running a V8 major GC.
+        // This will let the GC collect more V8 objects.
+        ThreadState::Current()->CompleteSweep();
+      }
       break;
     case v8::kGCTypeProcessWeakCallbacks:
-      TRACE_EVENT_BEGIN2("devtools.timeline,v8", "MajorGC",
-                         "usedHeapSizeBefore", UsedHeapSize(isolate), "type",
-                         "weak processing");
       break;
     default:
       NOTREACHED();
   }
 }
-
-namespace {
-
-void UpdateCollectedPhantomHandles(v8::Isolate* isolate) {
-  ThreadHeapStatsCollector* stats_collector =
-      ThreadState::Current()->Heap().stats_collector();
-  const size_t count = isolate->NumberOfPhantomHandleResetsSinceLastCall();
-  stats_collector->DecreaseWrapperCount(count);
-  stats_collector->IncreaseCollectedWrapperCount(count);
-}
-
-}  // namespace
 
 void V8GCController::GcEpilogue(v8::Isolate* isolate,
                                 v8::GCType type,
@@ -171,36 +132,6 @@ void V8GCController::GcEpilogue(v8::Isolate* isolate,
       IsNestedInV8GC(ThreadState::Current(), type)
           ? ThreadState::Current()->Heap().stats_collector()
           : nullptr);
-  UpdateCollectedPhantomHandles(isolate);
-  switch (type) {
-    case v8::kGCTypeScavenge:
-      TRACE_EVENT_END1("devtools.timeline,v8", "MinorGC", "usedHeapSizeAfter",
-                       UsedHeapSize(isolate));
-      // Scavenger might have dropped nodes.
-      if (ThreadState::Current()) {
-        ThreadState::Current()->ScheduleV8FollowupGCIfNeeded(
-            BlinkGC::kV8MinorGC);
-      }
-      break;
-    case v8::kGCTypeMarkSweepCompact:
-      TRACE_EVENT_END1("devtools.timeline,v8", "MajorGC", "usedHeapSizeAfter",
-                       UsedHeapSize(isolate));
-      if (ThreadState::Current())
-        ThreadState::Current()->ScheduleV8FollowupGCIfNeeded(
-            BlinkGC::kV8MajorGC);
-      break;
-    case v8::kGCTypeIncrementalMarking:
-      TRACE_EVENT_END1("devtools.timeline,v8", "MajorGC", "usedHeapSizeAfter",
-                       UsedHeapSize(isolate));
-      break;
-    case v8::kGCTypeProcessWeakCallbacks:
-      TRACE_EVENT_END1("devtools.timeline,v8", "MajorGC", "usedHeapSizeAfter",
-                       UsedHeapSize(isolate));
-      break;
-    default:
-      NOTREACHED();
-  }
-
   ScriptForbiddenScope::Exit();
 
   if (BlameContext* blame_context =
@@ -228,12 +159,10 @@ void V8GCController::CollectAllGarbageForTesting(
   constexpr unsigned kNumberOfGCs = 5;
 
   if (stack_state != v8::EmbedderHeapTracer::EmbedderStackState::kUnknown) {
-    V8PerIsolateData* data = V8PerIsolateData::From(isolate);
-    v8::EmbedderHeapTracer* tracer =
-        static_cast<v8::EmbedderHeapTracer*>(data->GetUnifiedHeapController());
+    v8::EmbedderHeapTracer* const tracer = static_cast<v8::EmbedderHeapTracer*>(
+        ThreadState::Current()->unified_heap_controller());
     // Passing a stack state is only supported when either wrapper tracing or
     // unified heap is enabled.
-    CHECK(tracer);
     for (unsigned i = 0; i < kNumberOfGCs; i++)
       tracer->GarbageCollectionForTesting(stack_state);
     return;
@@ -262,7 +191,11 @@ class DOMWrapperForwardingVisitor final
     VisitHandle(value, class_id);
   }
 
-  void VisitTracedGlobalHandle(const v8::TracedGlobal<v8::Value>& value) final {
+  void VisitTracedGlobalHandle(const v8::TracedGlobal<v8::Value>&) final {
+    CHECK(false) << "Blink does not use v8::TracedGlobal.";
+  }
+
+  void VisitTracedReference(const v8::TracedReference<v8::Value>& value) final {
     VisitHandle(&value, value.WrapperClassId());
   }
 
@@ -289,16 +222,14 @@ class DOMWrapperForwardingVisitor final
 
 }  // namespace
 
-void V8GCController::TraceDOMWrappers(v8::Isolate* isolate,
-                                      Visitor* parent_visitor) {
-  DOMWrapperForwardingVisitor visitor(parent_visitor);
-  isolate->VisitHandlesWithClassIds(&visitor);
-  v8::EmbedderHeapTracer* tracer =
-      V8PerIsolateData::From(isolate)->GetEmbedderHeapTracer();
-  // There may be no tracer during tear down garbage collections.
-  // Not all threads have a tracer attached.
-  if (tracer)
-    tracer->IterateTracedGlobalHandles(&visitor);
+// static
+void V8GCController::TraceDOMWrappers(v8::Isolate* isolate, Visitor* visitor) {
+  DCHECK(isolate);
+  DOMWrapperForwardingVisitor forwarding_visitor(visitor);
+  isolate->VisitHandlesWithClassIds(&forwarding_visitor);
+  v8::EmbedderHeapTracer* const tracer = static_cast<v8::EmbedderHeapTracer*>(
+      ThreadState::Current()->unified_heap_controller());
+  tracer->IterateTracedGlobalHandles(&forwarding_visitor);
 }
 
 }  // namespace blink

@@ -128,8 +128,8 @@ class TestChromeContentRendererClient : public ChromeContentRendererClient {
  public:
   TestChromeContentRendererClient() {}
   ~TestChromeContentRendererClient() override {}
-  // Since visited_link_slave_ in ChromeContentRenderClient never get initiated,
-  // overrides VisitedLinkedHash() function to prevent crashing.
+  // Since visited_link_reader_ in ChromeContentRenderClient never get
+  // initiated, overrides VisitedLinkedHash() function to prevent crashing.
   uint64_t VisitedLinkHash(const char* canonical_url, size_t length) override {
     return 0;
   }
@@ -138,9 +138,7 @@ class TestChromeContentRendererClient : public ChromeContentRendererClient {
 class PhishingDOMFeatureExtractorTest : public ChromeRenderViewTest {
  public:
   PhishingDOMFeatureExtractorTest()
-      : success_(false),
-        message_loop_(new content::MessageLoopRunner),
-        weak_factory_(this) {}
+      : success_(false), message_loop_(new content::MessageLoopRunner) {}
 
   bool GetSuccess() { return success_; }
   void ResetTest() {
@@ -224,7 +222,7 @@ class PhishingDOMFeatureExtractorTest : public ChromeRenderViewTest {
   bool success_;
   std::unique_ptr<TestPhishingDOMFeatureExtractor> extractor_;
   scoped_refptr<content::MessageLoopRunner> message_loop_;
-  base::WeakPtrFactory<PhishingDOMFeatureExtractorTest> weak_factory_;
+  base::WeakPtrFactory<PhishingDOMFeatureExtractorTest> weak_factory_{this};
 };
 
 TEST_F(PhishingDOMFeatureExtractorTest, FormFeatures) {

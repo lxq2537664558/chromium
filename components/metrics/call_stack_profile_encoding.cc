@@ -3,6 +3,7 @@
 // found in the LICENSE file.
 
 #include "components/metrics/call_stack_profile_encoding.h"
+#include "base/logging.h"
 
 namespace metrics {
 
@@ -41,6 +42,8 @@ Thread ToExecutionContextThread(CallStackProfileParams::Thread thread) {
       return IO_THREAD;
     case CallStackProfileParams::COMPOSITOR_THREAD:
       return COMPOSITOR_THREAD;
+    case CallStackProfileParams::SERVICE_WORKER_THREAD:
+      return SERVICE_WORKER_THREAD;
   }
   NOTREACHED();
   return UNKNOWN_THREAD;

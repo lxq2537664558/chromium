@@ -5,11 +5,13 @@
 #include "chrome/browser/ui/views/media_router/presentation_receiver_window_view.h"
 
 #include "base/bind.h"
-#include "base/logging.h"
+#include "base/check.h"
 #include "base/macros.h"
+#include "base/notreached.h"
 #include "chrome/app/chrome_command_ids.h"
+#include "chrome/browser/browser_process.h"
 #include "chrome/browser/content_settings/mixed_content_settings_tab_helper.h"
-#include "chrome/browser/content_settings/tab_specific_content_settings.h"
+#include "chrome/browser/content_settings/tab_specific_content_settings_delegate.h"
 #include "chrome/browser/infobars/infobar_service.h"
 #include "chrome/browser/password_manager/chrome_password_manager_client.h"
 #include "chrome/browser/profiles/profile.h"
@@ -26,6 +28,9 @@
 #include "chrome/browser/ui/views/accelerator_table.h"
 #include "chrome/browser/ui/views/exclusive_access_bubble_views.h"
 #include "chrome/browser/ui/views/media_router/presentation_receiver_window_frame.h"
+#include "components/autofill/content/browser/content_autofill_driver_factory.h"
+#include "components/autofill/core/browser/autofill_manager.h"
+#include "components/content_settings/browser/tab_specific_content_settings.h"
 #include "components/omnibox/browser/location_bar_model_impl.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/content_constants.h"
@@ -43,13 +48,11 @@
 
 #if defined(OS_CHROMEOS)
 #include "ash/public/cpp/window_properties.h"
-#include "ash/public/interfaces/window_state_type.mojom.h"
 #include "base/callback.h"
 #include "base/scoped_observer.h"
 #include "ui/aura/client/aura_constants.h"
 #include "ui/aura/window.h"
 #include "ui/aura/window_observer.h"
-#include "ui/base/ui_base_features.h"
 #include "ui/gfx/native_widget_types.h"
 #endif
 
@@ -64,8 +67,6 @@ class FullscreenWindowObserver : public aura::WindowObserver {
   FullscreenWindowObserver(aura::Window* observed_window,
                            base::RepeatingClosure on_fullscreen_change)
       : on_fullscreen_change_(on_fullscreen_change) {
-    if (features::IsUsingWindowService())
-      observed_window = observed_window->GetRootWindow();
     observed_window_.Add(observed_window);
   }
 
@@ -146,6 +147,11 @@ void PresentationReceiverWindowView::Init() {
   SecurityStateTabHelper::CreateForWebContents(web_contents);
   ChromeTranslateClient::CreateForWebContents(web_contents);
   autofill::ChromeAutofillClient::CreateForWebContents(web_contents);
+  autofill::ContentAutofillDriverFactory::CreateForWebContentsAndDelegate(
+      web_contents,
+      autofill::ChromeAutofillClient::FromWebContents(web_contents),
+      g_browser_process->GetApplicationLocale(),
+      autofill::AutofillManager::ENABLE_AUTOFILL_DOWNLOAD_MANAGER);
   ChromePasswordManagerClient::CreateForWebContentsWithAutofillClient(
       web_contents,
       autofill::ChromeAutofillClient::FromWebContents(web_contents));
@@ -157,7 +163,10 @@ void PresentationReceiverWindowView::Init() {
   InfoBarService::CreateForWebContents(web_contents);
   MixedContentSettingsTabHelper::CreateForWebContents(web_contents);
   PopupBlockerTabHelper::CreateForWebContents(web_contents);
-  TabSpecificContentSettings::CreateForWebContents(web_contents);
+  content_settings::TabSpecificContentSettings::CreateForWebContents(
+      web_contents,
+      std::make_unique<chrome::TabSpecificContentSettingsDelegate>(
+          web_contents));
 
   auto* profile =
       Profile::FromBrowserContext(web_contents->GetBrowserContext());
@@ -167,10 +176,10 @@ void PresentationReceiverWindowView::Init() {
   location_bar_view_ =
       new LocationBarView(nullptr, profile, &command_updater_, this, true);
 
-  auto box_owner =
-      std::make_unique<views::BoxLayout>(views::BoxLayout::kVertical);
+  auto box_owner = std::make_unique<views::BoxLayout>(
+      views::BoxLayout::Orientation::kVertical);
   box_owner->set_cross_axis_alignment(
-      views::BoxLayout::CROSS_AXIS_ALIGNMENT_STRETCH);
+      views::BoxLayout::CrossAxisAlignment::kStretch);
   auto* box = SetLayoutManager(std::move(box_owner));
   AddChildView(location_bar_view_);
   box->SetFlexForView(location_bar_view_, 0);
@@ -287,7 +296,8 @@ bool PresentationReceiverWindowView::IsFullscreen() const {
 
 void PresentationReceiverWindowView::EnterFullscreen(
     const GURL& url,
-    ExclusiveAccessBubbleType bubble_type) {
+    ExclusiveAccessBubbleType bubble_type,
+    const int64_t display_id) {
   frame_->SetFullscreen(true);
 #if !defined(OS_CHROMEOS)
   OnFullscreenChanged();
@@ -309,7 +319,7 @@ void PresentationReceiverWindowView::UpdateExclusiveAccessExitBubbleContent(
     ExclusiveAccessBubbleType bubble_type,
     ExclusiveAccessBubbleHideCallback bubble_first_hide_callback,
     bool force_update) {
-#if defined(CHROMEOS)
+#if defined(OS_CHROMEOS)
   // On Chrome OS, we will not show the toast for the normal browser fullscreen
   // mode.  The 'F11' text is confusing since how to access F11 on a Chromebook
   // is not common knowledge and there is also a dedicated fullscreen toggle
@@ -343,10 +353,6 @@ void PresentationReceiverWindowView::OnExclusiveAccessUserInput() {}
 content::WebContents* PresentationReceiverWindowView::GetActiveWebContents() {
   return delegate_->web_contents();
 }
-
-void PresentationReceiverWindowView::UnhideDownloadShelf() {}
-
-void PresentationReceiverWindowView::HideDownloadShelf() {}
 
 bool PresentationReceiverWindowView::CanUserExitFullscreen() const {
   return true;

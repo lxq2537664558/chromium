@@ -15,7 +15,6 @@
 #include "base/strings/utf_string_conversions.h"
 #include "components/autofill/core/browser/proto/autofill_sync.pb.h"
 #include "components/autofill/core/browser/webdata/autofill_table.h"
-#include "components/autofill/core/browser/webdata/autofill_webdata_backend.h"
 #include "components/autofill/core/browser/webdata/autofill_webdata_service.h"
 #include "components/autofill/core/common/autofill_features.h"
 #include "components/sync/model/entity_data.h"
@@ -72,7 +71,7 @@ std::unique_ptr<EntityData> CreateEntityData(const AutofillEntry& entry) {
   autofill->add_usage_timestamp(entry.date_created().ToInternalValue());
   if (entry.date_created() != entry.date_last_used())
     autofill->add_usage_timestamp(entry.date_last_used().ToInternalValue());
-  entity_data->non_unique_name = EscapeIdentifiers(*autofill);
+  entity_data->name = EscapeIdentifiers(*autofill);
   return entity_data;
 }
 
@@ -303,8 +302,7 @@ AutocompleteSyncBridge::AutocompleteSyncBridge(
     AutofillWebDataBackend* backend,
     std::unique_ptr<ModelTypeChangeProcessor> change_processor)
     : ModelTypeSyncBridge(std::move(change_processor)),
-      web_data_backend_(backend),
-      scoped_observer_(this) {
+      web_data_backend_(backend) {
   DCHECK(web_data_backend_);
 
   scoped_observer_.Add(web_data_backend_);
@@ -339,13 +337,6 @@ Optional<syncer::ModelError> AutocompleteSyncBridge::MergeSyncData(
   RETURN_IF_ERROR(tracker.FlushToSync(true, std::move(metadata_change_list),
                                 change_processor()));
 
-  // TODO(crbug.com/920214) Deprecated, clean-up as part of the
-  // Autocomplete Retention Policy flag cleanup.
-  if (!base::FeatureList::IsEnabled(
-          autofill::features::kAutocompleteRetentionPolicyEnabled)) {
-    web_data_backend_->RemoveExpiredFormElements();
-  }
-
   web_data_backend_->CommitChanges();
   web_data_backend_->NotifyThatSyncHasStarted(syncer::AUTOFILL);
   return {};
@@ -370,13 +361,6 @@ Optional<ModelError> AutocompleteSyncBridge::ApplySyncChanges(
   RETURN_IF_ERROR(tracker.FlushToLocal(web_data_backend_));
   RETURN_IF_ERROR(tracker.FlushToSync(false, std::move(metadata_change_list),
                                       change_processor()));
-
-  // TODO(crbug.com/920214) Deprecated, clean-up as part of the
-  // Autocomplete Retention Policy flag cleanup.
-  if (!base::FeatureList::IsEnabled(
-          autofill::features::kAutocompleteRetentionPolicyEnabled)) {
-    web_data_backend_->RemoveExpiredFormElements();
-  }
 
   web_data_backend_->CommitChanges();
   return {};

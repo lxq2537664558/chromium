@@ -24,7 +24,7 @@ layer at (0,0) size 800x600
           LayoutText {#text} at (0,27) size 663x20
             text run at (0,27) width 663: "Our ability to \"edit around\" content the HTML editing code does not yet handle very well. "
           LayoutBR {BR} at (663,43) size 0x0
-          LayoutInline {I} at (0,0) size 99x20
+          LayoutInline {I} at (0,48) size 99x20
             LayoutText {#text} at (0,48) size 99x20
               text run at (0,48) width 99: "For this test: "
           LayoutText {#text} at (99,48) size 168x20
@@ -39,10 +39,10 @@ layer at (0,0) size 800x600
             text run at (0,27) width 709: "The content in the red box must exactly match the content in the green box (except for the border"
             text run at (0,48) width 53: "color). "
           LayoutBR {BR} at (53,64) size 0x0
-          LayoutInline {I} at (0,0) size 99x20
+          LayoutInline {I} at (0,69) size 99x20
             LayoutText {#text} at (0,69) size 99x20
               text run at (0,69) width 99: "For this test: "
-          LayoutText {#text} at (99,69) size 708x41
+          LayoutText {#text} at (0,69) size 708x41
             text run at (99,69) width 609: "Only list content should get deleted. Surrounding content that is not selected should"
             text run at (0,90) width 201: "(obviously) not be affected."
       LayoutBlockFlow {DIV} at (0,251) size 784x32 [border: (2px solid #008000)]
@@ -55,7 +55,7 @@ layer at (0,0) size 800x600
               text run at (0,0) width 62: "before"
           LayoutBlockFlow {UL} at (2,54) size 780x28
             LayoutListItem {LI} at (40,0) size 740x28
-              LayoutListMarker (anonymous) at (-22,0) size 9x27: bullet
+              LayoutOutsideListMarker {::marker} at (-22,0) size 9x27: bullet
               LayoutText {#text} at (0,0) size 45x27
                 text run at (0,0) width 45: "after"
 caret: position 0 of child 0 {#text} of child 1 {LI} of child 1 {UL} of child 1 {DIV} of child 5 {DIV} of body

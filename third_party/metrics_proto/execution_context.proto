@@ -54,6 +54,19 @@ enum Thread {
   // Compositor thread (can be in both renderer and gpu processes).
   COMPOSITOR_THREAD = 11;
 
+  // Task scheduler thread.
+  SCHEDULER_WORKER_THREAD = 13;
+
+  COMPOSITOR_TILE_WORKER_THREAD = 14;
+
+  SERVICE_WORKER_THREAD = 15;
+
+  // Thread pool thread (in renderer process).
+  THREAD_POOL_THREAD = 16;
+
+  // GPU memory thread (in renderer process).
+  GPU_MEMORY_THREAD = 17;
+
   // A Chrome thread not identified by any other enum. Defined for the benefit
   // of Chrome OS. Do not use for the Chrome sampling profiler; define a new
   // enum instead.

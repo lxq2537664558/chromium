@@ -5,8 +5,6 @@
 #include "net/third_party/quiche/src/quic/core/crypto/proof_source.h"
 #include "net/third_party/quiche/src/quic/core/crypto/proof_verifier.h"
 
-#include "net/third_party/quiche/src/quic/core/tls_client_handshaker.h"
-#include "net/third_party/quiche/src/quic/core/tls_server_handshaker.h"
 #include "third_party/blink/renderer/modules/peerconnection/adapters/p2p_quic_crypto_config_factory_impl.h"
 
 namespace blink {
@@ -38,7 +36,7 @@ class InsecureProofVerifier : public quic::ProofVerifier {
       const uint16_t port,
       const std::string& server_config,
       quic::QuicTransportVersion transport_version,
-      quic::QuicStringPiece chlo_hash,
+      quiche::QuicheStringPiece chlo_hash,
       const std::vector<std::string>& certs,
       const std::string& cert_sct,
       const std::string& signature,
@@ -52,6 +50,8 @@ class InsecureProofVerifier : public quic::ProofVerifier {
   quic::QuicAsyncStatus VerifyCertChain(
       const std::string& hostname,
       const std::vector<std::string>& certs,
+      const std::string& ocsp_response,
+      const std::string& cert_sct,
       const quic::ProofVerifyContext* context,
       std::string* error_details,
       std::unique_ptr<quic::ProofVerifyDetails>* details,
@@ -78,7 +78,7 @@ class DummyProofSource : public quic::ProofSource {
                 const std::string& hostname,
                 const std::string& server_config,
                 quic::QuicTransportVersion transport_version,
-                quic::QuicStringPiece chlo_hash,
+                quiche::QuicheStringPiece chlo_hash,
                 std::unique_ptr<Callback> callback) override {
     quic::QuicCryptoProof proof;
     proof.signature = "Dummy signature";
@@ -99,10 +99,12 @@ class DummyProofSource : public quic::ProofSource {
       const quic::QuicSocketAddress& server_address,
       const std::string& hostname,
       uint16_t signature_algorithm,
-      quic::QuicStringPiece in,
+      quiche::QuicheStringPiece in,
       std::unique_ptr<SignatureCallback> callback) override {
-    callback->Run(true, "Dummy signature");
+    callback->Run(true, "Dummy signature", nullptr);
   }
+
+  TicketCrypter* SessionTicketCrypter() override { return nullptr; }
 };
 
 P2PQuicCryptoConfigFactoryImpl::P2PQuicCryptoConfigFactoryImpl(
@@ -114,7 +116,7 @@ P2PQuicCryptoConfigFactoryImpl::CreateClientCryptoConfig() {
   std::unique_ptr<quic::ProofVerifier> proof_verifier(
       new InsecureProofVerifier);
   return std::make_unique<quic::QuicCryptoClientConfig>(
-      std::move(proof_verifier), quic::TlsClientHandshaker::CreateSslCtx());
+      std::move(proof_verifier));
 }
 
 std::unique_ptr<quic::QuicCryptoServerConfig>
@@ -128,8 +130,7 @@ P2PQuicCryptoConfigFactoryImpl::CreateServerCryptoConfig() {
   return std::make_unique<quic::QuicCryptoServerConfig>(
       std::string(source_address_token_secret, kInputKeyingMaterialLength),
       random_generator_, std::move(proof_source),
-      quic::KeyExchangeSource::Default(),
-      quic::TlsServerHandshaker::CreateSslCtx());
+      quic::KeyExchangeSource::Default());
 }
 
 }  // namespace blink

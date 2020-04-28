@@ -10,7 +10,7 @@
 #include "base/task/post_task.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/threading/thread_task_runner_handle.h"
-#include "chrome/browser/content_settings/tab_specific_content_settings.h"
+#include "chrome/browser/content_settings/tab_specific_content_settings_delegate.h"
 #include "chrome/browser/infobars/infobar_service.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/safe_browsing/test_safe_browsing_service.h"
@@ -22,7 +22,8 @@
 #include "chrome/browser/subresource_filter/test_ruleset_publisher.h"
 #include "chrome/test/base/testing_browser_process.h"
 #include "chrome/test/base/testing_profile.h"
-#include "components/safe_browsing/db/v4_protocol_manager_util.h"
+#include "components/content_settings/browser/tab_specific_content_settings.h"
+#include "components/safe_browsing/core/db/v4_protocol_manager_util.h"
 #include "components/subresource_filter/content/browser/ruleset_service.h"
 #include "components/subresource_filter/content/browser/subresource_filter_observer_test_utils.h"
 #include "components/subresource_filter/core/common/activation_decision.h"
@@ -53,13 +54,6 @@ void SubresourceFilterTestHarness::SetUp() {
       subresource_filter::ActivationList::SUBRESOURCE_FILTER));
 
   NavigateAndCommit(GURL("https://example.first"));
-
-  system_request_context_getter_ =
-      base::MakeRefCounted<net::TestURLRequestContextGetter>(
-          base::CreateSingleThreadTaskRunnerWithTraits(
-              {content::BrowserThread::IO}));
-  TestingBrowserProcess::GetGlobal()->SetSystemRequestContext(
-      system_request_context_getter_.get());
 
   // Set up safe browsing service with the fake database manager.
   //
@@ -106,7 +100,10 @@ void SubresourceFilterTestHarness::SetUp() {
 
   // Set up the tab helpers.
   InfoBarService::CreateForWebContents(web_contents());
-  TabSpecificContentSettings::CreateForWebContents(web_contents());
+  content_settings::TabSpecificContentSettings::CreateForWebContents(
+      web_contents(),
+      std::make_unique<chrome::TabSpecificContentSettingsDelegate>(
+          web_contents()));
   ChromeSubresourceFilterClient::CreateForWebContents(web_contents());
 
   base::RunLoop().RunUntilIdle();
@@ -120,8 +117,6 @@ void SubresourceFilterTestHarness::TearDown() {
   // all cleanup related to these classes actually happens.
   TestingBrowserProcess::GetGlobal()->SetRulesetService(nullptr);
   TestingBrowserProcess::GetGlobal()->SetSafeBrowsingService(nullptr);
-  TestingBrowserProcess::GetGlobal()->SetSystemRequestContext(nullptr);
-  system_request_context_getter_ = nullptr;
 
   base::RunLoop().RunUntilIdle();
 

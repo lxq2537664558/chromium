@@ -8,6 +8,7 @@
 #include <memory>
 
 #include "base/memory/scoped_refptr.h"
+#include "build/build_config.h"
 #include "components/viz/common/resources/resource_format.h"
 #include "gpu/command_buffer/service/shared_image_backing_factory.h"
 #include "gpu/command_buffer/service/texture_manager.h"
@@ -22,6 +23,7 @@ class ColorSpace;
 
 namespace gpu {
 class SharedImageBacking;
+class SharedImageBatchAccessManager;
 class GpuDriverBugWorkarounds;
 struct GpuFeatureInfo;
 struct GpuPreferences;
@@ -41,16 +43,19 @@ class GPU_GLES2_EXPORT SharedImageBackingFactoryGLTexture
     bool supports_unpack_subimage = false;
   };
 
-  SharedImageBackingFactoryGLTexture(const GpuPreferences& gpu_preferences,
-                                     const GpuDriverBugWorkarounds& workarounds,
-                                     const GpuFeatureInfo& gpu_feature_info,
-                                     ImageFactory* image_factory);
+  SharedImageBackingFactoryGLTexture(
+      const GpuPreferences& gpu_preferences,
+      const GpuDriverBugWorkarounds& workarounds,
+      const GpuFeatureInfo& gpu_feature_info,
+      ImageFactory* image_factory,
+      SharedImageBatchAccessManager* batch_access_manager);
   ~SharedImageBackingFactoryGLTexture() override;
 
   // SharedImageBackingFactory implementation.
   std::unique_ptr<SharedImageBacking> CreateSharedImage(
       const Mailbox& mailbox,
       viz::ResourceFormat format,
+      SurfaceHandle surface_handle,
       const gfx::Size& size,
       const gfx::ColorSpace& color_space,
       uint32_t usage,
@@ -71,6 +76,8 @@ class GPU_GLES2_EXPORT SharedImageBackingFactoryGLTexture
       const gfx::Size& size,
       const gfx::ColorSpace& color_space,
       uint32_t usage) override;
+  bool CanImportGpuMemoryBuffer(
+      gfx::GpuMemoryBufferType memory_buffer_type) override;
 
   static std::unique_ptr<SharedImageBacking> CreateSharedImageForTest(
       const Mailbox& mailbox,
@@ -99,11 +106,30 @@ class GPU_GLES2_EXPORT SharedImageBackingFactoryGLTexture
       GLuint gl_type,
       const gles2::Texture::CompatibilitySwizzle* swizzle,
       bool is_cleared,
+      bool has_immutable_storage,
       viz::ResourceFormat format,
       const gfx::Size& size,
       const gfx::ColorSpace& color_space,
       uint32_t usage,
       const UnpackStateAttribs& attribs);
+
+  // This is meant to be used only on Android. Return nullptr for other
+  // platforms.
+  std::unique_ptr<SharedImageBacking> MakeEglImageBacking(
+      const Mailbox& mailbox,
+      viz::ResourceFormat format,
+      const gfx::Size& size,
+      const gfx::ColorSpace& color_space,
+      uint32_t usage);
+
+  std::unique_ptr<SharedImageBacking> CreateSharedImageInternal(
+      const Mailbox& mailbox,
+      viz::ResourceFormat format,
+      SurfaceHandle surface_handle,
+      const gfx::Size& size,
+      const gfx::ColorSpace& color_space,
+      uint32_t usage,
+      base::span<const uint8_t> pixel_data);
 
   struct FormatInfo {
     FormatInfo();
@@ -155,6 +181,11 @@ class GPU_GLES2_EXPORT SharedImageBackingFactoryGLTexture
   int32_t max_texture_size_ = 0;
   bool texture_usage_angle_ = false;
   UnpackStateAttribs attribs;
+  GpuDriverBugWorkarounds workarounds_;
+
+#if defined(OS_ANDROID)
+  SharedImageBatchAccessManager* batch_access_manager_ = nullptr;
+#endif
 };
 
 }  // namespace gpu

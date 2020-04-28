@@ -64,11 +64,14 @@ class ExtensionManagement : public KeyedService {
   //                        and cannot be disabled.
   // * INSTALLATION_RECOMMENDED: Extension will be installed automatically but
   //                             can be disabled.
+  // * INSTALLATION_REMOVED:  Extension cannot be installed and will be
+  //                          automatically removed.
   enum InstallationMode {
     INSTALLATION_ALLOWED = 0,
     INSTALLATION_BLOCKED,
     INSTALLATION_FORCED,
     INSTALLATION_RECOMMENDED,
+    INSTALLATION_REMOVED,
   };
 
   explicit ExtensionManagement(Profile* profile);
@@ -93,6 +96,11 @@ class ExtensionManagement : public KeyedService {
   // Returns installation mode for an extension.
   InstallationMode GetInstallationMode(const Extension* extension) const;
 
+  // Returns installation mode for an extension with id |id| and updated with
+  // |update_url|.
+  InstallationMode GetInstallationMode(const ExtensionId& extension_id,
+                                       const std::string& update_url) const;
+
   // Returns the force install list, in format specified by
   // ExternalPolicyLoader::AddExtension().
   std::unique_ptr<base::DictionaryValue> GetForceInstallList() const;
@@ -108,6 +116,10 @@ class ExtensionManagement : public KeyedService {
   // Returns if an extension with id |id| is explicitly allowed by enterprise
   // policy or not.
   bool IsInstallationExplicitlyAllowed(const ExtensionId& id) const;
+
+  // Returns if an extension with id |id| is explicitly blocked by enterprise
+  // policy or not.
+  bool IsInstallationExplicitlyBlocked(const ExtensionId& id) const;
 
   // Returns true if an extension download should be allowed to proceed.
   bool IsOffstoreInstallAllowed(const GURL& url,
@@ -169,9 +181,8 @@ class ExtensionManagement : public KeyedService {
   bool CheckMinimumVersion(const Extension* extension,
                            std::string* required_version) const;
 
-  // Returns true if there is a policy setting that explicitly uninstalls
-  // blacklisted extensions that are installed
-  bool ShouldUninstallPolicyBlacklistedExtensions() const;
+  // Returns whether the profile associated with this instance is supervised.
+  bool is_child() const { return is_child_; }
 
  private:
   using SettingsIdMap =
@@ -204,12 +215,6 @@ class ExtensionManagement : public KeyedService {
 
   // Helper to update |extension_dict| for forced installs.
   void UpdateForcedExtensions(const base::DictionaryValue* extension_dict);
-
-  // Helper to update |settings_by_id_| for forced cloud reporting extension.
-  void UpdateForcedCloudReportingExtension();
-
-  // Returns true if cloud reporting policy is enabled.
-  bool IsCloudReportingPolicyEnabled() const;
 
   // Helper function to access |settings_by_id_| with |id| as key.
   // Adds a new IndividualSettings entry to |settings_by_id_| if none exists for
@@ -244,9 +249,11 @@ class ExtensionManagement : public KeyedService {
   Profile* const profile_ = nullptr;
   PrefService* pref_service_ = nullptr;
   bool is_signin_profile_ = false;
+  bool is_child_ = false;
 
   base::ObserverList<Observer, true>::Unchecked observer_list_;
   PrefChangeRegistrar pref_change_registrar_;
+  PrefChangeRegistrar local_state_pref_change_registrar_;
   std::vector<std::unique_ptr<ManagementPolicy::Provider>> providers_;
 
   DISALLOW_COPY_AND_ASSIGN(ExtensionManagement);

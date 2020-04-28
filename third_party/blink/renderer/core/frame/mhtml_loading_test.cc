@@ -28,7 +28,10 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+#include "base/bind_helpers.h"
 #include "build/build_config.h"
+#include "services/network/public/cpp/web_sandbox_flags.h"
+#include "services/network/public/mojom/web_sandbox_flags.mojom-blink.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/platform/web_string.h"
 #include "third_party/blink/public/platform/web_url.h"
@@ -83,8 +86,8 @@ class MHTMLLoadingTest : public testing::Test {
   Page* GetPage() const { return helper_.GetWebView()->GetPage(); }
 
  private:
-  frame_test_helpers::WebViewHelper helper_;
   ScopedTestingPlatformSupport<TestingPlatformSupport> platform_;
+  frame_test_helpers::WebViewHelper helper_;
 };
 
 // Checks that the domain is set to the actual MHTML file, not the URL it was
@@ -99,11 +102,10 @@ TEST_F(MHTMLLoadingTest, CheckDomain) {
   Document* document = frame->GetDocument();
   ASSERT_TRUE(document);
 
-  EXPECT_STREQ(kFileURL,
-               frame->DomWindow()->location()->toString().Ascii().data());
+  EXPECT_EQ(kFileURL, frame->DomWindow()->location()->toString());
 
   const SecurityOrigin* origin = document->GetSecurityOrigin();
-  EXPECT_STRNE("localhost", origin->Domain().Ascii().data());
+  EXPECT_NE("localhost", origin->Domain().Ascii());
 }
 
 // Checks that full sandboxing protection has been turned on.
@@ -119,9 +121,10 @@ TEST_F(MHTMLLoadingTest, EnforceSandboxFlags) {
 
   // Full sandboxing with the exception to new top-level windows should be
   // turned on.
-  EXPECT_EQ(WebSandboxFlags::kAll &
-                ~(WebSandboxFlags::kPopups |
-                  WebSandboxFlags::kPropagatesToAuxiliaryBrowsingContexts),
+  EXPECT_EQ(network::mojom::blink::WebSandboxFlags::kAll &
+                ~(network::mojom::blink::WebSandboxFlags::kPopups |
+                  network::mojom::blink::WebSandboxFlags::
+                      kPropagatesToAuxiliaryBrowsingContexts),
             document->GetSandboxFlags());
 
   // MHTML document should be loaded into unique origin.
@@ -139,9 +142,10 @@ TEST_F(MHTMLLoadingTest, EnforceSandboxFlags) {
   Document* child_document = child_frame->GetDocument();
   ASSERT_TRUE(child_document);
 
-  EXPECT_EQ(WebSandboxFlags::kAll &
-                ~(WebSandboxFlags::kPopups |
-                  WebSandboxFlags::kPropagatesToAuxiliaryBrowsingContexts),
+  EXPECT_EQ(network::mojom::blink::WebSandboxFlags::kAll &
+                ~(network::mojom::blink::WebSandboxFlags::kPopups |
+                  network::mojom::blink::WebSandboxFlags::
+                      kPropagatesToAuxiliaryBrowsingContexts),
             child_document->GetSandboxFlags());
 
   // MHTML document should be loaded into unique origin.
@@ -165,9 +169,10 @@ TEST_F(MHTMLLoadingTest, EnforceSandboxFlagsInXSLT) {
 
   // Full sandboxing with the exception to new top-level windows should be
   // turned on.
-  EXPECT_EQ(WebSandboxFlags::kAll &
-                ~(WebSandboxFlags::kPopups |
-                  WebSandboxFlags::kPropagatesToAuxiliaryBrowsingContexts),
+  EXPECT_EQ(network::mojom::blink::WebSandboxFlags::kAll &
+                ~(network::mojom::blink::WebSandboxFlags::kPopups |
+                  network::mojom::blink::WebSandboxFlags::
+                      kPropagatesToAuxiliaryBrowsingContexts),
             document->GetSandboxFlags());
 
   // MHTML document should be loaded into unique origin.
@@ -212,7 +217,7 @@ TEST_F(MHTMLLoadingTest, FormControlElements) {
   Document* document = frame->GetDocument();
   ASSERT_TRUE(document);
 
-  ClassCollection* formControlElements = document->getElementsByClassName("fc");
+  HTMLCollection* formControlElements = document->getElementsByClassName("fc");
   ASSERT_TRUE(formControlElements);
   for (Element* element : *formControlElements)
     EXPECT_TRUE(element->IsDisabledFormControl());

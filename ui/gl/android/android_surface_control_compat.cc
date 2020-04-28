@@ -5,12 +5,16 @@
 #include "ui/gl/android/android_surface_control_compat.h"
 
 #include <dlfcn.h>
+#include <android/data_space.h>
 
 #include "base/android/build_info.h"
 #include "base/atomic_sequence_num.h"
 #include "base/bind.h"
+#include "base/debug/crash_logging.h"
 #include "base/memory/ptr_util.h"
 #include "base/no_destructor.h"
+#include "base/strings/string_number_conversions.h"
+#include "base/system/sys_info.h"
 #include "base/trace_event/trace_event.h"
 #include "ui/gfx/color_space.h"
 
@@ -31,23 +35,6 @@ enum {
   ASURFACE_TRANSACTION_TRANSPARENCY_TRANSPARENT = 0,
   ASURFACE_TRANSACTION_TRANSPARENCY_TRANSLUCENT = 1,
   ASURFACE_TRANSACTION_TRANSPARENCY_OPAQUE = 2,
-};
-
-enum {
-  ASURFACE_TRANSACTION_VISIBILITY_HIDE = 0,
-  ASURFACE_TRANSACTION_VISIBILITY_SHOW = 1,
-};
-
-enum {
-  ADATASPACE_UNKNOWN = 0,
-  ADATASPACE_SCRGB_LINEAR = 406913024,
-  ADATASPACE_SRGB = 142671872,
-  ADATASPACE_DISPLAY_P3 = 143261696,
-  ADATASPACE_BT2020_PQ = 163971072,
-};
-
-enum {
-  AHARDWAREBUFFER_USAGE_COMPOSER_OVERLAY = 1ULL << 11,
 };
 
 // ASurfaceTransaction
@@ -89,6 +76,8 @@ using pASurfaceTransaction_setBufferDataSpace =
 // ASurfaceTransactionStats
 using pASurfaceTransactionStats_getPresentFenceFd =
     int (*)(ASurfaceTransactionStats* stats);
+using pASurfaceTransactionStats_getLatchTime =
+    int64_t (*)(ASurfaceTransactionStats* stats);
 using pASurfaceTransactionStats_getASurfaceControls =
     void (*)(ASurfaceTransactionStats* stats,
              ASurfaceControl*** surface_controls,
@@ -104,18 +93,14 @@ namespace {
 
 base::AtomicSequenceNumber g_next_transaction_id;
 
-// Helper function to log errors from dlsym. Calling LOG(ERROR) inside a macro
-// crashes clang code coverage. https://crbug.com/843356
-void LogDlsymError(const char* func) {
-  LOG(ERROR) << "Unable to load function " << func;
-}
+uint64_t g_agb_required_usage_bits = AHARDWAREBUFFER_USAGE_COMPOSER_OVERLAY;
 
 #define LOAD_FUNCTION(lib, func)                             \
   do {                                                       \
     func##Fn = reinterpret_cast<p##func>(dlsym(lib, #func)); \
     if (!func##Fn) {                                         \
       supported = false;                                     \
-      LogDlsymError(#func);                                  \
+      LOG(ERROR) << "Unable to load function " << #func;     \
     }                                                        \
   } while (0)
 
@@ -151,6 +136,7 @@ struct SurfaceControlMethods {
     LOAD_FUNCTION(main_dl_handle, ASurfaceTransaction_setBufferDataSpace);
 
     LOAD_FUNCTION(main_dl_handle, ASurfaceTransactionStats_getPresentFenceFd);
+    LOAD_FUNCTION(main_dl_handle, ASurfaceTransactionStats_getLatchTime);
     LOAD_FUNCTION(main_dl_handle, ASurfaceTransactionStats_getASurfaceControls);
     LOAD_FUNCTION(main_dl_handle,
                   ASurfaceTransactionStats_releaseASurfaceControls);
@@ -184,6 +170,8 @@ struct SurfaceControlMethods {
   // TransactionStats methods.
   pASurfaceTransactionStats_getPresentFenceFd
       ASurfaceTransactionStats_getPresentFenceFdFn;
+  pASurfaceTransactionStats_getLatchTime
+      ASurfaceTransactionStats_getLatchTimeFn;
   pASurfaceTransactionStats_getASurfaceControls
       ASurfaceTransactionStats_getASurfaceControlsFn;
   pASurfaceTransactionStats_releaseASurfaceControls
@@ -197,6 +185,8 @@ ARect RectToARect(const gfx::Rect& rect) {
 }
 
 int32_t OverlayTransformToWindowTransform(gfx::OverlayTransform transform) {
+  // Note that the gfx::OverlayTransform expresses rotations in anticlockwise
+  // direction while the ANativeWindow rotations are in clockwise direction.
   switch (transform) {
     case gfx::OVERLAY_TRANSFORM_INVALID:
       DCHECK(false) << "Invalid Transform";
@@ -208,11 +198,11 @@ int32_t OverlayTransformToWindowTransform(gfx::OverlayTransform transform) {
     case gfx::OVERLAY_TRANSFORM_FLIP_VERTICAL:
       return ANATIVEWINDOW_TRANSFORM_MIRROR_VERTICAL;
     case gfx::OVERLAY_TRANSFORM_ROTATE_90:
-      return ANATIVEWINDOW_TRANSFORM_ROTATE_90;
+      return ANATIVEWINDOW_TRANSFORM_ROTATE_270;
     case gfx::OVERLAY_TRANSFORM_ROTATE_180:
       return ANATIVEWINDOW_TRANSFORM_ROTATE_180;
     case gfx::OVERLAY_TRANSFORM_ROTATE_270:
-      return ANATIVEWINDOW_TRANSFORM_ROTATE_270;
+      return ANATIVEWINDOW_TRANSFORM_ROTATE_90;
   };
   NOTREACHED();
   return ANATIVEWINDOW_TRANSFORM_IDENTITY;
@@ -239,6 +229,13 @@ SurfaceControl::TransactionStats ToTransactionStats(
   transaction_stats.present_fence = base::ScopedFD(
       SurfaceControlMethods::Get().ASurfaceTransactionStats_getPresentFenceFdFn(
           stats));
+  transaction_stats.latch_time =
+      base::TimeTicks() +
+      base::TimeDelta::FromNanoseconds(
+          SurfaceControlMethods::Get().ASurfaceTransactionStats_getLatchTimeFn(
+              stats));
+  if (transaction_stats.latch_time == base::TimeTicks())
+    transaction_stats.latch_time = base::TimeTicks::Now();
 
   ASurfaceControl** surface_controls = nullptr;
   size_t size = 0u;
@@ -291,7 +288,14 @@ void OnTransactionCompletedOnAnyThread(void* context,
 bool SurfaceControl::IsSupported() {
   if (!base::android::BuildInfo::GetInstance()->is_at_least_q())
     return false;
-  return SurfaceControlMethods::Get().supported;
+
+  // GLFence cannot be created successfully on emulator, and it is needed by
+  // Android surface control.
+  if (base::SysInfo::GetAndroidHardwareEGL() == "emulation")
+    return false;
+
+  CHECK(SurfaceControlMethods::Get().supported);
+  return true;
 }
 
 bool SurfaceControl::SupportsColorSpace(const gfx::ColorSpace& color_space) {
@@ -301,7 +305,11 @@ bool SurfaceControl::SupportsColorSpace(const gfx::ColorSpace& color_space) {
 uint64_t SurfaceControl::RequiredUsage() {
   if (!IsSupported())
     return 0u;
-  return AHARDWAREBUFFER_USAGE_COMPOSER_OVERLAY;
+  return g_agb_required_usage_bits;
+}
+
+void SurfaceControl::EnableQualcommUBWC() {
+  g_agb_required_usage_bits |= AHARDWAREBUFFER_USAGE_VENDOR_0;
 }
 
 SurfaceControl::Surface::Surface() = default;
@@ -309,13 +317,15 @@ SurfaceControl::Surface::Surface() = default;
 SurfaceControl::Surface::Surface(const Surface& parent, const char* name) {
   surface_ = SurfaceControlMethods::Get().ASurfaceControl_createFn(
       parent.surface(), name);
-  DCHECK(surface_);
+  if (!surface_)
+    LOG(ERROR) << "Failed to create ASurfaceControl : " << name;
 }
 
 SurfaceControl::Surface::Surface(ANativeWindow* parent, const char* name) {
   surface_ = SurfaceControlMethods::Get().ASurfaceControl_createFromWindowFn(
       parent, name);
-  DCHECK(surface_);
+  if (!surface_)
+    LOG(ERROR) << "Failed to create ASurfaceControl : " << name;
 }
 
 SurfaceControl::Surface::~Surface() {
@@ -414,8 +424,17 @@ void SurfaceControl::Transaction::SetDamageRect(const Surface& surface,
 void SurfaceControl::Transaction::SetColorSpace(
     const Surface& surface,
     const gfx::ColorSpace& color_space) {
+  auto data_space = ColorSpaceToADataSpace(color_space);
+
+  // Log the data space in crash keys for debugging crbug.com/997592.
+  static auto* kCrashKey = base::debug::AllocateCrashKeyString(
+      "data_space_for_buffer", base::debug::CrashKeySize::Size256);
+  auto crash_key_value = base::NumberToString(data_space);
+  base::debug::ScopedCrashKeyString scoped_crash_key(kCrashKey,
+                                                     crash_key_value);
+
   SurfaceControlMethods::Get().ASurfaceTransaction_setBufferDataSpaceFn(
-      transaction_, surface.surface(), ColorSpaceToADataSpace(color_space));
+      transaction_, surface.surface(), data_space);
 }
 
 void SurfaceControl::Transaction::SetOnCompleteCb(

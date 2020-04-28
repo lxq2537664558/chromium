@@ -4,11 +4,16 @@
 
 #import "ios/chrome/browser/ui/find_bar/find_bar_view.h"
 
+#include "base/feature_list.h"
 #include "components/strings/grit/components_strings.h"
 #import "ios/chrome/browser/ui/find_bar/find_bar_constants.h"
 #import "ios/chrome/browser/ui/toolbar/public/toolbar_constants.h"
+#include "ios/chrome/browser/ui/ui_feature_flags.h"
 #import "ios/chrome/browser/ui/util/uikit_ui_util.h"
-#import "ios/chrome/common/ui_util/constraints_ui_util.h"
+#import "ios/chrome/common/ui/colors/UIColor+cr_semantic_colors.h"
+#import "ios/chrome/common/ui/colors/dynamic_color_util.h"
+#import "ios/chrome/common/ui/colors/semantic_color_names.h"
+#import "ios/chrome/common/ui/util/constraints_ui_util.h"
 #include "ios/chrome/grit/ios_strings.h"
 #include "ui/base/l10n/l10n_util_mac.h"
 
@@ -19,16 +24,14 @@
 namespace {
 // Horizontal padding betwee all elements (except the previous/next buttons).
 const CGFloat kPadding = 8;
+// Horizontal padding between the last button and the trailing edge in a
+// Regular x Regular environment.
+const CGFloat kIPadButtonEdgeSpacing = 17;
 const CGFloat kInputFieldCornerRadius = 10;
 const CGFloat kFontSize = 15;
 const CGFloat kButtonFontSize = 17;
 const CGFloat kInputFieldHeight = 36;
 const CGFloat kButtonLength = 44;
-const CGFloat kInputFieldTextAlpha = 0.7;
-const CGFloat kPlaceholderAlpha = 0.3;
-const CGFloat kPlaceholderAlphaIncognito = 0.5;
-const CGFloat kResultsCountLabelAdditionalAlpha = 0.2;
-const CGFloat kBlueTintColor = 0x1A73E8;
 }  // namespace
 
 @interface FindBarView ()
@@ -99,6 +102,9 @@ const CGFloat kBlueTintColor = 0x1A73E8;
   [self.inputField setContentHuggingPriority:UILayoutPriorityDefaultLow - 1
                                      forAxis:UILayoutConstraintAxisHorizontal];
 
+  const CGFloat closeButtonTrailingPadding =
+      ShouldShowCompactToolbar() ? kPadding : kIPadButtonEdgeSpacing;
+
   [NSLayoutConstraint activateConstraints:@[
     // Input Field.
     [self.inputField.centerYAnchor constraintEqualToAnchor:self.centerYAnchor],
@@ -106,7 +112,6 @@ const CGFloat kBlueTintColor = 0x1A73E8;
     [self.inputField.leadingAnchor
         constraintEqualToAnchor:safeArea.leadingAnchor
                        constant:kPadding],
-
     [self.inputField.trailingAnchor
         constraintEqualToAnchor:self.previousButton.leadingAnchor
                        constant:-kPadding],
@@ -135,36 +140,27 @@ const CGFloat kBlueTintColor = 0x1A73E8;
     // Use button intrinsic width.
     [self.closeButton.trailingAnchor
         constraintEqualToAnchor:safeArea.trailingAnchor
-                       constant:-kPadding],
+                       constant:-closeButtonTrailingPadding],
   ]];
 }
 
 // Sets the colors for the different subviews, based on the |darkMode|.
 - (void)setupColors {
-  UIColor* inputFieldBackground =
-      self.darkMode
-          ? [UIColor
-                colorWithWhite:1
-                         alpha:kAdaptiveLocationBarBackgroundAlphaIncognito]
-          : [UIColor colorWithWhite:0
-                              alpha:kAdaptiveLocationBarBackgroundAlpha];
-  UIColor* inputFieldPlaceHolderTextColor =
-      self.darkMode
-          ? [UIColor colorWithWhite:1 alpha:kPlaceholderAlphaIncognito]
-          : [UIColor colorWithWhite:0 alpha:kPlaceholderAlpha];
-  UIColor* inputFieldTextColor =
-      self.darkMode ? [UIColor whiteColor]
-                    : [UIColor colorWithWhite:0 alpha:kInputFieldTextAlpha];
-  UIColor* resultsCountLabelTextColor =
-      self.darkMode
-          ? [UIColor colorWithWhite:1
-                              alpha:kPlaceholderAlphaIncognito +
-                                    kResultsCountLabelAdditionalAlpha]
-          : [UIColor colorWithWhite:0
-                              alpha:kPlaceholderAlpha +
-                                    kResultsCountLabelAdditionalAlpha];
-  UIColor* buttonTintColor =
-      self.darkMode ? [UIColor whiteColor] : UIColorFromRGB(kBlueTintColor);
+  UIColor* inputFieldBackground = color::DarkModeDynamicColor(
+      [UIColor colorNamed:kTextfieldBackgroundColor], self.darkMode,
+      [UIColor colorNamed:kTextfieldBackgroundDarkColor]);
+  UIColor* inputFieldPlaceHolderTextColor = color::DarkModeDynamicColor(
+      [UIColor colorNamed:kTextfieldPlaceholderColor], self.darkMode,
+      [UIColor colorNamed:kTextfieldPlaceholderDarkColor]);
+  UIColor* inputFieldTextColor = color::DarkModeDynamicColor(
+      [UIColor colorNamed:kTextPrimaryColor], self.darkMode,
+      [UIColor colorNamed:kTextPrimaryDarkColor]);
+  UIColor* resultsCountLabelTextColor = color::DarkModeDynamicColor(
+      [UIColor colorNamed:kTextfieldPlaceholderColor], self.darkMode,
+      [UIColor colorNamed:kTextfieldPlaceholderDarkColor]);
+  UIColor* buttonTintColor = color::DarkModeDynamicColor(
+      [UIColor colorNamed:kBlueColor], self.darkMode,
+      [UIColor colorNamed:kBlueDarkColor]);
 
   self.inputField.backgroundColor = inputFieldBackground;
   NSString* placeholder = [self.inputField placeholder];
@@ -248,6 +244,13 @@ const CGFloat kBlueTintColor = 0x1A73E8;
     SetA11yLabelAndUiAutomationName(_previousButton,
                                     IDS_FIND_IN_PAGE_PREVIOUS_TOOLTIP,
                                     kFindInPagePreviousButtonId);
+#if defined(__IPHONE_13_4)
+    if (@available(iOS 13.4, *)) {
+      if (base::FeatureList::IsEnabled(kPointerSupport)) {
+        _previousButton.pointerInteractionEnabled = YES;
+      }
+    }
+#endif  // defined(__IPHONE_13_4)
   }
 
   return _previousButton;
@@ -264,6 +267,13 @@ const CGFloat kBlueTintColor = 0x1A73E8;
     _nextButton.translatesAutoresizingMaskIntoConstraints = NO;
     SetA11yLabelAndUiAutomationName(_nextButton, IDS_FIND_IN_PAGE_NEXT_TOOLTIP,
                                     kFindInPageNextButtonId);
+#if defined(__IPHONE_13_4)
+    if (@available(iOS 13.4, *)) {
+      if (base::FeatureList::IsEnabled(kPointerSupport)) {
+        _nextButton.pointerInteractionEnabled = YES;
+      }
+    }
+#endif  // defined(__IPHONE_13_4)
   }
 
   return _nextButton;
@@ -278,6 +288,13 @@ const CGFloat kBlueTintColor = 0x1A73E8;
     _closeButton.translatesAutoresizingMaskIntoConstraints = NO;
     _closeButton.accessibilityIdentifier = kFindInPageCloseButtonId;
     _closeButton.titleLabel.font = [UIFont systemFontOfSize:kButtonFontSize];
+#if defined(__IPHONE_13_4)
+    if (@available(iOS 13.4, *)) {
+      if (base::FeatureList::IsEnabled(kPointerSupport)) {
+        _closeButton.pointerInteractionEnabled = YES;
+      }
+    }
+#endif  // defined(__IPHONE_13_4)
   }
 
   return _closeButton;

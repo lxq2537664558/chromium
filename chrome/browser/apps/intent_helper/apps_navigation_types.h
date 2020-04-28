@@ -17,8 +17,11 @@ namespace apps {
 
 // Describes the possible ways for the intent picker to be closed.
 enum class IntentPickerCloseReason {
-  // There was an error in showing the intent picker.
-  PICKER_ERROR,
+  // An error occurred in the intent picker before it could be displayed.
+  ERROR_BEFORE_PICKER,
+
+  // An error occurred in the intent picker after it was displayed.
+  ERROR_AFTER_PICKER,
 
   // The user dismissed the picker without making a choice.
   DIALOG_DEACTIVATED,
@@ -57,9 +60,25 @@ enum class AppsNavigationAction {
   RESUME,
 };
 
+// This enum backs an UMA histogram and must be treated as append-only.
+enum class Source {
+  kHttpOrHttps = 0,
+  kExternalProtocol = 1,
+  kMaxValue = kExternalProtocol
+};
+
+// The type of an entry in the intent picker for the user to choose from.
+enum class PickerEntryType {
+  kUnknown = 0,
+  kArc,
+  kWeb,
+  kDevice,
+  kMacNative,
+};
+
 // Represents the data required to display an app in a picker to the user.
 struct IntentPickerAppInfo {
-  IntentPickerAppInfo(apps::mojom::AppType type,
+  IntentPickerAppInfo(PickerEntryType type,
                       const gfx::Image& icon,
                       const std::string& launch_name,
                       const std::string& display_name);
@@ -69,13 +88,14 @@ struct IntentPickerAppInfo {
   IntentPickerAppInfo& operator=(IntentPickerAppInfo&& other);
 
   // The type of app that this object represents.
-  apps::mojom::AppType type;
+  PickerEntryType type;
 
   // The icon to be displayed for this app in the picker.
   gfx::Image icon;
 
-  // The string used to launch this app. Represents an Android package name
-  // when type is ARC.
+  // The string used to launch this app. Represents an Android package name when
+  // |type| is kArc, and when |type| is kMacNative, it is the file path of the
+  // native app to use.
   std::string launch_name;
 
   // The string shown to the user to identify this app in the intent picker.
@@ -104,7 +124,7 @@ using GetAppsCallback =
 // values of the launch name, app type, and persistence boolean are all ignored.
 using IntentPickerResponse =
     base::OnceCallback<void(const std::string& launch_name,
-                            apps::mojom::AppType app_type,
+                            apps::PickerEntryType entry_type,
                             apps::IntentPickerCloseReason close_reason,
                             bool should_persist)>;
 

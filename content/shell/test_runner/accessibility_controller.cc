@@ -7,6 +7,7 @@
 #include <string>
 
 #include "base/stl_util.h"
+#include "content/shell/renderer/web_test/blink_test_runner.h"
 #include "content/shell/test_runner/web_view_test_proxy.h"
 #include "gin/handle.h"
 #include "gin/object_template_builder.h"
@@ -20,7 +21,7 @@
 #include "third_party/blink/public/web/web_settings.h"
 #include "third_party/blink/public/web/web_view.h"
 
-namespace test_runner {
+namespace content {
 
 class AccessibilityControllerBindings
     : public gin::Wrappable<AccessibilityControllerBindings> {
@@ -45,6 +46,7 @@ class AccessibilityControllerBindings
   v8::Local<v8::Object> FocusedElement();
   v8::Local<v8::Object> RootElement();
   v8::Local<v8::Object> AccessibleElementById(const std::string& id);
+  void Reset();
 
   base::WeakPtr<AccessibilityController> controller_;
 
@@ -103,7 +105,8 @@ AccessibilityControllerBindings::GetObjectTemplateBuilder(
       .SetMethod("addNotificationListener",
                  &AccessibilityControllerBindings::SetNotificationListener)
       .SetMethod("removeNotificationListener",
-                 &AccessibilityControllerBindings::UnsetNotificationListener);
+                 &AccessibilityControllerBindings::UnsetNotificationListener)
+      .SetMethod("reset", &AccessibilityControllerBindings::Reset);
 }
 
 void AccessibilityControllerBindings::LogAccessibilityEvents() {
@@ -136,22 +139,31 @@ v8::Local<v8::Object> AccessibilityControllerBindings::AccessibleElementById(
                      : v8::Local<v8::Object>();
 }
 
+void AccessibilityControllerBindings::Reset() {
+  if (controller_)
+    controller_->Reset();
+}
+
 AccessibilityController::AccessibilityController(
     WebViewTestProxy* web_view_test_proxy)
     : log_accessibility_events_(false),
-      web_view_test_proxy_(web_view_test_proxy),
-      weak_factory_(this) {}
+      web_view_test_proxy_(web_view_test_proxy) {}
 
-AccessibilityController::~AccessibilityController() {}
+AccessibilityController::~AccessibilityController() {
+  // v8::Persistent will leak on destroy, due to the default
+  // NonCopyablePersistentTraits (it claims this may change in the future).
+  notification_callback_.Reset();
+}
 
 void AccessibilityController::Reset() {
   elements_.Clear();
   notification_callback_.Reset();
   log_accessibility_events_ = false;
+  ax_context_.reset();
 }
 
 void AccessibilityController::Install(blink::WebLocalFrame* frame) {
-  ax_context_.reset(new blink::WebAXContext(frame->GetDocument()));
+  ax_context_ = std::make_unique<blink::WebAXContext>(frame->GetDocument());
   frame->View()->GetSettings()->SetInlineTextBoxAccessibilityEnabled(true);
 
   AccessibilityControllerBindings::Install(weak_factory_.GetWeakPtr(), frame);
@@ -162,6 +174,17 @@ bool AccessibilityController::ShouldLogAccessibilityEvents() {
 }
 
 void AccessibilityController::NotificationReceived(
+    blink::WebLocalFrame* frame,
+    const blink::WebAXObject& target,
+    const std::string& notification_name) {
+  frame->GetTaskRunner(blink::TaskType::kInternalTest)
+      ->PostTask(FROM_HERE,
+                 base::BindOnce(&AccessibilityController::PostNotification,
+                                weak_factory_.GetWeakPtr(), target,
+                                notification_name));
+}
+
+void AccessibilityController::PostNotification(
     const blink::WebAXObject& target,
     const std::string& notification_name) {
   v8::Isolate* isolate = blink::MainThreadIsolate();
@@ -276,7 +299,7 @@ AccessibilityController::FindAccessibleElementByIdRecursive(
 }
 
 blink::WebView* AccessibilityController::web_view() {
-  return web_view_test_proxy_->webview();
+  return web_view_test_proxy_->GetWebView();
 }
 
 blink::WebAXObject
@@ -291,4 +314,4 @@ AccessibilityController::GetAccessibilityObjectForMainFrame() {
       web_view()->MainFrame()->ToWebLocalFrame()->GetDocument());
 }
 
-}  // namespace test_runner
+}  // namespace content

@@ -2,10 +2,10 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "components/sync/base/cryptographer.h"
+#include "components/sync/syncable/nigori_util.h"
+#include "components/sync/nigori/cryptographer.h"
 #include "components/sync/protocol/bookmark_specifics.pb.h"
 #include "components/sync/protocol/sync.pb.h"
-#include "components/sync/syncable/nigori_util.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace syncer {
@@ -29,7 +29,8 @@ TEST(NigoriUtilTest, SpecificsNeedsEncryption) {
   AddDefaultFieldValue(BOOKMARKS, &bookmark_specifics);
   EXPECT_TRUE(SpecificsNeedsEncryption(encrypted_types, bookmark_specifics));
 
-  bookmark_specifics.mutable_bookmark()->set_title("title");
+  bookmark_specifics.mutable_bookmark()->set_legacy_canonicalized_title(
+      "title");
   bookmark_specifics.mutable_bookmark()->set_url("url");
   EXPECT_TRUE(SpecificsNeedsEncryption(encrypted_types, bookmark_specifics));
   EXPECT_FALSE(SpecificsNeedsEncryption(ModelTypeSet(), bookmark_specifics));

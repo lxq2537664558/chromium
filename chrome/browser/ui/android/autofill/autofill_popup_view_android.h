@@ -48,11 +48,12 @@ class AutofillPopupViewAndroid : public AutofillPopupView {
   void OnSelectedRowChanged(base::Optional<int> previous_row_selection,
                             base::Optional<int> current_row_selection) override;
   void OnSuggestionsChanged() override;
+  base::Optional<int32_t> GetAxUniqueId() override;
 
  private:
   friend class AutofillPopupView;
   // Creates the AutofillPopupBridge Java object.
-  void Init();
+  bool Init();
   // Returns whether the dropdown was suppressed (mainly due to not enough
   // screen space available).
   bool WasSuppressed();

@@ -21,7 +21,7 @@ class ChunkToLayerMapperTest : public testing::Test {
     DEFINE_STATIC_LOCAL(
         base::Optional<PaintChunk::Id>, id,
         (PaintChunk::Id(fake_client, DisplayItem::kDrawingFirst)));
-    PaintChunk chunk(0, 0, *id, state);
+    PaintChunk chunk(0, 1, *id, state);
     return chunk;
   }
 
@@ -38,7 +38,7 @@ class ChunkToLayerMapperTest : public testing::Test {
           e0(), EffectPaintPropertyNode::State{
                     layer_transform_, layer_clip_, kColorFilterLuminanceToAlpha,
                     CompositorFilterOperations(), 0.789f,
-                    CompositorFilterOperations(), gfx::RRectF(),
+                    CompositorFilterOperations(), base::Optional<gfx::RRectF>(),
                     SkBlendMode::kSrcIn});
     }
     return PropertyTreeState(*layer_transform_, *layer_clip_, *layer_effect_);

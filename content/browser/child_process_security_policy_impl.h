@@ -20,10 +20,11 @@
 #include "base/memory/singleton.h"
 #include "base/synchronization/lock.h"
 #include "base/thread_annotations.h"
+#include "content/browser/can_commit_status.h"
+#include "content/browser/isolated_origin_util.h"
 #include "content/browser/isolation_context.h"
 #include "content/public/browser/child_process_security_policy.h"
-#include "content/public/common/resource_type.h"
-#include "storage/common/fileapi/file_system_types.h"
+#include "storage/common/file_system/file_system_types.h"
 #include "url/origin.h"
 
 class GURL;
@@ -39,7 +40,7 @@ class ResourceRequestBody;
 namespace storage {
 class FileSystemContext;
 class FileSystemURL;
-}
+}  // namespace storage
 
 namespace content {
 
@@ -51,6 +52,101 @@ class SiteInstance;
 class CONTENT_EXPORT ChildProcessSecurityPolicyImpl
     : public ChildProcessSecurityPolicy {
  public:
+  // Handle used to access the security state for a specific process.
+  //
+  // Objects that require the security state to be preserved beyond the
+  // lifetime of the RenderProcessHostImpl should hold an instance of this
+  // object and use it to answer security policy questions. (e.g. Mojo services
+  // created by RPHI that can receive calls after RPHI destruction). This
+  // object should only be called on the UI and IO threads.
+  //
+  // Note: Some security methods, like CanAccessDataForOrigin(), require
+  // information from the BrowserContext to make its decisions. These methods
+  // will fall back to failsafe values if called after BrowserContext
+  // destruction. Callers should be prepared to gracefully handle this or
+  // ensure that they don't make any calls after BrowserContext destruction.
+  class CONTENT_EXPORT Handle {
+   public:
+    Handle();
+    Handle(Handle&&);
+    Handle(const Handle&) = delete;
+    ~Handle();
+
+    Handle& operator=(const Handle&) = delete;
+    Handle& operator=(Handle&&);
+
+    // Create a new instance of Handle, holding another reference to the same
+    // process ID as the current one.
+    Handle Duplicate();
+
+    // Returns true if this object has a valid process ID.
+    // Returns false if this object was created with the default constructor,
+    // the contents of this object was transferred to another Handle via
+    // std::move(), or ChildProcessSecurityPolicyImpl::CreateHandle()
+    // created this object after the process has already been destructed.
+    bool is_valid() const;
+
+    // Whether the process is allowed to commit a document from the given URL.
+    bool CanCommitURL(const GURL& url);
+
+    // Before servicing a child process's request to upload a file to the web,
+    // the browser should call this method to determine whether the process has
+    // the capability to upload the requested file.
+    bool CanReadFile(const base::FilePath& file);
+
+    // Explicit read permissions check for FileSystemURL specified files.
+    bool CanReadFileSystemFile(const storage::FileSystemURL& url);
+
+    // Returns true if the process is permitted to read and modify the data for
+    // the origin of |url|. This is currently used to protect data such as
+    // cookies, passwords, and local storage. Does not affect cookies attached
+    // to or set by network requests.
+    //
+    // This can only return false for processes locked to a particular origin,
+    // which can happen for any origin when the --site-per-process flag is used,
+    // or for isolated origins that require a dedicated process (see
+    // AddIsolatedOrigins).
+    bool CanAccessDataForOrigin(const GURL& url);
+    bool CanAccessDataForOrigin(const url::Origin& origin);
+
+   private:
+    friend class ChildProcessSecurityPolicyImpl;
+    explicit Handle(int child_id);
+
+    // The ID of the child process that this handle is associated with or
+    // ChildProcessHost::kInvalidUniqueID if the handle is no longer valid.
+    int child_id_;
+  };
+
+  // This scoped class is used to temporarily store an origin requesting
+  // opt-in isolation in scoped_isolation_request_origin_, while the request is
+  // being processed. This is only necessary because it is difficult to plumb
+  // the parameter through the site URL computations that need it, and it is
+  // safe because overlapping and nested occurrences cannot occur. Callers
+  // should stack allocate the result so that the temporary result is
+  // automatically cleared when the result goes out of scope. The stored
+  // scoped_isolation_request_origin_ value is only safe to access from the UI
+  // thread, where this object must be created.
+  class CONTENT_EXPORT ScopedOriginIsolationOptInRequest {
+   public:
+    // This returns a new unique_ptr to ScopedOriginIsolationOptInRequest if
+    // no origin is already scoped for an isolation request, or a null
+    // unique_ptr if |origin_to_isolate| has already been scoped. If
+    // a second call occurs while this is set, this will fail on a CHECK.
+    static std::unique_ptr<ScopedOriginIsolationOptInRequest>
+    GetScopedOriginIsolationOptInRequest(const url::Origin& origin_to_isolate);
+
+    ~ScopedOriginIsolationOptInRequest();
+
+   private:
+    explicit ScopedOriginIsolationOptInRequest(
+        const url::Origin& origin_to_isolate);
+
+    friend class ChildProcessSecurityPolicyImpl;
+
+    DISALLOW_COPY_AND_ASSIGN(ScopedOriginIsolationOptInRequest);
+  };
+
   // Object can only be created through GetInstance() so the constructor is
   // private.
   ~ChildProcessSecurityPolicyImpl() override;
@@ -100,12 +196,38 @@ class CONTENT_EXPORT ChildProcessSecurityPolicyImpl
   bool HasWebUIBindings(int child_id) override;
   void GrantSendMidiSysExMessage(int child_id) override;
   bool CanAccessDataForOrigin(int child_id, const GURL& url) override;
-  void AddIsolatedOrigins(std::vector<url::Origin> origins,
+  void AddIsolatedOrigins(base::StringPiece origins_list,
+                          IsolatedOriginSource source,
+                          BrowserContext* browser_context = nullptr) override;
+  void AddIsolatedOrigins(const std::vector<url::Origin>& origins,
+                          IsolatedOriginSource source,
                           BrowserContext* browser_context = nullptr) override;
   bool IsGloballyIsolatedOriginForTesting(const url::Origin& origin) override;
+  std::vector<url::Origin> GetIsolatedOrigins(
+      base::Optional<IsolatedOriginSource> source = base::nullopt,
+      BrowserContext* browser_context = nullptr) override;
+  void ClearIsolatedOriginsForTesting() override;
 
   // Identical to the above method, but takes url::Origin as input.
   bool CanAccessDataForOrigin(int child_id, const url::Origin& origin);
+
+  // Shared helper for GURL and url::Origin processing.
+  bool CanAccessDataForOrigin(int child_id,
+                              const GURL& url,
+                              bool url_is_precursor_of_opaque_origin);
+
+  // Determines if the combination of |origin| & |url| is safe to commit to
+  // the process associated with |child_id|.
+  //
+  // Returns CAN_COMMIT_ORIGIN_AND_URL if it is safe to commit the |origin| and
+  // |url| combination to the process associated with |child_id|.
+  // Returns CANNOT_COMMIT_URL if |url| is not safe to commit.
+  // Returns CANNOT_COMMIT_ORIGIN if |origin| is not safe to commit.
+  CanCommitStatus CanCommitOriginAndUrl(
+      int child_id,
+      const IsolationContext& isolation_context,
+      const url::Origin& origin,
+      const GURL& url);
 
   // This function will check whether |origin| requires process isolation
   // within |isolation_context|, and if so, it will return true and put the
@@ -136,6 +258,45 @@ class CONTENT_EXPORT ChildProcessSecurityPolicyImpl
   bool GetMatchingIsolatedOrigin(const IsolationContext& isolation_context,
                                  const url::Origin& origin,
                                  url::Origin* result);
+
+  // Removes any origin isolation opt-in entries associated with the
+  // |isolation_context| of the BrowsingInstance.
+  void RemoveOptInIsolatedOriginsForBrowsingInstance(
+      const IsolationContext& isolation_context);
+
+  // Registers |origin|'s isolation status with respect to the BrowsingInstance
+  // associated with |isolation_context|. If it has already been registered,
+  // then nothing will be changed by this call.
+  void AddOptInIsolatedOriginForBrowsingInstance(
+      const IsolationContext& isolation_context,
+      const url::Origin& origin);
+
+  // This function will check whether |origin| has opted-in to process isolation
+  // (via OriginPolicy), with respect to the current state of the
+  // |isolation_context|. It is different from IsIsolatedOrigin() in that it
+  // only deals with OriginPolicy isolation status, whereas IsIsolatedOrigin()
+  // considers all possible mechanisms for requesting isolation.
+  // It will check for two things:
+  // 1) whether |origin| already is assigned to a SiteInstance in the
+  //    |isolation_context| by being tracked in either
+  //    |origin_isolation_non_isolated_by_browsing_instance_| or
+  //    |origin_isolation_by_browsing_instance_|, in which case we follow the
+  //    same policy, or
+  // 2) if it's not currently tracked as described above, whether |origin| is
+  //    currently requesting isolation via |scoped_isolation_request_origin_|,
+  //    as part of an in-progress navigation.
+  bool ShouldOriginGetOptInIsolation(const IsolationContext& isolation_context,
+                                     const url::Origin& origin);
+
+  // Returns true if web-exposed mechanisms for opting in to isolated origins
+  // are enabled (namely, either via origin policy or via the Origin-Isolation
+  // header).
+  static bool IsOptInOriginIsolationEnabled();
+
+  // This function adds |origin| to the master list of origins that have
+  // ever requested opt-in isolation, either via an OriginPolicy or opt-in
+  // header. Returns true if |origin| is not already in the list.
+  bool UpdateOriginIsolationOptInListIfNecessary(const url::Origin& origin);
 
   // A version of GetMatchingIsolatedOrigin that takes in both the |origin| and
   // the |site_url| that |origin| corresponds to.  |site_url| is the key by
@@ -211,24 +372,6 @@ class CONTENT_EXPORT ChildProcessSecurityPolicyImpl
   // Revoke read raw cookies permission.
   void RevokeReadRawCookies(int child_id);
 
-  // A version of the public ChildProcessSecurityPolicy::CanCommitURL() which
-  // takes an additional bool |check_origin_lock|, specifying whether to
-  // reject |url| if it does not match the origin lock on process |child_id|.
-  // Passing true for |check_origin_lock| provides stronger enforcement with
-  // strict site isolation; it is only set to false by features (e.g., Origin
-  // header validation) that aren't yet ready for this enforcement. This
-  // function should *not* be used by new features; use the public
-  // ChildProcessSecurityPolicy::CanCommitURL() instead, which internally calls
-  // this with |check_origin_lock| being true.
-  //
-  // TODO(alexmos): Remove |check_origin_lock| and check origin locks
-  // unconditionally once https://crbug.com/515309 is fixed.
-  bool CanCommitURL(int child_id, const GURL& url, bool check_origin_lock);
-
-  // Whether the given origin is valid for an origin header. Valid origin
-  // headers are commitable URLs.
-  bool CanSetAsOriginHeader(int child_id, const GURL& url);
-
   // Explicit permissions checks for FileSystemURL specified files.
   bool CanReadFileSystemFile(int child_id,
                              const storage::FileSystemURL& filesystem_url);
@@ -244,12 +387,14 @@ class CONTENT_EXPORT ChildProcessSecurityPolicyImpl
   bool CanDeleteFileSystemFile(int child_id,
                                const storage::FileSystemURL& filesystem_url);
 
-  // True if cookie headers may be exposed to renderer |child_id| for |url| for
-  // display in DevTools. |url| should be a WebSocket URL.
-  bool CanAccessDataForWebSocket(int child_id, const GURL& url);
-
   // Returns true if the specified child_id has been granted ReadRawCookies.
   bool CanReadRawCookies(int child_id);
+
+  // Notifies security state of |child_id| about the IsolationContext it will
+  // host.  The main side effect is proper setting of the lowest
+  // BrowsingInstanceId associated with the security state.
+  void IncludeIsolationContext(int child_id,
+                               const IsolationContext& isolation_context);
 
   // Sets the process identified by |child_id| as only permitted to access data
   // for the origin specified by |lock_url|. Most callers should use
@@ -261,23 +406,6 @@ class CONTENT_EXPORT ChildProcessSecurityPolicyImpl
   void LockToOrigin(const IsolationContext& isolation_context,
                     int child_id,
                     const GURL& lock_url);
-
-  // Used to indicate the result of comparing a process's origin lock to
-  // another value:
-  enum class CheckOriginLockResult {
-    // The process does not exist, or it has no origin lock.
-    NO_LOCK,
-    // The process has an origin lock and it matches the passed-in value.
-    HAS_EQUAL_LOCK,
-    // The process has an origin lock and it does not match the passed-in
-    // value.
-    HAS_WRONG_LOCK,
-  };
-
-  // Check the origin lock of the process specified by |child_id| against
-  // |site_url|.  See the definition of |CheckOriginLockResult| for possible
-  // returned values.
-  CheckOriginLockResult CheckOriginLock(int child_id, const GURL& site_url);
 
   // Retrieves the current origin lock of process |child_id|.  Returns an empty
   // GURL if the process does not exist or if it is not locked to an origin.
@@ -292,14 +420,14 @@ class CONTENT_EXPORT ChildProcessSecurityPolicyImpl
   // Returns true if sending system exclusive messages is allowed.
   bool CanSendMidiSysExMessage(int child_id);
 
-  // Remove all isolated origins associated with |browser_context|.  This is
+  // Remove all isolated origins associated with |browser_context| and clear any
+  // pointers that may reference |browser_context|.  This is
   // typically used when |browser_context| is being destroyed and assumes that
   // no processes are running or will run for that profile; this makes the
   // isolated origin removal safe.  Note that |browser_context| cannot be null;
   // i.e., isolated origins that apply globally to all profiles cannot
   // currently be removed, since that is not safe to do at runtime.
-  void RemoveIsolatedOriginsForBrowserContext(
-      const BrowserContext& browser_context);
+  void RemoveStateForBrowserContext(const BrowserContext& browser_context);
 
   // Check whether |origin| requires origin-wide process isolation within
   // |isolation_context|.
@@ -329,19 +457,40 @@ class CONTENT_EXPORT ChildProcessSecurityPolicyImpl
   //       renderer-initiated navigations.
   bool CanRedirectToURL(const GURL& url);
 
-  // Returns true if the policy object has security state information for
-  // |child_id|. This is essentially a way to determine if the policy object
-  // is actively tracking permissions for |child_id|. This method can be called
-  // from the UI & IO threads.
+  // Sets "killed_process_origin_lock" crash key with lock info for the
+  // process associated with |child_id|.
+  void LogKilledProcessOriginLock(int child_id);
+
+  // Creates a Handle object for a specific child process ID.
   //
-  // DO NOT ADD NEW CALLERS OF THIS METHOD.
-  // TODO(933089): Remove this method once a better long term solution is
-  // implemented for the one caller doing Blob URL revocation.
-  bool HasSecurityState(int child_id);
+  // This handle can be used to extend the lifetime of policy state beyond
+  // the Remove() call for |child_id|. This should be used by objects that can
+  // outlive the RenderProcessHostImpl object associated with |child_id| and
+  // need to be able to make policy decisions after RPHI destruction. (e.g.
+  // Mojo services created by RPHI)
+  //
+  // Returns a valid Handle for any |child_id| that is present in
+  // |security_state_|. Otherwise it returns a Handle that returns false for
+  // all policy checks.
+  Handle CreateHandle(int child_id);
+
+  // Returns true if we have seen an isolation request for this origin before
+  // in any BrowsingInstance.
+  bool HasOriginEverRequestedOptInIsolation(const url::Origin& origin);
+
+  // Adds |origin| to the non-isolated list for the BrowsingInstance specified
+  // by |isolation_context|, if it's not already in the list. |is_global_walk|
+  // should only be set to true during the global walk that is triggered when
+  // |origin| first requests opt-in isolation, so that the function can skip
+  // safety checks that will be unnecessary during the global walk.
+  void AddNonIsolatedOriginIfNeeded(const IsolationContext& isolation_context,
+                                    const url::Origin& origin,
+                                    bool is_global_walk);
 
  private:
   friend class ChildProcessSecurityPolicyInProcessBrowserTest;
   friend class ChildProcessSecurityPolicyTest;
+  friend class ChildProcessSecurityPolicyImpl::Handle;
   FRIEND_TEST_ALL_PREFIXES(ChildProcessSecurityPolicyInProcessBrowserTest,
                            NoLeak);
   FRIEND_TEST_ALL_PREFIXES(ChildProcessSecurityPolicyTest, FilePermissions);
@@ -352,6 +501,15 @@ class CONTENT_EXPORT ChildProcessSecurityPolicyImpl
                            IsolatedOriginsForSpecificBrowserContexts);
   FRIEND_TEST_ALL_PREFIXES(ChildProcessSecurityPolicyTest,
                            IsolatedOriginsRemovedWhenBrowserContextDestroyed);
+  FRIEND_TEST_ALL_PREFIXES(ChildProcessSecurityPolicyTest,
+                           IsolateAllSuborigins);
+  FRIEND_TEST_ALL_PREFIXES(ChildProcessSecurityPolicyTest,
+                           WildcardAndNonWildcardOrigins);
+  FRIEND_TEST_ALL_PREFIXES(ChildProcessSecurityPolicyTest,
+                           WildcardAndNonWildcardEmbedded);
+  FRIEND_TEST_ALL_PREFIXES(ChildProcessSecurityPolicyTest,
+                           ParseIsolatedOrigins);
+  FRIEND_TEST_ALL_PREFIXES(ChildProcessSecurityPolicyTest, WildcardDefaultPort);
 
   class SecurityState;
 
@@ -367,7 +525,9 @@ class CONTENT_EXPORT ChildProcessSecurityPolicyImpl
     IsolatedOriginEntry(const url::Origin& origin,
                         BrowsingInstanceId min_browsing_instance_id,
                         BrowserContext* browser_context,
-                        ResourceContext* resource_context);
+                        ResourceContext* resource_context,
+                        bool isolate_all_subdomains,
+                        IsolatedOriginSource source);
     // Copyable and movable.
     IsolatedOriginEntry(const IsolatedOriginEntry& other);
     IsolatedOriginEntry& operator=(const IsolatedOriginEntry& other);
@@ -378,16 +538,19 @@ class CONTENT_EXPORT ChildProcessSecurityPolicyImpl
     // Allow this class to be used as a key in STL.
     bool operator<(const IsolatedOriginEntry& other) const {
       return std::tie(origin_, min_browsing_instance_id_, browser_context_,
-                      resource_context_) <
+                      resource_context_, isolate_all_subdomains_, source_) <
              std::tie(other.origin_, other.min_browsing_instance_id_,
-                      other.browser_context_, other.resource_context_);
+                      other.browser_context_, other.resource_context_,
+                      other.isolate_all_subdomains_, source_);
     }
 
     bool operator==(const IsolatedOriginEntry& other) const {
       return origin_ == other.origin_ &&
              min_browsing_instance_id_ == other.min_browsing_instance_id_ &&
              browser_context_ == other.browser_context_ &&
-             resource_context_ == other.resource_context_;
+             resource_context_ == other.resource_context_ &&
+             isolate_all_subdomains_ == other.isolate_all_subdomains_ &&
+             source_ == other.source_;
     }
 
     // True if this isolated origin applies globally to all profiles.
@@ -407,6 +570,10 @@ class CONTENT_EXPORT ChildProcessSecurityPolicyImpl
 
     const BrowserContext* browser_context() const { return browser_context_; }
 
+    bool isolate_all_subdomains() const { return isolate_all_subdomains_; }
+
+    IsolatedOriginSource source() const { return source_; }
+
    private:
     url::Origin origin_;
     BrowsingInstanceId min_browsing_instance_id_;
@@ -418,9 +585,18 @@ class CONTENT_EXPORT ChildProcessSecurityPolicyImpl
     BrowserContext* browser_context_;
     ResourceContext* resource_context_;
 
-    // TODO(alexmos): Track the source of each isolated origin entry, e.g., to
+    // True if origins at this or lower level should be treated as distinct
+    // isolated origins, effectively isolating all domains below a given domain,
+    // e.g. if the origin is https://foo.com and isolate_all_subdomains_ is
+    // true, then https://bar.foo.com, https://qux.bar.foo.com and all
+    // subdomains of the form https://<<any pattern here>>.foo.com are
+    // considered isolated origins.
+    bool isolate_all_subdomains_;
+
+    // This tracks the source of each isolated origin entry, e.g., to
     // distinguish those that should be displayed to the user from those that
     // should not.  See https://crbug.com/920911.
+    IsolatedOriginSource source_;
   };
 
   // Obtain an instance of ChildProcessSecurityPolicyImpl via GetInstance().
@@ -443,10 +619,9 @@ class CONTENT_EXPORT ChildProcessSecurityPolicyImpl
   // Grants access permission to the given isolated file system
   // identified by |filesystem_id|.  See comments for
   // ChildProcessSecurityPolicy::GrantReadFileSystem() for more details.
-  void GrantPermissionsForFileSystem(
-      int child_id,
-      const std::string& filesystem_id,
-      int permission);
+  void GrantPermissionsForFileSystem(int child_id,
+                                     const std::string& filesystem_id,
+                                     int permission);
 
   // Determines if certain permissions were granted for a file. |permissions|
   // is an internally defined bit-set.
@@ -463,15 +638,36 @@ class CONTENT_EXPORT ChildProcessSecurityPolicyImpl
 
   // Determines if certain permissions were granted for a file system.
   // |permissions| is an internally defined bit-set.
-  bool HasPermissionsForFileSystem(
-      int child_id,
-      const std::string& filesystem_id,
-      int permission);
+  bool HasPermissionsForFileSystem(int child_id,
+                                   const std::string& filesystem_id,
+                                   int permission);
 
   // Gets the SecurityState object associated with |child_id|.
   // Note: Returned object is only valid for the duration the caller holds
   // |lock_|.
   SecurityState* GetSecurityState(int child_id) EXCLUSIVE_LOCKS_REQUIRED(lock_);
+
+  // Convert a list of comma separated isolated origins in |pattern_list|,
+  // specified either as wildcard origins, non-wildcard origins or a mix of the
+  // two into IsolatedOriginPatterns, suitable for addition via
+  // AddIsolatedOrigins().
+  static std::vector<IsolatedOriginPattern> ParseIsolatedOrigins(
+      base::StringPiece pattern_list);
+
+  void AddIsolatedOrigins(const std::vector<IsolatedOriginPattern>& patterns,
+                          IsolatedOriginSource source,
+                          BrowserContext* browser_context = nullptr);
+
+  bool AddProcessReference(int child_id);
+  bool AddProcessReferenceLocked(int child_id) EXCLUSIVE_LOCKS_REQUIRED(lock_);
+  void RemoveProcessReference(int child_id);
+  void RemoveProcessReferenceLocked(int child_id)
+      EXCLUSIVE_LOCKS_REQUIRED(lock_);
+
+  // Creates the value to place in the "killed_process_origin_lock" crash key
+  // based on the contents of |security_state|.
+  static std::string GetKilledProcessOriginLock(
+      const SecurityState* security_state);
 
   // You must acquire this lock before reading or writing any members of this
   // class, except for isolated_origins_ which uses its own lock.  You must not
@@ -504,6 +700,13 @@ class CONTENT_EXPORT ChildProcessSecurityPolicyImpl
   SecurityStateMap pending_remove_state_ GUARDED_BY(lock_);
 
   FileSystemPermissionPolicyMap file_system_policy_map_ GUARDED_BY(lock_);
+
+  // Contains a mapping between child process ID and the number of outstanding
+  // references that want to keep the SecurityState for each process alive.
+  // This object and Handles created by this object increment/decrement
+  // the counts in this map and only destroy a SecurityState object for a
+  // process when its count goes to zero.
+  std::map<int, int> process_reference_counts_ GUARDED_BY(lock_);
 
   // You must acquire this lock before reading or writing isolated_origins_.
   // You must not block while holding this lock.
@@ -546,8 +749,40 @@ class CONTENT_EXPORT ChildProcessSecurityPolicyImpl
   //      represents https://test.foo.com being isolated in profile1 starting
   //      with BrowsingInstance ID 4, and also in profile2 starting with
   //      BrowsingInstance ID 7.
-  base::flat_map<GURL, base::flat_set<IsolatedOriginEntry>> isolated_origins_
+  base::flat_map<GURL, std::vector<IsolatedOriginEntry>> isolated_origins_
       GUARDED_BY(isolated_origins_lock_);
+
+  // TODO(wjmaclean): Move these lists into a per-BrowserContext container, to
+  // prevent any record of sites visible in one profile from being visible to
+  // another profile.
+  base::Lock origins_isolation_opt_in_lock_;
+  // The set of all origins that have ever requested opt-in isolation. This is
+  // tracked so we know which origins need to be tracked when non-isolated in
+  // any given BrowsingInstance. Origins requesting isolation, if successful,
+  // are marked as isolated via ShouldOriginGetOptInIsolation's checking
+  // |scoped_isolation_request_origin_|.
+  base::flat_set<url::Origin> origin_isolation_opt_ins_
+      GUARDED_BY(origins_isolation_opt_in_lock_);
+  // A map to track origins that have been isolated within a given
+  // BrowsingInstance.
+  base::flat_map<BrowsingInstanceId, std::vector<url::Origin>>
+      origin_isolation_by_browsing_instance_
+          GUARDED_BY(origins_isolation_opt_in_lock_);
+  // A map to track origins that have been loaded in a BrowsingInstance without
+  // isolation, but that have requested isolation in at least one other
+  // BrowsingInstance. This map makes sure we don't try to isolate the origin
+  // in the associated BrowsingInstance at a later time, in order to keep the
+  // isolation consistent over the lifetime of the BrowsingInstance.
+  base::flat_map<BrowsingInstanceId, std::vector<url::Origin>>
+      origin_isolation_non_isolated_by_browsing_instance_
+          GUARDED_BY(origins_isolation_opt_in_lock_);
+
+  // This origin is set during a call to NavigationRequest::OnResponseStarted
+  // that requests isolation for an origin, via the creation of a
+  // ScopedOriginIsolationOptInRequest object. This value's state is read by
+  // ShouldOriginGetOptInIsolation(), and it is only safe to access on the UI
+  // thread.
+  base::Optional<url::Origin> scoped_isolation_request_origin_;
 
   DISALLOW_COPY_AND_ASSIGN(ChildProcessSecurityPolicyImpl);
 };

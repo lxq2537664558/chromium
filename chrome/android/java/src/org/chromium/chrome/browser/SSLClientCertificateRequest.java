@@ -12,17 +12,20 @@ import android.content.DialogInterface.OnClickListener;
 import android.security.KeyChain;
 import android.security.KeyChainAliasCallback;
 import android.security.KeyChainException;
-import android.support.v7.app.AlertDialog;
 import android.util.Log;
 
+import androidx.annotation.VisibleForTesting;
+import androidx.appcompat.app.AlertDialog;
+
 import org.chromium.base.ThreadUtils;
-import org.chromium.base.VisibleForTesting;
 import org.chromium.base.annotations.CalledByNative;
 import org.chromium.base.annotations.JNINamespace;
+import org.chromium.base.annotations.NativeMethods;
 import org.chromium.base.task.AsyncTask;
 import org.chromium.base.task.PostTask;
 import org.chromium.chrome.R;
 import org.chromium.content_public.browser.UiThreadTaskTraits;
+import org.chromium.ui.UiUtils;
 import org.chromium.ui.base.WindowAndroid;
 
 import java.security.Principal;
@@ -103,7 +106,8 @@ public class SSLClientCertificateRequest {
         @Override
         protected void onPostExecute(Void result) {
             ThreadUtils.assertOnUiThread();
-            nativeOnSystemRequestCompletion(mNativePtr, mEncodedChain, mPrivateKey);
+            SSLClientCertificateRequestJni.get().onSystemRequestCompletion(
+                    mNativePtr, mEncodedChain, mPrivateKey);
         }
 
         private String getAlias() {
@@ -156,7 +160,9 @@ public class SSLClientCertificateRequest {
                 if (alias == null) {
                     // No certificate was selected.
                     PostTask.runOrPostTask(UiThreadTaskTraits.DEFAULT,
-                            () -> nativeOnSystemRequestCompletion(mNativePtr, null, null));
+                            ()
+                                    -> SSLClientCertificateRequestJni.get()
+                                               .onSystemRequestCompletion(mNativePtr, null, null));
                 } else {
                     new CertAsyncTaskKeyChain(mContext, mNativePtr, alias)
                             .executeOnExecutor(AsyncTask.THREAD_POOL_EXECUTOR);
@@ -216,8 +222,8 @@ public class SSLClientCertificateRequest {
          * Builds and shows the dialog.
          */
         public void show() {
-            final AlertDialog.Builder builder =
-                    new AlertDialog.Builder(mActivity, R.style.Theme_Chromium_AlertDialog);
+            final AlertDialog.Builder builder = new UiUtils.CompatibleAlertDialogBuilder(
+                    mActivity, R.style.Theme_Chromium_AlertDialog);
             builder.setTitle(R.string.client_cert_unsupported_title)
                     .setMessage(R.string.client_cert_unsupported_message)
                     .setNegativeButton(R.string.close,
@@ -300,12 +306,13 @@ public class SSLClientCertificateRequest {
 
     public static void notifyClientCertificatesChangedOnIOThread() {
         Log.d(TAG, "ClientCertificatesChanged!");
-        nativeNotifyClientCertificatesChangedOnIOThread();
+        SSLClientCertificateRequestJni.get().notifyClientCertificatesChangedOnIOThread();
     }
 
-    private static native void nativeNotifyClientCertificatesChangedOnIOThread();
-
-    // Called to pass request results to native side.
-    private static native void nativeOnSystemRequestCompletion(
-            long requestPtr, byte[][] certChain, PrivateKey privateKey);
+    @NativeMethods
+    interface Natives {
+        void notifyClientCertificatesChangedOnIOThread();
+        // Called to pass request results to native side.
+        void onSystemRequestCompletion(long requestPtr, byte[][] certChain, PrivateKey privateKey);
+    }
 }

@@ -10,7 +10,7 @@
 #include "third_party/blink/renderer/platform/loader/fetch/fetch_context.h"
 #include "third_party/blink/renderer/platform/loader/fetch/resource.h"
 #include "third_party/blink/renderer/platform/loader/fetch/resource_loader.h"
-#include "third_party/blink/renderer/platform/shared_buffer.h"
+#include "third_party/blink/renderer/platform/wtf/shared_buffer.h"
 
 namespace blink {
 
@@ -431,6 +431,8 @@ void ResponseBodyLoader::OnStateChange() {
   if (!started_)
     return;
 
+  TRACE_EVENT0("blink", "ResponseBodyLoader::OnStateChange");
+
   size_t num_bytes_consumed = 0;
 
   while (!aborted_ && !suspended_) {
@@ -449,6 +451,8 @@ void ResponseBodyLoader::OnStateChange() {
     if (result == BytesConsumer::Result::kShouldWait)
       return;
     if (result == BytesConsumer::Result::kOk) {
+      TRACE_EVENT1("blink", "ResponseBodyLoader::OnStateChange", "available",
+                   available);
       in_two_phase_read_ = true;
 
       available =

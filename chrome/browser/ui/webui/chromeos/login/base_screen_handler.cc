@@ -10,7 +10,7 @@
 
 namespace chromeos {
 
-BaseScreenHandler::BaseScreenHandler(OobeScreen oobe_screen,
+BaseScreenHandler::BaseScreenHandler(OobeScreenId oobe_screen,
                                      JSCallsContainer* js_calls_container)
     : BaseWebUIHandler(js_calls_container), oobe_screen_(oobe_screen) {}
 
@@ -32,7 +32,7 @@ void BaseScreenHandler::RegisterMessages() {
 
 void BaseScreenHandler::HandleUserAction(const std::string& action_id) {
   if (base_screen_)
-    base_screen_->OnUserAction(action_id);
+    base_screen_->HandleUserAction(action_id);
 }
 
 }  // namespace chromeos

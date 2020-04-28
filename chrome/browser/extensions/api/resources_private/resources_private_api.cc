@@ -4,15 +4,17 @@
 
 #include "chrome/browser/extensions/api/resources_private/resources_private_api.h"
 
+#include <memory>
 #include <string>
 #include <utility>
 
 #include "base/values.h"
 #include "chrome/browser/browser_process.h"
-#include "chrome/browser/ui/webui/localized_string.h"
+#include "chrome/browser/ui/webui/webui_util.h"
 #include "chrome/common/extensions/api/resources_private.h"
 #include "chrome/grit/generated_resources.h"
 #include "components/strings/grit/components_strings.h"
+#include "components/zoom/page_zoom_constants.h"
 #include "pdf/buildflags.h"
 #include "printing/buildflags/buildflags.h"
 #include "ui/base/l10n/l10n_util.h"
@@ -20,11 +22,10 @@
 
 #if BUILDFLAG(ENABLE_PDF)
 #include "pdf/pdf_features.h"
-#endif
-
-#if BUILDFLAG(ENABLE_PRINT_PREVIEW)
-#include "chrome/common/chrome_features.h"
-#endif
+#if defined(OS_CHROMEOS)
+#include "chrome/browser/chromeos/login/ui/login_display_host.h"
+#endif  // defined(OS_CHROMEOS)
+#endif  // BUILDFLAG(ENABLE_PDF)
 
 // To add a new component to this API, simply:
 // 1. Add your component to the Component enum in
@@ -42,7 +43,8 @@ void AddStringsForIdentity(base::DictionaryValue* dict) {
 }
 
 void AddStringsForPdf(base::DictionaryValue* dict) {
-  static constexpr LocalizedString kPdfResources[] = {
+#if BUILDFLAG(ENABLE_PDF)
+  static constexpr webui::LocalizedString kPdfResources[] = {
     {"passwordDialogTitle", IDS_PDF_PASSWORD_DIALOG_TITLE},
     {"passwordPrompt", IDS_PDF_NEED_PASSWORD},
     {"passwordSubmit", IDS_PDF_PASSWORD_SUBMIT},
@@ -58,6 +60,8 @@ void AddStringsForPdf(base::DictionaryValue* dict) {
     {"tooltipPrint", IDS_PDF_TOOLTIP_PRINT},
     {"tooltipFitToPage", IDS_PDF_TOOLTIP_FIT_PAGE},
     {"tooltipFitToWidth", IDS_PDF_TOOLTIP_FIT_WIDTH},
+    {"tooltipTwoUpViewEnable", IDS_PDF_TOOLTIP_TWO_UP_VIEW_ENABLE},
+    {"tooltipTwoUpViewDisable", IDS_PDF_TOOLTIP_TWO_UP_VIEW_DISABLE},
     {"tooltipZoomIn", IDS_PDF_TOOLTIP_ZOOM_IN},
     {"tooltipZoomOut", IDS_PDF_TOOLTIP_ZOOM_OUT},
 #if defined(OS_CHROMEOS)
@@ -115,6 +119,9 @@ void AddStringsForPdf(base::DictionaryValue* dict) {
   };
   for (const auto& resource : kPdfResources)
     dict->SetString(resource.name, l10n_util::GetStringUTF16(resource.id));
+
+  dict->SetString("presetZoomFactors", zoom::GetPresetZoomFactorsAsJSON());
+#endif  // BUILDFLAG(ENABLE_PDF)
 }
 
 void AddAdditionalDataForPdf(base::DictionaryValue* dict) {
@@ -125,12 +132,17 @@ void AddAdditionalDataForPdf(base::DictionaryValue* dict) {
   dict->SetKey("pdfAnnotationsEnabled",
                base::Value(base::FeatureList::IsEnabled(
                    chrome_pdf::features::kPDFAnnotations)));
-#endif
-#if BUILDFLAG(ENABLE_PRINT_PREVIEW)
-  dict->SetKey("newPrintPreviewLayoutEnabled",
+  dict->SetKey("pdfTwoUpViewEnabled",
                base::Value(base::FeatureList::IsEnabled(
-                   features::kNewPrintPreviewLayout)));
-#endif
+                   chrome_pdf::features::kPDFTwoUpView)));
+
+  bool enable_printing = true;
+#if defined(OS_CHROMEOS)
+  // For Chrome OS, enable printing only if we are not at OOBE.
+  enable_printing = !chromeos::LoginDisplayHost::default_host();
+#endif  // defined(OS_CHROMEOS)
+  dict->SetKey("printingEnabled", base::Value(enable_printing));
+#endif  // BUILDFLAG(ENABLE_PDF)
 }
 
 }  // namespace

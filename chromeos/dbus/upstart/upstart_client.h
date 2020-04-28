@@ -11,6 +11,7 @@
 #include "base/callback.h"
 #include "base/component_export.h"
 #include "base/macros.h"
+#include "base/observer_list.h"
 #include "chromeos/dbus/dbus_method_call_status.h"
 
 namespace dbus {
@@ -24,6 +25,13 @@ namespace chromeos {
 // initializes the DBusThreadManager instance.
 class COMPONENT_EXPORT(UPSTART_CLIENT) UpstartClient {
  public:
+  class Observer : public base::CheckedObserver {
+   public:
+    ~Observer() override {}
+    // Called when the ARC is stopped after it had already started.
+    virtual void ArcStopped() {}
+  };
+
   virtual ~UpstartClient();
 
   // Creates and initializes the global instance. |bus| must not be null.
@@ -38,6 +46,10 @@ class COMPONENT_EXPORT(UPSTART_CLIENT) UpstartClient {
   // Returns the global instance if initialized. May return null.
   static UpstartClient* Get();
 
+  // Adds or removes an observer.
+  virtual void AddObserver(Observer* observer) = 0;
+  virtual void RemoveObserver(Observer* observer) = 0;
+
   // Starts an Upstart job.
   // |job|: Name of Upstart job.
   // |upstart_env|: List of upstart environment variables to be passed to the
@@ -49,8 +61,11 @@ class COMPONENT_EXPORT(UPSTART_CLIENT) UpstartClient {
 
   // Stops an Upstart job.
   // |job|: Name of Upstart job.
+  // |upstart_env|: List of upstart environment variables to be passed to the
+  // upstart service.
   // |callback|: Called with a response.
   virtual void StopJob(const std::string& job,
+                       const std::vector<std::string>& upstart_env,
                        VoidDBusMethodCallback callback) = 0;
 
   // Starts authpolicyd.
@@ -59,8 +74,11 @@ class COMPONENT_EXPORT(UPSTART_CLIENT) UpstartClient {
   // Restarts authpolicyd.
   virtual void RestartAuthPolicyService() = 0;
 
-  // Starts kerberosd.
-  virtual void StartKerberosService(VoidDBusMethodCallback callback) = 0;
+  // Starts the Linux Wayland client version of chrome.
+  // |upstart_env|: List of upstart environment variables to be passed to the
+  // upstart service.
+  virtual void StartLacrosChrome(
+      const std::vector<std::string>& upstart_env) = 0;
 
   // Starts the media analytics process.
   // |upstart_env|: List of upstart environment variables to be passed to the

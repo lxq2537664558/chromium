@@ -5,6 +5,8 @@
 #ifndef NET_DNS_DNS_CONFIG_SERVICE_POSIX_H_
 #define NET_DNS_DNS_CONFIG_SERVICE_POSIX_H_
 
+#include <memory>
+
 #if !defined(OS_ANDROID)
 #include <sys/types.h>
 #include <netinet/in.h>
@@ -33,6 +35,8 @@ class NET_EXPORT_PRIVATE DnsConfigServicePosix : public DnsConfigService {
  public:
   DnsConfigServicePosix();
   ~DnsConfigServicePosix() override;
+
+  void RefreshConfig() override;
 
  protected:
   // DnsConfigService:
@@ -72,7 +76,6 @@ enum ConfigParsePosixResult {
   CONFIG_PARSE_POSIX_MISSING_OPTIONS,
   CONFIG_PARSE_POSIX_UNHANDLED_OPTIONS,
   CONFIG_PARSE_POSIX_NO_DNSINFO,
-  CONFIG_PARSE_POSIX_PRIVATE_DNS_ACTIVE,
   CONFIG_PARSE_POSIX_MAX  // Bounding values for enumeration.
 };
 

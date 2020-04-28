@@ -27,16 +27,20 @@
 
 #include "third_party/blink/renderer/core/html/media/media_element_parser_helpers.h"
 #include "third_party/blink/renderer/core/layout/hit_test_result.h"
+#include "third_party/blink/renderer/core/layout/intrinsic_sizing_info.h"
 #include "third_party/blink/renderer/core/layout/layout_analyzer.h"
 #include "third_party/blink/renderer/core/layout/layout_image_resource.h"
+#include "third_party/blink/renderer/core/layout/layout_replaced.h"
 #include "third_party/blink/renderer/core/layout/pointer_events_hit_rules.h"
 #include "third_party/blink/renderer/core/layout/svg/layout_svg_resource_container.h"
 #include "third_party/blink/renderer/core/layout/svg/svg_layout_support.h"
 #include "third_party/blink/renderer/core/layout/svg/svg_resources.h"
 #include "third_party/blink/renderer/core/layout/svg/svg_resources_cache.h"
+#include "third_party/blink/renderer/core/layout/svg/transform_helper.h"
 #include "third_party/blink/renderer/core/layout/svg/transformed_hit_test_location.h"
 #include "third_party/blink/renderer/core/paint/image_element_timing.h"
 #include "third_party/blink/renderer/core/paint/svg_image_painter.h"
+#include "third_party/blink/renderer/core/svg/graphics/svg_image.h"
 #include "third_party/blink/renderer/core/svg/svg_image_element.h"
 #include "third_party/blink/renderer/platform/geometry/length_functions.h"
 #include "third_party/blink/renderer/platform/graphics/paint/paint_record.h"
@@ -47,19 +51,22 @@ LayoutSVGImage::LayoutSVGImage(SVGImageElement* impl)
     : LayoutSVGModelObject(impl),
       needs_boundaries_update_(true),
       needs_transform_update_(true),
+      transform_uses_reference_box_(false),
       image_resource_(MakeGarbageCollected<LayoutImageResource>()) {
   image_resource_->Initialize(this);
 }
 
 LayoutSVGImage::~LayoutSVGImage() = default;
 
+void LayoutSVGImage::StyleDidChange(StyleDifference diff,
+                                    const ComputedStyle* old_style) {
+  transform_uses_reference_box_ =
+      TransformHelper::DependsOnReferenceBox(StyleRef());
+  LayoutSVGModelObject::StyleDidChange(diff, old_style);
+}
+
 void LayoutSVGImage::WillBeDestroyed() {
   image_resource_->Shutdown();
-
-  if (RuntimeEnabledFeatures::ElementTimingEnabled(&GetDocument())) {
-    if (LocalDOMWindow* window = GetDocument().domWindow())
-      ImageElementTiming::From(*window).NotifyWillBeDestroyed(this);
-  }
 
   LayoutSVGModelObject::WillBeDestroyed();
 }
@@ -74,37 +81,54 @@ static float ResolveHeightForRatio(float width,
   return width * intrinsic_ratio.Height() / intrinsic_ratio.Width();
 }
 
-IntSize LayoutSVGImage::GetOverriddenIntrinsicSize() const {
-  if (auto* svg_image = ToSVGImageElementOrNull(GetElement())) {
-    if (RuntimeEnabledFeatures::ExperimentalProductivityFeaturesEnabled())
-      return svg_image->GetOverriddenIntrinsicSize();
-  }
-  return IntSize();
+bool LayoutSVGImage::HasOverriddenIntrinsicSize() const {
+  if (!RuntimeEnabledFeatures::ExperimentalProductivityFeaturesEnabled())
+    return false;
+  auto* svg_image_element = DynamicTo<SVGImageElement>(GetElement());
+  return svg_image_element && svg_image_element->IsDefaultIntrinsicSize();
 }
 
 FloatSize LayoutSVGImage::CalculateObjectSize() const {
-  FloatSize intrinsic_size = FloatSize(GetOverriddenIntrinsicSize());
+  FloatSize intrinsic_size;
   ImageResourceContent* cached_image = image_resource_->CachedImage();
-  if (intrinsic_size.IsEmpty()) {
+  bool has_intrinsic_ratio = true;
+  if (HasOverriddenIntrinsicSize()) {
+    intrinsic_size = FloatSize(LayoutReplaced::kDefaultWidth,
+                               LayoutReplaced::kDefaultHeight);
+  } else {
     if (!cached_image || cached_image->ErrorOccurred() ||
         !cached_image->IsSizeAvailable())
       return object_bounding_box_.Size();
 
-    intrinsic_size = FloatSize(cached_image->GetImage()->Size());
+    intrinsic_size =
+        FloatSize(cached_image->GetImage()->SizeRespectingOrientation());
+    if (auto* svg_image = DynamicTo<SVGImage>(cached_image->GetImage())) {
+      IntrinsicSizingInfo intrinsic_sizing_info;
+      has_intrinsic_ratio &= svg_image->GetIntrinsicSizingInfo(intrinsic_sizing_info);
+      has_intrinsic_ratio &= !intrinsic_sizing_info.aspect_ratio.IsEmpty();
+    }
   }
 
   if (StyleRef().Width().IsAuto() && StyleRef().Height().IsAuto())
     return intrinsic_size;
 
-  if (StyleRef().Height().IsAuto())
-    return FloatSize(
-        object_bounding_box_.Width(),
-        ResolveHeightForRatio(object_bounding_box_.Width(), intrinsic_size));
+  if (StyleRef().Height().IsAuto()) {
+    if (has_intrinsic_ratio) {
+      return FloatSize(
+          object_bounding_box_.Width(),
+          ResolveHeightForRatio(object_bounding_box_.Width(), intrinsic_size));
+    }
+    return FloatSize(object_bounding_box_.Width(), intrinsic_size.Height());
+  }
 
   DCHECK(StyleRef().Width().IsAuto());
-  return FloatSize(
-      ResolveWidthForRatio(object_bounding_box_.Height(), intrinsic_size),
-      object_bounding_box_.Height());
+  if (has_intrinsic_ratio) {
+    return FloatSize(
+        ResolveWidthForRatio(object_bounding_box_.Height(), intrinsic_size),
+        object_bounding_box_.Height());
+  }
+
+  return FloatSize(intrinsic_size.Width(), object_bounding_box_.Height());
 }
 
 bool LayoutSVGImage::UpdateBoundingBox() {
@@ -122,7 +146,6 @@ bool LayoutSVGImage::UpdateBoundingBox() {
     object_bounding_box_.SetSize(CalculateObjectSize());
 
   if (old_object_bounding_box != object_bounding_box_) {
-    GetElement()->SetNeedsResizeObserverUpdate();
     SetShouldDoFullPaintInvalidation(PaintInvalidationReason::kImage);
     needs_boundaries_update_ = true;
   }
@@ -137,22 +160,28 @@ void LayoutSVGImage::UpdateLayout() {
   if (EverHadLayout() && SelfNeedsLayout())
     SVGResourcesCache::ClientLayoutChanged(*this);
 
-  UpdateBoundingBox();
+  FloatPoint old_bbox_location = object_bounding_box_.Location();
+  bool bbox_changed = UpdateBoundingBox() ||
+                      old_bbox_location != object_bounding_box_.Location();
 
   bool update_parent_boundaries = false;
-  if (needs_transform_update_) {
-    local_transform_ =
-        ToSVGImageElement(GetElement())
-            ->CalculateTransform(SVGElement::kIncludeMotionTransform);
-    needs_transform_update_ = false;
-    update_parent_boundaries = true;
-  }
-
   if (needs_boundaries_update_) {
     local_visual_rect_ = object_bounding_box_;
     SVGLayoutSupport::AdjustVisualRectWithResources(*this, object_bounding_box_,
                                                     local_visual_rect_);
     needs_boundaries_update_ = false;
+    update_parent_boundaries = true;
+  }
+
+  if (!needs_transform_update_ && transform_uses_reference_box_) {
+    needs_transform_update_ = CheckForImplicitTransformChange(bbox_changed);
+    if (needs_transform_update_)
+      SetNeedsPaintPropertyUpdate();
+  }
+
+  if (needs_transform_update_) {
+    local_transform_ = CalculateLocalTransform();
+    needs_transform_update_ = false;
     update_parent_boundaries = true;
   }
 
@@ -163,8 +192,8 @@ void LayoutSVGImage::UpdateLayout() {
   DCHECK(!needs_boundaries_update_);
   DCHECK(!needs_transform_update_);
 
-  if (auto* svg_image_element = ToSVGImageElementOrNull(GetElement())) {
-    media_element_parser_helpers::ReportUnsizedMediaViolation(
+  if (auto* svg_image_element = DynamicTo<SVGImageElement>(GetElement())) {
+    media_element_parser_helpers::CheckUnsizedMediaViolation(
         this, svg_image_element->IsDefaultIntrinsicSize());
   }
   ClearNeedsLayout();
@@ -175,10 +204,10 @@ void LayoutSVGImage::Paint(const PaintInfo& paint_info) const {
 }
 
 bool LayoutSVGImage::NodeAtPoint(HitTestResult& result,
-                                 const HitTestLocation& location_in_container,
-                                 const LayoutPoint& accumulated_offset,
+                                 const HitTestLocation& hit_test_location,
+                                 const PhysicalOffset& accumulated_offset,
                                  HitTestAction hit_test_action) {
-  DCHECK_EQ(accumulated_offset, LayoutPoint());
+  DCHECK_EQ(accumulated_offset, PhysicalOffset());
   // We only draw in the forground phase, so we only hit-test then.
   if (hit_test_action != kHitTestForeground)
     return false;
@@ -190,7 +219,7 @@ bool LayoutSVGImage::NodeAtPoint(HitTestResult& result,
   if (hit_rules.require_visible && style.Visibility() != EVisibility::kVisible)
     return false;
 
-  TransformedHitTestLocation local_location(location_in_container,
+  TransformedHitTestLocation local_location(hit_test_location,
                                             LocalToSVGParentTransform());
   if (!local_location)
     return false;
@@ -200,9 +229,8 @@ bool LayoutSVGImage::NodeAtPoint(HitTestResult& result,
 
   if (hit_rules.can_hit_fill || hit_rules.can_hit_bounding_box) {
     if (local_location->Intersects(object_bounding_box_)) {
-      const LayoutPoint& local_layout_point =
-          LayoutPoint(local_location->TransformedPoint());
-      UpdateHitTestResult(result, local_layout_point);
+      UpdateHitTestResult(result, PhysicalOffset::FromFloatPointRound(
+                                      local_location->TransformedPoint()));
       if (result.AddNodeToListBasedTestResult(GetElement(), *local_location) ==
           kStopHitTesting)
         return true;

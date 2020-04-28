@@ -31,29 +31,37 @@ bool GetCanvasClipBounds(SkCanvas* canvas, gfx::Rect* clip_bounds) {
   return true;
 }
 
-void FillTextContent(const PaintOpBuffer* buffer,
-                     std::vector<NodeHolder>* content) {
+template <typename Function>
+void IterateTextContent(const PaintOpBuffer* buffer, const Function& yield) {
   for (auto* op : PaintOpBuffer::Iterator(buffer)) {
     if (op->GetType() == PaintOpType::DrawTextBlob) {
-      content->push_back(static_cast<DrawTextBlobOp*>(op)->node_holder);
+      yield(static_cast<DrawTextBlobOp*>(op));
     } else if (op->GetType() == PaintOpType::DrawRecord) {
-      FillTextContent(static_cast<DrawRecordOp*>(op)->record.get(), content);
+      IterateTextContent(static_cast<DrawRecordOp*>(op)->record.get(), yield);
     }
   }
 }
 
-void FillTextContentByOffsets(const PaintOpBuffer* buffer,
-                              const std::vector<size_t>& offsets,
-                              std::vector<NodeHolder>* content) {
+template <typename Function>
+void IterateTextContentByOffsets(const PaintOpBuffer* buffer,
+                                 const std::vector<size_t>& offsets,
+                                 const Function& yield) {
   if (!buffer)
     return;
   for (auto* op : PaintOpBuffer::OffsetIterator(buffer, &offsets)) {
     if (op->GetType() == PaintOpType::DrawTextBlob) {
-      content->push_back(static_cast<DrawTextBlobOp*>(op)->node_holder);
+      yield(static_cast<DrawTextBlobOp*>(op));
     } else if (op->GetType() == PaintOpType::DrawRecord) {
-      FillTextContent(static_cast<DrawRecordOp*>(op)->record.get(), content);
+      IterateTextContent(static_cast<DrawRecordOp*>(op)->record.get(), yield);
     }
   }
+}
+
+bool RotationEquivalentToAxisFlip(const SkMatrix& matrix) {
+  float skew_x = matrix.getSkewX();
+  float skew_y = matrix.getSkewY();
+  return ((skew_x == 1.f || skew_x == -1.f) &&
+          (skew_y == 1.f || skew_y == -1.f));
 }
 
 }  // namespace
@@ -82,10 +90,26 @@ void DisplayItemList::Raster(SkCanvas* canvas,
 }
 
 void DisplayItemList::CaptureContent(const gfx::Rect& rect,
-                                     std::vector<NodeHolder>* content) const {
+                                     std::vector<NodeId>* content) const {
   std::vector<size_t> offsets;
   rtree_.Search(rect, &offsets);
-  FillTextContentByOffsets(&paint_op_buffer_, offsets, content);
+  IterateTextContentByOffsets(
+      &paint_op_buffer_, offsets,
+      [content](const DrawTextBlobOp* op) { content->push_back(op->node_id); });
+}
+
+double DisplayItemList::AreaOfDrawText(const gfx::Rect& rect) const {
+  std::vector<size_t> offsets;
+  rtree_.Search(rect, &offsets);
+  double area = 0;
+  IterateTextContentByOffsets(
+      &paint_op_buffer_, offsets, [&area](const DrawTextBlobOp* op) {
+        // This is not fully accurate, e.g. when there is transform operations,
+        // but is good for statistics purpose.
+        SkRect bounds = op->blob->bounds();
+        area += static_cast<double>(bounds.width()) * bounds.height();
+      });
+  return area;
 }
 
 void DisplayItemList::Finalize() {
@@ -139,10 +163,31 @@ void DisplayItemList::EmitTraceSnapshot() const {
       CreateTracedValue(include_items));
 }
 
+std::string DisplayItemList::ToString() const {
+  base::trace_event::TracedValueJSON value;
+  AddToValue(&value, true);
+  return value.ToFormattedJSON();
+}
+
 std::unique_ptr<base::trace_event::TracedValue>
 DisplayItemList::CreateTracedValue(bool include_items) const {
   auto state = std::make_unique<base::trace_event::TracedValue>();
+  AddToValue(state.get(), include_items);
+  return state;
+}
+
+void DisplayItemList::AddToValue(base::trace_event::TracedValue* state,
+                                 bool include_items) const {
   state->BeginDictionary("params");
+
+  gfx::Rect bounds;
+  if (rtree_.has_valid_bounds()) {
+    bounds = rtree_.GetBoundsOrDie();
+  } else {
+    // For tracing code, just use the entire positive quadrant if the |rtree_|
+    // has invalid bounds.
+    bounds = gfx::Rect(INT_MAX, INT_MAX);
+  }
 
   if (include_items) {
     state->BeginArray("items");
@@ -155,12 +200,10 @@ DisplayItemList::CreateTracedValue(bool include_items) const {
 
       MathUtil::AddToTracedValue(
           "visual_rect",
-          visual_rects[paint_op_buffer_.GetOpOffsetForTracing(op)],
-          state.get());
+          visual_rects[paint_op_buffer_.GetOpOffsetForTracing(op)], state);
 
       SkPictureRecorder recorder;
-      SkCanvas* canvas =
-          recorder.beginRecording(gfx::RectToSkRect(rtree_.GetBounds()));
+      SkCanvas* canvas = recorder.beginRecording(gfx::RectToSkRect(bounds));
       op->Raster(canvas, params);
       sk_sp<SkPicture> picture = recorder.finishRecordingAsPicture();
 
@@ -176,12 +219,11 @@ DisplayItemList::CreateTracedValue(bool include_items) const {
     state->EndArray();  // "items".
   }
 
-  MathUtil::AddToTracedValue("layer_rect", rtree_.GetBounds(), state.get());
+  MathUtil::AddToTracedValue("layer_rect", bounds, state);
   state->EndDictionary();  // "params".
 
   {
     SkPictureRecorder recorder;
-    gfx::Rect bounds = rtree_.GetBounds();
     SkCanvas* canvas = recorder.beginRecording(gfx::RectToSkRect(bounds));
     canvas->translate(-bounds.x(), -bounds.y());
     canvas->clipRect(gfx::RectToSkRect(bounds));
@@ -192,12 +234,20 @@ DisplayItemList::CreateTracedValue(bool include_items) const {
     PictureDebugUtil::SerializeAsBase64(picture.get(), &b64_picture);
     state->SetString("skp64", b64_picture);
   }
-  return state;
 }
 
 void DisplayItemList::GenerateDiscardableImagesMetadata() {
   DCHECK(usage_hint_ == kTopLevelDisplayItemList);
-  image_map_.Generate(&paint_op_buffer_, rtree_.GetBounds());
+
+  gfx::Rect bounds;
+  if (rtree_.has_valid_bounds()) {
+    bounds = rtree_.GetBoundsOrDie();
+  } else {
+    // Bounds are only used to size an SkNoDrawCanvas, pass INT_MAX.
+    bounds = gfx::Rect(INT_MAX, INT_MAX);
+  }
+
+  image_map_.Generate(&paint_op_buffer_, bounds);
 }
 
 void DisplayItemList::Reset() {
@@ -215,6 +265,7 @@ void DisplayItemList::Reset() {
   offsets_.shrink_to_fit();
   begin_paired_indices_.clear();
   begin_paired_indices_.shrink_to_fit();
+  has_draw_ops_ = false;
 }
 
 sk_sp<PaintRecord> DisplayItemList::ReleaseAsRecord() {
@@ -231,7 +282,7 @@ bool DisplayItemList::GetColorIfSolidInRect(const gfx::Rect& rect,
   DCHECK(usage_hint_ == kTopLevelDisplayItemList);
   std::vector<size_t>* offsets_to_use = nullptr;
   std::vector<size_t> offsets;
-  if (!rect.Contains(rtree_.GetBounds())) {
+  if (rtree_.has_valid_bounds() && !rect.Contains(rtree_.GetBoundsOrDie())) {
     rtree_.Search(rect, &offsets);
     offsets_to_use = &offsets;
   }
@@ -244,6 +295,116 @@ bool DisplayItemList::GetColorIfSolidInRect(const gfx::Rect& rect,
     return true;
   }
   return false;
+}
+
+base::Optional<DisplayItemList::DirectlyCompositedImageResult>
+DisplayItemList::GetDirectlyCompositedImageResult(
+    gfx::Size containing_layer_bounds) const {
+  const PaintOpBuffer* op_buffer = nullptr;
+  if (paint_op_buffer_.size() == 1) {
+    // The actual ops are wrapped in DrawRecord if they were previously
+    // recorded.
+    if (paint_op_buffer_.GetFirstOp()->GetType() == PaintOpType::DrawRecord) {
+      const DrawRecordOp* draw_record =
+          static_cast<const DrawRecordOp*>(paint_op_buffer_.GetFirstOp());
+      op_buffer = draw_record->record.get();
+    } else {
+      op_buffer = &paint_op_buffer_;
+    }
+  } else {
+    return base::nullopt;
+  }
+
+  const DrawImageRectOp* draw_image_rect_op = nullptr;
+  bool transpose_image_size = false;
+  constexpr size_t kNumDrawImageForOrientationOps = 10;
+  if (op_buffer->size() == 1 &&
+      op_buffer->GetFirstOp()->GetType() == PaintOpType::DrawImageRect) {
+    draw_image_rect_op =
+        static_cast<const DrawImageRectOp*>(op_buffer->GetFirstOp());
+  } else if (op_buffer->size() < kNumDrawImageForOrientationOps) {
+    // Images that respect orientation will have 5 paint operations:
+    //  (1) Save
+    //  (2) Translate
+    //  (3) Concat (rotation matrix)
+    //  (4) DrawImageRect
+    //  (5) Restore
+    // Detect these the paint op buffer and disqualify the layer as a directly
+    // composited image if any other paint op is detected.
+    for (auto* op : PaintOpBuffer::Iterator(op_buffer)) {
+      switch (op->GetType()) {
+        case PaintOpType::Save:
+        case PaintOpType::Restore:
+          break;
+        case PaintOpType::Translate: {
+          const TranslateOp* translate = static_cast<const TranslateOp*>(op);
+          if (translate->dx != 0 || translate->dy != 0)
+            return base::nullopt;
+          break;
+        }
+        case PaintOpType::Concat: {
+          // We only expect a single rotation. If we see another one, then this
+          // image won't be eligible for directly compositing.
+          if (transpose_image_size)
+            return base::nullopt;
+
+          const ConcatOp* concat_op = static_cast<const ConcatOp*>(op);
+          if (concat_op->matrix.hasPerspective() ||
+              !concat_op->matrix.preservesAxisAlignment())
+            return base::nullopt;
+
+          // If the rotation is not an axis flip, we'll need to transpose the
+          // width and height dimensions to account for the same transform
+          // applying when the layer bounds were calculated.
+          transpose_image_size =
+              RotationEquivalentToAxisFlip(concat_op->matrix);
+          break;
+        }
+        case PaintOpType::DrawImageRect:
+          if (draw_image_rect_op)
+            return base::nullopt;
+          draw_image_rect_op = static_cast<const DrawImageRectOp*>(op);
+          break;
+        default:
+          return base::nullopt;
+      }
+    }
+  }
+
+  if (!draw_image_rect_op)
+    return base::nullopt;
+
+  // The src rect must match the image size exactly, i.e. the entire image
+  // must be drawn.
+  const SkRect& src = draw_image_rect_op->src;
+  if (src.fLeft != 0 || src.fTop != 0 ||
+      src.fRight != draw_image_rect_op->image.width() ||
+      src.fBottom != draw_image_rect_op->image.height())
+    return base::nullopt;
+
+  // The DrawImageRect op's destination rect must match the layer bounds
+  // exactly. Note that the layer bounds have already taken into account image
+  // orientation so transpose the dst width/height before comparing, if
+  // appropriate.
+  const SkRect& dst = draw_image_rect_op->dst;
+  int dst_width = transpose_image_size ? dst.fBottom : dst.fRight;
+  int dst_height = transpose_image_size ? dst.fRight : dst.fBottom;
+  if (dst.fLeft != 0 || dst.fTop != 0 ||
+      dst_width != containing_layer_bounds.width() ||
+      dst_height != containing_layer_bounds.height())
+    return base::nullopt;
+
+  int width = transpose_image_size ? draw_image_rect_op->image.height()
+                                   : draw_image_rect_op->image.width();
+  int height = transpose_image_size ? draw_image_rect_op->image.width()
+                                    : draw_image_rect_op->image.height();
+  DirectlyCompositedImageResult result;
+  result.intrinsic_image_size = gfx::Size(width, height);
+  // Ensure the layer will use nearest neighbor when drawn by the display
+  // compositor, if required.
+  result.nearest_neighbor =
+      draw_image_rect_op->flags.getFilterQuality() == kNone_SkFilterQuality;
+  return result;
 }
 
 }  // namespace cc

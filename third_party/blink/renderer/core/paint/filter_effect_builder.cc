@@ -27,7 +27,6 @@
 #include "third_party/blink/renderer/core/paint/filter_effect_builder.h"
 
 #include <algorithm>
-#include "third_party/blink/public/platform/web_point.h"
 #include "third_party/blink/renderer/core/style/filter_operations.h"
 #include "third_party/blink/renderer/core/svg/graphics/filters/svg_filter_builder.h"
 #include "third_party/blink/renderer/core/svg/svg_filter_element.h"
@@ -121,14 +120,17 @@ Vector<float> SepiaMatrix(double amount) {
 
 }  // namespace
 
-FilterEffectBuilder::FilterEffectBuilder(const FloatRect& reference_box,
-                                         float zoom,
-                                         const PaintFlags* fill_flags,
-                                         const PaintFlags* stroke_flags)
+FilterEffectBuilder::FilterEffectBuilder(
+    const FloatRect& reference_box,
+    float zoom,
+    const PaintFlags* fill_flags,
+    const PaintFlags* stroke_flags,
+    SkBlurImageFilter::TileMode blur_tile_mode)
     : reference_box_(reference_box),
       zoom_(zoom),
       fill_flags_(fill_flags),
-      stroke_flags_(stroke_flags) {}
+      stroke_flags_(stroke_flags),
+      blur_tile_mode_(blur_tile_mode) {}
 
 FilterEffect* FilterEffectBuilder::BuildFilterEffect(
     const FilterOperations& operations,
@@ -162,14 +164,16 @@ FilterEffect* FilterEffectBuilder::BuildFilterEffect(
         Vector<float> input_parameters = GrayscaleMatrix(
             To<BasicColorMatrixFilterOperation>(filter_operation)->Amount());
         effect = MakeGarbageCollected<FEColorMatrix>(
-            parent_filter, FECOLORMATRIX_TYPE_MATRIX, input_parameters);
+            parent_filter, FECOLORMATRIX_TYPE_MATRIX,
+            std::move(input_parameters));
         break;
       }
       case FilterOperation::SEPIA: {
         Vector<float> input_parameters = SepiaMatrix(
             To<BasicColorMatrixFilterOperation>(filter_operation)->Amount());
         effect = MakeGarbageCollected<FEColorMatrix>(
-            parent_filter, FECOLORMATRIX_TYPE_MATRIX, input_parameters);
+            parent_filter, FECOLORMATRIX_TYPE_MATRIX,
+            std::move(input_parameters));
         break;
       }
       case FilterOperation::SATURATE: {
@@ -177,7 +181,8 @@ FilterEffect* FilterEffectBuilder::BuildFilterEffect(
         input_parameters.push_back(clampTo<float>(
             To<BasicColorMatrixFilterOperation>(filter_operation)->Amount()));
         effect = MakeGarbageCollected<FEColorMatrix>(
-            parent_filter, FECOLORMATRIX_TYPE_SATURATE, input_parameters);
+            parent_filter, FECOLORMATRIX_TYPE_SATURATE,
+            std::move(input_parameters));
         break;
       }
       case FilterOperation::HUE_ROTATE: {
@@ -185,7 +190,8 @@ FilterEffect* FilterEffectBuilder::BuildFilterEffect(
         input_parameters.push_back(clampTo<float>(
             To<BasicColorMatrixFilterOperation>(filter_operation)->Amount()));
         effect = MakeGarbageCollected<FEColorMatrix>(
-            parent_filter, FECOLORMATRIX_TYPE_HUEROTATE, input_parameters);
+            parent_filter, FECOLORMATRIX_TYPE_HUEROTATE,
+            std::move(input_parameters));
         break;
       }
       case FilterOperation::INVERT: {
@@ -370,7 +376,7 @@ CompositorFilterOperations FilterEffectBuilder::BuildFilterOperations(
       case FilterOperation::BLUR: {
         float pixel_radius =
             To<BlurFilterOperation>(*op).StdDeviation().GetFloatValue();
-        filters.AppendBlurFilter(pixel_radius);
+        filters.AppendBlurFilter(pixel_radius, blur_tile_mode_);
         break;
       }
       case FilterOperation::DROP_SHADOW: {
@@ -412,7 +418,7 @@ Filter* FilterEffectBuilder::BuildReferenceFilter(
     FilterEffect* previous_effect) const {
   SVGResource* resource = reference_operation.Resource();
   if (auto* filter =
-          ToSVGFilterElementOrNull(resource ? resource->Target() : nullptr))
+          DynamicTo<SVGFilterElement>(resource ? resource->Target() : nullptr))
     return BuildReferenceFilter(*filter, previous_effect);
   return nullptr;
 }

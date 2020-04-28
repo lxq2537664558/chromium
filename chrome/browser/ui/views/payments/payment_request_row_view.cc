@@ -13,6 +13,9 @@
 
 namespace payments {
 
+// static
+constexpr char PaymentRequestRowView::kClassName[];
+
 PaymentRequestRowView::PaymentRequestRowView(views::ButtonListener* listener,
                                              bool clickable,
                                              const gfx::Insets& insets)
@@ -20,17 +23,25 @@ PaymentRequestRowView::PaymentRequestRowView(views::ButtonListener* listener,
       clickable_(clickable),
       insets_(insets),
       previous_row_(nullptr) {
-  SetEnabled(clickable_);
+  // When not clickable, use Button's STATE_DISABLED but don't set our
+  // View state to disabled. The former ensures we aren't clickable, the
+  // latter also disables us and our children for event handling.
+  views::Button::SetState(clickable_ ? views::Button::STATE_NORMAL
+                                     : views::Button::STATE_DISABLED);
   ShowBottomSeparator();
   SetFocusBehavior(views::View::FocusBehavior::ALWAYS);
 }
 
 PaymentRequestRowView::~PaymentRequestRowView() {}
 
+const char* PaymentRequestRowView::GetClassName() const {
+  return kClassName;
+}
+
 void PaymentRequestRowView::SetActiveBackground() {
-  ui::NativeTheme* theme = GetWidget()->GetNativeTheme();
-  SetBackground(views::CreateSolidBackground(theme->GetSystemColor(
-      ui::NativeTheme::kColorId_ResultsTableHoveredBackground)));
+  // TODO(crbug/976890): Check whether we can GetSystemColor from a NativeTheme
+  // ColorId instead of hard code here.
+  SetBackground(views::CreateSolidBackground(SkColorSetA(SK_ColorBLACK, 0x0D)));
 }
 
 void PaymentRequestRowView::ShowBottomSeparator() {

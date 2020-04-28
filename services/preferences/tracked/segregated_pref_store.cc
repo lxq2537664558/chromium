@@ -7,7 +7,8 @@
 #include <utility>
 
 #include "base/barrier_closure.h"
-#include "base/logging.h"
+#include "base/check_op.h"
+#include "base/notreached.h"
 #include "base/stl_util.h"
 #include "base/values.h"
 
@@ -53,7 +54,8 @@ SegregatedPrefStore::SegregatedPrefStore(
     const scoped_refptr<PersistentPrefStore>& default_pref_store,
     const scoped_refptr<PersistentPrefStore>& selected_pref_store,
     const std::set<std::string>& selected_pref_names,
-    prefs::mojom::TrackedPreferenceValidationDelegatePtr validation_delegate)
+    mojo::Remote<prefs::mojom::TrackedPreferenceValidationDelegate>
+        validation_delegate)
     : validation_delegate_(std::move(validation_delegate)),
       default_pref_store_(default_pref_store),
       selected_pref_store_(selected_pref_store),
@@ -107,6 +109,14 @@ void SegregatedPrefStore::SetValue(const std::string& key,
 
 void SegregatedPrefStore::RemoveValue(const std::string& key, uint32_t flags) {
   StoreForKey(key)->RemoveValue(key, flags);
+}
+
+void SegregatedPrefStore::RemoveValuesByPrefixSilently(
+    const std::string& prefix) {
+  // Since we can't guarantee to have all the prefs in one the pref stores, we
+  // have to push the removal command down to both of them.
+  default_pref_store_->RemoveValuesByPrefixSilently(prefix);
+  selected_pref_store_->RemoveValuesByPrefixSilently(prefix);
 }
 
 bool SegregatedPrefStore::GetMutableValue(const std::string& key,
@@ -204,16 +214,14 @@ SegregatedPrefStore::~SegregatedPrefStore() {
 }
 
 PersistentPrefStore* SegregatedPrefStore::StoreForKey(const std::string& key) {
-  return (base::ContainsKey(selected_preference_names_, key)
-              ? selected_pref_store_
-              : default_pref_store_)
+  return (base::Contains(selected_preference_names_, key) ? selected_pref_store_
+                                                          : default_pref_store_)
       .get();
 }
 
 const PersistentPrefStore* SegregatedPrefStore::StoreForKey(
     const std::string& key) const {
-  return (base::ContainsKey(selected_preference_names_, key)
-              ? selected_pref_store_
-              : default_pref_store_)
+  return (base::Contains(selected_preference_names_, key) ? selected_pref_store_
+                                                          : default_pref_store_)
       .get();
 }

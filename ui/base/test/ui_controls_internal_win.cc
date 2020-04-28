@@ -19,6 +19,7 @@
 #include "base/test/test_timeouts.h"
 #include "base/threading/thread_checker.h"
 #include "base/threading/thread_task_runner_handle.h"
+#include "base/win/win_util.h"
 #include "ui/display/win/screen_win.h"
 #include "ui/events/keycodes/keyboard_code_conversion_win.h"
 #include "ui/events/keycodes/keyboard_codes.h"
@@ -126,7 +127,7 @@ class InputDispatcher {
   // The desired mouse position for a mouse move event.
   const gfx::Point expected_mouse_location_;
 
-  base::WeakPtrFactory<InputDispatcher> weak_factory_;
+  base::WeakPtrFactory<InputDispatcher> weak_factory_{this};
 
   DISALLOW_COPY_AND_ASSIGN(InputDispatcher);
 };
@@ -170,8 +171,7 @@ InputDispatcher::InputDispatcher(base::OnceClosure callback,
                                  UINT system_queue_flag)
     : callback_(std::move(callback)),
       message_waiting_for_(message_waiting_for),
-      system_queue_flag_(system_queue_flag),
-      weak_factory_(this) {
+      system_queue_flag_(system_queue_flag) {
   InstallHook();
 }
 
@@ -182,8 +182,7 @@ InputDispatcher::InputDispatcher(base::OnceClosure callback,
     : callback_(std::move(callback)),
       message_waiting_for_(message_waiting_for),
       system_queue_flag_(system_queue_flag),
-      num_keyups_awaited_(num_keyups_awaited),
-      weak_factory_(this) {
+      num_keyups_awaited_(num_keyups_awaited) {
   DCHECK_EQ(message_waiting_for_, static_cast<WPARAM>(WM_KEYUP));
   InstallHook();
 }
@@ -195,8 +194,7 @@ InputDispatcher::InputDispatcher(base::OnceClosure callback,
     : callback_(std::move(callback)),
       message_waiting_for_(message_waiting_for),
       system_queue_flag_(system_queue_flag),
-      expected_mouse_location_(screen_point),
-      weak_factory_(this) {
+      expected_mouse_location_(screen_point) {
   DCHECK_EQ(message_waiting_for_, static_cast<WPARAM>(WM_MOUSEMOVE));
   InstallHook();
 }
@@ -257,37 +255,14 @@ LRESULT CALLBACK InputDispatcher::MouseHook(int n_code,
 LRESULT CALLBACK InputDispatcher::KeyHook(int n_code,
                                           WPARAM w_param,
                                           LPARAM l_param) {
-  HHOOK next_hook = next_hook_;
-  if (n_code == HC_ACTION) {
+  if ((n_code == HC_ACTION) && (HIWORD(l_param) & KF_UP)) {
     DCHECK(current_dispatcher_);
-    // Only send when the key is transitioning from pressed to released. Note
-    // that the documentation for the bit state on KeyboardProc [1] can lead to
-    // confusion. The relevant information is that the transition state (bit 31
-    // -- zero-based) is always 1 for WM_KEYUP.
-    // [1]
-    // https://msdn.microsoft.com/en-us/library/windows/desktop/ms644984.aspx
-    //
-    // While this documentation states that the previous key state (bit 30) is
-    // always 1 on WM_KEYUP it has been observed to be 0 when the preceding
-    // WM_KEYDOWN is intercepted (e.g., by an extension hooking a keyboard
-    // shortcut).
-    //
-    // And to add to the confusion about bit 30, the documentation for WM_KEYUP
-    // [2] and for general keyboard input [3] contradict each other, one saying
-    // it's always set to 1, the other saying it's always set to 0 on
-    // WM_KEYUP...
-    // [2] https://docs.microsoft.com/en-us/windows/desktop/inputdev/wm-keyup
-    // [3]
-    // https://docs.microsoft.com/en-us/windows/desktop/inputdev/about-keyboard-input#keystroke-message-flags
-    if (l_param & (1 << 31)) {
-      base::ThreadTaskRunnerHandle::Get()->PostTask(
-          FROM_HERE,
-          base::BindOnce(&InputDispatcher::MatchingMessageProcessed,
-                         current_dispatcher_->weak_factory_.GetWeakPtr(),
-                         false));
-    }
+    base::ThreadTaskRunnerHandle::Get()->PostTask(
+        FROM_HERE,
+        base::BindOnce(&InputDispatcher::MatchingMessageProcessed,
+                       current_dispatcher_->weak_factory_.GetWeakPtr(), false));
   }
-  return CallNextHookEx(next_hook, n_code, w_param, l_param);
+  return CallNextHookEx(next_hook_, n_code, w_param, l_param);
 }
 
 void InputDispatcher::DispatchedMessage(
@@ -519,7 +494,7 @@ bool SendKeyPressImpl(HWND window,
   return true;
 }
 
-bool SendMouseMoveImpl(long screen_x, long screen_y, base::OnceClosure task) {
+bool SendMouseMoveImpl(int screen_x, int screen_y, base::OnceClosure task) {
   gfx::Point screen_point =
       display::win::ScreenWin::DIPToScreenPoint({screen_x, screen_y});
   screen_x = screen_point.x();
@@ -632,18 +607,17 @@ bool SendTouchEventsImpl(int action, int num, int x, int y) {
   DCHECK_LE(num, kTouchesLengthCap);
 
   using InitializeTouchInjectionFn = BOOL(WINAPI*)(UINT32, DWORD);
-  static InitializeTouchInjectionFn initialize_touch_injection =
-      reinterpret_cast<InitializeTouchInjectionFn>(GetProcAddress(
-          GetModuleHandleA("user32.dll"), "InitializeTouchInjection"));
+  static const auto initialize_touch_injection =
+      reinterpret_cast<InitializeTouchInjectionFn>(
+          base::win::GetUser32FunctionPointer("InitializeTouchInjection"));
   if (!initialize_touch_injection ||
       !initialize_touch_injection(num, TOUCH_FEEDBACK_INDIRECT)) {
     return false;
   }
 
   using InjectTouchInputFn = BOOL(WINAPI*)(UINT32, POINTER_TOUCH_INFO*);
-  static InjectTouchInputFn inject_touch_input =
-      reinterpret_cast<InjectTouchInputFn>(
-          GetProcAddress(GetModuleHandleA("user32.dll"), "InjectTouchInput"));
+  static const auto inject_touch_input = reinterpret_cast<InjectTouchInputFn>(
+      base::win::GetUser32FunctionPointer("InjectTouchInput"));
   if (!inject_touch_input)
     return false;
 

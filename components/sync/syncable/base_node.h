@@ -30,7 +30,6 @@ class BookmarkSpecifics;
 class EntitySpecifics;
 class NigoriSpecifics;
 class PasswordSpecificsData;
-class TypedUrlSpecifics;
 }  // namespace sync_pb
 
 namespace syncer {
@@ -83,9 +82,6 @@ class BaseNode {
   // different ID value.
   virtual int64_t GetId() const;
 
-  // Returns the modification time of the object.
-  base::Time GetModificationTime() const;
-
   // Nodes are hierarchically arranged into a single-rooted tree.
   // InitByRootLookup on ReadNode allows access to the root. GetParentId is
   // how you find a node's parent.
@@ -119,10 +115,6 @@ class BaseNode {
   // Getter specific to the PASSWORD datatype.  Returns protobuf
   // data.  Can only be called if GetModelType() == PASSWORD.
   const sync_pb::PasswordSpecificsData& GetPasswordSpecifics() const;
-
-  // Getter specific to the TYPED_URLS datatype.  Returns protobuf
-  // data.  Can only be called if GetModelType() == TYPED_URLS.
-  const sync_pb::TypedUrlSpecifics& GetTypedUrlSpecifics() const;
 
   const sync_pb::EntitySpecifics& GetEntitySpecifics() const;
 

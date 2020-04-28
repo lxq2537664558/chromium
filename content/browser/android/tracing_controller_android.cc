@@ -14,8 +14,8 @@
 #include "base/logging.h"
 #include "base/trace_event/trace_event.h"
 #include "content/browser/tracing/tracing_controller_impl.h"
+#include "content/public/android/content_jni_headers/TracingControllerAndroidImpl_jni.h"
 #include "content/public/browser/tracing_controller.h"
-#include "jni/TracingControllerAndroidImpl_jni.h"
 
 using base::android::JavaParamRef;
 using base::android::ScopedJavaLocalRef;
@@ -31,8 +31,7 @@ static jlong JNI_TracingControllerAndroidImpl_Init(
 }
 
 TracingControllerAndroid::TracingControllerAndroid(JNIEnv* env, jobject obj)
-    : weak_java_object_(env, obj),
-      weak_factory_(this) {}
+    : weak_java_object_(env, obj) {}
 
 TracingControllerAndroid::~TracingControllerAndroid() {}
 
@@ -69,9 +68,8 @@ void TracingControllerAndroid::StopTracing(
       base::android::ConvertJavaStringToUTF8(env, jfilepath));
   ScopedJavaGlobalRef<jobject> global_callback(env, callback);
   auto endpoint = TracingController::CreateFileEndpoint(
-      file_path,
-      base::BindRepeating(&TracingControllerAndroid::OnTracingStopped,
-                          weak_factory_.GetWeakPtr(), global_callback));
+      file_path, base::BindOnce(&TracingControllerAndroid::OnTracingStopped,
+                                weak_factory_.GetWeakPtr(), global_callback));
   if (compressfile) {
     endpoint =
         TracingControllerImpl::CreateCompressedStringEndpoint(endpoint, true);

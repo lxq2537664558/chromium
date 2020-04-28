@@ -24,38 +24,14 @@
 #include "chrome/browser/prerender/prerender_manager.h"
 #include "chrome/browser/safe_browsing/test_safe_browsing_service.h"
 #include "chrome/test/base/in_process_browser_test.h"
-#include "components/safe_browsing/db/test_database_manager.h"
+#include "components/safe_browsing/core/db/test_database_manager.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/render_widget_host_observer.h"
-#include "net/test/url_request/url_request_mock_http_job.h"
-#include "net/url_request/url_request_interceptor.h"
 #include "url/gurl.h"
-
-namespace base {
-class FilePath;
-}  // namespace base
 
 namespace prerender {
 
 namespace test_utils {
-
-// Dummy counter class to live on the UI thread for counting requests.
-class RequestCounter : public base::SupportsWeakPtr<RequestCounter> {
- public:
-  RequestCounter();
-
-  ~RequestCounter();
-
-  int count() const { return count_; }
-
-  void RequestStarted();
-  void WaitForCount(int expected_count);
-
- private:
-  int count_;
-  int expected_count_;
-  std::unique_ptr<base::RunLoop> loop_;
-};
 
 // A SafeBrowsingDatabaseManager implementation that returns a fixed result for
 // a given URL.
@@ -86,7 +62,7 @@ class FakeSafeBrowsingDatabaseManager
   bool IsSupported() const override;
   bool ChecksAreAlwaysAsync() const override;
   bool CanCheckResourceType(
-      content::ResourceType /* resource_type */) const override;
+      blink::mojom::ResourceType /* resource_type */) const override;
 
   bool CheckExtensionIDs(const std::set<std::string>& extension_ids,
                          Client* client) override;
@@ -108,6 +84,7 @@ class TestPrerenderContents : public PrerenderContents,
                         Profile* profile,
                         const GURL& url,
                         const content::Referrer& referrer,
+                        const base::Optional<url::Origin>& initiator_origin,
                         Origin origin,
                         FinalStatus expected_final_status,
                         bool ignore_final_status);
@@ -288,6 +265,7 @@ class TestPrerenderContentsFactory : public PrerenderContents::Factory {
       Profile* profile,
       const GURL& url,
       const content::Referrer& referrer,
+      const base::Optional<url::Origin>& initiator_origin,
       Origin origin) override;
 
  private:
@@ -392,7 +370,15 @@ class PrerenderInProcessBrowserTest : virtual public InProcessBrowserTest {
   GURL ServeLoaderURL(const std::string& loader_path,
                       const std::string& replacement_variable,
                       const GURL& url_to_prerender,
-                      const std::string& loader_query);
+                      const std::string& loader_query,
+                      const std::string& hostname_alternative = std::string());
+
+  // A variation of the above that allows for overriding the hostname.
+  GURL ServeLoaderURLWithHostname(const std::string& loader_path,
+                                  const std::string& replacement_variable,
+                                  const GURL& url_to_prerender,
+                                  const std::string& loader_query,
+                                  const std::string& hostname);
 
   uint32_t GetRequestCount(const GURL& url);
   void WaitForRequestCount(const GURL& url, uint32_t expected_count);
@@ -433,16 +419,6 @@ class RestorePrerenderMode {
 
   DISALLOW_COPY_AND_ASSIGN(RestorePrerenderMode);
 };
-
-// Makes |url| respond to requests with the contents of |file|, counting the
-// number that start in |counter|.
-void CreateCountingInterceptorOnIO(
-    const GURL& url,
-    const base::FilePath& file,
-    const base::WeakPtr<RequestCounter>& counter);
-
-// Makes |url| respond to requests with the contents of |file|.
-void CreateMockInterceptorOnIO(const GURL& url, const base::FilePath& file);
 
 }  // namespace test_utils
 

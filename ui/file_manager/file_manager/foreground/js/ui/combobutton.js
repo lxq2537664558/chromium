@@ -4,31 +4,34 @@
 
 /**
  * @fileoverview This implements a combobutton control.
- * TODO(yawano): Migrate combobutton to Polymer element.
  */
 cr.define('cr.ui', () => {
   /**
-   * Creates a new combobutton element.
-   * @param {Object=} opt_propertyBag Optional properties.
-   * @constructor
-   * @extends {cr.ui.MenuButton}
+   * Creates a new combo button element.
    */
-  const ComboButton = cr.ui.define(cr.ui.MenuButton);
+  class ComboButton extends cr.ui.MultiMenuButton {
+    constructor() {
+      super();
 
-  ComboButton.prototype = {
-    __proto__: cr.ui.MenuButton.prototype,
+      /** @private {?cr.ui.MenuItem} */
+      this.defaultItem_ = null;
 
-    defaultItem_: null,
+      /** @private {?Element} */
+      this.trigger_ = null;
+
+      /** @private {?Element} */
+      this.actionNode_ = null;
+    }
 
     /**
      * Truncates drop-down list.
      */
-    clear: function() {
+    clear() {
       this.menu.clear();
       this.multiple = false;
-    },
+    }
 
-    addDropDownItem: function(item) {
+    addDropDownItem(item) {
       this.multiple = true;
       const menuitem = this.menu.addMenuItem(item);
 
@@ -46,31 +49,108 @@ cr.define('cr.ui', () => {
         menuitem.style.fontWeight = 'bold';
       }
       return menuitem;
-    },
+    }
 
     /**
      * Adds separator to drop-down list.
      */
-    addSeparator: function() {
+    addSeparator() {
       this.menu.addSeparator();
-    },
+    }
 
     /**
      * Default item to fire on combobox click
      */
     get defaultItem() {
       return this.defaultItem_;
-    },
-    set defaultItem(defaultItem) {
+    }
+    setDefaultItem_(defaultItem) {
       this.defaultItem_ = defaultItem;
       this.actionNode_.textContent = defaultItem.label || '';
-    },
+    }
+    set defaultItem(defaultItem) {
+      this.setDefaultItem_(defaultItem);
+    }
+
+    /**
+     * Utility function to set a boolean property get/setter.
+     * @param {string} property Name of the property.
+     */
+    addBooleanProperty_(property) {
+      Object.defineProperty(this, property, {
+        get() {
+          return this.getAttribute(property);
+        },
+        set(value) {
+          if (value) {
+            this.setAttribute(property, property);
+          } else {
+            this.removeAttribute(property);
+          }
+        },
+        enumerable: true,
+        configurable: true
+      });
+    }
+
+    /**
+     * cr.ui.decorate expects a static |decorate| method.
+     *
+     * @param {!Element} el Element to be decorated.
+     * @return {!cr.ui.ComboButton} Decorated element.
+     * @public
+     */
+    static decorate(el) {
+      // Add the ComboButton methods to the element we're
+      // decorating, leaving it's prototype chain intact.
+      // Don't copy 'constructor' or property get/setters.
+      Object.getOwnPropertyNames(ComboButton.prototype).forEach(name => {
+        if (name !== 'constructor' && name !== 'multiple' &&
+            name !== 'disabled') {
+          el[name] = ComboButton.prototype[name];
+        }
+      });
+      Object.getOwnPropertyNames(cr.ui.MultiMenuButton.prototype)
+          .forEach(name => {
+            if (name !== 'constructor' &&
+                !Object.getOwnPropertyDescriptor(el, name)) {
+              el[name] = cr.ui.MultiMenuButton.prototype[name];
+            }
+          });
+      // Set up the 'menu, defaultItem, multiple and disabled'
+      // properties & setter/getters.
+      Object.defineProperty(el, 'menu', {
+        get() {
+          return this.menu_;
+        },
+        set(menu) {
+          this.setMenu_(menu);
+        },
+        enumerable: true,
+        configurable: true
+      });
+      Object.defineProperty(el, 'defaultItem', {
+        get() {
+          return this.defaultItem_;
+        },
+        set(defaultItem) {
+          this.setDefaultItem_(defaultItem);
+        },
+        enumerable: true,
+        configurable: true
+      });
+      el.addBooleanProperty_('multiple');
+      el.addBooleanProperty_('disabled');
+      el = /** @type {!cr.ui.ComboButton} */ (el);
+      el.decorate();
+      return el;
+    }
 
     /**
      * Initializes the element.
      */
-    decorate: function() {
-      cr.ui.MenuButton.prototype.decorate.call(this);
+    decorate() {
+      cr.ui.MultiMenuButton.prototype.decorate.call(this);
 
       this.classList.add('combobutton');
 
@@ -93,6 +173,9 @@ cr.define('cr.ui', () => {
       const ripplesLayer = this.ownerDocument.createElement('div');
       ripplesLayer.classList.add('ripples');
       this.appendChild(ripplesLayer);
+      if (util.isFilesNg()) {
+        ripplesLayer.setAttribute('hidden', '');
+      }
 
       /** @private {!FilesToggleRipple} */
       this.filesToggleRipple_ = /** @type {!FilesToggleRipple} */
@@ -114,16 +197,16 @@ cr.define('cr.ui', () => {
       this.menu.addEventListener(
           'activate', this.handleMenuActivate_.bind(this));
 
-      // Remove mousedown event listener created by MenuButton::decorate,
+      // Remove mousedown event listener created by MultiMenuButton::decorate,
       // and move it down to trigger_.
       this.removeEventListener('mousedown', this);
       this.trigger_.addEventListener('mousedown', this);
-    },
+    }
 
     /**
      * Handles the keydown event for the menu button.
      */
-    handleKeyDown: function(e) {
+    handleKeyDown(e) {
       switch (e.key) {
         case 'ArrowDown':
         case 'ArrowUp':
@@ -136,17 +219,17 @@ cr.define('cr.ui', () => {
           this.hideMenu();
           break;
       }
-    },
+    }
 
-    handleTriggerClicked_: function(event) {
+    handleTriggerClicked_(event) {
       event.stopPropagation();
-    },
+    }
 
-    handleMenuActivate_: function(event) {
+    handleMenuActivate_(event) {
       this.dispatchSelectEvent(event.target.data);
-    },
+    }
 
-    handleButtonClick_: function(event) {
+    handleButtonClick_(event) {
       if (this.multiple) {
         // When there are multiple choices just show/hide menu.
         if (this.isMenuShown()) {
@@ -160,22 +243,22 @@ cr.define('cr.ui', () => {
         this.blur();
         this.dispatchSelectEvent(this.defaultItem_);
       }
-    },
+    }
 
-    handleMenuShow_: function() {
+    handleMenuShow_() {
       this.filesToggleRipple_.activated = true;
-    },
+    }
 
-    handleMenuHide_: function() {
+    handleMenuHide_() {
       this.filesToggleRipple_.activated = false;
-    },
+    }
 
-    dispatchSelectEvent: function(item) {
+    dispatchSelectEvent(item) {
       const selectEvent = new Event('select');
       selectEvent.item = item;
       this.dispatchEvent(selectEvent);
     }
-  };
+  }
 
   cr.defineProperty(ComboButton, 'disabled', cr.PropertyKind.BOOL_ATTR);
   cr.defineProperty(ComboButton, 'multiple', cr.PropertyKind.BOOL_ATTR);

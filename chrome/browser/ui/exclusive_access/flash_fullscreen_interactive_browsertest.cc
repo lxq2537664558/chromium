@@ -6,7 +6,6 @@
 #include "base/bind_helpers.h"
 #include "base/location.h"
 #include "base/macros.h"
-#include "base/message_loop/message_loop.h"
 #include "base/run_loop.h"
 #include "base/single_thread_task_runner.h"
 #include "base/threading/thread_task_runner_handle.h"
@@ -16,6 +15,7 @@
 #include "chrome/browser/ui/exclusive_access/fullscreen_controller.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/test/base/interactive_test_utils.h"
+#include "chrome/test/base/ui_test_utils.h"
 #include "chrome/test/ppapi/ppapi_test.h"
 #include "content/public/browser/render_process_host.h"
 #include "content/public/browser/render_widget_host.h"
@@ -72,7 +72,8 @@ class FlashFullscreenInteractiveBrowserTest : public OutOfProcessPPAPITest {
   // screen captured.  During tab capture, Flash fullscreen remains embedded
   // within the tab content area of a non-fullscreened browser window.
   void StartFakingTabCapture() {
-    GetActiveWebContents()->IncrementCapturerCount(gfx::Size(360, 240));
+    GetActiveWebContents()->IncrementCapturerCount(gfx::Size(360, 240),
+                                                   /* stay_hidden */ false);
   }
 
   bool LaunchFlashFullscreen() {
@@ -93,16 +94,6 @@ class FlashFullscreenInteractiveBrowserTest : public OutOfProcessPPAPITest {
   }
 
   bool LaunchFlashFullscreenInSubframe() {
-    // Start the embedded test server and set it up to serve PPAPI test case
-    // URLs.
-    base::FilePath document_root;
-    EXPECT_TRUE(ui_test_utils::GetRelativeBuildDirectory(&document_root));
-    embedded_test_server()->AddDefaultHandlers(document_root);
-    if (!embedded_test_server()->Start()) {
-      ADD_FAILURE() << "Failed to launch embedded test server.";
-      return false;
-    }
-
     // Load a page with an <iframe> that points to the test case URL, which
     // runs the simulated fullscreen Flash plugin.  In OOPIF modes, the frame
     // will render in a separate process.  Block until the plugin has completed
@@ -300,14 +291,8 @@ IN_PROC_BROWSER_TEST_F(FlashFullscreenInteractiveBrowserTest,
   EXPECT_TRUE(ObserveTabIsInFullscreen(false));
 }
 
-// Flaky on Linux, see https://crbug.com/648406.
-#if defined(OS_LINUX)
-#define MAYBE_FullscreenFromSubframe DISABLED_FullscreenFromSubframe
-#else
-#define MAYBE_FullscreenFromSubframe FullscreenFromSubframe
-#endif
 IN_PROC_BROWSER_TEST_F(FlashFullscreenInteractiveBrowserTest,
-                       MAYBE_FullscreenFromSubframe) {
+                       FullscreenFromSubframe) {
   ASSERT_TRUE(ui_test_utils::BringBrowserWindowToFront(browser()));
   StartFakingTabCapture();
   ASSERT_TRUE(LaunchFlashFullscreenInSubframe());
@@ -422,9 +407,8 @@ IN_PROC_BROWSER_TEST_F(FlashFullscreenInteractiveBrowserTest,
       web_contents->GetFullscreenRenderWidgetHostView();
   content::RenderWidgetHost* fullscreen_widget =
       fullscreen_view->GetRenderWidgetHost();
-  content::RenderProcessHost* process = fullscreen_widget->GetProcess();
-  content::PwnMessageHelper::LockMouse(
-      process, fullscreen_widget->GetRoutingID(), true, true);
+  content::RequestMouseLock(fullscreen_widget, /*from_user_gesture=*/true,
+                            /*privileged=*/true, /*unadjusted_movement=*/false);
 
   // Make sure that the fullscreen widget got the mouse lock.
   EXPECT_TRUE(fullscreen_view->IsMouseLocked());

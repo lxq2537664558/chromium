@@ -19,73 +19,28 @@ namespace autofill {
 namespace features {
 
 // All features in alphabetical order.
+extern const base::Feature kAutofillAlwaysReturnCloudTokenizedCard;
+extern const base::Feature kAutofillCacheServerCardInfo;
 extern const base::Feature kAutofillCreditCardAblationExperiment;
 extern const base::Feature kAutofillCreditCardAuthentication;
-extern const base::Feature kAutofillCreditCardLocalCardMigration;
-extern const base::Feature kAutofillDoNotUploadSaveUnsupportedCards;
-extern const base::Feature kAutofillDownstreamUseGooglePayBrandingOniOS;
+extern const base::Feature kAutofillCreditCardUploadFeedback;
+extern const base::Feature kAutofillEnableGoogleIssuedCard;
 extern const base::Feature kAutofillEnableLocalCardMigrationForNonSyncUser;
+extern const base::Feature kAutofillEnableStickyPaymentsBubble;
+extern const base::Feature kAutofillEnableSurfacingServerCardNickname;
 extern const base::Feature kAutofillEnableToolbarStatusChip;
-extern const base::Feature kAutofillImportDynamicForms;
-extern const base::Feature kAutofillImportNonFocusableCreditCardForms;
-extern const base::Feature kAutofillLocalCardMigrationShowFeedback;
-extern const base::Feature kAutofillLocalCardMigrationUsesStrikeSystemV2;
+extern const base::Feature kAutofillEnableVirtualCard;
 extern const base::Feature kAutofillNoLocalSaveOnUnmaskSuccess;
 extern const base::Feature kAutofillNoLocalSaveOnUploadSuccess;
-extern const base::Feature kAutofillSaveCardImprovedUserConsent;
-extern const base::Feature kAutofillSaveCardSignInAfterLocalSave;
-extern const base::Feature kAutofillSaveCreditCardUsesStrikeSystem;
-extern const base::Feature kAutofillSaveCreditCardUsesStrikeSystemV2;
-extern const base::Feature kAutofillSendExperimentIdsInPaymentsRPCs;
-extern const base::Feature kAutofillSendOnlyCountryInGetUploadDetails;
+extern const base::Feature kAutofillSaveCardDismissOnNavigation;
+extern const base::Feature kAutofillSaveCardInfobarEditSupport;
 extern const base::Feature kAutofillUpstream;
 extern const base::Feature kAutofillUpstreamAllowAllEmailDomains;
-extern const base::Feature kAutofillUpstreamAlwaysRequestCardholderName;
-extern const base::Feature kAutofillUpstreamBlankCardholderNameField;
-extern const base::Feature kAutofillUpstreamDisallowElo;
-extern const base::Feature kAutofillUpstreamDisallowJcb;
-extern const base::Feature kAutofillUpstreamEditableCardholderName;
 extern const base::Feature kAutofillUpstreamEditableExpirationDate;
-extern const base::Feature kAutofillUsePaymentsCustomerData;
-extern const char kAutofillCreditCardLocalCardMigrationParameterName[];
-extern const char
-    kAutofillCreditCardLocalCardMigrationParameterWithoutSettingsPage[];
 
-// Enum for local card migration experimental flag states.
-enum class LocalCardMigrationExperimentalFlag {
-  // Local card migration disabled.
-  kMigrationDisabled,
-  // Only migrate local cards when user submits form.
-  kMigrationWithoutSettingsPage,
-  // Migrate both on submitted form and from settings page.
-  kMigrationIncludeSettingsPage,
-};
-
-// Returns kMigrationDisabled if no experimental behavior is enabled for
-// kAutofillCreditCardLocalCardMigration; Return kMigrationIncludeSettingsPage
-// if user enables the local card migration and does not exclude the settings
-// page. Return kMigrationWithoutSettingsPage if user chooses to exclude the
-// settings page migration.
-LocalCardMigrationExperimentalFlag GetLocalCardMigrationExperimentalFlag();
-
-// For testing purposes; not to be launched.  When enabled, Chrome Upstream
-// always requests that the user enters/confirms cardholder name in the
-// offer-to-save dialog, regardless of if it was present or if the user is a
-// Google Payments customer.  Note that this will override the detected
-// cardholder name, if one was found.
-bool IsAutofillUpstreamAlwaysRequestCardholderNameExperimentEnabled();
-
-// For experimental purposes; not to be made available in chrome://flags. When
-// enabled and Chrome Upstream requests the cardholder name in the offer-to-save
-// dialog, the field will be blank instead of being prefilled with the name from
-// the user's Google Account.
-bool IsAutofillUpstreamBlankCardholderNameFieldExperimentEnabled();
-
-// Returns whether the experiment is enabled where Chrome Upstream can request
-// the user to enter/confirm cardholder name in the offer-to-save bubble if it
-// was not detected or was conflicting during the checkout flow and the user is
-// NOT a Google Payments customer.
-bool IsAutofillUpstreamEditableCardholderNameExperimentEnabled();
+// Return whether a [No thanks] button and new messaging is shown in the save
+// card bubbles. This will be called only on desktop platforms.
+bool ShouldShowImprovedUserConsentForCreditCardSave();
 
 }  // namespace features
 }  // namespace autofill

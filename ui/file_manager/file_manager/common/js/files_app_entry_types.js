@@ -284,6 +284,7 @@ class EntryList {
     this.isDirectory = true;
     this.isFile = false;
     this.type_name = 'EntryList';
+    this.fullPath = '/';
   }
 
   /**
@@ -473,6 +474,9 @@ class VolumeEntry {
       });
     }
     this.type_name = 'VolumeEntry';
+
+    // TODO(lucmult): consider deriving this from volumeInfo.
+    this.rootType = null;
   }
 
   /**
@@ -484,11 +488,11 @@ class VolumeEntry {
   }
 
   /**
-   * @return {!FileSystem} FileSystem for this volume.
+   * @return {?FileSystem} FileSystem for this volume.
    * This method is defined on Entry.
    */
   get filesystem() {
-    return this.rootEntry_.filesystem;
+    return this.rootEntry_ ? this.rootEntry_.filesystem : null;
   }
 
   /**
@@ -507,13 +511,16 @@ class VolumeEntry {
    * @override.
    */
   get fullPath() {
-    return this.rootEntry_.fullPath;
+    return this.rootEntry_ ? this.rootEntry_.fullPath : '';
   }
   get isDirectory() {
-    return this.rootEntry_.isDirectory;
+    // Defaults to true if root entry isn't resolved yet, because a VolumeEntry
+    // is like a directory.
+    return this.rootEntry_ ? this.rootEntry_.isDirectory : true;
   }
   get isFile() {
-    return this.rootEntry_.isFile;
+    // Defaults to false if root entry isn't resolved yet.
+    return this.rootEntry_ ? this.rootEntry_.isFile : false;
   }
 
   /**
@@ -560,7 +567,7 @@ class VolumeEntry {
    * @override
    */
   toURL() {
-    return this.rootEntry_.toURL();
+    return this.rootEntry_ ? this.rootEntry_.toURL() : '';
   }
 
   /**
@@ -716,8 +723,10 @@ class FakeEntry {
    * @param {!VolumeManagerCommon.RootType} rootType Root type of this entry.
    * @param {chrome.fileManagerPrivate.SourceRestriction=} opt_sourceRestriction
    *    used on Recents to filter the source of recent files/directories.
+   * @param {chrome.fileManagerPrivate.RecentFileType=} opt_recentFileType
+   *    used on Recents to filter recent files by their file types.
    */
-  constructor(label, rootType, opt_sourceRestriction) {
+  constructor(label, rootType, opt_sourceRestriction, opt_recentFileType) {
     /**
      * @public {string} label: Label to be used when displaying to user, it
      *      should be already translated.
@@ -744,11 +753,20 @@ class FakeEntry {
     this.sourceRestriction = opt_sourceRestriction;
 
     /**
+     * @public {chrome.fileManagerPrivate.RecentFileType|undefined} It's used to
+     * communicate file-type filter to chrome.fileManagerPrivate.getRecentFiles
+     * API.
+     */
+    this.recentFileType = opt_recentFileType;
+
+    /**
      * @public {string} the class name for this class. It's workaround for the
      * fact that an instance created on foreground page and sent to background
      * page can't be checked with "instanceof".
      */
     this.type_name = 'FakeEntry';
+
+    this.fullPath = '/';
   }
 
   /**
@@ -763,7 +781,11 @@ class FakeEntry {
 
   /** @override */
   toURL() {
-    return 'fake-entry://' + this.rootType;
+    let url = 'fake-entry://' + this.rootType;
+    if (this.recentFileType) {
+      url += '/' + this.recentFileType;
+    }
+    return url;
   }
 
   /**

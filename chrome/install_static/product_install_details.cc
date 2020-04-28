@@ -8,10 +8,10 @@
 
 #include <algorithm>
 
+#include "chrome/chrome_elf/nt_registry/nt_registry.h"
 #include "chrome/install_static/install_details.h"
 #include "chrome/install_static/install_modes.h"
 #include "chrome/install_static/install_util.h"
-#include "chrome_elf/nt_registry/nt_registry.h"
 
 namespace install_static {
 
@@ -133,9 +133,8 @@ std::unique_ptr<PrimaryInstallDetails> MakeProductDetails(
   // keys and in about:version.
   std::wstring update_ap;
   std::wstring update_cohort_name;
-  details->set_channel(DetermineChannel(*mode, system_level,
-                                        false /* !from_binaries */, &update_ap,
-                                        &update_cohort_name));
+  details->set_channel(
+      DetermineChannel(*mode, system_level, &update_ap, &update_cohort_name));
   details->set_update_ap(update_ap);
   details->set_update_cohort_name(update_cohort_name);
 

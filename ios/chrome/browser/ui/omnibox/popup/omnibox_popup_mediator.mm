@@ -19,14 +19,14 @@
 #import "ios/chrome/browser/ui/omnibox/popup/autocomplete_match_formatter.h"
 #import "ios/chrome/browser/ui/omnibox/popup/omnibox_popup_presenter.h"
 #import "ios/chrome/browser/web_state_list/web_state_list.h"
-#import "ios/chrome/common/favicon/favicon_attributes.h"
+#import "ios/chrome/common/ui/favicon/favicon_attributes.h"
 
 #if !defined(__has_feature) || !__has_feature(objc_arc)
 #error "This file requires ARC support."
 #endif
 
 namespace {
-const CGFloat kOmniboxIconSize = 20;
+const CGFloat kOmniboxIconSize = 16;
 }  // namespace
 
 @implementation OmniboxPopupMediator {
@@ -81,6 +81,7 @@ const CGFloat kOmniboxIconSize = 20;
         [AutocompleteMatchFormatter formatterWithMatch:match];
     formatter.starred = _delegate->IsStarredMatch(match);
     formatter.incognito = _incognito;
+    formatter.defaultSearchEngineIsGoogle = self.defaultSearchEngineIsGoogle;
     [wrappedMatches addObject:formatter];
   }
 
@@ -184,20 +185,12 @@ const CGFloat kOmniboxIconSize = 20;
     return;
   }
 
-  FaviconAttributes* cachedAttributes = self.faviconLoader->FaviconForPageUrl(
+  self.faviconLoader->FaviconForPageUrl(
       pageURL, kOmniboxIconSize, kOmniboxIconSize,
-      /*fallback_to_google_server=*/YES, ^(FaviconAttributes* attributes) {
+      /*fallback_to_google_server=*/false, ^(FaviconAttributes* attributes) {
         if (attributes.faviconImage && !attributes.usesDefaultImage)
           completion(attributes.faviconImage);
       });
-
-  // Only use cached attributes when they are a non-default icon. Never show
-  // monograms or default globe icon.
-  if (cachedAttributes.faviconImage && !cachedAttributes.usesDefaultImage) {
-    dispatch_async(dispatch_get_main_queue(), ^() {
-      completion(cachedAttributes.faviconImage);
-    });
-  }
 }
 
 @end

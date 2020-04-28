@@ -11,7 +11,7 @@ cr.define('identity_internals', function() {
    * @constructor
    */
   function TokenListItem(tokenInfo) {
-    const el = cr.doc.createElement('div');
+    const el = document.createElement('div');
     el.data_ = tokenInfo;
     el.__proto__ = TokenListItem.prototype;
     el.decorate();
@@ -22,22 +22,22 @@ cr.define('identity_internals', function() {
     __proto__: HTMLDivElement.prototype,
 
     /** @override */
-    decorate: function() {
+    decorate() {
       this.textContent = '';
       this.id = this.data_.accessToken;
 
       const table = this.ownerDocument.createElement('table');
       const tbody = this.ownerDocument.createElement('tbody');
       tbody.appendChild(this.createEntry_(
-          'accessToken', this.data_.accessToken, 'access-token'));
+          'Access Token', this.data_.accessToken, 'access-token'));
       tbody.appendChild(this.createEntry_(
-          'extensionName', this.data_.extensionName, 'extension-name'));
+          'Extension Name', this.data_.extensionName, 'extension-name'));
       tbody.appendChild(this.createEntry_(
-          'extensionId', this.data_.extensionId, 'extension-id'));
+          'Extension Id', this.data_.extensionId, 'extension-id'));
       tbody.appendChild(
-          this.createEntry_('tokenStatus', this.data_.status, 'token-status'));
+          this.createEntry_('Token Status', this.data_.status, 'token-status'));
       tbody.appendChild(this.createEntry_(
-          'expirationTime', this.data_.expirationTime, 'expiration-time'));
+          'Expiration Time', this.data_.expirationTime, 'expiration-time'));
       tbody.appendChild(this.createEntryForScopes_());
       table.appendChild(tbody);
       const tfoot = this.ownerDocument.createElement('tfoot');
@@ -48,16 +48,16 @@ cr.define('identity_internals', function() {
 
     /**
      * Creates an entry for a single property of the token.
-     * @param {string} label An i18n label of the token's property name.
+     * @param {string} label A label of the token's property name.
      * @param {string} value A value of the token property.
      * @param {string} accessor Additional class to tag the field for testing.
      * @return {HTMLElement} An HTML element with the property name and value.
      */
-    createEntry_: function(label, value, accessor) {
+    createEntry_(label, value, accessor) {
       const row = this.ownerDocument.createElement('tr');
       const labelField = this.ownerDocument.createElement('td');
       labelField.classList.add('label');
-      labelField.textContent = loadTimeData.getString(label);
+      labelField.textContent = label;
       row.appendChild(labelField);
       const valueField = this.ownerDocument.createElement('td');
       valueField.classList.add('value');
@@ -71,11 +71,11 @@ cr.define('identity_internals', function() {
      * Creates an entry for a list of token scopes.
      * @return {!HTMLElement} An HTML element with scopes.
      */
-    createEntryForScopes_: function() {
+    createEntryForScopes_() {
       const row = this.ownerDocument.createElement('tr');
       const labelField = this.ownerDocument.createElement('td');
       labelField.classList.add('label');
-      labelField.textContent = loadTimeData.getString('scopes');
+      labelField.textContent = 'Scopes';
       row.appendChild(labelField);
       const valueField = this.ownerDocument.createElement('td');
       valueField.classList.add('value');
@@ -93,7 +93,7 @@ cr.define('identity_internals', function() {
      * @return {HTMLElement} An HTML element with actionable buttons for the
      *     token.
      */
-    createButtons_: function() {
+    createButtons_() {
       const row = this.ownerDocument.createElement('tr');
       const buttonHolder = this.ownerDocument.createElement('td');
       buttonHolder.colSpan = 2;
@@ -109,7 +109,7 @@ cr.define('identity_internals', function() {
      * @return {!HTMLButtonElement} The created revoke button.
      * @private
      */
-    createRevokeButton_: function() {
+    createRevokeButton_() {
       const revokeButton = this.ownerDocument.createElement('button');
       revokeButton.classList.add('revoke-button');
       revokeButton.addEventListener('click', function() {
@@ -117,7 +117,7 @@ cr.define('identity_internals', function() {
             'identityInternalsRevokeToken',
             [this.data_.extensionId, this.data_.accessToken]);
       }.bind(this));
-      revokeButton.textContent = loadTimeData.getString('revoke');
+      revokeButton.textContent = 'Revoke';
       return revokeButton;
     },
   };
@@ -134,7 +134,7 @@ cr.define('identity_internals', function() {
     __proto__: HTMLDivElement.prototype,
 
     /** @override */
-    decorate: function() {
+    decorate() {
       this.textContent = '';
       this.showTokenNodes_();
     },
@@ -142,7 +142,7 @@ cr.define('identity_internals', function() {
     /**
      * Populates the list of tokens.
      */
-    showTokenNodes_: function() {
+    showTokenNodes_() {
       this.data_.forEach(function(tokenInfo) {
         this.appendChild(new TokenListItem(tokenInfo));
       }, this);
@@ -154,7 +154,7 @@ cr.define('identity_internals', function() {
      * @param {string} accessToken The id of the token to remove.
      * @private
      */
-    removeTokenNode_: function(accessToken) {
+    removeTokenNode_(accessToken) {
       let tokenIndex;
       for (let index = 0; index < this.data_.length; index++) {
         if (this.data_[index].accessToken == accessToken) {

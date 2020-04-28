@@ -8,21 +8,15 @@
 
 #include "base/test/metrics/histogram_tester.h"
 #include "chrome/browser/safe_browsing/safe_browsing_navigation_observer_manager.h"
-#include "chrome/browser/sessions/session_tab_helper.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/test/base/browser_with_test_window_test.h"
+#include "components/sessions/content/session_tab_helper.h"
 #include "content/public/test/navigation_simulator.h"
 #include "content/public/test/test_renderer_host.h"
 #include "content/public/test/test_utils.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/base/window_open_disposition.h"
-
-namespace {
-
-const char kNavigationEventCleanUpHistogramName[] =
-    "SafeBrowsing.NavigationObserver.NavigationEventCleanUpCount";
-}  // namespace
 
 namespace safe_browsing {
 
@@ -165,7 +159,8 @@ TEST_F(SBNavigationObserverTest, BasicNavigationAndCommit) {
                              WindowOpenDisposition::CURRENT_TAB,
                              ui::PAGE_TRANSITION_AUTO_BOOKMARK, false));
   CommitPendingLoad(controller);
-  SessionID tab_id = SessionTabHelper::IdForTab(controller->GetWebContents());
+  SessionID tab_id =
+      sessions::SessionTabHelper::IdForTab(controller->GetWebContents());
   auto* nav_list = navigation_event_list();
   ASSERT_EQ(1U, nav_list->Size());
   VerifyNavigationEvent(GURL(),                // source_url
@@ -187,7 +182,7 @@ TEST_F(SBNavigationObserverTest, ServerRedirect) {
   navigation->Start();
   navigation->Redirect(GURL("http://redirect/1"));
   navigation->Commit();
-  SessionID tab_id = SessionTabHelper::IdForTab(
+  SessionID tab_id = sessions::SessionTabHelper::IdForTab(
       browser()->tab_strip_model()->GetWebContentsAt(0));
   auto* nav_list = navigation_event_list();
   ASSERT_EQ(1U, nav_list->Size());
@@ -231,9 +226,6 @@ TEST_F(SBNavigationObserverTest, TestCleanUpStaleNavigationEvents) {
       CreateNavigationEventUniquePtr(url_0, now));
   ASSERT_EQ(6U, navigation_event_list()->Size());
 
-  base::HistogramTester histograms;
-  histograms.ExpectTotalCount(kNavigationEventCleanUpHistogramName, 0);
-
   // Cleans up navigation events.
   CleanUpNavigationEvents();
 
@@ -242,8 +234,6 @@ TEST_F(SBNavigationObserverTest, TestCleanUpStaleNavigationEvents) {
   EXPECT_EQ(nullptr,
             navigation_event_list()->FindNavigationEvent(
                 base::Time::Now(), url_1, GURL(), SessionID::InvalidValue()));
-  EXPECT_THAT(histograms.GetAllSamples(kNavigationEventCleanUpHistogramName),
-              testing::ElementsAre(base::Bucket(4, 1)));
 }
 
 TEST_F(SBNavigationObserverTest, TestCleanUpStaleUserGestures) {
@@ -353,7 +343,7 @@ TEST_F(SBNavigationObserverTest, TestContentSettingChange) {
   // Simulate content setting change via page info UI.
   navigation_observer_->OnContentSettingChanged(
       ContentSettingsPattern::FromURL(web_content->GetLastCommittedURL()),
-      ContentSettingsPattern::Wildcard(), CONTENT_SETTINGS_TYPE_NOTIFICATIONS,
+      ContentSettingsPattern::Wildcard(), ContentSettingsType::NOTIFICATIONS,
       std::string());
 
   // A user gesture should be recorded.
@@ -366,7 +356,7 @@ TEST_F(SBNavigationObserverTest, TestContentSettingChange) {
   // Simulate content setting change that cannot be changed via page info UI.
   navigation_observer_->OnContentSettingChanged(
       ContentSettingsPattern::FromURL(web_content->GetLastCommittedURL()),
-      ContentSettingsPattern::Wildcard(), CONTENT_SETTINGS_TYPE_SITE_ENGAGEMENT,
+      ContentSettingsPattern::Wildcard(), ContentSettingsType::SITE_ENGAGEMENT,
       std::string());
   // No user gesture should be recorded.
   EXPECT_EQ(0U, user_gesture_map()->size());

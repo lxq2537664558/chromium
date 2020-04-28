@@ -20,18 +20,21 @@
 #include "build/build_config.h"
 #include "ui/base/ui_base_types.h"
 #include "ui/gfx/native_widget_types.h"
+#include "ui/views/buildflags.h"
 #include "ui/views/views_export.h"
 #include "ui/views/widget/widget.h"
 
 namespace gfx {
 class ImageSkia;
 class Rect;
-}
+}  // namespace gfx
 
 namespace ui {
+#if defined(OS_MACOSX)
 class ContextFactory;
+#endif
 class TouchEditingControllerFactory;
-}
+}  // namespace ui
 
 namespace views {
 
@@ -40,8 +43,6 @@ class NonClientFrameView;
 class Widget;
 
 #if defined(USE_AURA)
-class DesktopNativeWidgetAura;
-class DesktopWindowTreeHost;
 class TouchSelectionMenuRunnerViews;
 #endif
 
@@ -60,20 +61,12 @@ class VIEWS_EXPORT ViewsDelegate {
   using NativeWidgetFactory =
       base::RepeatingCallback<NativeWidget*(const Widget::InitParams&,
                                             internal::NativeWidgetDelegate*)>;
-#if defined(USE_AURA)
-  using DesktopWindowTreeHostFactory =
-      base::RepeatingCallback<std::unique_ptr<DesktopWindowTreeHost>(
-          const Widget::InitParams&,
-          internal::NativeWidgetDelegate*,
-          DesktopNativeWidgetAura*)>;
-#endif
-
 #if defined(OS_WIN)
   enum AppbarAutohideEdge {
-    EDGE_TOP    = 1 << 0,
-    EDGE_LEFT   = 1 << 1,
+    EDGE_TOP = 1 << 0,
+    EDGE_LEFT = 1 << 1,
     EDGE_BOTTOM = 1 << 2,
-    EDGE_RIGHT  = 1 << 3,
+    EDGE_RIGHT = 1 << 3,
   };
 #endif
 
@@ -82,14 +75,16 @@ class VIEWS_EXPORT ViewsDelegate {
     // is needed and the menu should be kept open.
     LEAVE_MENU_OPEN,
 
-    // The accelerator was not handled. Menu should be closed and the
-    // accelerator will be reposted to be handled after the menu closes.
-    CLOSE_MENU
+    // The accelerator was not handled. The menu should be closed and event
+    // handling should stop for this event.
+    CLOSE_MENU,
   };
 
   virtual ~ViewsDelegate();
 
-  // Returns the ViewsDelegate instance if there is one, or nullptr otherwise.
+  // Returns the ViewsDelegate instance.  This should never return non-null
+  // unless the binary has not yet initialized the delegate, so callers should
+  // not generally null-check.
   static ViewsDelegate* GetInstance();
 
   // Call this method to set a factory callback that will be used to construct
@@ -101,15 +96,6 @@ class VIEWS_EXPORT ViewsDelegate {
     return native_widget_factory_;
   }
 
-#if defined(USE_AURA)
-  void set_desktop_window_tree_host_factory(
-      DesktopWindowTreeHostFactory factory) {
-    desktop_window_tree_host_factory_ = std::move(factory);
-  }
-  const DesktopWindowTreeHostFactory& desktop_window_tree_host_factory() const {
-    return desktop_window_tree_host_factory_;
-  }
-#endif
   // Saves the position, size and "show" state for the window with the
   // specified name.
   virtual void SaveWindowPlacement(const Widget* widget,
@@ -147,7 +133,7 @@ class VIEWS_EXPORT ViewsDelegate {
   // Returns true if the window passed in is in the Windows 8 metro
   // environment.
   virtual bool IsWindowInMetro(gfx::NativeWindow window) const;
-#elif defined(OS_LINUX) && !defined(OS_CHROMEOS)
+#elif defined(OS_LINUX) && BUILDFLAG(ENABLE_DESKTOP_AURA)
   virtual gfx::ImageSkia* GetDefaultWindowIcon() const;
 #endif
 
@@ -160,6 +146,9 @@ class VIEWS_EXPORT ViewsDelegate {
   // ensure we don't attempt to exit while a menu is showing.
   virtual void AddRef();
   virtual void ReleaseRef();
+  // Returns true if the application is shutting down. AddRef/Release should not
+  // be called in this situation.
+  virtual bool IsShuttingDown() const;
 
   // Gives the platform a chance to modify the properties of a Widget.
   virtual void OnBeforeWidgetInit(Widget::InitParams* params,
@@ -171,11 +160,10 @@ class VIEWS_EXPORT ViewsDelegate {
   // maximized windows; otherwise to restored windows.
   virtual bool WindowManagerProvidesTitleBar(bool maximized);
 
+#if defined(OS_MACOSX)
   // Returns the context factory for new windows.
   virtual ui::ContextFactory* GetContextFactory();
-
-  // Returns the privileged context factory for new windows.
-  virtual ui::ContextFactoryPrivate* GetContextFactoryPrivate();
+#endif
 
   // Returns the user-visible name of the application.
   virtual std::string GetApplicationName();
@@ -205,8 +193,6 @@ class VIEWS_EXPORT ViewsDelegate {
 
 #if defined(USE_AURA)
   std::unique_ptr<TouchSelectionMenuRunnerViews> touch_selection_menu_runner_;
-
-  DesktopWindowTreeHostFactory desktop_window_tree_host_factory_;
 #endif
 
   NativeWidgetFactory native_widget_factory_;

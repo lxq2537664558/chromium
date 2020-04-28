@@ -9,6 +9,7 @@
 #include "base/debug/alias.h"
 #include "third_party/khronos/EGL/egl.h"
 #include "third_party/khronos/EGL/eglext.h"
+#include "ui/gfx/buffer_format_util.h"
 #include "ui/gl/gl_angle_util_win.h"
 #include "ui/gl/gl_bindings.h"
 #include "ui/gl/gl_image.h"
@@ -39,15 +40,7 @@ bool SupportedBindFormat(gfx::BufferFormat format) {
 
 bool HasAlpha(gfx::BufferFormat format) {
   DCHECK(SupportedBindFormat(format));
-  switch (format) {
-    case gfx::BufferFormat::RGBA_8888:
-      return true;
-    case gfx::BufferFormat::RGBX_8888:
-      return false;
-    default:
-      NOTREACHED();
-      return false;
-  };
+  return gfx::AlphaBitsForBufferFormat(format) > 0;
 }
 
 EGLConfig ChooseCompatibleConfig(gfx::BufferFormat format) {
@@ -203,6 +196,10 @@ unsigned GLImageDXGI::GetInternalFormat() {
     return HasAlpha(buffer_format_) ? GL_RGBA : GL_RGB;
 }
 
+unsigned GLImageDXGI::GetDataType() {
+  return GL_UNSIGNED_BYTE;
+}
+
 gfx::Size GLImageDXGI::GetSize() {
   return size_;
 }
@@ -221,11 +218,6 @@ void GLImageDXGI::ReleaseTexImage(unsigned target) {
 
   DCHECK(texture_);
   DCHECK(keyed_mutex_);
-
-  Microsoft::WRL::ComPtr<ID3D11Device> device =
-      QueryD3D11DeviceObjectFromANGLE();
-  Microsoft::WRL::ComPtr<ID3D11Device1> device1;
-  device.CopyTo(device1.GetAddressOf());
 
   keyed_mutex_->ReleaseSync(KEY_RELEASE);
 

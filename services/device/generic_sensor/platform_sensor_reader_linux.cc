@@ -15,6 +15,7 @@
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/task/post_task.h"
+#include "base/task/thread_pool.h"
 #include "base/timer/timer.h"
 #include "services/device/generic_sensor/linux/sensor_data_linux.h"
 #include "services/device/generic_sensor/platform_sensor_linux.h"
@@ -91,14 +92,14 @@ class PollingSensorReader : public SensorReader {
   SEQUENCE_CHECKER(sequence_checker_);
 
   scoped_refptr<base::SequencedTaskRunner> blocking_task_runner_ =
-      base::CreateSequencedTaskRunnerWithTraits(
+      base::ThreadPool::CreateSequencedTaskRunner(
           {base::MayBlock(), base::TaskPriority::USER_VISIBLE,
            base::TaskShutdownBehavior::CONTINUE_ON_SHUTDOWN});
 
   std::unique_ptr<BlockingTaskRunnerHelper, base::OnTaskRunnerDeleter>
       blocking_task_helper_;
 
-  base::WeakPtrFactory<PollingSensorReader> weak_factory_;
+  base::WeakPtrFactory<PollingSensorReader> weak_factory_{this};
 
   DISALLOW_COPY_AND_ASSIGN(PollingSensorReader);
 };
@@ -182,8 +183,7 @@ PollingSensorReader::PollingSensorReader(
     scoped_refptr<base::SingleThreadTaskRunner> task_runner)
     : SensorReader(sensor, std::move(task_runner)),
       blocking_task_helper_(nullptr,
-                            base::OnTaskRunnerDeleter(blocking_task_runner_)),
-      weak_factory_(this) {
+                            base::OnTaskRunnerDeleter(blocking_task_runner_)) {
   // We need to properly initialize |blocking_task_helper_| here because we need
   // |weak_factory_| to be created first.
   blocking_task_helper_.reset(

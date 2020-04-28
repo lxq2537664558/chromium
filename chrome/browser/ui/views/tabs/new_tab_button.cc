@@ -12,6 +12,7 @@
 #include "chrome/browser/themes/theme_properties.h"
 #include "chrome/browser/ui/browser_list.h"
 #include "chrome/browser/ui/layout_constants.h"
+#include "chrome/browser/ui/tabs/tab_types.h"
 #include "chrome/browser/ui/views/chrome_layout_provider.h"
 #include "chrome/browser/ui/views/feature_promos/feature_promo_bubble_view.h"
 #include "chrome/browser/ui/views/tabs/browser_tab_strip_controller.h"
@@ -19,23 +20,23 @@
 #include "chrome/grit/generated_resources.h"
 #include "components/feature_engagement/buildflags.h"
 #include "components/variations/variations_associated_data.h"
-#include "ui/base/default_theme_provider.h"
-#include "ui/base/material_design/material_design_controller.h"
+#include "ui/base/pointer/touch_ui_controller.h"
+#include "ui/base/theme_provider.h"
 #include "ui/gfx/color_utils.h"
 #include "ui/gfx/scoped_canvas.h"
 #include "ui/views/animation/flood_fill_ink_drop_ripple.h"
+#include "ui/views/animation/ink_drop.h"
 #include "ui/views/animation/ink_drop_impl.h"
 #include "ui/views/animation/ink_drop_mask.h"
-#include "ui/views/view_class_properties.h"
+#include "ui/views/controls/highlight_path_generator.h"
 #include "ui/views/widget/widget.h"
 
 #if defined(OS_WIN)
 #include "ui/display/win/screen_win.h"
-#include "ui/gfx/win/hwnd_util.h"
 #include "ui/views/win/hwnd_util.h"
 #endif
 
-#if BUILDFLAG(ENABLE_DESKTOP_IN_PRODUCT_HELP)
+#if BUILDFLAG(ENABLE_LEGACY_DESKTOP_IN_PRODUCT_HELP)
 #include "chrome/browser/feature_engagement/new_tab/new_tab_tracker.h"
 #include "chrome/browser/feature_engagement/new_tab/new_tab_tracker_factory.h"
 #endif
@@ -60,7 +61,25 @@ int GetNewTabPromoStringSpecifier() {
 }  // namespace
 
 // static
+constexpr char NewTabButton::kClassName[];
+
+// static
 const gfx::Size NewTabButton::kButtonSize{28, 28};
+
+class NewTabButton::HighlightPathGenerator
+    : public views::HighlightPathGenerator {
+ public:
+  HighlightPathGenerator() = default;
+
+  // views::HighlightPathGenerator:
+  SkPath GetHighlightPath(const views::View* view) override {
+    return static_cast<const NewTabButton*>(view)->GetBorderPath(
+        view->GetContentsBounds().origin(), 1.0f, false);
+  }
+
+ private:
+  DISALLOW_COPY_AND_ASSIGN(HighlightPathGenerator);
+};
 
 NewTabButton::NewTabButton(TabStrip* tab_strip, views::ButtonListener* listener)
     : views::ImageButton(listener), tab_strip_(tab_strip) {
@@ -70,11 +89,16 @@ NewTabButton::NewTabButton(TabStrip* tab_strip, views::ButtonListener* listener)
                               ui::EF_MIDDLE_MOUSE_BUTTON);
 #endif
 
+  ink_drop_container_ =
+      AddChildView(std::make_unique<views::InkDropContainerView>());
+
   SetInkDropMode(InkDropMode::ON);
-  set_ink_drop_visible_opacity(0.08f);
-  set_ink_drop_highlight_opacity(0.1f);
+  set_ink_drop_highlight_opacity(0.16f);
+  set_ink_drop_visible_opacity(0.14f);
 
   SetInstallFocusRingOnFocus(true);
+  views::HighlightPathGenerator::Install(
+      this, std::make_unique<NewTabButton::HighlightPathGenerator>());
 }
 
 NewTabButton::~NewTabButton() {
@@ -121,6 +145,23 @@ void NewTabButton::AnimateInkDropToStateForTesting(views::InkDropState state) {
   GetInkDrop()->AnimateToState(state);
 }
 
+const char* NewTabButton::GetClassName() const {
+  return kClassName;
+}
+
+void NewTabButton::AddLayerBeneathView(ui::Layer* new_layer) {
+  ink_drop_container_->AddLayerBeneathView(new_layer);
+}
+
+void NewTabButton::RemoveLayerBeneathView(ui::Layer* old_layer) {
+  ink_drop_container_->RemoveLayerBeneathView(old_layer);
+}
+
+void NewTabButton::OnBoundsChanged(const gfx::Rect& previous_bounds) {
+  ImageButton::OnBoundsChanged(previous_bounds);
+  ink_drop_container_->SetBoundsRect(GetLocalBounds());
+}
+
 #if defined(OS_WIN)
 void NewTabButton::OnMouseReleased(const ui::MouseEvent& event) {
   if (!event.IsOnlyRightMouseButton()) {
@@ -128,12 +169,14 @@ void NewTabButton::OnMouseReleased(const ui::MouseEvent& event) {
     return;
   }
 
+  // TODO(pkasting): If we handled right-clicks on the frame, and we made sure
+  // this event was not handled, it seems like things would Just Work.
   gfx::Point point = event.location();
   views::View::ConvertPointToScreen(this, &point);
   point = display::win::ScreenWin::DIPToScreenPoint(point);
   bool destroyed = false;
   destroyed_ = &destroyed;
-  gfx::ShowSystemMenuAtPoint(views::HWNDForView(this), point);
+  views::ShowSystemMenuAtScreenPixelLocation(views::HWNDForView(this), point);
   if (!destroyed)
     SetState(views::Button::STATE_NORMAL);
 }
@@ -158,13 +201,6 @@ void NewTabButton::PaintButtonContents(gfx::Canvas* canvas) {
   PaintPlusIcon(canvas);
 }
 
-void NewTabButton::OnBoundsChanged(const gfx::Rect& previous_bounds) {
-  ImageButton::OnBoundsChanged(previous_bounds);
-  SetProperty(
-      views::kHighlightPathKey,
-      new SkPath(GetBorderPath(GetContentsBounds().origin(), 1.0f, false)));
-}
-
 gfx::Size NewTabButton::CalculatePreferredSize() const {
   gfx::Size size = kButtonSize;
   const auto insets = GetInsets();
@@ -184,7 +220,7 @@ bool NewTabButton::GetHitTestMask(SkPath* mask) const {
 }
 
 void NewTabButton::OnWidgetDestroying(views::Widget* widget) {
-#if BUILDFLAG(ENABLE_DESKTOP_IN_PRODUCT_HELP)
+#if BUILDFLAG(ENABLE_LEGACY_DESKTOP_IN_PRODUCT_HELP)
   feature_engagement::NewTabTrackerFactory::GetInstance()
       ->GetForProfile(tab_strip_->controller()->GetProfile())
       ->OnPromoClosed();
@@ -206,13 +242,14 @@ void NewTabButton::PaintFill(gfx::Canvas* canvas) const {
   cc::PaintFlags flags;
   flags.setAntiAlias(true);
 
-  bool has_custom_image;
-  const int bg_id = tab_strip_->GetBackgroundResourceId(&has_custom_image);
   const float scale = canvas->image_scale();
-  if (has_custom_image && !new_tab_promo_observer_.IsObservingSources()) {
+  const base::Optional<int> bg_id =
+      tab_strip_->GetCustomBackgroundId(BrowserFrameActiveState::kUseCurrent);
+  if (bg_id.has_value() && !new_tab_promo_observer_.IsObservingSources()) {
     float x_scale = scale;
     const gfx::Rect& contents_bounds = GetContentsBounds();
-    int x = GetMirroredX() + contents_bounds.x() + background_offset_;
+    int x = GetMirroredX() + contents_bounds.x() +
+            tab_strip_->GetBackgroundOffset();
     if (base::i18n::IsRTL()) {
       // The new tab background is mirrored in RTL mode, but the theme
       // background should never be mirrored. Mirror it here to compensate.
@@ -223,8 +260,9 @@ void NewTabButton::PaintFill(gfx::Canvas* canvas) const {
     }
 
     canvas->InitPaintFlagsForTiling(
-        *GetThemeProvider()->GetImageSkiaNamed(bg_id), x, contents_bounds.y(),
-        x_scale, scale, 0, 0, SkTileMode::kRepeat, SkTileMode::kRepeat, &flags);
+        *GetThemeProvider()->GetImageSkiaNamed(bg_id.value()), x,
+        contents_bounds.y(), x_scale, scale, 0, 0, SkTileMode::kRepeat,
+        SkTileMode::kRepeat, &flags);
   } else {
     flags.setColor(GetButtonFillColor());
   }
@@ -233,18 +271,18 @@ void NewTabButton::PaintFill(gfx::Canvas* canvas) const {
 }
 
 void NewTabButton::PaintPlusIcon(gfx::Canvas* canvas) const {
-  const SkColor background_color =
-      tab_strip_->GetTabBackgroundColor(TAB_INACTIVE);
+  const SkColor background_color = tab_strip_->GetTabBackgroundColor(
+      TabActive::kInactive, BrowserFrameActiveState::kUseCurrent);
 
   cc::PaintFlags flags;
   flags.setAntiAlias(true);
-  flags.setColor(
-      tab_strip_->GetTabForegroundColor(TAB_INACTIVE, background_color));
+  flags.setColor(tab_strip_->GetTabForegroundColor(TabActive::kInactive,
+                                                   background_color));
   flags.setStrokeCap(cc::PaintFlags::kRound_Cap);
   constexpr int kStrokeWidth = 2;
   flags.setStrokeWidth(kStrokeWidth);
 
-  const int radius = ui::MaterialDesignController::touch_ui() ? 7 : 6;
+  const int radius = ui::TouchUiController::Get()->touch_ui() ? 7 : 6;
   const int offset = GetCornerRadius() - radius;
   // The cap will be added outside the end of the stroke; inset to compensate.
   constexpr int kCapRadius = kStrokeWidth / 2;
@@ -267,7 +305,8 @@ SkColor NewTabButton::GetButtonFillColor() const {
 
   return GetThemeProvider()->GetDisplayProperty(
              ThemeProperties::SHOULD_FILL_BACKGROUND_TAB_COLOR)
-             ? tab_strip_->GetTabBackgroundColor(TAB_INACTIVE)
+             ? tab_strip_->GetTabBackgroundColor(
+                   TabActive::kInactive, BrowserFrameActiveState::kUseCurrent)
              : SK_ColorTRANSPARENT;
 }
 
@@ -284,8 +323,8 @@ SkPath NewTabButton::GetBorderPath(const gfx::Point& origin,
     const float diameter = radius * 2;
     path.rLineTo(diameter, 0);
     path.rLineTo(0, scaled_origin.y() + radius);
-    path.rArcTo(radius, radius, 0, SkPath::kSmall_ArcSize,
-                SkPath::kCW_Direction, -diameter, 0);
+    path.rArcTo(radius, radius, 0, SkPath::kSmall_ArcSize, SkPathDirection::kCW,
+                -diameter, 0);
     path.close();
   } else {
     path.addCircle(scaled_origin.x() + radius, scaled_origin.y() + radius,

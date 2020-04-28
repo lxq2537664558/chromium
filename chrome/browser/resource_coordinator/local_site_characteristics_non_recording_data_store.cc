@@ -4,7 +4,7 @@
 
 #include "chrome/browser/resource_coordinator/local_site_characteristics_non_recording_data_store.h"
 
-#include "base/logging.h"
+#include "base/check.h"
 #include "base/memory/ptr_util.h"
 #include "chrome/browser/resource_coordinator/local_site_characteristics_noop_data_writer.h"
 
@@ -37,7 +37,7 @@ LocalSiteCharacteristicsNonRecordingDataStore::GetReaderForOrigin(
 std::unique_ptr<SiteCharacteristicsDataWriter>
 LocalSiteCharacteristicsNonRecordingDataStore::GetWriterForOrigin(
     const url::Origin& origin,
-    TabVisibility tab_visibility) {
+    performance_manager::TabVisibility tab_visibility) {
   // Return a fake data writer.
   SiteCharacteristicsDataWriter* writer =
       new LocalSiteCharacteristicsNoopDataWriter();
@@ -73,7 +73,7 @@ void LocalSiteCharacteristicsNonRecordingDataStore::GetDatabaseSize(
 bool LocalSiteCharacteristicsNonRecordingDataStore::GetDataForOrigin(
     const url::Origin& origin,
     bool* is_dirty,
-    std::unique_ptr<SiteCharacteristicsProto>* data) {
+    std::unique_ptr<SiteDataProto>* data) {
   if (!data_store_inspector_)
     return false;
 

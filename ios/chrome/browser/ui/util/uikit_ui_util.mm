@@ -21,7 +21,7 @@
 #include "ios/chrome/browser/ui/util/dynamic_type_util.h"
 #include "ios/chrome/browser/ui/util/rtl_geometry.h"
 #include "ios/chrome/browser/ui/util/ui_util.h"
-#include "ios/web/public/web_thread.h"
+#include "ios/web/public/thread/web_thread.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/l10n/l10n_util_mac.h"
 #include "ui/base/resource/resource_bundle.h"
@@ -65,11 +65,24 @@ void GetRGBA(UIColor* color, CGFloat* r, CGFloat* g, CGFloat* b, CGFloat* a) {
   }
 }
 
+// Store a reference to the current first responder.
+UIResponder* g_first_responder = nil;
+
 }  // namespace
 
-void SetA11yLabelAndUiAutomationName(UIView* element,
-                                     int idsAccessibilityLabel,
-                                     NSString* englishUiAutomationName) {
+// Category used to get the first responder.
+@implementation UIResponder (FirstResponder)
+
+- (void)cr_markSelfCurrentFirstResponder {
+  g_first_responder = self;
+}
+
+@end
+
+void SetA11yLabelAndUiAutomationName(
+    NSObject<UIAccessibilityIdentification>* element,
+    int idsAccessibilityLabel,
+    NSString* englishUiAutomationName) {
   [element setAccessibilityLabel:l10n_util::GetNSString(idsAccessibilityLabel)];
   [element setAccessibilityIdentifier:englishUiAutomationName];
 }
@@ -629,6 +642,18 @@ UIView* GetFirstResponderSubview(UIView* view) {
 
 UIResponder* GetFirstResponder() {
   DCHECK_CURRENTLY_ON(web::WebThread::UI);
+  if (base::FeatureList::IsEnabled(kFirstResponderSendAction)) {
+    DCHECK_CURRENTLY_ON(web::WebThread::UI);
+    DCHECK(!g_first_responder);
+    [[UIApplication sharedApplication]
+        sendAction:@selector(cr_markSelfCurrentFirstResponder)
+                to:nil
+              from:nil
+          forEvent:nil];
+    UIResponder* firstResponder = g_first_responder;
+    g_first_responder = nil;
+    return firstResponder;
+  }
   return GetFirstResponderSubview([UIApplication sharedApplication].keyWindow);
 }
 

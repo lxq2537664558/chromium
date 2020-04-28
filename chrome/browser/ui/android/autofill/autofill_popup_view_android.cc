@@ -5,21 +5,22 @@
 #include "chrome/browser/ui/android/autofill/autofill_popup_view_android.h"
 
 #include <memory>
+#include <utility>
 
 #include "base/android/jni_android.h"
 #include "base/android/jni_string.h"
 #include "base/command_line.h"
+#include "chrome/android/chrome_jni_headers/AutofillPopupBridge_jni.h"
 #include "chrome/browser/android/resource_mapper.h"
 #include "chrome/browser/autofill/autofill_keyboard_accessory_adapter.h"
 #include "chrome/browser/ui/android/autofill/autofill_keyboard_accessory_view.h"
 #include "chrome/browser/ui/android/view_android_helper.h"
 #include "chrome/browser/ui/autofill/autofill_popup_controller.h"
-#include "chrome/browser/ui/autofill/autofill_popup_layout_model.h"
-#include "components/autofill/core/browser/popup_item_ids.h"
-#include "components/autofill/core/browser/suggestion.h"
+#include "chrome/browser/ui/autofill/autofill_popup_controller_utils.h"
+#include "components/autofill/core/browser/ui/popup_item_ids.h"
+#include "components/autofill/core/browser/ui/suggestion.h"
 #include "components/autofill/core/common/autofill_util.h"
 #include "components/security_state/core/security_state.h"
-#include "jni/AutofillPopupBridge_jni.h"
 #include "ui/android/view_android.h"
 #include "ui/android/window_android.h"
 #include "ui/base/resource/resource_bundle.h"
@@ -76,16 +77,15 @@ void AutofillPopupViewAndroid::OnSuggestionsChanged() {
 
   for (size_t i = 0; i < count; ++i) {
     ScopedJavaLocalRef<jstring> value = base::android::ConvertUTF16ToJavaString(
-        env, controller_->GetElidedValueAt(i));
-    ScopedJavaLocalRef<jstring> label =
-        base::android::ConvertUTF16ToJavaString(
-            env, controller_->GetElidedLabelAt(i));
+        env, controller_->GetSuggestionValueAt(i));
+    ScopedJavaLocalRef<jstring> label = base::android::ConvertUTF16ToJavaString(
+        env, controller_->GetSuggestionLabelAt(i));
     int android_icon_id = 0;
 
     const Suggestion& suggestion = controller_->GetSuggestionAt(i);
     if (!suggestion.icon.empty()) {
-      android_icon_id = ResourceMapper::MapFromChromiumId(
-          controller_->layout_model().GetIconResourceID(suggestion.icon));
+      android_icon_id = ResourceMapper::MapToJavaDrawableId(
+          GetIconResourceID(suggestion.icon));
     }
 
     bool is_deletable =
@@ -102,6 +102,11 @@ void AutofillPopupViewAndroid::OnSuggestionsChanged() {
 
   Java_AutofillPopupBridge_show(env, java_object_, data_array,
                                 controller_->IsRTL());
+}
+
+base::Optional<int32_t> AutofillPopupViewAndroid::GetAxUniqueId() {
+  NOTIMPLEMENTED() << "See https://crbug.com/985927";
+  return base::nullopt;
 }
 
 void AutofillPopupViewAndroid::SuggestionSelected(
@@ -154,7 +159,7 @@ void AutofillPopupViewAndroid::PopupDismissed(
   delete this;
 }
 
-void AutofillPopupViewAndroid::Init() {
+bool AutofillPopupViewAndroid::Init() {
   JNIEnv* env = base::android::AttachCurrentThread();
   ui::ViewAndroid* view_android = controller_->container_view();
 
@@ -162,11 +167,15 @@ void AutofillPopupViewAndroid::Init() {
   popup_view_ = view_android->AcquireAnchorView();
   const ScopedJavaLocalRef<jobject> view = popup_view_.view();
   if (view.is_null())
-    return;
+    return false;
+  ui::WindowAndroid* window_android = view_android->GetWindowAndroid();
+  if (!window_android)
+    return false;  // The window might not be attached (yet or anymore).
 
   java_object_.Reset(Java_AutofillPopupBridge_create(
       env, view, reinterpret_cast<intptr_t>(this),
-      view_android->GetWindowAndroid()->GetJavaObject()));
+      window_android->GetJavaObject()));
+  return true;
 }
 
 bool AutofillPopupViewAndroid::WasSuppressed() {
@@ -177,19 +186,23 @@ bool AutofillPopupViewAndroid::WasSuppressed() {
 
 // static
 AutofillPopupView* AutofillPopupView::Create(
-    AutofillPopupController* controller) {
+    base::WeakPtr<AutofillPopupController> controller) {
   if (IsKeyboardAccessoryEnabled()) {
-    auto adapter = std::make_unique<AutofillKeyboardAccessoryAdapter>(
-        controller, GetKeyboardAccessoryAnimationDuration(),
-        ShouldLimitKeyboardAccessorySuggestionLabelWidth());
-    adapter->SetAccessoryView(
-        std::make_unique<AutofillKeyboardAccessoryView>(adapter.get()));
+    auto adapter =
+        std::make_unique<AutofillKeyboardAccessoryAdapter>(controller);
+    auto accessory_view =
+        std::make_unique<AutofillKeyboardAccessoryView>(adapter.get());
+    if (!accessory_view->Initialize())
+      return nullptr;  // Don't create an adapter without initialized view.
+    adapter->SetAccessoryView(std::move(accessory_view));
     return adapter.release();
   }
 
-  auto popup_view = std::make_unique<AutofillPopupViewAndroid>(controller);
-  popup_view->Init();
-  return popup_view->WasSuppressed() ? nullptr : popup_view.release();
+  auto popup_view =
+      std::make_unique<AutofillPopupViewAndroid>(controller.get());
+  if (!popup_view->Init() || popup_view->WasSuppressed())
+    return nullptr;
+  return popup_view.release();
 }
 
 }  // namespace autofill

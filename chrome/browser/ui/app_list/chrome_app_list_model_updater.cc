@@ -8,6 +8,7 @@
 #include <utility>
 
 #include "ash/public/cpp/app_list/app_list_config.h"
+#include "ash/public/cpp/app_list/app_list_controller.h"
 #include "base/bind.h"
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/ui/app_list/app_list_client_impl.h"
@@ -17,8 +18,27 @@
 #include "extensions/common/constants.h"
 #include "ui/base/models/menu_model.h"
 
+namespace {
+
+syncer::StringOrdinal CreateChromePositionOnLast(
+    const std::map<std::string, std::unique_ptr<ChromeAppListItem>>& items) {
+  syncer::StringOrdinal last_known_position;
+  for (auto& it : items) {
+    if (!last_known_position.IsValid() ||
+        (it.second->position().IsValid() &&
+         it.second->position().GreaterThan(last_known_position))) {
+      last_known_position = it.second->position();
+    }
+  }
+  return last_known_position.IsValid()
+             ? last_known_position.CreateAfter()
+             : syncer::StringOrdinal::CreateInitialOrdinal();
+}
+
+}  // namespace
+
 ChromeAppListModelUpdater::ChromeAppListModelUpdater(Profile* profile)
-    : profile_(profile), weak_ptr_factory_(this) {}
+    : profile_(profile) {}
 
 ChromeAppListModelUpdater::~ChromeAppListModelUpdater() = default;
 
@@ -34,7 +54,7 @@ void ChromeAppListModelUpdater::SetActive(bool active) {
     return;
 
   // Activating this model updater should sync the cached model to Ash.
-  std::vector<ash::mojom::AppListItemMetadataPtr> items_to_sync;
+  std::vector<std::unique_ptr<ash::AppListItemMetadata>> items_to_sync;
   for (auto const& item : items_)
     items_to_sync.push_back(item.second->CloneMetadata());
 
@@ -45,7 +65,8 @@ void ChromeAppListModelUpdater::SetActive(bool active) {
 
 void ChromeAppListModelUpdater::AddItem(
     std::unique_ptr<ChromeAppListItem> app_item) {
-  ash::mojom::AppListItemMetadataPtr item_data = app_item->CloneMetadata();
+  std::unique_ptr<ash::AppListItemMetadata> item_data =
+      app_item->CloneMetadata();
   // Add to Chrome first leave all updates to observer methods.
   AddChromeItem(std::move(app_item));
   if (app_list_controller_)
@@ -55,7 +76,8 @@ void ChromeAppListModelUpdater::AddItem(
 void ChromeAppListModelUpdater::AddItemToFolder(
     std::unique_ptr<ChromeAppListItem> app_item,
     const std::string& folder_id) {
-  ash::mojom::AppListItemMetadataPtr item_data = app_item->CloneMetadata();
+  std::unique_ptr<ash::AppListItemMetadata> item_data =
+      app_item->CloneMetadata();
   // Add to Chrome first leave all updates to observer methods.
   ChromeAppListItem* item_added = AddChromeItem(std::move(app_item));
   item_added->SetChromeFolderId(folder_id);
@@ -141,7 +163,7 @@ void ChromeAppListModelUpdater::PublishSearchResults(
     result->set_model_updater(this);
   if (!app_list_controller_)
     return;
-  std::vector<ash::mojom::SearchResultMetadataPtr> result_data;
+  std::vector<std::unique_ptr<ash::SearchResultMetadata>> result_data;
   for (auto* result : results)
     result_data.push_back(result->CloneMetadata());
   app_list_controller_->PublishSearchResults(std::move(result_data));
@@ -196,7 +218,7 @@ void ChromeAppListModelUpdater::SetItemName(const std::string& id,
   ChromeAppListItem* item = FindItem(id);
   if (!item)
     return;
-  ash::mojom::AppListItemMetadataPtr data = item->CloneMetadata();
+  std::unique_ptr<ash::AppListItemMetadata> data = item->CloneMetadata();
   data->name = name;
   app_list_controller_->SetItemMetadata(id, std::move(data));
 }
@@ -210,7 +232,7 @@ void ChromeAppListModelUpdater::SetItemNameAndShortName(
   ChromeAppListItem* item = FindItem(id);
   if (!item)
     return;
-  ash::mojom::AppListItemMetadataPtr data = item->CloneMetadata();
+  std::unique_ptr<ash::AppListItemMetadata> data = item->CloneMetadata();
   data->name = name;
   data->short_name = short_name;
   app_list_controller_->SetItemMetadata(id, std::move(data));
@@ -224,7 +246,7 @@ void ChromeAppListModelUpdater::SetItemPosition(
   ChromeAppListItem* item = FindItem(id);
   if (!item)
     return;
-  ash::mojom::AppListItemMetadataPtr data = item->CloneMetadata();
+  std::unique_ptr<ash::AppListItemMetadata> data = item->CloneMetadata();
   data->position = new_position;
   app_list_controller_->SetItemMetadata(id, std::move(data));
 }
@@ -236,7 +258,7 @@ void ChromeAppListModelUpdater::SetItemIsPersistent(const std::string& id,
   ChromeAppListItem* item = FindItem(id);
   if (!item)
     return;
-  ash::mojom::AppListItemMetadataPtr data = item->CloneMetadata();
+  std::unique_ptr<ash::AppListItemMetadata> data = item->CloneMetadata();
   data->is_persistent = is_persistent;
   app_list_controller_->SetItemMetadata(id, std::move(data));
 }
@@ -248,7 +270,7 @@ void ChromeAppListModelUpdater::SetItemFolderId(const std::string& id,
   ChromeAppListItem* item = FindItem(id);
   if (!item)
     return;
-  ash::mojom::AppListItemMetadataPtr data = item->CloneMetadata();
+  std::unique_ptr<ash::AppListItemMetadata> data = item->CloneMetadata();
   data->folder_id = folder_id;
   app_list_controller_->SetItemMetadata(id, std::move(data));
 }
@@ -273,7 +295,7 @@ void ChromeAppListModelUpdater::SetItemPercentDownloaded(
 
 void ChromeAppListModelUpdater::SetSearchResultMetadata(
     const std::string& id,
-    ash::mojom::SearchResultMetadataPtr metadata) {
+    std::unique_ptr<ash::SearchResultMetadata> metadata) {
   if (!app_list_controller_)
     return;
   app_list_controller_->SetSearchResultMetadata(std::move(metadata));
@@ -307,7 +329,7 @@ void ChromeAppListModelUpdater::NotifySearchResultItemInstalled(
 // Methods for item querying
 
 ChromeAppListItem* ChromeAppListModelUpdater::FindItem(const std::string& id) {
-  return items_.count(id) ? items_[id].get() : nullptr;
+  return items_.find(id) != items_.end() ? items_[id].get() : nullptr;
 }
 
 size_t ChromeAppListModelUpdater::ItemCount() {
@@ -378,14 +400,6 @@ void ChromeAppListModelUpdater::GetContextMenuModel(
   item->GetContextMenuModel(std::move(callback));
 }
 
-void ChromeAppListModelUpdater::ContextMenuItemSelected(const std::string& id,
-                                                        int command_id,
-                                                        int event_flags) {
-  ChromeAppListItem* chrome_item = FindItem(id);
-  if (chrome_item)
-    chrome_item->ContextMenuItemSelected(command_id, event_flags);
-}
-
 syncer::StringOrdinal ChromeAppListModelUpdater::GetFirstAvailablePosition()
     const {
   std::vector<ChromeAppListItem*> top_level_items;
@@ -414,7 +428,7 @@ void ChromeAppListModelUpdater::ResolveOemFolderPosition(
       base::BindOnce(
           [](base::WeakPtr<ChromeAppListModelUpdater> self,
              ResolveOemFolderPositionCallback callback,
-             ash::mojom::AppListItemMetadataPtr folder_data) {
+             std::unique_ptr<ash::AppListItemMetadata> folder_data) {
             if (!self)
               return;
             ChromeAppListItem* chrome_oem_folder = nullptr;
@@ -442,8 +456,7 @@ void ChromeAppListModelUpdater::AddItemToOemFolder(
         oem_folder_name, position_to_try,
         base::BindOnce(
             [](base::WeakPtr<ChromeAppListModelUpdater> self,
-               std::unique_ptr<ChromeAppListItem> item,
-               ash::mojom::AppListItemMetadataPtr /* oem_folder */) {
+               std::unique_ptr<ChromeAppListItem> item) {
               if (!self)
                 return;
               self->AddItemToFolder(std::move(item), ash::kOemFolderId);
@@ -462,6 +475,10 @@ void ChromeAppListModelUpdater::AddItemToOemFolder(
       oem_folder->SetChromeIsFolder(true);
     }
     oem_folder->SetChromeName(oem_folder_name);
+
+    if (!position_to_try.IsValid())
+      position_to_try = CreateChromePositionOnLast(items_);
+
     oem_folder->SetChromePosition(position_to_try);
   }
 }
@@ -509,7 +526,7 @@ void ChromeAppListModelUpdater::RemoveObserver(
 // Methods called from Ash:
 
 void ChromeAppListModelUpdater::OnFolderCreated(
-    ash::mojom::AppListItemMetadataPtr item) {
+    std::unique_ptr<ash::AppListItemMetadata> item) {
   DCHECK(item->is_folder);
   ChromeAppListItem* chrome_item = FindItem(item->id);
   // If the item already exists, we should have set its information properly.
@@ -527,7 +544,7 @@ void ChromeAppListModelUpdater::OnFolderCreated(
 }
 
 void ChromeAppListModelUpdater::OnFolderDeleted(
-    ash::mojom::AppListItemMetadataPtr item) {
+    std::unique_ptr<ash::AppListItemMetadata> item) {
   DCHECK(item->is_folder);
 
   ChromeAppListItem* chrome_item = FindItem(item->id);
@@ -541,7 +558,7 @@ void ChromeAppListModelUpdater::OnFolderDeleted(
 }
 
 void ChromeAppListModelUpdater::OnItemUpdated(
-    ash::mojom::AppListItemMetadataPtr item) {
+    std::unique_ptr<ash::AppListItemMetadata> item) {
   ChromeAppListItem* chrome_item = FindItem(item->id);
 
   // Ignore the item if it does not exist. This happens when a race occurs

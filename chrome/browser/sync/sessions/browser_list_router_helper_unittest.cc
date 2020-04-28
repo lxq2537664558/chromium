@@ -31,9 +31,6 @@ class MockLocalSessionEventHandler : public LocalSessionEventHandler {
     seen_ids_.push_back(modified_tab->GetSessionId());
   }
 
-  void OnFaviconsChanged(const std::set<GURL>& page_urls,
-                         const GURL& icon_url) override {}
-
   std::vector<GURL>* seen_urls() { return &seen_urls_; }
   std::vector<SessionID>* seen_ids() { return &seen_ids_; }
 
@@ -72,12 +69,12 @@ TEST_F(BrowserListRouterHelperTest, ObservationScopedToSingleProfile) {
   AddTab(browser_2.get(), gurl_2);
 
   std::vector<GURL>* handler_1_urls = handler_1.seen_urls();
-  EXPECT_TRUE(base::ContainsValue(*handler_1_urls, gurl_1));
-  EXPECT_FALSE(base::ContainsValue(*handler_1_urls, gurl_2));
+  EXPECT_TRUE(base::Contains(*handler_1_urls, gurl_1));
+  EXPECT_FALSE(base::Contains(*handler_1_urls, gurl_2));
 
   std::vector<GURL>* handler_2_urls = handler_2.seen_urls();
-  EXPECT_TRUE(base::ContainsValue(*handler_2_urls, gurl_2));
-  EXPECT_FALSE(base::ContainsValue(*handler_2_urls, gurl_1));
+  EXPECT_TRUE(base::Contains(*handler_2_urls, gurl_2));
+  EXPECT_FALSE(base::Contains(*handler_2_urls, gurl_1));
 
   // Add a browser for each profile.
   std::unique_ptr<BrowserWindow> window_3(CreateBrowserWindow());
@@ -94,12 +91,12 @@ TEST_F(BrowserListRouterHelperTest, ObservationScopedToSingleProfile) {
   AddTab(new_browser_in_second_profile.get(), gurl_4);
 
   handler_1_urls = handler_1.seen_urls();
-  EXPECT_TRUE(base::ContainsValue(*handler_1_urls, gurl_3));
-  EXPECT_FALSE(base::ContainsValue(*handler_1_urls, gurl_4));
+  EXPECT_TRUE(base::Contains(*handler_1_urls, gurl_3));
+  EXPECT_FALSE(base::Contains(*handler_1_urls, gurl_4));
 
   handler_2_urls = handler_2.seen_urls();
-  EXPECT_TRUE(base::ContainsValue(*handler_2_urls, gurl_4));
-  EXPECT_FALSE(base::ContainsValue(*handler_2_urls, gurl_3));
+  EXPECT_TRUE(base::Contains(*handler_2_urls, gurl_4));
+  EXPECT_FALSE(base::Contains(*handler_2_urls, gurl_3));
 
   // Cleanup needed for manually created browsers so they don't complain about
   // having open tabs when destructing.

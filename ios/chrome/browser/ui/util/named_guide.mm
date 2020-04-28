@@ -6,7 +6,8 @@
 
 #include "base/logging.h"
 #import "base/mac/foundation_util.h"
-#import "ios/chrome/common/ui_util/constraints_ui_util.h"
+#import "ios/chrome/browser/ui/toolbar/public/features.h"
+#import "ios/chrome/common/ui/util/constraints_ui_util.h"
 
 #if !defined(__has_feature) || !__has_feature(objc_arc)
 #error "This file requires ARC support."
@@ -57,6 +58,13 @@ NSString* const kActiveKeyPath = @"active";
 
 - (void)dealloc {
   [self resetConstraints];
+}
+
+- (NSString*)description {
+  return [NSString
+      stringWithFormat:@"<%@: %p - %@, layoutFrame=%@, owningView=%@>",
+                       NSStringFromClass([self class]), self, self.name,
+                       NSStringFromCGRect(self.layoutFrame), self.owningView];
 }
 
 #pragma mark - Accessors
@@ -136,6 +144,8 @@ NSString* const kActiveKeyPath = @"active";
 #pragma mark - Public
 
 + (instancetype)guideWithName:(GuideName*)name view:(UIView*)view {
+  DCHECK(name != kTabStripTabSwitcherGuide ||
+         !base::FeatureList::IsEnabled(kChangeTabSwitcherPosition));
   while (view) {
     for (UILayoutGuide* guide in view.layoutGuides) {
       NamedGuide* namedGuide = base::mac::ObjCCast<NamedGuide>(guide);

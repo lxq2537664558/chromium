@@ -4,32 +4,45 @@
 
 #include "ash/app_list/views/assistant/assistant_main_view.h"
 
+#include <algorithm>
 #include <memory>
 
+#include "ash/app_list/views/assistant/assistant_dialog_plate.h"
 #include "ash/app_list/views/assistant/assistant_main_stage.h"
-#include "ash/app_list/views/assistant/dialog_plate.h"
 #include "ash/assistant/ui/assistant_ui_constants.h"
 #include "ash/assistant/ui/assistant_view_delegate.h"
+#include "ash/assistant/ui/assistant_view_ids.h"
+#include "ash/assistant/util/animation_util.h"
+#include "ash/assistant/util/assistant_util.h"
 #include "ash/public/cpp/app_list/app_list_features.h"
 #include "ui/chromeos/search_box/search_box_constants.h"
 #include "ui/views/layout/box_layout.h"
 
-namespace app_list {
+namespace ash {
 
-AssistantMainView::AssistantMainView(ash::AssistantViewDelegate* delegate)
+namespace {
+
+// Dialog plate animation.
+constexpr base::TimeDelta kDialogPlateAnimationFadeInDelay =
+    base::TimeDelta::FromMilliseconds(283);
+constexpr base::TimeDelta kDialogPlateAnimationFadeInDuration =
+    base::TimeDelta::FromMilliseconds(167);
+
+}  // namespace
+
+AssistantMainView::AssistantMainView(AssistantViewDelegate* delegate)
     : delegate_(delegate) {
+  SetID(AssistantViewID::kMainView);
   InitLayout();
+
+  assistant_controller_observer_.Add(AssistantController::Get());
+  assistant_ui_model_observer_.Add(AssistantUiController::Get());
 }
 
 AssistantMainView::~AssistantMainView() = default;
 
 const char* AssistantMainView::GetClassName() const {
   return "AssistantMainView";
-}
-
-gfx::Size AssistantMainView::CalculatePreferredSize() const {
-  return gfx::Size(ash::kPreferredWidthDip,
-                   GetHeightForWidth(ash::kPreferredWidthDip));
 }
 
 void AssistantMainView::ChildPreferredSizeChanged(views::View* child) {
@@ -59,6 +72,35 @@ void AssistantMainView::RequestFocus() {
   dialog_plate_->RequestFocus();
 }
 
+void AssistantMainView::OnAssistantControllerDestroying() {
+  assistant_ui_model_observer_.Remove(AssistantUiController::Get());
+  assistant_controller_observer_.Remove(AssistantController::Get());
+}
+
+void AssistantMainView::OnUiVisibilityChanged(
+    AssistantVisibility new_visibility,
+    AssistantVisibility old_visibility,
+    base::Optional<AssistantEntryPoint> entry_point,
+    base::Optional<AssistantExitPoint> exit_point) {
+  if (!assistant::util::IsStartingSession(new_visibility, old_visibility)) {
+    return;
+  }
+
+  // When Assistant is starting a new session, we animate in the appearance of
+  // the dialog plate.
+  using assistant::util::CreateLayerAnimationSequence;
+  using assistant::util::CreateOpacityElement;
+
+  // Animate the dialog plate from 0% to 100% opacity with delay.
+  dialog_plate_->layer()->SetOpacity(0.f);
+  dialog_plate_->layer()->GetAnimator()->StartAnimation(
+      CreateLayerAnimationSequence(
+          ui::LayerAnimationElement::CreatePauseElement(
+              ui::LayerAnimationElement::AnimatableProperty::OPACITY,
+              kDialogPlateAnimationFadeInDelay),
+          CreateOpacityElement(1.f, kDialogPlateAnimationFadeInDuration)));
+}
+
 void AssistantMainView::InitLayout() {
   constexpr int radius = search_box::kSearchBoxBorderCornerRadiusSearchResult;
 
@@ -70,17 +112,19 @@ void AssistantMainView::InitLayout() {
       SetLayoutManager(std::make_unique<views::BoxLayout>(
           views::BoxLayout::Orientation::kVertical));
   layout->set_cross_axis_alignment(
-      views::BoxLayout::CROSS_AXIS_ALIGNMENT_CENTER);
+      views::BoxLayout::CrossAxisAlignment::kCenter);
 
-  // Dialog plate.
-  dialog_plate_ = new DialogPlate(delegate_);
-  AddChildView(dialog_plate_);
+  // Dialog plate, which will be animated on its own layer.
+  dialog_plate_ =
+      AddChildView(std::make_unique<AssistantDialogPlate>(delegate_));
+  dialog_plate_->SetPaintToLayer();
+  dialog_plate_->layer()->SetFillsBoundsOpaquely(false);
 
   // Main stage.
-  main_stage_ = new AssistantMainStage(delegate_);
-  AddChildView(main_stage_);
+  main_stage_ =
+      AddChildView(std::make_unique<AppListAssistantMainStage>(delegate_));
 
   layout->SetFlexForView(main_stage_, 1);
 }
 
-}  // namespace app_list
+}  // namespace ash

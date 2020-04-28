@@ -58,30 +58,20 @@ const uint64_t kUnknownPipeIdForDebug = 0x7f7f7f7f7f7f7f7fUL;
 // invitation.
 constexpr base::StringPiece kIsolatedInvitationPipeName = {"\0\0\0\0", 4};
 
-void InvokeProcessErrorCallbackOnTaskRunner(
-    scoped_refptr<base::TaskRunner> task_runner,
-    MojoProcessErrorHandler handler,
-    uintptr_t context,
-    const std::string& error,
-    MojoProcessErrorFlags flags) {
-  // We always run the handler asynchronously to ensure no Mojo core reentrancy.
-  task_runner->PostTask(
-      FROM_HERE,
-      base::BindOnce(
-          [](MojoProcessErrorHandler handler, uintptr_t context,
-             const std::string& error, MojoProcessErrorFlags flags) {
-            MojoProcessErrorDetails details;
-            details.struct_size = sizeof(details);
-            DCHECK(base::IsValueInRangeForNumericType<uint32_t>(error.size()));
-            details.error_message_length = static_cast<uint32_t>(error.size());
-            if (!error.empty())
-              details.error_message = error.data();
-            else
-              details.error_message = nullptr;
-            details.flags = flags;
-            handler(context, &details);
-          },
-          handler, context, error, flags));
+void InvokeProcessErrorCallback(MojoProcessErrorHandler handler,
+                                uintptr_t context,
+                                const std::string& error,
+                                MojoProcessErrorFlags flags) {
+  MojoProcessErrorDetails details;
+  details.struct_size = sizeof(details);
+  DCHECK(base::IsValueInRangeForNumericType<uint32_t>(error.size()));
+  details.error_message_length = static_cast<uint32_t>(error.size());
+  if (!error.empty())
+    details.error_message = error.data();
+  else
+    details.error_message = nullptr;
+  details.flags = flags;
+  handler(context, &details);
 }
 
 // Helper class which is bound to the lifetime of a
@@ -93,34 +83,28 @@ void InvokeProcessErrorCallbackOnTaskRunner(
 // -- see Core::SendInvitation) will be destroyed.
 class ProcessDisconnectHandler {
  public:
-  ProcessDisconnectHandler(scoped_refptr<base::TaskRunner> task_runner,
-                           MojoProcessErrorHandler handler,
-                           uintptr_t context)
-      : task_runner_(std::move(task_runner)),
-        handler_(handler),
-        context_(context) {}
+  ProcessDisconnectHandler(MojoProcessErrorHandler handler, uintptr_t context)
+      : handler_(handler), context_(context) {}
 
   ~ProcessDisconnectHandler() {
-    InvokeProcessErrorCallbackOnTaskRunner(
-        task_runner_, handler_, context_, std::string(),
-        MOJO_PROCESS_ERROR_FLAG_DISCONNECTED);
+    InvokeProcessErrorCallback(handler_, context_, std::string(),
+                               MOJO_PROCESS_ERROR_FLAG_DISCONNECTED);
   }
 
  private:
-  const scoped_refptr<base::TaskRunner> task_runner_;
   const MojoProcessErrorHandler handler_;
   const uintptr_t context_;
 
   DISALLOW_COPY_AND_ASSIGN(ProcessDisconnectHandler);
 };
 
-void RunMojoProcessErrorHandler(ProcessDisconnectHandler* disconnect_handler,
-                                scoped_refptr<base::TaskRunner> task_runner,
-                                MojoProcessErrorHandler handler,
-                                uintptr_t context,
-                                const std::string& error) {
-  InvokeProcessErrorCallbackOnTaskRunner(task_runner, handler, context, error,
-                                         MOJO_PROCESS_ERROR_FLAG_NONE);
+void RunMojoProcessErrorHandler(
+    ProcessDisconnectHandler* disconnect_handler,
+    MojoProcessErrorHandler handler,
+    uintptr_t context,
+    const std::string& error) {
+  InvokeProcessErrorCallback(handler, context, error,
+                             MOJO_PROCESS_ERROR_FLAG_NONE);
 }
 
 }  // namespace
@@ -136,18 +120,18 @@ Core::~Core() {
     // If this races with IO thread shutdown the callback will be dropped and
     // the NodeController will be shutdown on this thread anyway, which is also
     // just fine.
-    scoped_refptr<base::TaskRunner> io_task_runner =
-        node_controller_->io_task_runner();
+    auto io_task_runner = node_controller_->io_task_runner();
     io_task_runner->PostTask(FROM_HERE,
                              base::BindOnce(&Core::PassNodeControllerToIOThread,
-                                            base::Passed(&node_controller_)));
+                                            std::move(node_controller_)));
   }
   base::trace_event::MemoryDumpManager::GetInstance()
       ->UnregisterAndDeleteDumpProviderSoon(std::move(handles_));
 }
 
-void Core::SetIOTaskRunner(scoped_refptr<base::TaskRunner> io_task_runner) {
-  GetNodeController()->SetIOTaskRunner(io_task_runner);
+void Core::SetIOTaskRunner(
+    scoped_refptr<base::SingleThreadTaskRunner> io_task_runner) {
+  GetNodeController()->SetIOTaskRunner(std::move(io_task_runner));
 }
 
 NodeController* Core::GetNodeController() {
@@ -169,9 +153,8 @@ scoped_refptr<Dispatcher> Core::GetAndRemoveDispatcher(MojoHandle handle) {
   return dispatcher;
 }
 
-void Core::SetDefaultProcessErrorCallback(
-    const ProcessErrorCallback& callback) {
-  default_process_error_callback_ = callback;
+void Core::SetDefaultProcessErrorCallback(ProcessErrorCallback callback) {
+  default_process_error_callback_ = std::move(callback);
 }
 
 MojoHandle Core::CreatePartialMessagePipe(ports::PortRef* peer) {
@@ -199,12 +182,6 @@ void Core::SendBrokerClientInvitation(
       process_error_callback);
 }
 
-void Core::AcceptBrokerClientInvitation(ConnectionParams connection_params) {
-  RequestContext request_context;
-  GetNodeController()->AcceptBrokerClientInvitation(
-      std::move(connection_params));
-}
-
 void Core::ConnectIsolated(ConnectionParams connection_params,
                            const ports::PortRef& port,
                            base::StringPiece connection_name) {
@@ -212,18 +189,6 @@ void Core::ConnectIsolated(ConnectionParams connection_params,
   GetNodeController()->ConnectIsolated(std::move(connection_params), port,
                                        connection_name);
 }
-
-void Core::SetMachPortProvider(base::PortProvider* port_provider) {
-#if defined(OS_MACOSX) && !defined(OS_IOS)
-  GetNodeController()->CreateMachPortRelay(port_provider);
-#endif
-}
-
-#if defined(OS_MACOSX) && !defined(OS_IOS)
-MachPortRelay* Core::GetMachPortRelay() {
-  return GetNodeController()->GetMachPortRelay();
-}
-#endif
 
 MojoHandle Core::AddDispatcher(scoped_refptr<Dispatcher> dispatcher) {
   base::AutoLock lock(handles_->GetLock());
@@ -270,8 +235,8 @@ void Core::ReleaseDispatchersForTransit(
     handles_->CancelTransit(dispatchers);
 }
 
-void Core::RequestShutdown(const base::Closure& callback) {
-  GetNodeController()->RequestShutdown(callback);
+void Core::RequestShutdown(base::OnceClosure callback) {
+  GetNodeController()->RequestShutdown(std::move(callback));
 }
 
 MojoHandle Core::ExtractMessagePipeFromInvitation(const std::string& name) {
@@ -417,29 +382,19 @@ MojoResult Core::AppendMessageData(MojoMessageHandle message_handle,
                                    uint32_t* buffer_size) {
   if (!message_handle || (num_handles && !handles))
     return MOJO_RESULT_INVALID_ARGUMENT;
-
-  const MojoAppendMessageDataHandleOptions* handle_options = nullptr;
-  if (options) {
-    if (options->struct_size < sizeof(MojoAppendMessageDataOptionsV0))
-      return MOJO_RESULT_INVALID_ARGUMENT;
-    if (options->struct_size >= sizeof(MojoAppendMessageDataOptions)) {
-      if (options->handle_options)
-        handle_options = options->handle_options;
-    }
-  }
+  if (options && options->struct_size < sizeof(*options))
+    return MOJO_RESULT_INVALID_ARGUMENT;
 
   RequestContext request_context;
   auto* message = reinterpret_cast<ports::UserMessageEvent*>(message_handle)
                       ->GetMessage<UserMessageImpl>();
-  MojoResult rv = message->AppendData(additional_payload_size, handles,
-                                      num_handles, handle_options);
+  MojoResult rv =
+      message->AppendData(additional_payload_size, handles, num_handles);
   if (rv != MOJO_RESULT_OK)
     return rv;
 
-  if (options && (options->flags & MOJO_APPEND_MESSAGE_DATA_FLAG_COMMIT_SIZE)) {
-    RequestContext request_context;
+  if (options && (options->flags & MOJO_APPEND_MESSAGE_DATA_FLAG_COMMIT_SIZE))
     message->CommitSize();
-  }
 
   if (buffer)
     *buffer = message->user_payload();
@@ -543,29 +498,22 @@ MojoResult Core::CreateMessagePipe(const MojoCreateMessagePipeOptions* options,
 
   uint64_t pipe_id = base::RandUint64();
 
-  auto dispatcher0 = base::MakeRefCounted<MessagePipeDispatcher>(
-      GetNodeController(), port0, pipe_id, 0);
-  *message_pipe_handle0 = AddDispatcher(dispatcher0);
-  if (*message_pipe_handle0 == MOJO_HANDLE_INVALID) {
-    dispatcher0->Close();
+  *message_pipe_handle0 = AddDispatcher(
+      new MessagePipeDispatcher(GetNodeController(), port0, pipe_id, 0));
+  if (*message_pipe_handle0 == MOJO_HANDLE_INVALID)
     return MOJO_RESULT_RESOURCE_EXHAUSTED;
-  }
 
-  auto dispatcher1 = base::MakeRefCounted<MessagePipeDispatcher>(
-      GetNodeController(), port1, pipe_id, 1);
-  *message_pipe_handle1 = AddDispatcher(dispatcher1);
+  *message_pipe_handle1 = AddDispatcher(
+      new MessagePipeDispatcher(GetNodeController(), port1, pipe_id, 1));
   if (*message_pipe_handle1 == MOJO_HANDLE_INVALID) {
-    dispatcher0->Close();
-    dispatcher1->Close();
+    scoped_refptr<Dispatcher> dispatcher0;
     {
       base::AutoLock lock(handles_->GetLock());
-      handles_->GetAndRemoveDispatcher(*message_pipe_handle0, nullptr);
+      handles_->GetAndRemoveDispatcher(*message_pipe_handle0, &dispatcher0);
     }
+    dispatcher0->Close();
     return MOJO_RESULT_RESOURCE_EXHAUSTED;
   }
-
-  dispatcher0->SetLocalPeer(dispatcher1);
-  dispatcher1->SetLocalPeer(dispatcher0);
 
   return MOJO_RESULT_OK;
 }
@@ -654,15 +602,19 @@ MojoResult Core::NotifyBadMessage(MojoMessageHandle message_handle,
   auto* message_event =
       reinterpret_cast<ports::UserMessageEvent*>(message_handle);
   auto* message = message_event->GetMessage<UserMessageImpl>();
-  if (message->source_node() == ports::kInvalidNodeName) {
-    DVLOG(1) << "Received invalid message from unknown node.";
+  NodeController* node_controller = GetNodeController();
+
+  if (!node_controller->HasBadMessageHandler(message->source_node())) {
+    if (message->source_node() == ports::kInvalidNodeName)
+      DVLOG(1) << "Received invalid message from unknown node.";
     if (!default_process_error_callback_.is_null())
       default_process_error_callback_.Run(std::string(error, error_num_bytes));
     return MOJO_RESULT_OK;
   }
 
-  GetNodeController()->NotifyBadMessageFrom(
-      message->source_node(), std::string(error, error_num_bytes));
+  node_controller->NotifyBadMessageFrom(message->source_node(),
+                                        std::string(error, error_num_bytes));
+
   return MOJO_RESULT_OK;
 }
 
@@ -1318,12 +1270,11 @@ MojoResult Core::SendInvitation(
 
   ProcessErrorCallback process_error_callback;
   if (error_handler) {
-    auto error_handler_task_runner = GetNodeController()->io_task_runner();
-    process_error_callback = base::BindRepeating(
-        &RunMojoProcessErrorHandler,
-        base::Owned(new ProcessDisconnectHandler(
-            error_handler_task_runner, error_handler, error_handler_context)),
-        error_handler_task_runner, error_handler, error_handler_context);
+    process_error_callback =
+        base::BindRepeating(&RunMojoProcessErrorHandler,
+                            base::Owned(new ProcessDisconnectHandler(
+                                error_handler, error_handler_context)),
+                            error_handler, error_handler_context);
   } else if (default_process_error_callback_) {
     process_error_callback = default_process_error_callback_;
   }
@@ -1338,7 +1289,9 @@ MojoResult Core::SendInvitation(
     return MOJO_RESULT_INVALID_ARGUMENT;
   if (transport_endpoint->type != MOJO_INVITATION_TRANSPORT_TYPE_CHANNEL &&
       transport_endpoint->type !=
-          MOJO_INVITATION_TRANSPORT_TYPE_CHANNEL_SERVER) {
+          MOJO_INVITATION_TRANSPORT_TYPE_CHANNEL_SERVER &&
+      transport_endpoint->type !=
+          MOJO_INVITATION_TRANSPORT_TYPE_CHANNEL_ASYNC) {
     return MOJO_RESULT_UNIMPLEMENTED;
   }
 
@@ -1402,6 +1355,10 @@ MojoResult Core::SendInvitation(
                                          attached_ports[0].second,
                                          connection_name);
   } else {
+    if (transport_endpoint->type ==
+        MOJO_INVITATION_TRANSPORT_TYPE_CHANNEL_ASYNC) {
+      connection_params.set_is_async(true);
+    }
     GetNodeController()->SendBrokerClientInvitation(
         target_process, std::move(connection_params), attached_ports,
         process_error_callback);
@@ -1427,7 +1384,9 @@ MojoResult Core::AcceptInvitation(
     return MOJO_RESULT_INVALID_ARGUMENT;
   if (transport_endpoint->type != MOJO_INVITATION_TRANSPORT_TYPE_CHANNEL &&
       transport_endpoint->type !=
-          MOJO_INVITATION_TRANSPORT_TYPE_CHANNEL_SERVER) {
+          MOJO_INVITATION_TRANSPORT_TYPE_CHANNEL_SERVER &&
+      transport_endpoint->type !=
+          MOJO_INVITATION_TRANSPORT_TYPE_CHANNEL_ASYNC) {
     return MOJO_RESULT_UNIMPLEMENTED;
   }
 
@@ -1458,6 +1417,10 @@ MojoResult Core::AcceptInvitation(
     connection_params =
         ConnectionParams(PlatformChannelEndpoint(std::move(endpoint)));
   }
+  if (options &&
+      options->flags & MOJO_ACCEPT_INVITATION_FLAG_LEAK_TRANSPORT_ENDPOINT) {
+    connection_params.set_leak_endpoint(true);
+  }
 
   bool is_isolated =
       options && (options->flags & MOJO_ACCEPT_INVITATION_FLAG_ISOLATED);
@@ -1476,6 +1439,10 @@ MojoResult Core::AcceptInvitation(
         dispatcher->AttachMessagePipe(kIsolatedInvitationPipeName, local_port);
     DCHECK_EQ(MOJO_RESULT_OK, result);
   } else {
+    if (transport_endpoint->type ==
+        MOJO_INVITATION_TRANSPORT_TYPE_CHANNEL_ASYNC) {
+      connection_params.set_is_async(true);
+    }
     node_controller->AcceptBrokerClientInvitation(std::move(connection_params));
   }
 

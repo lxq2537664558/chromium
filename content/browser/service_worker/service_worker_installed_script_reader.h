@@ -31,21 +31,19 @@ class ServiceWorkerInstalledScriptReader {
     kConnectionError = 4,
     kResponseReaderError = 5,
     kMetaDataSenderError = 6,
+    kNoContextError = 7,
     // Add a new type here, then update kMaxValue and enums.xml.
-    kMaxValue = kMetaDataSenderError,
+    kMaxValue = kNoContextError,
   };
 
   // Receives the read data.
   class Client {
    public:
-    virtual void OnStarted(std::string encoding,
-                           base::flat_map<std::string, std::string> headers,
-                           mojo::ScopedDataPipeConsumerHandle body_handle,
-                           uint64_t body_size,
-                           mojo::ScopedDataPipeConsumerHandle meta_data_handle,
-                           uint64_t meta_data_size) = 0;
-    virtual void OnHttpInfoRead(
-        scoped_refptr<HttpResponseInfoIOBuffer> http_info) = 0;
+    virtual void OnStarted(
+        network::mojom::URLResponseHeadPtr response_head,
+        scoped_refptr<net::IOBufferWithSize> metadata,
+        mojo::ScopedDataPipeConsumerHandle body_handle,
+        mojo::ScopedDataPipeConsumerHandle meta_data_handle) = 0;
     // Called after both body and metadata have finished being written to the
     // data pipes, or called immediately if an error occurred.
     virtual void OnFinished(FinishedReason reason) = 0;
@@ -63,8 +61,10 @@ class ServiceWorkerInstalledScriptReader {
 
  private:
   class MetaDataSender;
-  void OnReadInfoComplete(scoped_refptr<HttpResponseInfoIOBuffer> http_info,
-                          int result);
+  void OnReadResponseHeadComplete(
+      int result,
+      network::mojom::URLResponseHeadPtr response_head,
+      scoped_refptr<net::IOBufferWithSize> metadata);
   void OnWritableBody(MojoResult);
   void OnResponseDataRead(int read_bytes);
   void OnMetaDataSent(bool success);
@@ -91,8 +91,12 @@ class ServiceWorkerInstalledScriptReader {
   mojo::ScopedDataPipeProducerHandle body_handle_;
   scoped_refptr<network::NetToMojoPendingBuffer> body_pending_write_;
   mojo::SimpleWatcher body_watcher_;
+  // Initialized to max uint64_t to default to reading until EOF, but updated
+  // to an expected body size in OnReadInfoCompete().
+  uint64_t body_size_ = std::numeric_limits<uint64_t>::max();
+  uint64_t body_bytes_sent_ = 0;
 
-  base::WeakPtrFactory<ServiceWorkerInstalledScriptReader> weak_factory_;
+  base::WeakPtrFactory<ServiceWorkerInstalledScriptReader> weak_factory_{this};
 };
 
 }  // namespace content

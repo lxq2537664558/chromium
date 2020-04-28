@@ -6,111 +6,20 @@
 
 #include <utility>
 
+#include "base/check.h"
 #include "base/containers/span.h"
 #include "base/files/file_util.h"
-#include "base/logging.h"
 #include "base/memory/ptr_util.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/timer/elapsed_timer.h"
-#include "content/public/common/resource_type.h"
+#include "extensions/browser/api/declarative_net_request/constants.h"
+#include "extensions/browser/api/declarative_net_request/request_action.h"
 #include "extensions/browser/api/declarative_net_request/ruleset_source.h"
 #include "extensions/browser/api/declarative_net_request/utils.h"
-#include "extensions/browser/api/web_request/web_request_info.h"
 #include "extensions/common/api/declarative_net_request/utils.h"
-#include "net/base/registry_controlled_domains/registry_controlled_domain.h"
 
 namespace extensions {
 namespace declarative_net_request {
-namespace flat_rule = url_pattern_index::flat;
-
-namespace {
-
-using FindRuleStrategy =
-    url_pattern_index::UrlPatternIndexMatcher::FindRuleStrategy;
-
-// Maps content::ResourceType to flat_rule::ElementType.
-flat_rule::ElementType GetElementType(content::ResourceType type) {
-  switch (type) {
-    case content::RESOURCE_TYPE_LAST_TYPE:
-    case content::RESOURCE_TYPE_PREFETCH:
-    case content::RESOURCE_TYPE_SUB_RESOURCE:
-    case content::RESOURCE_TYPE_NAVIGATION_PRELOAD:
-      return flat_rule::ElementType_OTHER;
-    case content::RESOURCE_TYPE_MAIN_FRAME:
-      return flat_rule::ElementType_MAIN_FRAME;
-    case content::RESOURCE_TYPE_CSP_REPORT:
-      return flat_rule::ElementType_CSP_REPORT;
-    case content::RESOURCE_TYPE_SCRIPT:
-    case content::RESOURCE_TYPE_WORKER:
-    case content::RESOURCE_TYPE_SHARED_WORKER:
-    case content::RESOURCE_TYPE_SERVICE_WORKER:
-      return flat_rule::ElementType_SCRIPT;
-    case content::RESOURCE_TYPE_IMAGE:
-    case content::RESOURCE_TYPE_FAVICON:
-      return flat_rule::ElementType_IMAGE;
-    case content::RESOURCE_TYPE_STYLESHEET:
-      return flat_rule::ElementType_STYLESHEET;
-    case content::RESOURCE_TYPE_OBJECT:
-    case content::RESOURCE_TYPE_PLUGIN_RESOURCE:
-      return flat_rule::ElementType_OBJECT;
-    case content::RESOURCE_TYPE_XHR:
-      return flat_rule::ElementType_XMLHTTPREQUEST;
-    case content::RESOURCE_TYPE_SUB_FRAME:
-      return flat_rule::ElementType_SUBDOCUMENT;
-    case content::RESOURCE_TYPE_PING:
-      return flat_rule::ElementType_PING;
-    case content::RESOURCE_TYPE_MEDIA:
-      return flat_rule::ElementType_MEDIA;
-    case content::RESOURCE_TYPE_FONT_RESOURCE:
-      return flat_rule::ElementType_FONT;
-  }
-  NOTREACHED();
-  return flat_rule::ElementType_OTHER;
-}
-
-// Returns the flat_rule::ElementType for the given |request|.
-flat_rule::ElementType GetElementType(const WebRequestInfo& request) {
-  if (request.url.SchemeIsWSOrWSS())
-    return flat_rule::ElementType_WEBSOCKET;
-
-  return request.type.has_value() ? GetElementType(request.type.value())
-                                  : flat_rule::ElementType_OTHER;
-}
-
-// Returns whether the request to |url| is third party to its |document_origin|.
-// TODO(crbug.com/696822): Look into caching this.
-bool IsThirdPartyRequest(const GURL& url, const url::Origin& document_origin) {
-  if (document_origin.opaque())
-    return true;
-
-  return !net::registry_controlled_domains::SameDomainOrHost(
-      url, document_origin,
-      net::registry_controlled_domains::INCLUDE_PRIVATE_REGISTRIES);
-}
-
-std::vector<url_pattern_index::UrlPatternIndexMatcher> GetMatchers(
-    const flat::ExtensionIndexedRuleset* root) {
-  DCHECK(root);
-  DCHECK(root->index_list());
-  DCHECK_EQ(flat::ActionIndex_count, root->index_list()->size());
-
-  std::vector<url_pattern_index::UrlPatternIndexMatcher> matchers;
-  matchers.reserve(flat::ActionIndex_count);
-  for (const flat_rule::UrlPatternIndex* index : *(root->index_list()))
-    matchers.emplace_back(index);
-  return matchers;
-}
-
-}  // namespace
-
-RequestParams::RequestParams(const WebRequestInfo& info)
-    : url(&info.url),
-      first_party_origin(info.initiator.value_or(url::Origin())),
-      element_type(GetElementType(info)) {
-  is_third_party = IsThirdPartyRequest(*url, first_party_origin);
-}
-
-RequestParams::RequestParams() = default;
 
 // static
 RulesetMatcher::LoadRulesetResult RulesetMatcher::CreateVerifiedMatcher(
@@ -146,65 +55,90 @@ RulesetMatcher::LoadRulesetResult RulesetMatcher::CreateVerifiedMatcher(
 
   // Using WrapUnique instead of make_unique since this class has a private
   // constructor.
-  *matcher = base::WrapUnique(new RulesetMatcher(
-      std::move(ruleset_data), source.id(), source.priority()));
+  *matcher = base::WrapUnique(new RulesetMatcher(std::move(ruleset_data),
+                                                 source.id(), source.type(),
+                                                 source.extension_id()));
   return kLoadSuccess;
 }
 
 RulesetMatcher::~RulesetMatcher() = default;
 
-bool RulesetMatcher::HasMatchingRedirectRule(const RequestParams& params,
-                                             GURL* redirect_url) const {
-  DCHECK(redirect_url);
-  DCHECK_NE(flat_rule::ElementType_WEBSOCKET, params.element_type);
-
-  const flat_rule::UrlRule* rule = GetMatchingRule(
-      params, flat::ActionIndex_redirect, FindRuleStrategy::kHighestPriority);
-  if (!rule)
-    return false;
-
-  // Find the UrlRuleMetadata corresponding to |rule|. Since |metadata_list_| is
-  // sorted by rule id, use LookupByKey which binary searches for fast lookup.
-  const flat::UrlRuleMetadata* metadata =
-      metadata_list_->LookupByKey(rule->id());
-
-  // There must be a UrlRuleMetadata object corresponding to each redirect rule.
-  DCHECK(metadata);
-  DCHECK_EQ(metadata->id(), rule->id());
-
-  *redirect_url = GURL(base::StringPiece(metadata->redirect_url()->c_str(),
-                                         metadata->redirect_url()->size()));
-  DCHECK(redirect_url->is_valid());
-  return true;
+base::Optional<RequestAction> RulesetMatcher::GetBeforeRequestAction(
+    const RequestParams& params) const {
+  return GetMaxPriorityAction(
+      url_pattern_index_matcher_.GetBeforeRequestAction(params),
+      regex_matcher_.GetBeforeRequestAction(params));
 }
 
-RulesetMatcher::RulesetMatcher(std::string ruleset_data,
-                               size_t id,
-                               size_t priority)
+uint8_t RulesetMatcher::GetRemoveHeadersMask(
+    const RequestParams& params,
+    uint8_t excluded_remove_headers_mask,
+    std::vector<RequestAction>* remove_headers_actions) const {
+  DCHECK(remove_headers_actions);
+  static_assert(
+      flat::RemoveHeaderType_ANY <= std::numeric_limits<uint8_t>::max(),
+      "flat::RemoveHeaderType can't fit in a uint8_t");
+
+  uint8_t mask = url_pattern_index_matcher_.GetRemoveHeadersMask(
+      params, excluded_remove_headers_mask, remove_headers_actions);
+  return mask | regex_matcher_.GetRemoveHeadersMask(
+                    params, excluded_remove_headers_mask | mask,
+                    remove_headers_actions);
+}
+
+bool RulesetMatcher::IsExtraHeadersMatcher() const {
+  return url_pattern_index_matcher_.IsExtraHeadersMatcher() ||
+         regex_matcher_.IsExtraHeadersMatcher();
+}
+
+size_t RulesetMatcher::GetRulesCount() const {
+  return url_pattern_index_matcher_.GetRulesCount() +
+         regex_matcher_.GetRulesCount();
+}
+
+size_t RulesetMatcher::GetRegexRulesCount() const {
+  return regex_matcher_.GetRulesCount();
+}
+
+void RulesetMatcher::OnRenderFrameCreated(content::RenderFrameHost* host) {
+  url_pattern_index_matcher_.OnRenderFrameCreated(host);
+  regex_matcher_.OnRenderFrameCreated(host);
+}
+
+void RulesetMatcher::OnRenderFrameDeleted(content::RenderFrameHost* host) {
+  url_pattern_index_matcher_.OnRenderFrameDeleted(host);
+  regex_matcher_.OnRenderFrameDeleted(host);
+}
+
+void RulesetMatcher::OnDidFinishNavigation(content::RenderFrameHost* host) {
+  url_pattern_index_matcher_.OnDidFinishNavigation(host);
+  regex_matcher_.OnDidFinishNavigation(host);
+}
+
+base::Optional<RequestAction>
+RulesetMatcher::GetAllowlistedFrameActionForTesting(
+    content::RenderFrameHost* host) const {
+  return GetMaxPriorityAction(
+      url_pattern_index_matcher_.GetAllowlistedFrameActionForTesting(host),
+      regex_matcher_.GetAllowlistedFrameActionForTesting(host));
+}
+
+RulesetMatcher::RulesetMatcher(
+    std::string ruleset_data,
+    int id,
+    api::declarative_net_request::SourceType source_type,
+    const ExtensionId& extension_id)
     : ruleset_data_(std::move(ruleset_data)),
       root_(flat::GetExtensionIndexedRuleset(ruleset_data_.data())),
-      matchers_(GetMatchers(root_)),
-      metadata_list_(root_->extension_metadata()),
       id_(id),
-      priority_(priority) {}
-
-const flat_rule::UrlRule* RulesetMatcher::GetMatchingRule(
-    const RequestParams& params,
-    flat::ActionIndex index,
-    FindRuleStrategy strategy) const {
-  DCHECK_LT(index, flat::ActionIndex_count);
-  DCHECK_GE(index, 0);
-  DCHECK(params.url);
-
-  // Don't exclude generic rules from being matched. A generic rule is one with
-  // an empty included domains list.
-  const bool kDisableGenericRules = false;
-
-  return matchers_[index].FindMatch(
-      *params.url, params.first_party_origin, params.element_type,
-      flat_rule::ActivationType_NONE, params.is_third_party,
-      kDisableGenericRules, strategy);
-}
+      url_pattern_index_matcher_(extension_id,
+                                 source_type,
+                                 root_->index_list(),
+                                 root_->extension_metadata()),
+      regex_matcher_(extension_id,
+                     source_type,
+                     root_->regex_rules(),
+                     root_->extension_metadata()) {}
 
 }  // namespace declarative_net_request
 }  // namespace extensions

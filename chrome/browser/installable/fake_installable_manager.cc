@@ -21,8 +21,9 @@ FakeInstallableManager::~FakeInstallableManager() {}
 void FakeInstallableManager::GetData(const InstallableParams& params,
                                      InstallableCallback callback) {
   base::ThreadTaskRunnerHandle::Get()->PostTask(
-      FROM_HERE, base::BindOnce(&FakeInstallableManager::RunCallback,
-                                base::Unretained(this), std::move(callback)));
+      FROM_HERE,
+      base::BindOnce(&FakeInstallableManager::RunCallback,
+                     weak_factory_.GetWeakPtr(), std::move(callback)));
 }
 
 void FakeInstallableManager::RunCallback(InstallableCallback callback) {
@@ -48,10 +49,10 @@ FakeInstallableManager::CreateForWebContentsWithManifest(
   FakeInstallableManager* installable_manager =
       FakeInstallableManager::CreateForWebContents(web_contents);
 
+  const bool valid_manifest = manifest && !manifest->IsEmpty();
   installable_manager->manifest_url_ = manifest_url;
   installable_manager->manifest_ = std::move(manifest);
 
-  const bool valid_manifest = true;
   const bool has_worker = true;
   std::vector<InstallableStatusCode> errors;
 

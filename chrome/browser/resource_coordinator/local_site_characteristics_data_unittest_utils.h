@@ -14,8 +14,8 @@
 #include "chrome/browser/resource_coordinator/local_site_characteristics_data_store_factory.h"
 #include "chrome/browser/resource_coordinator/local_site_characteristics_database.h"
 #include "chrome/test/base/chrome_render_view_host_test_harness.h"
-#include "content/public/common/service_manager_connection.h"
-#include "services/service_manager/public/mojom/service.mojom.h"
+#include "components/performance_manager/embedder/performance_manager_registry.h"
+#include "components/performance_manager/performance_manager_impl.h"
 #include "testing/gmock/include/gmock/gmock.h"
 
 namespace content {
@@ -23,7 +23,7 @@ class WebContents;
 }
 
 namespace performance_manager {
-class PerformanceManager;
+class PerformanceManagerImpl;
 }  // namespace performance_manager
 
 namespace resource_coordinator {
@@ -78,7 +78,7 @@ class NoopLocalSiteCharacteristicsDatabase
       ReadSiteCharacteristicsFromDBCallback callback) override;
   void WriteSiteCharacteristicsIntoDB(
       const url::Origin& origin,
-      const SiteCharacteristicsProto& site_characteristic_proto) override;
+      const SiteDataProto& site_characteristic_proto) override;
   void RemoveSiteCharacteristicsFromDB(
       const std::vector<url::Origin>& site_origins) override;
   void ClearDatabase() override;
@@ -92,7 +92,14 @@ class NoopLocalSiteCharacteristicsDatabase
 // Site Characteristics Database is initialized.
 class ChromeTestHarnessWithLocalDB : public ChromeRenderViewHostTestHarness {
  public:
-  ChromeTestHarnessWithLocalDB();
+  // Construct a ChromeTestHarnessWithLocalDB with zero or more arguments
+  // passed to ChromeRenderViewHostTestHarness.
+  template <typename... TaskEnvironmentTraits>
+  explicit ChromeTestHarnessWithLocalDB(TaskEnvironmentTraits&&... traits)
+      : ChromeRenderViewHostTestHarness(
+            std::forward<TaskEnvironmentTraits>(traits)...) {
+  }
+
   ~ChromeTestHarnessWithLocalDB() override;
 
  protected:
@@ -100,9 +107,9 @@ class ChromeTestHarnessWithLocalDB : public ChromeRenderViewHostTestHarness {
   void TearDown() override;
 
  private:
-  base::test::ScopedFeatureList scoped_feature_list_;
-  service_manager::mojom::ServicePtr service_;
-  std::unique_ptr<performance_manager::PerformanceManager> performance_manager_;
+  std::unique_ptr<performance_manager::PerformanceManagerImpl>
+      performance_manager_;
+  std::unique_ptr<performance_manager::PerformanceManagerRegistry> registry_;
 };
 
 }  // namespace testing

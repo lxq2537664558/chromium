@@ -12,6 +12,7 @@
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/stringprintf.h"
 #include "base/values.h"
+#include "chromeos/network/network_event_log.h"
 #include "chromeos/network/network_profile_handler.h"
 #include "chromeos/network/network_type_pattern.h"
 #include "chromeos/network/network_ui_data.h"
@@ -19,12 +20,10 @@
 #include "chromeos/network/onc/onc_utils.h"
 #include "chromeos/network/shill_property_util.h"
 #include "chromeos/network/tether_constants.h"
-#include "components/device_event_log/device_event_log.h"
+#include "chromeos/services/network_config/public/mojom/cros_network_config.mojom.h"
 #include "third_party/cros_system_api/dbus/service_constants.h"
 
 namespace {
-
-const char kErrorUnknown[] = "Unknown";
 
 const char kDefaultCellularNetworkPath[] = "/cellular";
 
@@ -36,10 +35,11 @@ std::string GetStringFromDictionary(const base::Value* dict, const char* key) {
   return v ? v->GetString() : std::string();
 }
 
-bool IsCaptivePortalState(const base::Value& properties, bool log) {
+bool IsCaptivePortalState(const base::Value& properties,
+                          const std::string& log_id) {
   std::string state =
       GetStringFromDictionary(&properties, shill::kStateProperty);
-  if (state != shill::kStatePortal)
+  if (!chromeos::NetworkState::StateIsPortalled(state))
     return false;
   if (!properties.FindKey(shill::kPortalDetectionFailedPhaseProperty) ||
       !properties.FindKey(shill::kPortalDetectionFailedStatusProperty)) {
@@ -58,19 +58,17 @@ bool IsCaptivePortalState(const base::Value& properties, bool log) {
   // returned and ignore other reasons.
   bool is_captive_portal =
       portal_detection_phase == shill::kPortalDetectionPhaseContent &&
-      portal_detection_status == shill::kPortalDetectionStatusFailure;
+      (portal_detection_status == shill::kPortalDetectionStatusSuccess ||
+       portal_detection_status == shill::kPortalDetectionStatusFailure ||
+       portal_detection_status == shill::kPortalDetectionStatusRedirect);
 
-  if (log) {
-    std::string name =
-        GetStringFromDictionary(&properties, shill::kNameProperty);
-    if (name.empty())
-      name = GetStringFromDictionary(&properties, shill::kSSIDProperty);
+  if (!log_id.empty()) {
     if (!is_captive_portal) {
       NET_LOG(EVENT) << "State is 'portal' but not in captive portal state:"
-                     << " name=" << name << " phase=" << portal_detection_phase
-                     << " status=" << portal_detection_status;
+                     << log_id << ", phase=" << portal_detection_phase
+                     << ", status=" << portal_detection_status;
     } else {
-      NET_LOG(EVENT) << "Network is in captive portal state: " << name;
+      NET_LOG(EVENT) << "Network is in captive portal state: " << log_id;
     }
   }
 
@@ -104,12 +102,11 @@ bool NetworkState::PropertyChanged(const std::string& key,
   } else if (key == shill::kConnectableProperty) {
     return GetBooleanValue(key, value, &connectable_);
   } else if (key == shill::kErrorProperty) {
-    if (!GetStringValue(key, value, &error_))
+    std::string error;
+    if (!GetStringValue(key, value, &error))
       return false;
-    if (ErrorIsValid(error_))
-      last_error_ = error_;
-    else
-      error_.clear();
+    if (ErrorIsValid(error))
+      last_error_ = error;
     return true;
   } else if (key == shill::kWifiFrequency) {
     return GetIntegerValue(key, value, &frequency_);
@@ -217,31 +214,32 @@ bool NetworkState::PropertyChanged(const std::string& key,
       return false;
     onc_source_ = ui_data->onc_source();
     return true;
+  } else if (key == shill::kProbeUrlProperty) {
+    std::string probe_url_string;
+    if (!GetStringValue(key, value, &probe_url_string))
+      return false;
+    probe_url_ = GURL(probe_url_string);
+    return true;
   }
   return false;
 }
 
 bool NetworkState::InitialPropertiesReceived(const base::Value& properties) {
-  NET_LOG(EVENT) << "InitialPropertiesReceived: " << name() << " (" << path()
-                 << ") State: " << connection_state_
-                 << " Visible: " << visible_;
+  NET_LOG(EVENT) << "InitialPropertiesReceived: " << NetworkId(this)
+                 << " State: " << connection_state_ << " Visible: " << visible_;
   if (!properties.FindKey(shill::kTypeProperty)) {
-    NET_LOG(ERROR) << "NetworkState has no type: "
-                   << shill_property_util::GetNetworkIdFromProperties(
-                          properties);
+    NET_LOG(ERROR) << "NetworkState has no type: " << NetworkId(this);
     return false;
   }
 
-  // By convention, all visible WiFi and WiMAX networks have a
-  // SignalStrength > 0.
-  if ((type() == shill::kTypeWifi || type() == shill::kTypeWimax) &&
-      visible() && signal_strength_ <= 0) {
+  // By convention, all visible WiFi networks have a SignalStrength > 0.
+  if (type() == shill::kTypeWifi && visible() && signal_strength_ <= 0) {
     signal_strength_ = 1;
   }
 
   // Any change to connection state will trigger a complete property update,
   // so we update is_captive_portal_ here.
-  is_captive_portal_ = IsCaptivePortalState(properties, true /* log */);
+  is_captive_portal_ = IsCaptivePortalState(properties, NetworkId(this));
 
   // Ensure that the network has a valid name.
   return UpdateName(properties);
@@ -281,10 +279,13 @@ void NetworkState::GetStateProperties(base::Value* dictionary) const {
   if (NetworkTypePattern::Tether().MatchesType(type())) {
     dictionary->SetKey(kTetherBatteryPercentage,
                        base::Value(battery_percentage()));
-    dictionary->SetKey(kTetherCarrier, base::Value(carrier()));
+    dictionary->SetKey(kTetherCarrier, base::Value(tether_carrier()));
     dictionary->SetKey(kTetherHasConnectedToHost,
                        base::Value(tether_has_connected_to_host()));
     dictionary->SetKey(kTetherSignalStrength, base::Value(signal_strength()));
+
+    // All Tether networks are connectable.
+    dictionary->SetKey(shill::kConnectableProperty, base::Value(connectable()));
 
     // Tether networks do not share some of the wireless/mobile properties added
     // below; exit early to avoid having these properties applied.
@@ -323,6 +324,11 @@ void NetworkState::GetStateProperties(base::Value* dictionary) const {
   }
 }
 
+bool NetworkState::IsActive() const {
+  return IsConnectingOrConnected() ||
+         activation_state() == shill::kActivationStateActivating;
+}
+
 void NetworkState::IPConfigPropertiesChanged(const base::Value& properties) {
   if (properties.DictEmpty()) {
     ipv4_config_.reset();
@@ -346,8 +352,8 @@ GURL NetworkState::GetWebProxyAutoDiscoveryUrl() const {
     return GURL();
   GURL gurl(url);
   if (!gurl.is_valid()) {
-    NET_LOG(ERROR) << "Invalid WebProxyAutoDiscoveryUrl: " << path() << ": "
-                   << url;
+    NET_LOG(ERROR) << "Invalid WebProxyAutoDiscoveryUrl: " << NetworkId(this)
+                   << ": " << url;
     return GURL();
   }
   return gurl;
@@ -381,9 +387,38 @@ bool NetworkState::SecurityRequiresPassphraseOnly() const {
           security_class() == shill::kSecurityWep);
 }
 
+const std::string& NetworkState::GetError() const {
+  return last_error_;
+}
+
+void NetworkState::ClearError() {
+  last_error_.clear();
+}
+
 std::string NetworkState::connection_state() const {
   if (!visible())
-    return shill::kStateDisconnect;
+    return shill::kStateIdle;
+  DCHECK(connection_state_ == shill::kStateIdle ||
+         connection_state_ == shill::kStateAssociation ||
+         connection_state_ == shill::kStateConfiguration ||
+         connection_state_ == shill::kStateReady ||
+         connection_state_ == shill::kStatePortal ||
+         connection_state_ == shill::kStateNoConnectivity ||
+         connection_state_ == shill::kStateRedirectFound ||
+         connection_state_ == shill::kStatePortalSuspected ||
+         // TODO(https://crbug.com/552190): Remove kStateOffline from this list
+         // when occurrences in chromium code have been eliminated.
+         connection_state_ == shill::kStateOffline ||
+         connection_state_ == shill::kStateOnline ||
+         connection_state_ == shill::kStateFailure ||
+         connection_state_ == shill::kStateDisconnect ||
+         // TODO(https://crbug.com/552190): Remove kStateActivationFailure from
+         // this list when occurrences in chromium code have been eliminated.
+         connection_state_ == shill::kStateActivationFailure ||
+         // TODO(https://crbug.com/552190): Empty should not be a valid state,
+         // but e.g. new tether NetworkStates and unit tests use it currently.
+         connection_state_.empty());
+
   return connection_state_;
 }
 
@@ -440,9 +475,8 @@ bool NetworkState::IsConnectingOrConnected() const {
           StateIsConnected(connection_state_));
 }
 
-bool NetworkState::IsActive() const {
-  return IsConnectingOrConnected() ||
-         activation_state() == shill::kActivationStateActivating;
+bool NetworkState::IsOnline() const {
+  return connection_state() == shill::kStateOnline;
 }
 
 bool NetworkState::IsInProfile() const {
@@ -498,7 +532,7 @@ std::string NetworkState::GetNetmask() const {
 
 std::string NetworkState::GetSpecifier() const {
   if (!update_received()) {
-    NET_LOG(ERROR) << "GetSpecifier called before update: " << path();
+    NET_LOG(ERROR) << "GetSpecifier called before update: " << NetworkId(this);
     return std::string();
   }
   if (type() == shill::kTypeWifi)
@@ -512,38 +546,72 @@ void NetworkState::SetGuid(const std::string& guid) {
   guid_ = guid;
 }
 
-std::string NetworkState::GetErrorState() const {
-  if (ErrorIsValid(error()))
-    return error();
-  return last_error();
+network_config::mojom::ActivationStateType
+NetworkState::GetMojoActivationState() const {
+  using network_config::mojom::ActivationStateType;
+  if (IsDefaultCellular())
+    return ActivationStateType::kNoService;
+  if (activation_state_.empty())
+    return ActivationStateType::kUnknown;
+  if (activation_state_ == shill::kActivationStateActivated)
+    return ActivationStateType::kActivated;
+  if (activation_state_ == shill::kActivationStateActivating)
+    return ActivationStateType::kActivating;
+  if (activation_state_ == shill::kActivationStateNotActivated)
+    return ActivationStateType::kNotActivated;
+  if (activation_state_ == shill::kActivationStatePartiallyActivated)
+    return ActivationStateType::kPartiallyActivated;
+  NET_LOG(ERROR) << "Unexpected shill activation state: " << activation_state_;
+  return ActivationStateType::kUnknown;
+}
+
+network_config::mojom::SecurityType NetworkState::GetMojoSecurity() const {
+  using network_config::mojom::SecurityType;
+  if (security_class_.empty() || security_class_ == shill::kSecurityNone)
+    return SecurityType::kNone;
+  if (IsDynamicWep())
+    return SecurityType::kWep8021x;
+
+  if (security_class_ == shill::kSecurityWep)
+    return SecurityType::kWepPsk;
+  if (security_class_ == shill::kSecurityPsk)
+    return SecurityType::kWpaPsk;
+  if (security_class_ == shill::kSecurity8021x)
+    return SecurityType::kWpaEap;
+  NET_LOG(ERROR) << "Unsupported shill security class: " << security_class_;
+  return SecurityType::kNone;
 }
 
 // static
 bool NetworkState::StateIsConnected(const std::string& connection_state) {
   return (connection_state == shill::kStateReady ||
           connection_state == shill::kStateOnline ||
-          connection_state == shill::kStatePortal);
+          StateIsPortalled(connection_state));
 }
 
 // static
 bool NetworkState::StateIsConnecting(const std::string& connection_state) {
   return (connection_state == shill::kStateAssociation ||
-          connection_state == shill::kStateConfiguration ||
-          connection_state == shill::kStateCarrier);
+          connection_state == shill::kStateConfiguration);
+}
+
+// static
+bool NetworkState::StateIsPortalled(const std::string& connection_state) {
+  return (connection_state == shill::kStatePortal ||
+          connection_state == shill::kStateNoConnectivity ||
+          connection_state == shill::kStateRedirectFound ||
+          connection_state == shill::kStatePortalSuspected);
 }
 
 // static
 bool NetworkState::NetworkStateIsCaptivePortal(
     const base::Value& shill_properties) {
-  return IsCaptivePortalState(shill_properties, false /* log */);
+  return IsCaptivePortalState(shill_properties, std::string() /* log_id */);
 }
 
 // static
 bool NetworkState::ErrorIsValid(const std::string& error) {
-  // Pre M-74 Shill uses "Unknown" to indicate an unset or cleared error state.
-  // TODO(stevenjb): Remove kErrorUnknown once 74 has shipped.
-  return !error.empty() && error != kErrorUnknown &&
-         error != shill::kErrorNoFailure;
+  return !error.empty() && error != shill::kErrorNoFailure;
 }
 
 // static

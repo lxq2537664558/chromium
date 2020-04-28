@@ -121,6 +121,10 @@ class COMPONENT_EXPORT(ACCOUNT_MANAGER) AccountManager {
 
   static void RegisterPrefs(PrefRegistrySimple* registry);
 
+  // Sets a |PrefService|. Account Manager will use this instance to read its
+  // policies.
+  void SetPrefService(PrefService* pref_service);
+
   // |home_dir| is the path of the Device Account's home directory (root of the
   // user's cryptohome).
   // |request_context| is a non-owning pointer.
@@ -131,8 +135,23 @@ class COMPONENT_EXPORT(ACCOUNT_MANAGER) AccountManager {
   void Initialize(
       const base::FilePath& home_dir,
       scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
+      DelayNetworkCallRunner delay_network_call_runner);
+
+  // Same as above except that it accepts an |initialization_callback|, which
+  // will be called after Account Manager has been fully initialized.
+  // If Account Manager has already been fully initialized,
+  // |initialization_callback| is called immediately.
+  // Note: During initialization, there is no ordering guarantee between
+  // |initialization_callback| and Account Manager's observers getting their
+  // callbacks.
+  void Initialize(
+      const base::FilePath& home_dir,
+      scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
       DelayNetworkCallRunner delay_network_call_runner,
-      PrefService* pref_service);
+      base::OnceClosure initialization_callback);
+
+  // Returns |true| if |AccountManager| has been fully initialized.
+  bool IsInitialized() const;
 
   // Gets (async) a list of account keys known to |AccountManager|. Note that
   // |callback| will be immediately called in the same thread if
@@ -157,11 +176,17 @@ class COMPONENT_EXPORT(ACCOUNT_MANAGER) AccountManager {
   // with GAIA fails, AccountManager will forget the account.
   void RemoveAccount(const AccountKey& account_key);
 
+  // Similar to |RemoveAccount(AccountKey)| except that it accepts |email| as
+  // the account identifier instead of |account_key|. |email| can be the raw
+  // email or the canonical email.
+  void RemoveAccount(const std::string& email);
+
   // Updates or inserts an account. |raw_email| is the raw, un-canonicalized
   // email id for |account_key|. |raw_email| must not be empty. Use
   // |AccountManager::kActiveDirectoryDummyToken| as the |token| for Active
   // Directory accounts, and |AccountManager::kInvalidToken| for Gaia accounts
   // with unknown tokens.
+  // Note: This API is idempotent.
   void UpsertAccount(const AccountKey& account_key,
                      const std::string& raw_email,
                      const std::string& token);
@@ -231,7 +256,7 @@ class COMPONENT_EXPORT(ACCOUNT_MANAGER) AccountManager {
   class GaiaTokenRevocationRequest;
 
   friend class AccountManagerTest;
-  FRIEND_TEST_ALL_PREFIXES(AccountManagerTest, TestInitialization);
+  FRIEND_TEST_ALL_PREFIXES(AccountManagerTest, TestInitializationCompletes);
   FRIEND_TEST_ALL_PREFIXES(AccountManagerTest, TestTokenPersistence);
   FRIEND_TEST_ALL_PREFIXES(AccountManagerTest,
                            UpdatingAccountEmailShouldNotOverwriteTokens);
@@ -246,7 +271,7 @@ class COMPONENT_EXPORT(ACCOUNT_MANAGER) AccountManager {
       scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
       DelayNetworkCallRunner delay_network_call_runner,
       scoped_refptr<base::SequencedTaskRunner> task_runner,
-      PrefService* pref_service);
+      base::OnceClosure initialization_callback);
 
   // Loads accounts from disk and returns the result.
   static AccountMap LoadAccountsFromDisk(
@@ -254,7 +279,11 @@ class COMPONENT_EXPORT(ACCOUNT_MANAGER) AccountManager {
 
   // Reads accounts from |accounts| and inserts them in |accounts_| and runs all
   // callbacks waiting on |AccountManager| initialization.
-  void InsertAccountsAndRunInitializationCallbacks(const AccountMap& accounts);
+  // |initialization_start_time| is the time at which
+  // |AccountManager::Initialize| was called.
+  void InsertAccountsAndRunInitializationCallbacks(
+      const base::TimeTicks& initialization_start_time,
+      const AccountMap& accounts);
 
   // Accepts a closure and runs it immediately if |AccountManager| has already
   // been initialized, otherwise saves the |closure| for running later, when the
@@ -274,6 +303,11 @@ class COMPONENT_EXPORT(ACCOUNT_MANAGER) AccountManager {
   // Does the actual work of removing an account. Assumes that
   // |AccountManager| initialization (|init_state_|) is complete.
   void RemoveAccountInternal(const AccountKey& account_key);
+
+  // Does the actual work of removing an account. Assumes that |AccountManager|
+  // initialization (|init_state_|) is complete. |email| can be the raw email or
+  // the canonical email.
+  void RemoveAccountByEmailInternal(const std::string& email);
 
   // Assumes that |AccountManager| initialization (|init_state_|) is complete.
   void UpdateTokenInternal(const AccountKey& account_key,
@@ -309,10 +343,10 @@ class COMPONENT_EXPORT(ACCOUNT_MANAGER) AccountManager {
   // Revokes |account_key|'s token on the relevant backend.
   // Note: Does not do anything if the |account_manager::AccountType|
   // of |account_key| does not support server token revocation.
-  // Note: Does not do anything if |account_key| is not present in |accounts_|.
-  // Hence, call this method before actually modifying or deleting old tokens
-  // from |accounts_|.
-  void MaybeRevokeTokenOnServer(const AccountKey& account_key);
+  // Note: |account_key| may or may not be present in |accounts_|. Call this
+  // method *after* modifying or deleting old tokens from |accounts_|.
+  void MaybeRevokeTokenOnServer(const AccountKey& account_key,
+                                const std::string& old_token);
 
   // Revokes |refresh_token| with GAIA. Virtual for testing.
   virtual void RevokeGaiaTokenOnServer(const std::string& refresh_token);
@@ -333,7 +367,7 @@ class COMPONENT_EXPORT(ACCOUNT_MANAGER) AccountManager {
   DelayNetworkCallRunner delay_network_call_runner_;
 
   // Non-owning pointer.
-  PrefService* pref_service_;
+  PrefService* pref_service_ = nullptr;
 
   // A task runner for disk I/O.
   scoped_refptr<base::SequencedTaskRunner> task_runner_;
@@ -358,7 +392,7 @@ class COMPONENT_EXPORT(ACCOUNT_MANAGER) AccountManager {
 
   SEQUENCE_CHECKER(sequence_checker_);
 
-  base::WeakPtrFactory<AccountManager> weak_factory_;
+  base::WeakPtrFactory<AccountManager> weak_factory_{this};
   DISALLOW_COPY_AND_ASSIGN(AccountManager);
 };
 

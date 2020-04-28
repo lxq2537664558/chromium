@@ -82,7 +82,7 @@ class WTF_EXPORT TextCodec {
 
   struct EncodeIntoResult {
     wtf_size_t code_units_read;
-    wtf_size_t bytes_written;
+    size_t bytes_written;
   };
 
   String Decode(const char* str,
@@ -97,25 +97,25 @@ class WTF_EXPORT TextCodec {
                         FlushBehavior,
                         bool stop_on_error,
                         bool& saw_error) = 0;
-  virtual CString Encode(const UChar*,
-                         wtf_size_t length,
-                         UnencodableHandling) = 0;
-  virtual CString Encode(const LChar*,
-                         wtf_size_t length,
-                         UnencodableHandling) = 0;
+  virtual std::string Encode(const UChar*,
+                             wtf_size_t length,
+                             UnencodableHandling) = 0;
+  virtual std::string Encode(const LChar*,
+                             wtf_size_t length,
+                             UnencodableHandling) = 0;
   // EncodeInto is meant only to encode UTF8 bytes into an unsigned char*
   // buffer; therefore this method is only usefully overridden by TextCodecUTF8.
   virtual EncodeIntoResult EncodeInto(const LChar*,
                                       wtf_size_t length,
                                       unsigned char* destination,
-                                      wtf_size_t capacity) {
+                                      size_t capacity) {
     NOTREACHED();
     return EncodeIntoResult{0, 0};
   }
   virtual EncodeIntoResult EncodeInto(const UChar*,
                                       wtf_size_t length,
                                       unsigned char* destination,
-                                      wtf_size_t capacity) {
+                                      size_t capacity) {
     NOTREACHED();
     return EncodeIntoResult{0, 0};
   }

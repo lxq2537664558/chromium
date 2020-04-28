@@ -7,14 +7,15 @@ package org.chromium.chrome.browser.suggestions;
 import android.graphics.Bitmap;
 import android.os.SystemClock;
 
+import androidx.annotation.VisibleForTesting;
+
 import org.chromium.base.Callback;
 import org.chromium.base.DiscardableReferencePool;
-import org.chromium.base.VisibleForTesting;
-import org.chromium.chrome.browser.favicon.LargeIconBridge;
 import org.chromium.chrome.browser.ntp.snippets.SnippetArticle;
 import org.chromium.chrome.browser.ntp.snippets.SuggestionsSource;
 import org.chromium.chrome.browser.profiles.Profile;
-import org.chromium.chrome.browser.widget.ThumbnailProvider;
+import org.chromium.chrome.browser.thumbnail.generator.ThumbnailProvider;
+import org.chromium.chrome.browser.ui.favicon.LargeIconBridge;
 
 /**
  * Class responsible for fetching images for the views in the NewTabPage and Chrome Home.
@@ -65,11 +66,7 @@ public class ImageFetcher {
     public void makeArticleThumbnailRequest(SnippetArticle suggestion, Callback<Bitmap> callback) {
         assert !mIsDestroyed;
 
-        if (suggestion.isContextual()) {
-            mSuggestionsSource.fetchContextualSuggestionImage(suggestion, callback);
-        } else {
-            mSuggestionsSource.fetchSuggestionImage(suggestion, callback);
-        }
+        mSuggestionsSource.fetchSuggestionImage(suggestion, callback);
     }
 
     /**
@@ -83,7 +80,7 @@ public class ImageFetcher {
     public void makeFaviconRequest(
             SnippetArticle suggestion, final Callback<Bitmap> faviconCallback) {
         assert !mIsDestroyed;
-        if (!suggestion.isContextual() && !suggestion.isArticle()) return;
+        if (!suggestion.isArticle()) return;
 
         fetchFaviconFromLocalCacheOrGoogleServer(
                 suggestion, SystemClock.elapsedRealtime(), faviconCallback);
@@ -102,7 +99,7 @@ public class ImageFetcher {
             String url, int size, LargeIconBridge.LargeIconCallback callback) {
         assert !mIsDestroyed;
 
-        getLargeIconBridge().getLargeIconForUrl(url, size, callback);
+        getLargeIconBridge().getLargeIconForStringUrl(url, size, callback);
     }
 
     public void onDestroy() {
@@ -127,8 +124,6 @@ public class ImageFetcher {
                 PUBLISHER_FAVICON_DESIRED_SIZE_PX, new Callback<Bitmap>() {
                     @Override
                     public void onResult(Bitmap image) {
-                        SuggestionsMetrics.recordArticleFaviconFetchTime(
-                                SystemClock.elapsedRealtime() - faviconFetchStartTimeMs);
                         if (image == null) return;
                         faviconCallback.onResult(image);
                     }

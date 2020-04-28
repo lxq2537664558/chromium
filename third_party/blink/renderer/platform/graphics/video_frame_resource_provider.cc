@@ -16,6 +16,7 @@
 #include "components/viz/common/quads/yuv_video_draw_quad.h"
 #include "media/base/video_frame.h"
 #include "media/renderers/video_resource_updater.h"
+#include "third_party/blink/public/platform/web_vector.h"
 
 namespace blink {
 
@@ -35,8 +36,7 @@ void VideoFrameResourceProvider::Initialize(
     viz::RasterContextProvider* media_context_provider,
     viz::SharedBitmapReporter* shared_bitmap_reporter) {
   context_provider_ = media_context_provider;
-  resource_provider_ = std::make_unique<viz::ClientResourceProvider>(
-      /*delegated_sync_points_required=*/true);
+  resource_provider_ = std::make_unique<viz::ClientResourceProvider>();
 
   int max_texture_size;
   if (context_provider_) {
@@ -126,15 +126,19 @@ void VideoFrameResourceProvider::ReleaseFrameResources() {
 }
 
 void VideoFrameResourceProvider::PrepareSendToParent(
-    const std::vector<viz::ResourceId>& resource_ids,
-    std::vector<viz::TransferableResource>* transferable_resources) {
-  resource_provider_->PrepareSendToParent(resource_ids, transferable_resources,
-                                          context_provider_);
+    const WebVector<viz::ResourceId>& resource_ids,
+    WebVector<viz::TransferableResource>* transferable_resources) {
+  std::vector<viz::TransferableResource> resources_list;
+  resource_provider_->PrepareSendToParent(
+      const_cast<WebVector<viz::ResourceId>&>(resource_ids).ReleaseVector(),
+      &resources_list, context_provider_);
+  *transferable_resources = std::move(resources_list);
 }
 
 void VideoFrameResourceProvider::ReceiveReturnsFromParent(
-    const std::vector<viz::ReturnedResource>& transferable_resources) {
-  resource_provider_->ReceiveReturnsFromParent(transferable_resources);
+    const Vector<viz::ReturnedResource>& transferable_resources) {
+  resource_provider_->ReceiveReturnsFromParent(
+      WebVector<viz::ReturnedResource>(transferable_resources).ReleaseVector());
 }
 
 }  // namespace blink

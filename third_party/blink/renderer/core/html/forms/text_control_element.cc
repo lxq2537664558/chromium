@@ -24,6 +24,7 @@
 
 #include "third_party/blink/renderer/core/html/forms/text_control_element.h"
 
+#include "third_party/blink/public/mojom/input/focus_type.mojom-blink.h"
 #include "third_party/blink/renderer/core/accessibility/ax_object_cache.h"
 #include "third_party/blink/renderer/core/css/style_change_reason.h"
 #include "third_party/blink/renderer/core/dom/document.h"
@@ -42,10 +43,10 @@
 #include "third_party/blink/renderer/core/editing/selection_template.h"
 #include "third_party/blink/renderer/core/editing/serializers/serialization.h"
 #include "third_party/blink/renderer/core/editing/set_selection_options.h"
+#include "third_party/blink/renderer/core/editing/spellcheck/spell_checker.h"
 #include "third_party/blink/renderer/core/editing/text_affinity.h"
 #include "third_party/blink/renderer/core/editing/visible_position.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
-#include "third_party/blink/renderer/core/frame/use_counter.h"
 #include "third_party/blink/renderer/core/html/forms/text_control_inner_elements.h"
 #include "third_party/blink/renderer/core/html/html_br_element.h"
 #include "third_party/blink/renderer/core/html/html_div_element.h"
@@ -58,11 +59,11 @@
 #include "third_party/blink/renderer/platform/bindings/exception_messages.h"
 #include "third_party/blink/renderer/platform/bindings/exception_state.h"
 #include "third_party/blink/renderer/platform/heap/handle.h"
+#include "third_party/blink/renderer/platform/heap/heap.h"
+#include "third_party/blink/renderer/platform/instrumentation/use_counter.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_builder.h"
 
 namespace blink {
-
-using namespace html_names;
 
 TextControlElement::TextControlElement(const QualifiedName& tag_name,
                                        Document& doc)
@@ -83,7 +84,7 @@ TextControlElement::~TextControlElement() = default;
 
 void TextControlElement::DispatchFocusEvent(
     Element* old_focused_element,
-    WebFocusType type,
+    mojom::blink::FocusType type,
     InputDeviceCapabilities* source_capabilities) {
   if (SupportsPlaceholder())
     UpdatePlaceholderVisibility();
@@ -94,7 +95,7 @@ void TextControlElement::DispatchFocusEvent(
 
 void TextControlElement::DispatchBlurEvent(
     Element* new_focused_element,
-    WebFocusType type,
+    mojom::blink::FocusType type,
     InputDeviceCapabilities* source_capabilities) {
   if (SupportsPlaceholder())
     UpdatePlaceholderVisibility();
@@ -137,7 +138,8 @@ void TextControlElement::ForwardEvent(Event& event) {
 String TextControlElement::StrippedPlaceholder() const {
   // According to the HTML5 specification, we need to remove CR and LF from
   // the attribute value.
-  const AtomicString& attribute_value = FastGetAttribute(kPlaceholderAttr);
+  const AtomicString& attribute_value =
+      FastGetAttribute(html_names::kPlaceholderAttr);
   if (!attribute_value.Contains(kNewlineCharacter) &&
       !attribute_value.Contains(kCarriageReturnCharacter))
     return attribute_value;
@@ -159,7 +161,8 @@ static bool IsNotLineBreak(UChar ch) {
 }
 
 bool TextControlElement::IsPlaceholderEmpty() const {
-  const AtomicString& attribute_value = FastGetAttribute(kPlaceholderAttr);
+  const AtomicString& attribute_value =
+      FastGetAttribute(html_names::kPlaceholderAttr);
   return attribute_value.GetString().Find(IsNotLineBreak) == kNotFound;
 }
 
@@ -172,8 +175,10 @@ HTMLElement* TextControlElement::PlaceholderElement() const {
   if (!SupportsPlaceholder())
     return nullptr;
   DCHECK(UserAgentShadowRoot());
-  return ToHTMLElementOrDie(UserAgentShadowRoot()->getElementById(
-      shadow_element_names::Placeholder()));
+  auto* element = UserAgentShadowRoot()->getElementById(
+      shadow_element_names::Placeholder());
+  CHECK(!element || IsA<HTMLElement>(element));
+  return To<HTMLElement>(element);
 }
 
 void TextControlElement::UpdatePlaceholderVisibility() {
@@ -219,8 +224,8 @@ void TextControlElement::select() {
   setSelectionRangeForBinding(0, std::numeric_limits<unsigned>::max());
   // Avoid SelectionBehaviorOnFocus::Restore, which scrolls containers to show
   // the selection.
-  focus(
-      FocusParams(SelectionBehaviorOnFocus::kNone, kWebFocusTypeNone, nullptr));
+  focus(FocusParams(SelectionBehaviorOnFocus::kNone,
+                    mojom::blink::FocusType::kNone, nullptr));
   RestoreCachedSelection();
 }
 
@@ -243,7 +248,8 @@ void TextControlElement::ClearValueBeforeFirstUserEdit() {
   value_before_first_user_edit_ = String();
 }
 
-void TextControlElement::SetFocused(bool flag, WebFocusType focus_type) {
+void TextControlElement::SetFocused(bool flag,
+                                    mojom::blink::FocusType focus_type) {
   HTMLFormControlElementWithState::SetFocused(flag, focus_type);
 
   if (!flag)
@@ -357,7 +363,7 @@ static Position PositionForIndex(HTMLElement* inner_editor, unsigned index) {
   unsigned remaining_characters_to_move_forward = index;
   Node* last_br_or_text = inner_editor;
   for (Node& node : NodeTraversal::DescendantsOf(*inner_editor)) {
-    if (node.HasTagName(kBrTag)) {
+    if (node.HasTagName(html_names::kBrTag)) {
       if (remaining_characters_to_move_forward == 0)
         return Position::BeforeNode(node);
       --remaining_characters_to_move_forward;
@@ -365,11 +371,10 @@ static Position PositionForIndex(HTMLElement* inner_editor, unsigned index) {
       continue;
     }
 
-    if (node.IsTextNode()) {
-      Text& text = ToText(node);
-      if (remaining_characters_to_move_forward < text.length())
-        return Position(&text, remaining_characters_to_move_forward);
-      remaining_characters_to_move_forward -= text.length();
+    if (auto* text = DynamicTo<Text>(node)) {
+      if (remaining_characters_to_move_forward < text->length())
+        return Position(text, remaining_characters_to_move_forward);
+      remaining_characters_to_move_forward -= text->length();
       last_br_or_text = &node;
       continue;
     }
@@ -400,18 +405,25 @@ unsigned TextControlElement::IndexForPosition(HTMLElement* inner_editor,
 
   for (Node* node = start_node; node;
        node = NodeTraversal::Previous(*node, inner_editor)) {
-    if (node->IsTextNode()) {
-      int length = ToText(*node).length();
+    if (auto* text_node = DynamicTo<Text>(node)) {
+      int length = text_node->length();
       if (node == passed_position.ComputeContainerNode())
         index += std::min(length, passed_position.OffsetInContainerNode());
       else
         index += length;
-    } else if (node->HasTagName(kBrTag)) {
+      // Disregard the last auto added placeholder BrTag.
+    } else if (node->HasTagName(html_names::kBrTag) &&
+               node != inner_editor->lastChild()) {
       ++index;
     }
   }
 
   return index;
+}
+
+bool TextControlElement::ShouldApplySelectionCache() const {
+  const auto& doc = GetDocument();
+  return doc.FocusedElement() != this || doc.WillUpdateFocusAppearance();
 }
 
 bool TextControlElement::SetSelectionRange(
@@ -431,7 +443,7 @@ bool TextControlElement::SetSelectionRange(
 
   // TODO(crbug.com/927646): The focused element should always be connected, but
   // we fail to ensure so in some cases. Fix it.
-  if (GetDocument().FocusedElement() != this || !isConnected())
+  if (ShouldApplySelectionCache() || !isConnected())
     return did_change;
 
   HTMLElement* inner_editor = InnerEditorElement();
@@ -510,7 +522,7 @@ int TextControlElement::IndexForVisiblePosition(
 unsigned TextControlElement::selectionStart() const {
   if (!IsTextControl())
     return 0;
-  if (GetDocument().FocusedElement() != this)
+  if (ShouldApplySelectionCache())
     return cached_selection_start_;
 
   return ComputeSelectionStart();
@@ -536,7 +548,7 @@ unsigned TextControlElement::ComputeSelectionStart() const {
 unsigned TextControlElement::selectionEnd() const {
   if (!IsTextControl())
     return 0;
-  if (GetDocument().FocusedElement() != this)
+  if (ShouldApplySelectionCache())
     return cached_selection_end_;
   return ComputeSelectionEnd();
 }
@@ -579,7 +591,7 @@ static const AtomicString& DirectionString(
 const AtomicString& TextControlElement::selectionDirection() const {
   // Ensured by HTMLInputElement::selectionDirectionForBinding().
   DCHECK(IsTextControl());
-  if (GetDocument().FocusedElement() != this)
+  if (ShouldApplySelectionCache())
     return DirectionString(cached_selection_direction_);
   return DirectionString(ComputeSelectionDirection());
 }
@@ -641,7 +653,7 @@ SelectionInDOMTree TextControlElement::Selection() const {
   Node* end_node = nullptr;
   for (Node& node : NodeTraversal::DescendantsOf(*inner_text)) {
     DCHECK(!node.hasChildren());
-    DCHECK(node.IsTextNode() || IsHTMLBRElement(node));
+    DCHECK(node.IsTextNode() || IsA<HTMLBRElement>(node));
     int length = node.IsTextNode() ? Position::LastOffsetInNode(node) : 1;
 
     if (offset <= start && start <= offset + length)
@@ -673,14 +685,14 @@ SelectionInDOMTree TextControlElement::Selection() const {
 
 int TextControlElement::maxLength() const {
   int value;
-  if (!ParseHTMLInteger(FastGetAttribute(kMaxlengthAttr), value))
+  if (!ParseHTMLInteger(FastGetAttribute(html_names::kMaxlengthAttr), value))
     return -1;
   return value >= 0 ? value : -1;
 }
 
 int TextControlElement::minLength() const {
   int value;
-  if (!ParseHTMLInteger(FastGetAttribute(kMinlengthAttr), value))
+  if (!ParseHTMLInteger(FastGetAttribute(html_names::kMinlengthAttr), value))
     return -1;
   return value >= 0 ? value : -1;
 }
@@ -699,7 +711,7 @@ void TextControlElement::setMaxLength(int new_value,
         ExceptionMessages::IndexExceedsMinimumBound("maxLength", new_value,
                                                     min));
   } else {
-    SetIntegralAttribute(kMaxlengthAttr, new_value);
+    SetIntegralAttribute(html_names::kMaxlengthAttr, new_value);
   }
 }
 
@@ -717,7 +729,7 @@ void TextControlElement::setMinLength(int new_value,
         ExceptionMessages::IndexExceedsMaximumBound("minLength", new_value,
                                                     max));
   } else {
-    SetIntegralAttribute(kMinlengthAttr, new_value);
+    SetIntegralAttribute(html_names::kMinlengthAttr, new_value);
   }
 }
 
@@ -754,13 +766,21 @@ void TextControlElement::ScheduleSelectEvent() {
 
 void TextControlElement::ParseAttribute(
     const AttributeModificationParams& params) {
-  if (params.name == kPlaceholderAttr) {
+  if (params.name == html_names::kPlaceholderAttr) {
     UpdatePlaceholderText();
     UpdatePlaceholderVisibility();
     UseCounter::Count(GetDocument(), WebFeature::kPlaceholderAttribute);
-  } else if (params.name == kReadonlyAttr || params.name == kDisabledAttr) {
+  } else if (params.name == html_names::kReadonlyAttr ||
+             params.name == html_names::kDisabledAttr) {
     DisabledOrReadonlyAttributeChanged(params.name);
     HTMLFormControlElementWithState::ParseAttribute(params);
+    if (params.new_value.IsNull())
+      return;
+
+    if (HTMLElement* inner_editor = InnerEditorElement()) {
+      if (auto* frame = GetDocument().GetFrame())
+        frame->GetSpellChecker().RemoveSpellingAndGrammarMarkers(*inner_editor);
+    }
   } else {
     HTMLFormControlElementWithState::ParseAttribute(params);
   }
@@ -781,7 +801,7 @@ bool TextControlElement::LastChangeWasUserEdit() const {
 }
 
 Node* TextControlElement::CreatePlaceholderBreakElement() const {
-  return HTMLBRElement::Create(GetDocument());
+  return MakeGarbageCollected<HTMLBRElement>(GetDocument());
 }
 
 void TextControlElement::AddPlaceholderBreakElementIfNecessary() {
@@ -789,11 +809,11 @@ void TextControlElement::AddPlaceholderBreakElementIfNecessary() {
   if (inner_editor->GetLayoutObject() &&
       !inner_editor->GetLayoutObject()->Style()->PreserveNewline())
     return;
-  Node* last_child = inner_editor->lastChild();
-  if (!last_child || !last_child->IsTextNode())
+  auto* last_child_text_node = DynamicTo<Text>(inner_editor->lastChild());
+  if (!last_child_text_node)
     return;
-  if (ToText(last_child)->data().EndsWith('\n') ||
-      ToText(last_child)->data().EndsWith('\r'))
+  if (last_child_text_node->data().EndsWith('\n') ||
+      last_child_text_node->data().EndsWith('\r'))
     inner_editor->AppendChild(CreatePlaceholderBreakElement());
 }
 
@@ -811,7 +831,7 @@ void TextControlElement::SetInnerEditorValue(const String& value) {
 
   // If the last child is a trailing <br> that's appended below, remove it
   // first so as to enable setInnerText() fast path of updating a text node.
-  if (IsHTMLBRElement(inner_editor->lastChild()))
+  if (IsA<HTMLBRElement>(inner_editor->lastChild()))
     inner_editor->RemoveChild(inner_editor->lastChild(), ASSERT_NO_EXCEPTION);
 
   // We don't use setTextContent.  It triggers unnecessary paint.
@@ -840,24 +860,23 @@ String TextControlElement::InnerEditorValue() const {
   if (!inner_editor->HasChildren())
     return g_empty_string;
   Node& first_child = *inner_editor->firstChild();
-  if (first_child.IsTextNode()) {
+  if (auto* first_child_text_node = DynamicTo<Text>(first_child)) {
     Node* second_child = first_child.nextSibling();
-    if (!second_child)
-      return ToText(first_child).data();
-    if (!second_child->nextSibling() && IsHTMLBRElement(*second_child))
-      return ToText(first_child).data();
-  } else if (!first_child.nextSibling() && IsHTMLBRElement(first_child)) {
+    if (!second_child ||
+        (!second_child->nextSibling() && IsA<HTMLBRElement>(*second_child)))
+      return first_child_text_node->data();
+  } else if (!first_child.nextSibling() && IsA<HTMLBRElement>(first_child)) {
     return g_empty_string;
   }
 
   StringBuilder result;
   for (Node& node : NodeTraversal::InclusiveDescendantsOf(*inner_editor)) {
-    if (IsHTMLBRElement(node)) {
+    if (IsA<HTMLBRElement>(node)) {
       DCHECK_EQ(&node, inner_editor->lastChild());
       if (&node != inner_editor->lastChild())
         result.Append(kNewlineCharacter);
-    } else if (node.IsTextNode()) {
-      result.Append(ToText(node).data());
+    } else if (auto* text_node = DynamicTo<Text>(node)) {
+      result.Append(text_node->data());
     }
   }
   return result.ToString();
@@ -903,12 +922,12 @@ String TextControlElement::ValueWithHardLineBreaks() const {
 
   StringBuilder result;
   for (Node& node : NodeTraversal::DescendantsOf(*inner_text)) {
-    if (IsHTMLBRElement(node)) {
+    if (IsA<HTMLBRElement>(node)) {
       DCHECK_EQ(&node, inner_text->lastChild());
       if (&node != inner_text->lastChild())
         result.Append(kNewlineCharacter);
-    } else if (node.IsTextNode()) {
-      String data = ToText(node).data();
+    } else if (auto* text_node = DynamicTo<Text>(node)) {
+      String data = text_node->data();
       unsigned length = data.length();
       unsigned position = 0;
       while (break_node == node && break_offset <= length) {
@@ -959,15 +978,15 @@ String TextControlElement::DirectionForFormData() const {
   for (const HTMLElement* element = this; element;
        element = Traversal<HTMLElement>::FirstAncestor(*element)) {
     const AtomicString& dir_attribute_value =
-        element->FastGetAttribute(kDirAttr);
+        element->FastGetAttribute(html_names::kDirAttr);
     if (dir_attribute_value.IsNull())
       continue;
 
-    if (DeprecatedEqualIgnoringCase(dir_attribute_value, "rtl") ||
-        DeprecatedEqualIgnoringCase(dir_attribute_value, "ltr"))
+    if (EqualIgnoringASCIICase(dir_attribute_value, "rtl") ||
+        EqualIgnoringASCIICase(dir_attribute_value, "ltr"))
       return dir_attribute_value;
 
-    if (DeprecatedEqualIgnoringCase(dir_attribute_value, "auto")) {
+    if (EqualIgnoringASCIICase(dir_attribute_value, "auto")) {
       bool is_auto;
       TextDirection text_direction =
           element->DirectionalityIfhasDirAutoAttribute(is_auto);

@@ -8,7 +8,7 @@
 
 #include <array>
 
-#include "base/logging.h"
+#include "base/check.h"
 #include "remoting/client/display/canvas.h"
 #include "remoting/client/display/gl_cursor_feedback_texture.h"
 #include "remoting/client/display/gl_math.h"
@@ -43,7 +43,7 @@ float GetExpansionCoefficient(float progress) {
 
 namespace remoting {
 
-GlCursorFeedback::GlCursorFeedback() : weak_factory_(this) {}
+GlCursorFeedback::GlCursorFeedback() {}
 
 GlCursorFeedback::~GlCursorFeedback() {
   DCHECK(thread_checker_.CalledOnValidThread());

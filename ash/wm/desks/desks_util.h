@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "ash/ash_export.h"
+#include "ash/public/cpp/shell_window_ids.h"
 
 namespace aura {
 class Window;
@@ -18,9 +19,7 @@ namespace ash {
 
 namespace desks_util {
 
-// TODO(afakhry): Fix the size of the array when you add the rest of the desks'
-// containters.
-constexpr size_t kMaxNumberOfDesks = 1;
+constexpr size_t kMaxNumberOfDesks = 4;
 
 ASH_EXPORT const std::array<int, kMaxNumberOfDesks>& GetDesksContainersIds();
 
@@ -32,11 +31,25 @@ ASH_EXPORT bool IsDeskContainer(const aura::Window* container);
 
 ASH_EXPORT bool IsDeskContainerId(int id);
 
+// NOTE: The below *ActiveDesk* functions work with the currently active desk.
+// If they can be called during a desk-switch animation, you might be interested
+// in the soon-to-be active desk when the animation ends.
+// See `DesksController::GetTargetActiveDesk()`.
+
 ASH_EXPORT int GetActiveDeskContainerId();
 
 ASH_EXPORT bool IsActiveDeskContainer(const aura::Window* container);
 
 ASH_EXPORT aura::Window* GetActiveDeskContainerForRoot(aura::Window* root);
+
+ASH_EXPORT bool BelongsToActiveDesk(aura::Window* window);
+
+// If |context| is a descendent window of a desk container, return that desk
+// container, otherwise return nullptr.
+ASH_EXPORT aura::Window* GetDeskContainerForContext(aura::Window* context);
+
+// Returns true if the DesksBar widget should be created in overview mode.
+ASH_EXPORT bool ShouldDesksBarBeCreated();
 
 }  // namespace desks_util
 

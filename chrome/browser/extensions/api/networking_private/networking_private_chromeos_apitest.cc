@@ -33,18 +33,25 @@
 #include "chromeos/network/managed_network_configuration_handler.h"
 #include "chromeos/network/network_certificate_handler.h"
 #include "chromeos/network/network_handler.h"
+#include "chromeos/network/network_metadata_store.h"
 #include "chromeos/network/network_state.h"
 #include "chromeos/network/network_state_handler.h"
 #include "chromeos/network/network_type_pattern.h"
 #include "chromeos/network/onc/onc_utils.h"
 #include "chromeos/network/portal_detector/network_portal_detector.h"
 #include "components/onc/onc_constants.h"
+#include "components/onc/onc_pref_names.h"
 #include "components/policy/core/browser/browser_policy_connector.h"
 #include "components/policy/core/common/external_data_fetcher.h"
 #include "components/policy/core/common/mock_configuration_policy_provider.h"
 #include "components/policy/core/common/policy_map.h"
 #include "components/policy/core/common/policy_types.h"
 #include "components/policy/policy_constants.h"
+#include "components/prefs/testing_pref_service.h"
+#include "components/proxy_config/pref_proxy_config_tracker_impl.h"
+#include "components/proxy_config/proxy_config_dictionary.h"
+#include "components/proxy_config/proxy_config_pref_names.h"
+#include "components/sync_preferences/testing_pref_service_syncable.h"
 #include "components/user_manager/user.h"
 #include "components/user_manager/user_manager.h"
 #include "components/user_manager/user_names.h"
@@ -243,8 +250,6 @@ class NetworkingPrivateChromeOSApiTest : public extensions::ExtensionApiTest {
     // Add a Cellular GSM Device.
     device_test_->AddDevice(kCellularDevicePath, shill::kTypeCellular,
                             "stub_cellular_device1");
-    SetDeviceProperty(kCellularDevicePath, shill::kCarrierProperty,
-                      base::Value("Cellular1_Carrier"));
     base::DictionaryValue home_provider;
     home_provider.SetString("name", "Cellular1_Provider");
     home_provider.SetString("code", "000000");
@@ -365,9 +370,6 @@ class NetworkingPrivateChromeOSApiTest : public extensions::ExtensionApiTest {
     // Sends a notification about the added profile.
     profile_test_->AddProfile(kUser1ProfilePath, userhash_);
 
-    // Enable technologies.
-    manager_test_->AddTechnology("wimax", true);
-
     // Add IPConfigs
     base::DictionaryValue ipconfig;
     ipconfig.SetKey(shill::kAddressProperty, base::Value("0.0.0.0"));
@@ -444,15 +446,6 @@ class NetworkingPrivateChromeOSApiTest : public extensions::ExtensionApiTest {
         kWifi2ServicePath, shill::kTetheringProperty,
         base::Value(shill::kTetheringNotDetectedState));
 
-    AddService("stub_wimax", "wimax", shill::kTypeWimax, shill::kStateOnline);
-    service_test_->SetServiceProperty(
-        "stub_wimax", shill::kSignalStrengthProperty, base::Value(40));
-    service_test_->SetServiceProperty("stub_wimax", shill::kProfileProperty,
-                                      base::Value(kUser1ProfilePath));
-    service_test_->SetServiceProperty("stub_wimax", shill::kConnectableProperty,
-                                      base::Value(true));
-    profile_test_->AddService(kUser1ProfilePath, "stub_wimax");
-
     base::ListValue frequencies2;
     frequencies2.AppendInteger(2400);
     frequencies2.AppendInteger(5000);
@@ -479,6 +472,15 @@ class NetworkingPrivateChromeOSApiTest : public extensions::ExtensionApiTest {
         base::Value("third_party_provider_extension_id"));
     profile_test_->AddService(kUser1ProfilePath, "stub_vpn2");
 
+    PrefProxyConfigTrackerImpl::RegisterProfilePrefs(user_prefs_.registry());
+    PrefProxyConfigTrackerImpl::RegisterPrefs(local_state_.registry());
+    ::onc::RegisterProfilePrefs(user_prefs_.registry());
+    ::onc::RegisterPrefs(local_state_.registry());
+    chromeos::NetworkMetadataStore::RegisterPrefs(user_prefs_.registry());
+    chromeos::NetworkMetadataStore::RegisterPrefs(local_state_.registry());
+
+    chromeos::NetworkHandler::Get()->InitializePrefServices(&user_prefs_,
+                                                            &local_state_);
     content::RunAllPendingInMessageLoop();
   }
 
@@ -501,6 +503,8 @@ class NetworkingPrivateChromeOSApiTest : public extensions::ExtensionApiTest {
   ShillServiceClient::TestInterface* service_test_;
   ShillDeviceClient::TestInterface* device_test_;
   policy::MockConfigurationPolicyProvider provider_;
+  sync_preferences::TestingPrefServiceSyncable user_prefs_;
+  TestingPrefServiceSimple local_state_;
   std::string userhash_;
 
  private:
@@ -526,17 +530,6 @@ IN_PROC_BROWSER_TEST_F(NetworkingPrivateChromeOSApiTest, StartActivate) {
   SetupCellular();
   EXPECT_TRUE(RunNetworkingSubtest("startActivate")) << message_;
   EXPECT_EQ(1, UIDelegateStub::s_show_account_details_called_);
-}
-
-IN_PROC_BROWSER_TEST_F(NetworkingPrivateChromeOSApiTest, StartActivateSprint) {
-  SetupCellular();
-  // Set the carrier to Sprint.
-  DBusThreadManager::Get()->GetShillDeviceClient()->SetCarrier(
-      dbus::ObjectPath(kCellularDevicePath), shill::kCarrierSprint,
-      base::DoNothing(),
-      base::BindRepeating([](const std::string&, const std::string&) {}));
-  EXPECT_TRUE(RunNetworkingSubtest("startActivateSprint")) << message_;
-  EXPECT_EQ(0, UIDelegateStub::s_show_account_details_called_);
 }
 
 IN_PROC_BROWSER_TEST_F(NetworkingPrivateChromeOSApiTest,
@@ -575,10 +568,9 @@ IN_PROC_BROWSER_TEST_F(NetworkingPrivateChromeOSApiTest,
   EXPECT_TRUE(RunNetworkingSubtest("getVisibleNetworksWifi")) << message_;
 }
 
-// TODO(crbug.com/928778): Flaky on CrOS.
-IN_PROC_BROWSER_TEST_F(NetworkingPrivateChromeOSApiTest,
-                       DISABLED_EnabledNetworkTypes) {
-  EXPECT_TRUE(RunNetworkingSubtest("enabledNetworkTypes")) << message_;
+IN_PROC_BROWSER_TEST_F(NetworkingPrivateChromeOSApiTest, EnabledNetworkTypes) {
+  EXPECT_TRUE(RunNetworkingSubtest("enabledNetworkTypesDisable")) << message_;
+  EXPECT_TRUE(RunNetworkingSubtest("enabledNetworkTypesEnable")) << message_;
 }
 
 IN_PROC_BROWSER_TEST_F(NetworkingPrivateChromeOSApiTest, GetDeviceStates) {
@@ -586,8 +578,6 @@ IN_PROC_BROWSER_TEST_F(NetworkingPrivateChromeOSApiTest, GetDeviceStates) {
   manager_test_->RemoveTechnology("cellular");
   manager_test_->AddTechnology("cellular", false /* disabled */);
   manager_test_->SetTechnologyInitializing("cellular", true);
-  manager_test_->RemoveTechnology("wimax");
-  manager_test_->AddTechnology("wimax", false /* disabled */);
   EXPECT_TRUE(RunNetworkingSubtest("getDeviceStates")) << message_;
 }
 
@@ -662,7 +652,7 @@ IN_PROC_BROWSER_TEST_F(NetworkingPrivateChromeOSApiTest, CreateNetwork) {
 
 IN_PROC_BROWSER_TEST_F(NetworkingPrivateChromeOSApiTest,
                        CreateNetworkForPolicyControlledNetwork) {
-  const std::string user_policy_blob =
+  constexpr char kUserPolicyBlob[] =
       R"({
            "NetworkConfigurations": [{
              "GUID": "stub_wifi2",
@@ -683,7 +673,7 @@ IN_PROC_BROWSER_TEST_F(NetworkingPrivateChromeOSApiTest,
   policy.Set(policy::key::kOpenNetworkConfiguration,
              policy::POLICY_LEVEL_MANDATORY, policy::POLICY_SCOPE_USER,
              policy::POLICY_SOURCE_CLOUD,
-             base::WrapUnique(new base::Value(user_policy_blob)), nullptr);
+             std::make_unique<base::Value>(kUserPolicyBlob), nullptr);
   provider_.UpdateChromePolicy(policy);
 
   content::RunAllPendingInMessageLoop();
@@ -697,7 +687,7 @@ IN_PROC_BROWSER_TEST_F(NetworkingPrivateChromeOSApiTest, ForgetNetwork) {
 
 IN_PROC_BROWSER_TEST_F(NetworkingPrivateChromeOSApiTest,
                        ForgetPolicyControlledNetwork) {
-  const std::string user_policy_blob =
+  constexpr char kUserPolicyBlob[] =
       R"({
            "NetworkConfigurations": [{
              "GUID": "stub_wifi2",
@@ -718,7 +708,7 @@ IN_PROC_BROWSER_TEST_F(NetworkingPrivateChromeOSApiTest,
   policy.Set(policy::key::kOpenNetworkConfiguration,
              policy::POLICY_LEVEL_MANDATORY, policy::POLICY_SCOPE_USER,
              policy::POLICY_SOURCE_CLOUD,
-             base::WrapUnique(new base::Value(user_policy_blob)), nullptr);
+             std::make_unique<base::Value>(kUserPolicyBlob), nullptr);
   provider_.UpdateChromePolicy(policy);
 
   content::RunAllPendingInMessageLoop();
@@ -728,14 +718,14 @@ IN_PROC_BROWSER_TEST_F(NetworkingPrivateChromeOSApiTest,
 
 // TODO(stevenjb): Find a better way to set this up on Chrome OS.
 IN_PROC_BROWSER_TEST_F(NetworkingPrivateChromeOSApiTest, GetManagedProperties) {
-  const std::string uidata_blob =
-      "{ \"user_settings\": {"
-      "      \"WiFi\": {"
-      "        \"Passphrase\": \"FAKE_CREDENTIAL_VPaJDV9x\" }"
-      "    }"
-      "}";
+  constexpr char kUidataBlob[] =
+      R"({
+        "user_settings": {
+          "WiFi": {"Passphrase": "FAKE_CREDENTIAL_VPaJDV9x"}
+        }
+      })";
   service_test_->SetServiceProperty(kWifi2ServicePath, shill::kUIDataProperty,
-                                    base::Value(uidata_blob));
+                                    base::Value(kUidataBlob));
   service_test_->SetServiceProperty(
       kWifi2ServicePath, shill::kAutoConnectProperty, base::Value(false));
 
@@ -744,27 +734,30 @@ IN_PROC_BROWSER_TEST_F(NetworkingPrivateChromeOSApiTest, GetManagedProperties) {
 
   content::RunAllPendingInMessageLoop();
 
-  const std::string user_policy_blob =
-      "{ \"NetworkConfigurations\": ["
-      "    { \"GUID\": \"stub_wifi2\","
-      "      \"Type\": \"WiFi\","
-      "      \"Name\": \"My WiFi Network\","
-      "      \"WiFi\": {"
-      "        \"HexSSID\": \"77696669325F50534B\","  // "wifi2_PSK"
-      "        \"Passphrase\": \"passphrase\","
-      "        \"Recommended\": [ \"AutoConnect\", \"Passphrase\" ],"
-      "        \"Security\": \"WPA-PSK\" }"
-      "    }"
-      "  ],"
-      "  \"Certificates\": [],"
-      "  \"Type\": \"UnencryptedConfiguration\""
-      "}";
+  constexpr char kUserPolicyBlob[] = R"({
+      "NetworkConfigurations": [
+          { "GUID": "stub_wifi2",
+            "Type": "WiFi",
+            "Name": "My WiFi Network",
+            "ProxySettings":{
+                "Type": "Direct"
+            },
+            "WiFi": {
+              "HexSSID": "77696669325F50534B",
+              "Passphrase": "passphrase",
+              "Recommended": [ "AutoConnect", "Passphrase" ],
+              "Security": "WPA-PSK" }
+          }
+        ],
+        "Certificates": [],
+        "Type": "UnencryptedConfiguration"
+      })";
 
   policy::PolicyMap policy;
   policy.Set(policy::key::kOpenNetworkConfiguration,
              policy::POLICY_LEVEL_MANDATORY, policy::POLICY_SCOPE_USER,
              policy::POLICY_SOURCE_CLOUD,
-             base::WrapUnique(new base::Value(user_policy_blob)), nullptr);
+             std::make_unique<base::Value>(kUserPolicyBlob), nullptr);
   provider_.UpdateChromePolicy(policy);
 
   content::RunAllPendingInMessageLoop();
@@ -773,7 +766,7 @@ IN_PROC_BROWSER_TEST_F(NetworkingPrivateChromeOSApiTest, GetManagedProperties) {
 }
 
 IN_PROC_BROWSER_TEST_F(NetworkingPrivateChromeOSApiTest, GetErrorState) {
-  chromeos::NetworkHandler::Get()->network_state_handler()->SetLastErrorForTest(
+  chromeos::NetworkHandler::Get()->network_state_handler()->SetErrorForTest(
       kWifi1ServicePath, "TestErrorState");
   EXPECT_TRUE(RunNetworkingSubtest("getErrorState")) << message_;
 }
@@ -799,6 +792,12 @@ IN_PROC_BROWSER_TEST_F(NetworkingPrivateChromeOSApiTest,
                        OnDeviceStateListChangedEvent) {
   EXPECT_TRUE(RunNetworkingSubtest("onDeviceStateListChangedEvent"))
       << message_;
+}
+
+IN_PROC_BROWSER_TEST_F(NetworkingPrivateChromeOSApiTest,
+                       OnDeviceScanningChangedEvent) {
+  SetupCellular();
+  EXPECT_TRUE(RunNetworkingSubtest("onDeviceScanningChangedEvent")) << message_;
 }
 
 IN_PROC_BROWSER_TEST_F(NetworkingPrivateChromeOSApiTest,

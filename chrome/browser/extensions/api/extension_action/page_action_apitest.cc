@@ -12,12 +12,12 @@
 #include "chrome/browser/extensions/extension_service.h"
 #include "chrome/browser/extensions/extension_tab_util.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/sessions/session_tab_helper.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/test/base/ui_test_utils.h"
+#include "components/sessions/content/session_tab_helper.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_test_utils.h"
 #include "extensions/browser/extension_system.h"
@@ -33,8 +33,12 @@ namespace {
 class PageActionApiTest : public ExtensionApiTest {
  protected:
   ExtensionAction* GetPageAction(const Extension& extension) {
-    return ExtensionActionManager::Get(browser()->profile())->
-        GetPageAction(extension);
+    ExtensionAction* extension_action =
+        ExtensionActionManager::Get(browser()->profile())
+            ->GetExtensionAction(extension);
+    return extension_action->action_type() == ActionInfo::TYPE_PAGE
+               ? extension_action
+               : nullptr;
   }
 };
 
@@ -52,8 +56,10 @@ IN_PROC_BROWSER_TEST_F(PageActionApiTest, Basic) {
   }
 
   // Test that we received the changes.
-  int tab_id = SessionTabHelper::FromWebContents(
-      browser()->tab_strip_model()->GetActiveWebContents())->session_id().id();
+  int tab_id = sessions::SessionTabHelper::FromWebContents(
+                   browser()->tab_strip_model()->GetActiveWebContents())
+                   ->session_id()
+                   .id();
   ExtensionAction* action = GetPageAction(*extension);
   ASSERT_TRUE(action);
   EXPECT_EQ("Modified", action->GetTitle(tab_id));
@@ -80,8 +86,10 @@ IN_PROC_BROWSER_TEST_F(PageActionApiTest, Basic) {
   ExtensionActionIconFactory icon_factory(profile(), extension, action, NULL);
 
   // Test that we received the changes.
-  tab_id = SessionTabHelper::FromWebContents(
-      browser()->tab_strip_model()->GetActiveWebContents())->session_id().id();
+  tab_id = sessions::SessionTabHelper::FromWebContents(
+               browser()->tab_strip_model()->GetActiveWebContents())
+               ->session_id()
+               .id();
   EXPECT_FALSE(icon_factory.GetIcon(tab_id).IsEmpty());
 }
 
@@ -173,8 +181,8 @@ IN_PROC_BROWSER_TEST_F(PageActionApiTest, DISABLED_ShowPageActionPopup) {
 
   {
     ResultCatcher catcher;
-    ExtensionActionAPI::Get(browser()->profile())->ShowExtensionActionPopup(
-        extension, browser(), true);
+    ExtensionActionAPI::Get(browser()->profile())
+        ->ShowExtensionActionPopupForAPICall(extension, browser());
     ASSERT_TRUE(catcher.GetNextResult());
   }
 }

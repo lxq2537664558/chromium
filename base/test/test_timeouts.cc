@@ -7,7 +7,7 @@
 #include <algorithm>
 #include <string>
 
-#include "base/clang_coverage_buildflags.h"
+#include "base/clang_profiling_buildflags.h"
 #include "base/command_line.h"
 #include "base/debug/debugger.h"
 #include "base/logging.h"
@@ -57,8 +57,13 @@ void InitializeTimeout(const char* switch_name, int min_value, int* value) {
   constexpr int kTimeoutMultiplier = 3;
 #elif defined(ADDRESS_SANITIZER) || defined(THREAD_SANITIZER)
   constexpr int kTimeoutMultiplier = 2;
-#elif BUILDFLAG(CLANG_COVERAGE)
+#elif BUILDFLAG(CLANG_PROFILING)
   // On coverage build, tests run 3x slower.
+  constexpr int kTimeoutMultiplier = 3;
+#elif !defined(NDEBUG) && defined(OS_CHROMEOS)
+  // TODO(crbug.com/1058022): reduce the multiplier back to 2x.
+  // A number of tests on ChromeOS run very close to the base limit, so ChromeOS
+  // gets 3x.
   constexpr int kTimeoutMultiplier = 3;
 #else
   constexpr int kTimeoutMultiplier = 1;
@@ -77,12 +82,7 @@ bool TestTimeouts::initialized_ = false;
 // static
 int TestTimeouts::tiny_timeout_ms_ = 100;
 int TestTimeouts::action_timeout_ms_ = 10000;
-#ifndef NDEBUG
-int TestTimeouts::action_max_timeout_ms_ = 45000;
-#else
 int TestTimeouts::action_max_timeout_ms_ = 30000;
-#endif  // NDEBUG
-
 int TestTimeouts::test_launcher_timeout_ms_ = 45000;
 
 // static

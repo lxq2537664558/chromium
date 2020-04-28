@@ -28,6 +28,7 @@
 #include "base/strings/string_util.h"
 #include "base/task/post_task.h"
 #include "base/task/task_traits.h"
+#include "base/task/thread_pool.h"
 #include "base/threading/thread_task_runner_handle.h"
 #include "base/value_conversions.h"
 #include "base/values.h"
@@ -44,7 +45,6 @@
 #include "components/prefs/scoped_user_pref_update.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
-#include "content/public/common/service_manager_connection.h"
 #include "services/data_decoder/public/cpp/json_sanitizer.h"
 
 namespace component_updater {
@@ -67,7 +67,7 @@ const char kExtensionShortName[] = "short_name";
 const char kExtensionIcons[] = "icons";
 const char kExtensionLargeIcon[] = "128";
 
-constexpr base::TaskTraits kTaskTraits = {
+constexpr base::TaskTraits kThreadPoolTaskTraits = {
     base::MayBlock(), base::TaskPriority::BEST_EFFORT,
     base::TaskShutdownBehavior::SKIP_ON_SHUTDOWN};
 
@@ -122,7 +122,7 @@ base::FilePath GetSanitizedWhitelistPath(const std::string& crx_id) {
 }
 
 void RecordUncleanUninstall() {
-  base::CreateSingleThreadTaskRunnerWithTraits({content::BrowserThread::UI})
+  base::CreateSingleThreadTaskRunner({content::BrowserThread::UI})
       ->PostTask(
           FROM_HERE,
           base::BindOnce(&base::RecordAction,
@@ -130,21 +130,23 @@ void RecordUncleanUninstall() {
                              "ManagedUsers_Whitelist_UncleanUninstall")));
 }
 
-void OnWhitelistSanitizationError(const base::FilePath& whitelist,
-                                  const std::string& error) {
-  LOG(WARNING) << "Invalid whitelist " << whitelist.value() << ": " << error;
-}
-
 void DeleteFileOnTaskRunner(const base::FilePath& path) {
-  if (!base::DeleteFile(path, true))
+  if (!base::DeleteFileRecursively(path))
     DPLOG(ERROR) << "Couldn't delete " << path.value();
 }
 
 void OnWhitelistSanitizationResult(
+    const base::FilePath& whitelist_path,
     const std::string& crx_id,
     scoped_refptr<base::SequencedTaskRunner> task_runner,
     base::OnceClosure callback,
-    const std::string& result) {
+    data_decoder::JsonSanitizer::Result result) {
+  if (!result.value) {
+    LOG(WARNING) << "Invalid whitelist " << whitelist_path.value() << ": "
+                 << *result.error;
+    return;
+  }
+
   const base::FilePath sanitized_whitelist_path =
       GetSanitizedWhitelistPath(crx_id);
   const base::FilePath install_directory = sanitized_whitelist_path.DirName();
@@ -155,8 +157,9 @@ void OnWhitelistSanitizationResult(
     }
   }
 
-  const int size = result.size();
-  if (base::WriteFile(sanitized_whitelist_path, result.data(), size) != size) {
+  const int size = result.value->size();
+  if (base::WriteFile(sanitized_whitelist_path, result.value->data(), size) !=
+      size) {
     PLOG(ERROR) << "Couldn't write file " << sanitized_whitelist_path.value();
     return;
   }
@@ -180,10 +183,9 @@ void CheckForSanitizedWhitelistOnTaskRunner(
   }
 
   data_decoder::JsonSanitizer::Sanitize(
-      content::ServiceManagerConnection::GetForProcess()->GetConnector(),
       unsafe_json,
-      base::Bind(&OnWhitelistSanitizationResult, crx_id, task_runner, callback),
-      base::Bind(&OnWhitelistSanitizationError, whitelist_path));
+      base::BindOnce(&OnWhitelistSanitizationResult, whitelist_path, crx_id,
+                     task_runner, callback));
 }
 
 void RemoveUnregisteredWhitelistsOnTaskRunner(
@@ -203,7 +205,7 @@ void RemoveUnregisteredWhitelistsOnTaskRunner(
         continue;
 
       // Ignore folders that correspond to registered whitelists.
-      if (base::ContainsKey(registered_whitelists, crx_id))
+      if (base::Contains(registered_whitelists, crx_id))
         continue;
 
       RecordUncleanUninstall();
@@ -234,7 +236,7 @@ void RemoveUnregisteredWhitelistsOnTaskRunner(
         continue;
 
       // Ignore files that correspond to registered whitelists.
-      if (base::ContainsKey(registered_whitelists, crx_id))
+      if (base::Contains(registered_whitelists, crx_id))
         continue;
 
       RecordUncleanUninstall();
@@ -257,7 +259,7 @@ class SupervisedUserWhitelistComponentInstallerPolicy
       const std::string& name,
       const RawWhitelistReadyCallback& callback)
       : crx_id_(crx_id), name_(name), callback_(callback) {}
-  ~SupervisedUserWhitelistComponentInstallerPolicy() override {}
+  ~SupervisedUserWhitelistComponentInstallerPolicy() override = default;
 
  private:
   // ComponentInstallerPolicy overrides:
@@ -363,7 +365,7 @@ class SupervisedUserWhitelistInstallerImpl
       ComponentUpdateService* cus,
       ProfileAttributesStorage* profile_attributes_storage,
       PrefService* local_state);
-  ~SupervisedUserWhitelistInstallerImpl() override {}
+  ~SupervisedUserWhitelistInstallerImpl() override = default;
 
  private:
   void RegisterComponent(const std::string& crx_id,
@@ -403,9 +405,10 @@ class SupervisedUserWhitelistInstallerImpl
       observer_;
 
   scoped_refptr<base::SequencedTaskRunner> sequenced_task_runner_ =
-      base::CreateSequencedTaskRunnerWithTraits(kTaskTraits);
+      base::ThreadPool::CreateSequencedTaskRunner(kThreadPoolTaskTraits);
 
-  base::WeakPtrFactory<SupervisedUserWhitelistInstallerImpl> weak_ptr_factory_;
+  base::WeakPtrFactory<SupervisedUserWhitelistInstallerImpl> weak_ptr_factory_{
+      this};
 
   DISALLOW_COPY_AND_ASSIGN(SupervisedUserWhitelistInstallerImpl);
 };
@@ -414,10 +417,7 @@ SupervisedUserWhitelistInstallerImpl::SupervisedUserWhitelistInstallerImpl(
     ComponentUpdateService* cus,
     ProfileAttributesStorage* profile_attributes_storage,
     PrefService* local_state)
-    : cus_(cus),
-      local_state_(local_state),
-      observer_(this),
-      weak_ptr_factory_(this) {
+    : cus_(cus), local_state_(local_state), observer_(this) {
   DCHECK(cus);
   DCHECK(local_state);
   observer_.Add(profile_attributes_storage);
@@ -478,8 +478,8 @@ void SupervisedUserWhitelistInstallerImpl::OnRawWhitelistReady(
     const base::FilePath& large_icon_path,
     const base::FilePath& whitelist_path) {
   // TODO(sorin): avoid using a single thread task runner crbug.com/744718.
-  auto task_runner = base::CreateSingleThreadTaskRunnerWithTraits(
-      kTaskTraits, base::SingleThreadTaskRunnerThreadMode::SHARED);
+  auto task_runner = base::ThreadPool::CreateSingleThreadTaskRunner(
+      kThreadPoolTaskTraits, base::SingleThreadTaskRunnerThreadMode::SHARED);
   task_runner->PostTask(
       FROM_HERE,
       base::BindOnce(
@@ -519,7 +519,7 @@ void SupervisedUserWhitelistInstallerImpl::RegisterComponents() {
     // previously registered on the command line but isn't anymore.
     const base::ListValue* clients = nullptr;
     if ((!dict->GetList(kClients, &clients) || clients->empty()) &&
-        !base::ContainsKey(command_line_whitelists, id)) {
+        !base::Contains(command_line_whitelists, id)) {
       stale_whitelists.insert(id);
       continue;
     }
@@ -572,8 +572,8 @@ void SupervisedUserWhitelistInstallerImpl::RegisterWhitelist(
     }
 
     base::Value client(client_id);
-    DCHECK(!base::ContainsValue(clients->GetList(), client));
-    clients->GetList().push_back(std::move(client));
+    DCHECK(!base::Contains(clients->GetList(), client));
+    clients->Append(std::move(client));
   }
 
   if (!newly_added) {

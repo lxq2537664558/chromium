@@ -7,7 +7,6 @@
 #include <utility>
 #include <vector>
 
-#include "ash/public/interfaces/constants.mojom.h"
 #include "base/bind.h"
 #include "base/bind_helpers.h"
 #include "base/logging.h"
@@ -18,20 +17,18 @@
 #include "chrome/browser/chromeos/customization/customization_document.h"
 #include "chrome/browser/chromeos/login/oobe_screen.h"
 #include "chrome/browser/chromeos/login/screen_manager.h"
-#include "chrome/browser/chromeos/login/screens/welcome_view.h"
 #include "chrome/browser/chromeos/login/ui/input_events_blocker.h"
 #include "chrome/browser/chromeos/login/wizard_controller.h"
 #include "chrome/browser/chromeos/system/timezone_util.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/ui/webui/chromeos/login/l10n_util.h"
+#include "chrome/browser/ui/webui/chromeos/login/welcome_screen_handler.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/grit/chromium_strings.h"
 #include "chrome/grit/generated_resources.h"
 #include "components/language/core/browser/pref_names.h"
 #include "components/prefs/pref_service.h"
 #include "content/public/browser/browser_thread.h"
-#include "content/public/common/service_manager_connection.h"
-#include "services/service_manager/public/cpp/connector.h"
 
 namespace {
 
@@ -47,15 +44,14 @@ namespace chromeos {
 // static
 WelcomeScreen* WelcomeScreen::Get(ScreenManager* manager) {
   return static_cast<WelcomeScreen*>(
-      manager->GetScreen(OobeScreen::SCREEN_OOBE_WELCOME));
+      manager->GetScreen(WelcomeView::kScreenId));
 }
 
 WelcomeScreen::WelcomeScreen(WelcomeView* view,
                              const base::RepeatingClosure& exit_callback)
-    : BaseScreen(OobeScreen::SCREEN_OOBE_WELCOME),
+    : BaseScreen(WelcomeView::kScreenId, OobeScreenPriority::DEFAULT),
       view_(view),
-      exit_callback_(exit_callback),
-      weak_factory_(this) {
+      exit_callback_(exit_callback) {
   if (view_)
     view_->Bind(this);
 
@@ -132,8 +128,7 @@ void WelcomeScreen::SetInputMethod(const std::string& input_method) {
       input_method::InputMethodManager::Get()
           ->GetActiveIMEState()
           ->GetActiveInputMethodIds();
-  if (input_method.empty() ||
-      !base::ContainsValue(input_methods, input_method)) {
+  if (input_method.empty() || !base::Contains(input_methods, input_method)) {
     LOG(WARNING) << "The input method is empty or ineligible!";
     return;
   }
@@ -172,7 +167,7 @@ void WelcomeScreen::RemoveObserver(Observer* observer) {
 ////////////////////////////////////////////////////////////////////////////////
 // BaseScreen implementation:
 
-void WelcomeScreen::Show() {
+void WelcomeScreen::ShowImpl() {
   // Here we should handle default locales, for which we do not have UI
   // resources. This would load fallback, but properly show "selected" locale
   // in the UI.
@@ -190,7 +185,7 @@ void WelcomeScreen::Show() {
   }
 }
 
-void WelcomeScreen::Hide() {
+void WelcomeScreen::HideImpl() {
   if (view_)
     view_->Hide();
 }
@@ -270,27 +265,10 @@ void WelcomeScreen::OnLanguageListResolved(
     observer.OnLanguageListReloaded();
 }
 
-void WelcomeScreen::ConnectToLocaleUpdateController() {
-  content::ServiceManagerConnection* connection =
-      content::ServiceManagerConnection::GetForProcess();
-  service_manager::Connector* connector =
-      connection ? connection->GetConnector() : nullptr;
-  // Unit tests may not have a connector.
-  if (!connector)
-    return;
-
-  connector->BindInterface(ash::mojom::kServiceName,
-                           &locale_update_controller_);
-}
-
 void WelcomeScreen::NotifyLocaleChange() {
-  if (!locale_update_controller_)
-    ConnectToLocaleUpdateController();
-
-  DCHECK(locale_update_controller_);
-  locale_update_controller_->OnLocaleChanged(
+  ash::LocaleUpdateController::Get()->OnLocaleChanged(
       std::string(), std::string(), std::string(),
-      base::DoNothing::Once<ash::mojom::LocaleNotificationResult>());
+      base::DoNothing::Once<ash::LocaleNotificationResult>());
 }
 
 }  // namespace chromeos

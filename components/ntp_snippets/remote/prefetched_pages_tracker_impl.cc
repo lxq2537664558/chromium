@@ -27,9 +27,7 @@ bool IsOfflineItemPrefetchedPage(const OfflinePageItem& offline_page_item) {
 
 PrefetchedPagesTrackerImpl::PrefetchedPagesTrackerImpl(
     OfflinePageModel* offline_page_model)
-    : initialized_(false),
-      offline_page_model_(offline_page_model),
-      weak_ptr_factory_(this) {
+    : initialized_(false), offline_page_model_(offline_page_model) {
   DCHECK(offline_page_model_);
 }
 
@@ -52,8 +50,8 @@ void PrefetchedPagesTrackerImpl::Initialize(
     // already waiting.
     if (initialization_completed_callbacks_.size() == 1) {
       PageCriteria criteria;
-      criteria.client_namespaces.push_back(
-          offline_pages::kSuggestedArticlesNamespace);
+      criteria.client_namespaces =
+          std::vector<std::string>{offline_pages::kSuggestedArticlesNamespace};
       offline_page_model_->GetPagesWithCriteria(
           criteria,
           base::BindOnce(&PrefetchedPagesTrackerImpl::OfflinePagesLoaded,
@@ -86,8 +84,8 @@ void PrefetchedPagesTrackerImpl::OfflinePageAdded(
 }
 
 void PrefetchedPagesTrackerImpl::OfflinePageDeleted(
-    const offline_pages::OfflinePageModel::DeletedPageInfo& page_info) {
-  auto offline_id_it = offline_id_to_url_mapping_.find(page_info.offline_id);
+    const offline_pages::OfflinePageItem& deleted_page) {
+  auto offline_id_it = offline_id_to_url_mapping_.find(deleted_page.offline_id);
 
   if (offline_id_it == offline_id_to_url_mapping_.end()) {
     // We did not know about this page, thus, nothing to delete.

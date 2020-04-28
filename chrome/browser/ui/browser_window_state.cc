@@ -16,6 +16,7 @@
 #include "chrome/browser/sessions/session_service.h"
 #include "chrome/browser/sessions/session_service_factory.h"
 #include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/web_applications/app_browser_controller.h"
 #include "chrome/browser/ui/window_sizer/window_sizer.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/pref_names.h"
@@ -75,11 +76,20 @@ class WindowPlacementPrefUpdate : public DictionaryPrefUpdate {
 }  // namespace
 
 std::string GetWindowName(const Browser* browser) {
-  if (browser->app_name().empty()) {
-    return browser->is_type_popup() ? prefs::kBrowserWindowPlacementPopup
-                                    : prefs::kBrowserWindowPlacement;
+  switch (browser->type()) {
+    case Browser::TYPE_NORMAL:
+#if defined(OS_CHROMEOS)
+    case Browser::TYPE_CUSTOM_TAB:
+#endif
+      return prefs::kBrowserWindowPlacement;
+    case Browser::TYPE_POPUP:
+      return prefs::kBrowserWindowPlacementPopup;
+    case Browser::TYPE_APP:
+    case Browser::TYPE_DEVTOOLS:
+      return browser->app_name();
+    case Browser::TYPE_APP_POPUP:
+      return browser->app_name() + "_popup";
   }
-  return browser->app_name();
 }
 
 std::unique_ptr<DictionaryPrefUpdate> GetWindowPlacementDictionaryReadWrite(
@@ -111,17 +121,20 @@ const base::DictionaryValue* GetWindowPlacementDictionaryReadOnly(
 }
 
 bool ShouldSaveWindowPlacement(const Browser* browser) {
-  // Only save the window placement of popups if the window is from a trusted
-  // source (v1 app, devtools, or system window).
-  return (browser->type() == Browser::TYPE_TABBED) ||
-         ((browser->type() == Browser::TYPE_POPUP) &&
-          browser->is_trusted_source());
+  // Never track app popup windows that do not have a trusted source (i.e.
+  // popup windows spawned by an app).  See similar code in
+  //   SessionService::ShouldTrackBrowser().
+  return !browser->deprecated_is_app() || browser->is_trusted_source();
 }
 
 bool SavedBoundsAreContentBounds(const Browser* browser) {
-  // Pop ups such as devtools or bookmark app windows should behave as per other
-  // windows with persisted sizes - treating the saved bounds as window bounds.
-  return browser->is_type_popup() && !browser->is_app() &&
+  // Applications other than web apps (such as devtools) save their window size.
+  // Web apps, on the other hand, have the same behavior as popups, and save
+  // their content bounds.
+  bool is_app_with_window_bounds =
+      browser->deprecated_is_app() &&
+      !web_app::AppBrowserController::IsForWebAppBrowser(browser);
+  return !browser->is_type_normal() && !is_app_with_window_bounds &&
          !browser->is_trusted_source();
 }
 
@@ -152,8 +165,8 @@ void GetSavedWindowBoundsAndShowState(const Browser* browser,
   DCHECK(bounds);
   DCHECK(show_state);
   *bounds = browser->override_bounds();
-  WindowSizer::GetBrowserWindowBoundsAndShowState(browser->app_name(), *bounds,
-                                                  browser, bounds, show_state);
+  WindowSizer::GetBrowserWindowBoundsAndShowState(*bounds, browser, bounds,
+                                                  show_state);
 
   const base::CommandLine& parsed_command_line =
       *base::CommandLine::ForCurrentProcess();

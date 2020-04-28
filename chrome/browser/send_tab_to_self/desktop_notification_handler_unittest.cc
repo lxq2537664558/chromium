@@ -49,6 +49,7 @@ class SendTabToSelfModelMock : public TestSendTabToSelfModel {
 
   MOCK_METHOD1(DeleteEntry, void(const std::string&));
   MOCK_METHOD1(DismissEntry, void(const std::string&));
+  MOCK_METHOD1(MarkEntryOpened, void(const std::string&));
 };
 
 class TestSendTabToSelfSyncService : public SendTabToSelfSyncService {
@@ -101,6 +102,8 @@ class NotificationDisplayServiceMock : public NotificationDisplayService {
 
   MOCK_METHOD2(Close, void(NotificationHandler::Type, const std::string&));
   MOCK_METHOD1(GetDisplayed, void(DisplayedNotificationsCallback));
+  MOCK_METHOD1(AddObserver, void(Observer* observer));
+  MOCK_METHOD1(RemoveObserver, void(Observer* observer));
 };
 
 std::unique_ptr<KeyedService> BuildTestNotificationDisplayService(
@@ -197,7 +200,7 @@ TEST_F(DesktopNotificationHandlerTest, ClickHandler) {
               Close(NotificationHandler::Type::SEND_TAB_TO_SELF,
                     kDesktopNotificationId))
       .WillOnce(::testing::Return());
-  EXPECT_CALL(*model_mock_, DeleteEntry(kDesktopNotificationId))
+  EXPECT_CALL(*model_mock_, MarkEntryOpened(kDesktopNotificationId))
       .WillOnce(::testing::Return());
 
   handler.OnClick(profile(), GURL(kDesktopNotificationOrigin),

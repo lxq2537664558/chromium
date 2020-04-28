@@ -16,14 +16,13 @@
 #include "build/build_config.h"
 #include "chrome/browser/ui/bookmarks/bookmark_editor.h"
 #include "content/public/browser/content_browser_client.h"
-#include "content/public/browser/resource_request_info.h"
 #include "third_party/skia/include/core/SkColor.h"
 #include "ui/gfx/native_widget_types.h"
 
 class Browser;
+class ChooserController;
 class LoginHandler;
 class Profile;
-class WebShareTarget;
 struct WebApplicationInfo;
 
 namespace base {
@@ -43,10 +42,9 @@ namespace net {
 class AuthChallengeInfo;
 }
 
-namespace payments {
-class PaymentRequest;
-class PaymentRequestDialog;
-}  // namespace payments
+namespace permissions {
+enum class PermissionAction;
+}
 
 namespace safe_browsing {
 class ChromeCleanerController;
@@ -72,7 +70,6 @@ namespace chrome {
 task_manager::TaskManagerTableModel* ShowTaskManager(Browser* browser);
 void HideTaskManager();
 
-#if !defined(OS_MACOSX)
 // Creates and shows an HTML dialog with the given delegate and context.
 // The window is automatically destroyed when it is closed.
 // Returns the created window.
@@ -82,7 +79,6 @@ void HideTaskManager();
 gfx::NativeWindow ShowWebDialog(gfx::NativeView parent,
                                 content::BrowserContext* context,
                                 ui::WebDialogDelegate* delegate);
-#endif  // !defined(OS_MACOSX)
 
 // Shows the create chrome app shortcut dialog box.
 // |close_callback| may be null.
@@ -92,45 +88,70 @@ void ShowCreateChromeAppShortcutsDialog(
     const extensions::Extension* app,
     const base::Callback<void(bool /* created */)>& close_callback);
 
+// Shows the create chrome app shortcut dialog box. Same as above but for a
+// WebApp instead of an Extension. |close_callback| may be null.
+void ShowCreateChromeAppShortcutsDialog(
+    gfx::NativeWindow parent_window,
+    Profile* profile,
+    const std::string& web_app_id,
+    const base::Callback<void(bool /* created */)>& close_callback);
+
 // Callback used to indicate whether a user has accepted the installation of a
 // web app. The boolean parameter is true when the user accepts the dialog. The
 // WebApplicationInfo parameter contains the information about the app,
 // possibly modified by the user.
 using AppInstallationAcceptanceCallback =
-    base::OnceCallback<void(bool, const WebApplicationInfo&)>;
+    base::OnceCallback<void(bool, std::unique_ptr<WebApplicationInfo>)>;
 
-// Shows the Bookmark App bubble.
-// See Extension::InitFromValueFlags::FROM_BOOKMARK for a description of
-// bookmark apps.
+// Shows the Web App bubble.
 //
 // |web_app_info| is the WebApplicationInfo being converted into an app.
-void ShowBookmarkAppDialog(content::WebContents* web_contents,
-                           const WebApplicationInfo& web_app_info,
-                           AppInstallationAcceptanceCallback callback);
+// |web_app_info.app_url| should contain a start url from a web app manifest
+// (for a Desktop PWA), or the current url (when creating a shortcut app).
+void ShowWebAppDialog(content::WebContents* web_contents,
+                      std::unique_ptr<WebApplicationInfo> web_app_info,
+                      AppInstallationAcceptanceCallback callback);
 
-// Sets whether |ShowBookmarkAppDialog| should accept immediately without any
-// user interaction.
-void SetAutoAcceptBookmarkAppDialogForTesting(bool auto_accept);
+// Sets whether |ShowWebAppDialog| should accept immediately without any
+// user interaction. |auto_open_in_window| sets whether the open in window
+// checkbox is checked.
+void SetAutoAcceptWebAppDialogForTesting(bool auto_accept,
+                                         bool auto_open_in_window);
 
-// Shows the PWA installation confirmation bubble.
+// Shows the PWA installation confirmation bubble anchored off the PWA install
+// icon in the omnibox.
 //
 // |web_app_info| is the WebApplicationInfo to be installed.
-void ShowPWAInstallDialog(content::WebContents* web_contents,
-                          const WebApplicationInfo& web_app_info,
+void ShowPWAInstallBubble(content::WebContents* web_contents,
+                          std::unique_ptr<WebApplicationInfo> web_app_info,
                           AppInstallationAcceptanceCallback callback);
 
-// Sets whether |ShowPWAInstallDialog| should accept immediately without any
+// Sets whether |ShowPWAInstallBubble| should accept immediately without any
 // user interaction.
-void SetAutoAcceptPWAInstallDialogForTesting(bool auto_accept);
+void SetAutoAcceptPWAInstallConfirmationForTesting(bool auto_accept);
+
+#if defined(OS_CHROMEOS)
+
+// Shows the print job confirmation dialog bubble anchored to the toolbar icon
+// for the extension.
+// If there's no toolbar icon, shows a modal dialog using
+// CreateBrowserModalDialogViews(). Note that this dialog is shown up even if we
+// have no |parent| window.
+void ShowPrintJobConfirmationDialog(gfx::NativeWindow parent,
+                                    const std::string& extension_id,
+                                    const base::string16& extension_name,
+                                    const gfx::ImageSkia& extension_icon,
+                                    const base::string16& print_job_title,
+                                    const base::string16& printer_name,
+                                    base::OnceCallback<void(bool)> callback);
+
+#endif  // OS_CHROMEOS
 
 #if defined(OS_MACOSX)
 
 // Bridging methods that show/hide the toolkit-views based Task Manager on Mac.
 task_manager::TaskManagerTableModel* ShowTaskManagerViews(Browser* browser);
 void HideTaskManagerViews();
-
-// Show the Views "Chrome Update" dialog.
-void ShowUpdateChromeDialogViews(gfx::NativeWindow parent);
 
 #endif  // OS_MACOSX
 
@@ -141,28 +162,6 @@ std::unique_ptr<LoginHandler> CreateLoginHandlerViews(
     const net::AuthChallengeInfo& auth_info,
     content::WebContents* web_contents,
     LoginAuthRequiredCallback auth_required_callback);
-
-// Shows the toolkit-views based BookmarkEditor.
-void ShowBookmarkEditorViews(gfx::NativeWindow parent_window,
-                             Profile* profile,
-                             const BookmarkEditor::EditDetails& details,
-                             BookmarkEditor::Configuration configuration);
-
-payments::PaymentRequestDialog* CreatePaymentRequestDialog(
-    payments::PaymentRequest* request);
-
-// Used to return the target the user picked or nullptr if the user cancelled
-// the share.
-using WebShareTargetPickerCallback =
-    base::OnceCallback<void(const WebShareTarget*)>;
-
-// Shows the dialog to choose a share target app. |targets| is a list of app
-// title and manifest URL pairs that will be shown in a list. If the user picks
-// a target, this calls |callback| with the manifest URL of the chosen target,
-// or supplies null if the user cancelled the share.
-void ShowWebShareTargetPickerDialog(gfx::NativeWindow parent_window,
-                                    std::vector<WebShareTarget> targets,
-                                    WebShareTargetPickerCallback callback);
 
 #endif  // TOOLKIT_VIEWS
 
@@ -206,7 +205,7 @@ enum class DialogIdentifier {
   ACCOUNT_CHOOSER = 32,
   ARC_APP = 33,
   AUTO_SIGNIN_FIRST_RUN = 34,
-  BOOKMARK_APP_CONFIRMATION = 35,
+  WEB_APP_CONFIRMATION = 35,
   CHOOSER_UI = 36,
   CHOOSER = 37,
   COLLECTED_COOKIES = 38,
@@ -266,6 +265,17 @@ enum class DialogIdentifier {
   INCOGNITO_WINDOW_COUNT = 92,
   CROSTINI_APP_UNINSTALLER = 93,
   CROSTINI_CONTAINER_UPGRADE = 94,
+  COOKIE_CONTROLS = 95,
+  CROSTINI_ANSIBLE_SOFTWARE_CONFIG = 96,
+  INCOGNITO_MENU = 97,
+  PHONE_CHOOSER = 98,
+  QR_CODE_GENERATOR = 99,
+  CROSTINI_FORCE_CLOSE = 100,
+  APP_UNINSTALL = 101,
+  PRINT_JOB_CONFIRMATION = 102,
+  CROSTINI_RECOVERY = 103,
+  PARENT_PERMISSION = 104,  // ChromeOS only.
+  SIGNIN_REAUTH = 105,
   // Add values above this line with a corresponding label in
   // tools/metrics/histograms/enums.xml
   MAX_VALUE
@@ -298,6 +308,24 @@ void ShowChromeCleanerRebootPrompt(
     safe_browsing::ChromeCleanerRebootDialogController* dialog_controller);
 
 #endif  // OS_WIN
+
+// Displays a dialog to notify the user that the extension installation is
+// blocked due to policy. It also show additional information from administrator
+// if it exists.
+void ShowExtensionInstallBlockedDialog(
+    const std::string& extension_name,
+    const base::string16& custom_error_message,
+    const gfx::ImageSkia& icon,
+    content::WebContents* web_contents,
+    base::OnceClosure done_callback);
+
+// Returns a OnceClosure that client code can call to close the device chooser.
+// This OnceClosure references the actual dialog as a WeakPtr, so it's safe to
+// call at any point.
+base::OnceClosure ShowDeviceChooserDialog(
+    content::RenderFrameHost* owner,
+    std::unique_ptr<ChooserController> controller);
+bool IsDeviceChooserShowingForTesting(Browser* browser);
 
 }  // namespace chrome
 

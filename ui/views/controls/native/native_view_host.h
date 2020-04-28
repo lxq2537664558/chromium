@@ -5,6 +5,7 @@
 #ifndef UI_VIEWS_CONTROLS_NATIVE_NATIVE_VIEW_HOST_H_
 #define UI_VIEWS_CONTROLS_NATIVE_NATIVE_VIEW_HOST_H_
 
+#include <memory>
 #include <string>
 
 #include "base/macros.h"
@@ -28,8 +29,7 @@ extern const char kWidgetNativeViewHostKey[];
 // the platform-specific work of manipulating the underlying OS widget type.
 class VIEWS_EXPORT NativeViewHost : public View {
  public:
-  // The NativeViewHost's class name.
-  static const char kViewClassName[];
+  METADATA_HEADER(NativeViewHost);
 
   NativeViewHost();
   ~NativeViewHost() override;
@@ -86,11 +86,6 @@ class VIEWS_EXPORT NativeViewHost : public View {
   void set_fast_resize(bool fast_resize) { fast_resize_ = fast_resize; }
   bool fast_resize() const { return fast_resize_; }
 
-  // Value of fast_resize() the last time Layout() was invoked.
-  bool fast_resize_at_last_layout() const {
-    return fast_resize_at_last_layout_;
-  }
-
   gfx::NativeView native_view() const { return native_view_; }
 
   void NativeViewDestroyed();
@@ -109,7 +104,6 @@ class VIEWS_EXPORT NativeViewHost : public View {
   void OnVisibleBoundsChanged() override;
   void ViewHierarchyChanged(
       const ViewHierarchyChangedDetails& details) override;
-  const char* GetClassName() const override;
 
  private:
   friend class test::NativeViewHostTestBase;
@@ -137,9 +131,6 @@ class VIEWS_EXPORT NativeViewHost : public View {
   // True if the native view is being resized using the fast method described
   // in the setter/accessor above.
   bool fast_resize_ = false;
-
-  // Value of |fast_resize_| during the last call to Layout.
-  bool fast_resize_at_last_layout_ = false;
 
   DISALLOW_COPY_AND_ASSIGN(NativeViewHost);
 };

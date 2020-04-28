@@ -10,6 +10,7 @@
 #include "base/strings/utf_string_conversions.h"
 #include "ui/aura/window.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/base/pointer/touch_editing_controller.h"
 #include "ui/display/display.h"
 #include "ui/display/screen.h"
 #include "ui/gfx/canvas.h"
@@ -25,14 +26,16 @@
 namespace views {
 namespace {
 
-constexpr int kMenuCommands[] = {IDS_APP_CUT, IDS_APP_COPY, IDS_APP_PASTE};
-constexpr int kSpacingBetweenButtons = 2;
-constexpr int kButtonSeparatorColor = SkColorSetARGB(13, 0, 0, 0);
-constexpr int kMenuButtonMinHeight = 38;
-constexpr int kMenuButtonMinWidth = 63;
-constexpr int kMenuMargin = 1;
+struct MenuCommand {
+  int command_id;
+  int message_id;
+} kMenuCommands[] = {
+    {ui::TouchEditable::kCut, IDS_APP_CUT},
+    {ui::TouchEditable::kCopy, IDS_APP_COPY},
+    {ui::TouchEditable::kPaste, IDS_APP_PASTE},
+};
 
-constexpr char kEllipsesButtonText[] = "...";
+constexpr int kSpacingBetweenButtons = 2;
 constexpr int kEllipsesButtonTag = -1;
 
 }  // namespace
@@ -47,15 +50,18 @@ TouchSelectionMenuViews::TouchSelectionMenuViews(
   DCHECK(owner_);
   DCHECK(client_);
 
+  DialogDelegate::SetButtons(ui::DIALOG_BUTTON_NONE);
   set_shadow(BubbleBorder::SMALL_SHADOW);
   set_parent_window(context);
-  set_margins(gfx::Insets(kMenuMargin, kMenuMargin, kMenuMargin, kMenuMargin));
+  constexpr gfx::Insets kMenuMargins = gfx::Insets(1);
+  set_margins(kMenuMargins);
   SetCanActivate(false);
   set_adjust_if_offscreen(true);
   EnableCanvasFlippingForRTLUI(true);
 
-  SetLayoutManager(std::make_unique<BoxLayout>(
-      BoxLayout::kHorizontal, gfx::Insets(), kSpacingBetweenButtons));
+  SetLayoutManager(
+      std::make_unique<BoxLayout>(BoxLayout::Orientation::kHorizontal,
+                                  gfx::Insets(), kSpacingBetweenButtons));
 }
 
 void TouchSelectionMenuViews::ShowMenu(const gfx::Rect& anchor_rect,
@@ -98,11 +104,11 @@ bool TouchSelectionMenuViews::IsMenuAvailable(
     const ui::TouchSelectionMenuClient* client) {
   DCHECK(client);
 
-  for (size_t i = 0; i < base::size(kMenuCommands); i++) {
-    if (client->IsCommandIdEnabled(kMenuCommands[i]))
-      return true;
-  }
-  return false;
+  const auto is_enabled = [client](MenuCommand command) {
+    return client->IsCommandIdEnabled(command.command_id);
+  };
+  return std::any_of(std::cbegin(kMenuCommands), std::cend(kMenuCommands),
+                     is_enabled);
 }
 
 void TouchSelectionMenuViews::CloseMenu() {
@@ -116,19 +122,17 @@ void TouchSelectionMenuViews::CloseMenu() {
 TouchSelectionMenuViews::~TouchSelectionMenuViews() = default;
 
 void TouchSelectionMenuViews::CreateButtons() {
-  for (size_t i = 0; i < base::size(kMenuCommands); i++) {
-    int command_id = kMenuCommands[i];
-    if (!client_->IsCommandIdEnabled(command_id))
+  for (const auto& command : kMenuCommands) {
+    if (!client_->IsCommandIdEnabled(command.command_id))
       continue;
 
-    Button* button =
-        CreateButton(l10n_util::GetStringUTF16(command_id), command_id);
+    Button* button = CreateButton(l10n_util::GetStringUTF16(command.message_id),
+                                  command.command_id);
     AddChildView(button);
   }
 
   // Finally, add ellipses button.
-  AddChildView(
-      CreateButton(base::UTF8ToUTF16(kEllipsesButtonText), kEllipsesButtonTag));
+  AddChildView(CreateButton(base::ASCIIToUTF16("..."), kEllipsesButtonTag));
   InvalidateLayout();
 }
 
@@ -137,7 +141,8 @@ LabelButton* TouchSelectionMenuViews::CreateButton(const base::string16& title,
   base::string16 label =
       gfx::RemoveAcceleratorChar(title, '&', nullptr, nullptr);
   LabelButton* button = new LabelButton(this, label, style::CONTEXT_TOUCH_MENU);
-  button->SetMinSize(gfx::Size(kMenuButtonMinWidth, kMenuButtonMinHeight));
+  constexpr gfx::Size kMenuButtonMinSize = gfx::Size(63, 38);
+  button->SetMinSize(kMenuButtonMinSize);
   button->SetFocusForPlatform();
   button->SetHorizontalAlignment(gfx::ALIGN_CENTER);
   button->set_tag(tag);
@@ -160,7 +165,8 @@ void TouchSelectionMenuViews::OnPaint(gfx::Canvas* canvas) {
     const View* child = *i;
     int x = child->bounds().right() + kSpacingBetweenButtons / 2;
     canvas->FillRect(gfx::Rect(x, 0, 1, child->height()),
-                     kButtonSeparatorColor);
+                     GetNativeTheme()->GetSystemColor(
+                         ui::NativeTheme::kColorId_SeparatorColor));
   }
 }
 
@@ -171,10 +177,6 @@ void TouchSelectionMenuViews::WindowClosing() {
     DisconnectOwner();
 }
 
-int TouchSelectionMenuViews::GetDialogButtons() const {
-  return ui::DIALOG_BUTTON_NONE;
-}
-
 void TouchSelectionMenuViews::ButtonPressed(Button* sender,
                                             const ui::Event& event) {
   CloseMenu();
@@ -183,5 +185,9 @@ void TouchSelectionMenuViews::ButtonPressed(Button* sender,
   else
     client_->RunContextMenu();
 }
+
+BEGIN_METADATA(TouchSelectionMenuViews)
+METADATA_PARENT_CLASS(BubbleDialogDelegateView)
+END_METADATA()
 
 }  // namespace views

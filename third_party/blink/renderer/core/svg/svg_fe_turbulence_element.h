@@ -45,8 +45,6 @@ class SVGFETurbulenceElement final
   DEFINE_WRAPPERTYPEINFO();
 
  public:
-  DECLARE_NODE_FACTORY(SVGFETurbulenceElement);
-
   explicit SVGFETurbulenceElement(Document&);
 
   SVGAnimatedNumber* baseFrequencyX() { return base_frequency_->FirstNumber(); }
@@ -60,7 +58,7 @@ class SVGFETurbulenceElement final
   SVGAnimatedEnumeration<TurbulenceType>* type() { return type_.Get(); }
   SVGAnimatedInteger* numOctaves() { return num_octaves_.Get(); }
 
-  void Trace(blink::Visitor*) override;
+  void Trace(Visitor*) override;
 
   // Turbulence takes no inputs and doesn't taint origin, so we can always
   // return false.

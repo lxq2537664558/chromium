@@ -31,16 +31,12 @@ public class SequencedTaskRunnerImplTest {
     @Test
     @SmallTest
     public void testPreNativeTasksRunInOrder() {
-        TaskRunner taskQueue = new SequencedTaskRunnerImpl(new TaskTraits());
+        TaskRunner taskQueue = new SequencedTaskRunnerImpl(TaskTraits.USER_BLOCKING);
         List<Integer> orderList = new ArrayList<>();
-        try {
-            SchedulerTestHelpers.postRecordOrderTask(taskQueue, orderList, 1);
-            SchedulerTestHelpers.postRecordOrderTask(taskQueue, orderList, 2);
-            SchedulerTestHelpers.postRecordOrderTask(taskQueue, orderList, 3);
-            SchedulerTestHelpers.postTaskAndBlockUntilRun(taskQueue);
-        } finally {
-            taskQueue.destroy();
-        }
+        SchedulerTestHelpers.postRecordOrderTask(taskQueue, orderList, 1);
+        SchedulerTestHelpers.postRecordOrderTask(taskQueue, orderList, 2);
+        SchedulerTestHelpers.postRecordOrderTask(taskQueue, orderList, 3);
+        SchedulerTestHelpers.postTaskAndBlockUntilRun(taskQueue);
         assertThat(orderList, contains(1, 2, 3));
     }
 }

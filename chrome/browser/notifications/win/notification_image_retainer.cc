@@ -15,6 +15,7 @@
 #include "base/path_service.h"
 #include "base/stl_util.h"
 #include "base/task/post_task.h"
+#include "base/task/thread_pool.h"
 #include "base/time/default_tick_clock.h"
 #include "chrome/common/chrome_paths.h"
 #include "ui/gfx/image/image.h"
@@ -56,7 +57,7 @@ std::vector<base::FilePath> GetFilesFromPrevSessions(
   for (base::FilePath current = file_enumerator.Next(); !current.empty();
        current = file_enumerator.Next()) {
     // Exclude any new file created in this session.
-    if (!base::ContainsKey(registered_names, current.BaseName()))
+    if (!base::Contains(registered_names, current.BaseName()))
       files.push_back(std::move(current));
   }
 
@@ -68,7 +69,7 @@ void DeleteFiles(std::vector<base::FilePath> paths) {
   // |file_path| can be a directory, created by the old implementation, so
   // delete it recursively.
   for (const auto& file_path : paths)
-    base::DeleteFile(file_path, /*recursive=*/true);
+    base::DeleteFileRecursively(file_path);
 }
 
 }  // namespace
@@ -79,8 +80,7 @@ NotificationImageRetainer::NotificationImageRetainer(
     : deletion_task_runner_(std::move(deletion_task_runner)),
       image_dir_(DetermineImageDirectory()),
       tick_clock_(tick_clock),
-      deletion_timer_(tick_clock),
-      weak_ptr_factory_(this) {
+      deletion_timer_(tick_clock) {
   DCHECK(deletion_task_runner_);
   DCHECK(tick_clock);
 
@@ -89,7 +89,7 @@ NotificationImageRetainer::NotificationImageRetainer(
 
 NotificationImageRetainer::NotificationImageRetainer()
     : NotificationImageRetainer(
-          base::CreateSequencedTaskRunnerWithTraits(
+          base::ThreadPool::CreateSequencedTaskRunner(
               {base::MayBlock(), base::TaskPriority::BEST_EFFORT,
                base::TaskShutdownBehavior::CONTINUE_ON_SHUTDOWN}),
           base::DefaultTickClock::GetInstance()) {}

@@ -9,41 +9,40 @@ import android.widget.Spinner;
 
 import org.chromium.base.annotations.CalledByNative;
 import org.chromium.chrome.R;
-import org.chromium.chrome.browser.ResourceId;
-import org.chromium.chrome.browser.infobar.InfoBarControlLayout.InfoBarArrayAdapter;
+import org.chromium.chrome.browser.ui.messages.infobar.ConfirmInfoBar;
+import org.chromium.chrome.browser.ui.messages.infobar.InfoBar;
+import org.chromium.chrome.browser.ui.messages.infobar.InfoBarControlLayout;
+import org.chromium.chrome.browser.ui.messages.infobar.InfoBarControlLayout.InfoBarArrayAdapter;
+import org.chromium.chrome.browser.ui.messages.infobar.InfoBarLayout;
 
 /**
  * The Update Password infobar offers the user the ability to update a password for the site.
  */
 public class UpdatePasswordInfoBar extends ConfirmInfoBar {
     private final String[] mUsernames;
-    private final int mTitleLinkRangeStart;
-    private final int mTitleLinkRangeEnd;
+    private final int mUsernameIndex;
     private final String mDetailsMessage;
     private Spinner mUsernamesSpinner;
 
     @CalledByNative
-    private static InfoBar show(int enumeratedIconId, String[] usernames, String message,
-            int titleLinkStart, int titleLinkEnd, String detailsMessage, String primaryButtonText) {
-        return new UpdatePasswordInfoBar(ResourceId.mapToDrawableId(enumeratedIconId), usernames,
-                message, titleLinkStart, titleLinkEnd, detailsMessage, primaryButtonText);
+    private static InfoBar show(int iconId, String[] usernames, int selectedUsername,
+            String message, String detailsMessage, String primaryButtonText) {
+        return new UpdatePasswordInfoBar(
+                iconId, usernames, selectedUsername, message, detailsMessage, primaryButtonText);
     }
 
-    private UpdatePasswordInfoBar(int iconDrawbleId, String[] usernames, String message,
-            int titleLinkStart, int titleLinkEnd, String detailsMessage, String primaryButtonText) {
-        super(iconDrawbleId, null, message, null, primaryButtonText, null);
-        mTitleLinkRangeStart = titleLinkStart;
-        mTitleLinkRangeEnd = titleLinkEnd;
+    private UpdatePasswordInfoBar(int iconDrawableId, String[] usernames, int selectedUsername,
+            String message, String detailsMessage, String primaryButtonText) {
+        super(iconDrawableId, R.color.infobar_icon_drawable_color, null, message, null,
+                primaryButtonText, null);
         mDetailsMessage = detailsMessage;
         mUsernames = usernames;
+        mUsernameIndex = selectedUsername;
     }
 
     @Override
     public void createContent(InfoBarLayout layout) {
         super.createContent(layout);
-        if (mTitleLinkRangeStart != 0 && mTitleLinkRangeEnd != 0) {
-            layout.setInlineMessageLink(mTitleLinkRangeStart, mTitleLinkRangeEnd);
-        }
 
         InfoBarControlLayout usernamesLayout = layout.addControlLayout();
         if (mUsernames.length > 1) {
@@ -51,6 +50,7 @@ public class UpdatePasswordInfoBar extends ConfirmInfoBar {
                     new InfoBarArrayAdapter<String>(getContext(), mUsernames);
             mUsernamesSpinner = usernamesLayout.addSpinner(
                     R.id.password_infobar_accounts_spinner, usernamesAdapter);
+            mUsernamesSpinner.setSelection(mUsernameIndex);
         } else {
             usernamesLayout.addDescription(mUsernames[0]);
         }

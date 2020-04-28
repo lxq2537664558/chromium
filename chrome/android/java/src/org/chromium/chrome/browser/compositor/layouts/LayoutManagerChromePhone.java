@@ -13,10 +13,11 @@ import org.chromium.chrome.browser.compositor.overlays.SceneOverlay;
 import org.chromium.chrome.browser.contextualsearch.ContextualSearchManagementDelegate;
 import org.chromium.chrome.browser.device.DeviceClassManager;
 import org.chromium.chrome.browser.tab.Tab;
+import org.chromium.chrome.browser.tab.TabLaunchType;
 import org.chromium.chrome.browser.tabmodel.TabCreatorManager;
-import org.chromium.chrome.browser.tabmodel.TabLaunchType;
 import org.chromium.chrome.browser.tabmodel.TabModelSelector;
 import org.chromium.chrome.browser.tabmodel.TabModelUtils;
+import org.chromium.chrome.features.start_surface.StartSurface;
 import org.chromium.ui.resources.dynamics.DynamicResourceLoader;
 
 /**
@@ -25,25 +26,17 @@ import org.chromium.ui.resources.dynamics.DynamicResourceLoader;
  */
 public class LayoutManagerChromePhone extends LayoutManagerChrome {
     // Layouts
-    private final SimpleAnimationLayout mSimpleAnimationLayout;
+    private SimpleAnimationLayout mSimpleAnimationLayout;
 
     /**
      * Creates an instance of a {@link LayoutManagerChromePhone}.
-     * @param host                A {@link LayoutManagerHost} instance.
-     * @param swipeDownDelegate   OverviewModeController to delegate tab switcher behavior.
+     * @param host         A {@link LayoutManagerHost} instance.
+     * @param startSurface An interface to talk to the Grid Tab Switcher. If it's NULL, VTS
+     *                     should be used, otherwise GTS should be used.
      */
-    public LayoutManagerChromePhone(
-            LayoutManagerHost host, OverviewModeController swipeDownDelegate) {
-        super(host, true, swipeDownDelegate);
-        Context context = host.getContext();
-        LayoutRenderHost renderHost = host.getLayoutRenderHost();
+    public LayoutManagerChromePhone(LayoutManagerHost host, StartSurface startSurface) {
+        super(host, true, startSurface);
 
-        // Build Layouts
-        mSimpleAnimationLayout = new SimpleAnimationLayout(context, this, renderHost);
-
-        // Set up layout parameters
-        mStaticLayout.setLayoutHandlesTabLifecycles(false);
-        mToolbarSwipeLayout.setMovesToolbar(true);
     }
 
     @Override
@@ -51,11 +44,32 @@ public class LayoutManagerChromePhone extends LayoutManagerChrome {
             TabContentManager content, ViewGroup androidContentContainer,
             ContextualSearchManagementDelegate contextualSearchDelegate,
             DynamicResourceLoader dynamicResourceLoader) {
+        Context context = mHost.getContext();
+        LayoutRenderHost renderHost = mHost.getLayoutRenderHost();
+
+        // Build Layouts
+        mSimpleAnimationLayout = new SimpleAnimationLayout(context, this, renderHost);
+
+        // Set up layout parameters
+        mStaticLayout.setLayoutHandlesTabLifecycles(false);
+
         super.init(selector, creator, content, androidContentContainer, contextualSearchDelegate,
                 dynamicResourceLoader);
 
+        mToolbarSwipeLayout.setMovesToolbar(true);
+
         // Initialize Layouts
         mSimpleAnimationLayout.setTabModelSelector(selector, content);
+    }
+
+    @Override
+    public boolean closeAllTabsRequest(boolean incognito) {
+        if (getActiveLayout() == mStaticLayout && !incognito) {
+            startShowing(DeviceClassManager.enableAccessibilityLayout() ? mOverviewListLayout
+                                                                        : mOverviewLayout,
+                    /* animate= */ false);
+        }
+        return super.closeAllTabsRequest(incognito);
     }
 
     @Override
@@ -107,10 +121,10 @@ public class LayoutManagerChromePhone extends LayoutManagerChrome {
         }
         getActiveLayout().onTabClosed(time(), id, nextId, incognito);
         Tab nextTab = getTabById(nextId);
-        if (nextTab != null) nextTab.requestFocus();
+        if (nextTab != null && nextTab.getView() != null) nextTab.getView().requestFocus();
         boolean animate = !tabRemoved && animationsEnabled();
         if (getActiveLayout() != overviewLayout && showOverview && !animate) {
-            mOverviewModeDelegate.showOverview(false);
+            showOverview(false);
         }
     }
 
@@ -142,7 +156,7 @@ public class LayoutManagerChromePhone extends LayoutManagerChrome {
 
         if (willBeSelected) {
             Tab newTab = TabModelUtils.getTabById(getTabModelSelector().getModel(isIncognito), id);
-            if (newTab != null) newTab.requestFocus();
+            if (newTab != null && newTab.getView() != null) newTab.getView().requestFocus();
         }
     }
 

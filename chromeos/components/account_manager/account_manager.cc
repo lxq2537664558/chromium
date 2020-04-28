@@ -8,6 +8,7 @@
 #include <utility>
 
 #include "base/bind.h"
+#include "base/bind_helpers.h"
 #include "base/files/file_util.h"
 #include "base/files/important_file_writer.h"
 #include "base/location.h"
@@ -15,6 +16,7 @@
 #include "base/metrics/histogram_functions.h"
 #include "base/sequenced_task_runner.h"
 #include "base/task/post_task.h"
+#include "base/task/thread_pool.h"
 #include "base/task_runner_util.h"
 #include "base/threading/sequenced_task_runner_handle.h"
 #include "chromeos/constants/chromeos_pref_names.h"
@@ -22,8 +24,9 @@
 #include "components/prefs/pref_service.h"
 #include "google_apis/gaia/gaia_auth_consumer.h"
 #include "google_apis/gaia/gaia_auth_fetcher.h"
+#include "google_apis/gaia/gaia_auth_util.h"
+#include "google_apis/gaia/gaia_constants.h"
 #include "google_apis/gaia/oauth2_access_token_fetcher_impl.h"
-#include "google_apis/gaia/oauth2_token_service_delegate.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "third_party/protobuf/src/google/protobuf/message_lite.h"
 
@@ -38,9 +41,32 @@ constexpr int kTokensFileMaxSizeInBytes = 100000;  // ~100 KB.
 constexpr char kNumAccountsMetricName[] = "AccountManager.NumAccounts";
 constexpr int kMaxNumAccountsMetric = 10;
 
+// These values are persisted to logs. Entries should not be renumbered and
+// numeric values should never be reused.
+// Note: Enums labels are at |AccountManagerTokenLoadStatus|.
+enum class TokenLoadStatus {
+  kSuccess = 0,
+  kFileReadError = 1,
+  kFileParseError = 2,
+  kAccountCorruptionDetected = 3,
+  kMaxValue = kAccountCorruptionDetected,
+};
+
 void RecordNumAccountsMetric(const int num_accounts) {
   base::UmaHistogramExactLinear(kNumAccountsMetricName, num_accounts,
                                 kMaxNumAccountsMetric + 1);
+}
+
+void RecordTokenLoadStatus(const TokenLoadStatus& token_load_status) {
+  base::UmaHistogramEnumeration("AccountManager.TokenLoadStatus",
+                                token_load_status);
+}
+
+void RecordInitializationTime(
+    const base::TimeTicks& initialization_start_time) {
+  base::UmaHistogramMicrosecondsTimes(
+      "AccountManager.InitializationTime",
+      base::TimeTicks::Now() - initialization_start_time);
 }
 
 }  // namespace
@@ -50,7 +76,7 @@ const char AccountManager::kActiveDirectoryDummyToken[] = "dummy_ad_token";
 
 // static
 const char* const AccountManager::kInvalidToken =
-    OAuth2TokenServiceDelegate::kInvalidRefreshToken;
+    GaiaConstants::kInvalidRefreshToken;
 
 class AccountManager::GaiaTokenRevocationRequest : public GaiaAuthConsumer {
  public:
@@ -59,9 +85,7 @@ class AccountManager::GaiaTokenRevocationRequest : public GaiaAuthConsumer {
       AccountManager::DelayNetworkCallRunner delay_network_call_runner,
       const std::string& refresh_token,
       base::WeakPtr<AccountManager> account_manager)
-      : account_manager_(account_manager),
-        refresh_token_(refresh_token),
-        weak_factory_(this) {
+      : account_manager_(account_manager), refresh_token_(refresh_token) {
     DCHECK(!refresh_token_.empty());
     gaia_auth_fetcher_ = std::make_unique<GaiaAuthFetcher>(
         this, gaia::GaiaSource::kChromeOS, url_loader_factory);
@@ -99,7 +123,7 @@ class AccountManager::GaiaTokenRevocationRequest : public GaiaAuthConsumer {
   // Refresh token to be revoked from GAIA.
   std::string refresh_token_;
 
-  base::WeakPtrFactory<GaiaTokenRevocationRequest> weak_factory_;
+  base::WeakPtrFactory<GaiaTokenRevocationRequest> weak_factory_{this};
   DISALLOW_COPY_AND_ASSIGN(GaiaTokenRevocationRequest);
 };
 
@@ -128,7 +152,7 @@ AccountManager::Observer::Observer() = default;
 
 AccountManager::Observer::~Observer() = default;
 
-AccountManager::AccountManager() : weak_factory_(this) {}
+AccountManager::AccountManager() {}
 
 // static
 void AccountManager::RegisterPrefs(PrefRegistrySimple* registry) {
@@ -137,16 +161,29 @@ void AccountManager::RegisterPrefs(PrefRegistrySimple* registry) {
       true /* default_value */);
 }
 
+void AccountManager::SetPrefService(PrefService* pref_service) {
+  DCHECK(pref_service);
+  pref_service_ = pref_service;
+}
+
+void AccountManager::Initialize(
+    const base::FilePath& home_dir,
+    scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
+    DelayNetworkCallRunner delay_network_call_runner) {
+  Initialize(home_dir, url_loader_factory, delay_network_call_runner,
+             base::DoNothing());
+}
+
 void AccountManager::Initialize(
     const base::FilePath& home_dir,
     scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
     DelayNetworkCallRunner delay_network_call_runner,
-    PrefService* pref_service) {
+    base::OnceClosure initialization_callback) {
   Initialize(
       home_dir, url_loader_factory, std::move(delay_network_call_runner),
-      base::CreateSequencedTaskRunnerWithTraits(
+      base::ThreadPool::CreateSequencedTaskRunner(
           {base::TaskShutdownBehavior::BLOCK_SHUTDOWN, base::MayBlock()}),
-      pref_service);
+      std::move(initialization_callback));
 }
 
 void AccountManager::Initialize(
@@ -154,9 +191,10 @@ void AccountManager::Initialize(
     scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
     DelayNetworkCallRunner delay_network_call_runner,
     scoped_refptr<base::SequencedTaskRunner> task_runner,
-    PrefService* pref_service) {
+    base::OnceClosure initialization_callback) {
   VLOG(1) << "AccountManager::Initialize";
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  const base::TimeTicks initialization_start_time = base::TimeTicks::Now();
 
   if (init_state_ != InitializationState::kNotStarted) {
     // |Initialize| has already been called once. To help diagnose possible race
@@ -164,6 +202,7 @@ void AccountManager::Initialize(
     // invocation of |Initialize| matches the one it is currently being called
     // with.
     DCHECK_EQ(home_dir, writer_->path().DirName());
+    std::move(initialization_callback).Run();
     return;
   }
 
@@ -173,14 +212,14 @@ void AccountManager::Initialize(
   task_runner_ = task_runner;
   writer_ = std::make_unique<base::ImportantFileWriter>(
       home_dir.Append(kTokensFileName), task_runner_);
-  pref_service_ = pref_service;
+  initialization_callbacks_.emplace_back(std::move(initialization_callback));
 
   PostTaskAndReplyWithResult(
       task_runner_.get(), FROM_HERE,
       base::BindOnce(&AccountManager::LoadAccountsFromDisk, writer_->path()),
       base::BindOnce(
           &AccountManager::InsertAccountsAndRunInitializationCallbacks,
-          weak_factory_.GetWeakPtr()));
+          weak_factory_.GetWeakPtr(), initialization_start_time));
 }
 
 // static
@@ -196,6 +235,7 @@ AccountManager::AccountMap AccountManager::LoadAccountsFromDisk(
     if (base::PathExists(tokens_file_path)) {
       // The file exists but cannot be read from.
       LOG(ERROR) << "Unable to read accounts from disk";
+      RecordTokenLoadStatus(TokenLoadStatus::kFileReadError);
     }
     return accounts;
   }
@@ -204,9 +244,11 @@ AccountManager::AccountMap AccountManager::LoadAccountsFromDisk(
   success = accounts_proto.ParseFromString(token_file_data);
   if (!success) {
     LOG(ERROR) << "Failed to parse tokens from file";
+    RecordTokenLoadStatus(TokenLoadStatus::kFileParseError);
     return accounts;
   }
 
+  bool is_any_account_corrupt = false;
   for (const auto& account : accounts_proto.accounts()) {
     AccountManager::AccountKey account_key{account.id(),
                                            account.account_type()};
@@ -214,21 +256,29 @@ AccountManager::AccountMap AccountManager::LoadAccountsFromDisk(
     if (!account_key.IsValid()) {
       LOG(WARNING) << "Ignoring invalid account_key load from disk: "
                    << account_key;
+      is_any_account_corrupt = true;
       continue;
     }
     accounts[account_key] = AccountInfo{account.raw_email(), account.token()};
   }
+  if (is_any_account_corrupt) {
+    RecordTokenLoadStatus(TokenLoadStatus::kAccountCorruptionDetected);
+    return accounts;
+  }
 
+  RecordTokenLoadStatus(TokenLoadStatus::kSuccess);
   return accounts;
 }
 
 void AccountManager::InsertAccountsAndRunInitializationCallbacks(
+    const base::TimeTicks& initialization_start_time,
     const AccountMap& accounts) {
   VLOG(1) << "AccountManager::RunInitializationCallbacks";
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   accounts_.insert(accounts.begin(), accounts.end());
   init_state_ = InitializationState::kInitialized;
+  RecordInitializationTime(initialization_start_time);
 
   for (auto& cb : initialization_callbacks_) {
     std::move(cb).Run();
@@ -245,6 +295,11 @@ void AccountManager::InsertAccountsAndRunInitializationCallbacks(
 
 AccountManager::~AccountManager() {
   // AccountManager is supposed to be used as a leaky global.
+}
+
+bool AccountManager::IsInitialized() const {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  return init_state_ == InitializationState::kInitialized;
 }
 
 void AccountManager::RunOnInitialization(base::OnceClosure closure) {
@@ -317,10 +372,32 @@ void AccountManager::RemoveAccountInternal(const AccountKey& account_key) {
   }
 
   const std::string raw_email = it->second.raw_email;
-  MaybeRevokeTokenOnServer(account_key);
+  const std::string old_token = it->second.token;
   accounts_.erase(it);
   PersistAccountsAsync();
   NotifyAccountRemovalObservers(Account{account_key, raw_email});
+  MaybeRevokeTokenOnServer(account_key, old_token);
+}
+
+void AccountManager::RemoveAccount(const std::string& email) {
+  DCHECK_NE(init_state_, InitializationState::kNotStarted);
+
+  base::OnceClosure closure =
+      base::BindOnce(&AccountManager::RemoveAccountByEmailInternal,
+                     weak_factory_.GetWeakPtr(), email);
+  RunOnInitialization(std::move(closure));
+}
+
+void AccountManager::RemoveAccountByEmailInternal(const std::string& email) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  DCHECK_EQ(init_state_, InitializationState::kInitialized);
+
+  for (const std::pair<AccountKey, AccountInfo> account : accounts_) {
+    if (gaia::AreEmailsSame(account.second.raw_email, email)) {
+      RemoveAccountInternal(account.first /* account_key */);
+      return;
+    }
+  }
 }
 
 void AccountManager::UpsertAccount(const AccountKey& account_key,
@@ -397,7 +474,14 @@ void AccountManager::UpsertAccountInternal(const AccountKey& account_key,
 
   auto it = accounts_.find(account_key);
   if (it == accounts_.end()) {
-    // New account. Insert it.
+    // This is a new account. Insert it.
+
+    // New account insertions can only happen through a user action, which
+    // implies that |Profile| must have been fully initialized at this point.
+    // |ProfileImpl|'s constructor guarantees that
+    // |AccountManager::SetPrefService| has been called on this object, which in
+    // turn guarantees that |pref_service_| is not null.
+    DCHECK(pref_service_);
     if (!pref_service_->GetBoolean(
             chromeos::prefs::kSecondaryGoogleAccountSigninAllowed)) {
       // Secondary Account additions are disabled by policy and all flows for
@@ -412,10 +496,8 @@ void AccountManager::UpsertAccountInternal(const AccountKey& account_key,
 
   // Precondition: Iterator |it| is valid and points to a previously known
   // account.
-  const bool did_token_change = (it->second.token != account.token);
-  if (did_token_change) {
-    MaybeRevokeTokenOnServer(account_key);
-  }
+  const std::string old_token = it->second.token;
+  const bool did_token_change = (old_token != account.token);
   it->second = account;
   PersistAccountsAsync();
 
@@ -523,18 +605,12 @@ bool AccountManager::HasDummyGaiaToken(const AccountKey& account_key) const {
   return it != accounts_.end() && it->second.token == kInvalidToken;
 }
 
-void AccountManager::MaybeRevokeTokenOnServer(const AccountKey& account_key) {
-  auto it = accounts_.find(account_key);
-  if (it == accounts_.end()) {
-    return;
-  }
-
-  const std::string& token = it->second.token;
-
+void AccountManager::MaybeRevokeTokenOnServer(const AccountKey& account_key,
+                                              const std::string& old_token) {
   if ((account_key.account_type ==
        account_manager::AccountType::ACCOUNT_TYPE_GAIA) &&
-      !token.empty() && (token != kInvalidToken)) {
-    RevokeGaiaTokenOnServer(token);
+      !old_token.empty() && (old_token != kInvalidToken)) {
+    RevokeGaiaTokenOnServer(old_token);
   }
 }
 

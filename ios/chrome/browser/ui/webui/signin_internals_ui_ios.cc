@@ -4,17 +4,19 @@
 
 #include "ios/chrome/browser/ui/webui/signin_internals_ui_ios.h"
 
+#include <string>
+#include <vector>
+
 #include "base/hash/hash.h"
-#include "components/grit/components_resources.h"
-#include "components/signin/core/browser/about_signin_internals.h"
+#include "components/grit/dev_ui_components_resources.h"
+#include "components/signin/public/identity_manager/accounts_in_cookie_jar_info.h"
+#include "components/signin/public/identity_manager/identity_manager.h"
 #include "ios/chrome/browser/browser_state/chrome_browser_state.h"
 #include "ios/chrome/browser/chrome_url_constants.h"
 #include "ios/chrome/browser/signin/about_signin_internals_factory.h"
 #include "ios/chrome/browser/signin/identity_manager_factory.h"
-#include "ios/web/public/web_ui_ios_data_source.h"
 #include "ios/web/public/webui/web_ui_ios.h"
-#include "services/identity/public/cpp/accounts_in_cookie_jar_info.h"
-#include "services/identity/public/cpp/identity_manager.h"
+#include "ios/web/public/webui/web_ui_ios_data_source.h"
 
 namespace {
 
@@ -22,10 +24,9 @@ web::WebUIIOSDataSource* CreateSignInInternalsHTMLSource() {
   web::WebUIIOSDataSource* source =
       web::WebUIIOSDataSource::Create(kChromeUISignInInternalsHost);
 
-  source->SetJsonPath("strings.js");
+  source->UseStringsJs();
   source->AddResourcePath("signin_internals.js", IDR_SIGNIN_INTERNALS_INDEX_JS);
   source->SetDefaultResource(IDR_SIGNIN_INTERNALS_INDEX_HTML);
-  source->UseGzip();
 
   return source;
 }
@@ -34,8 +35,7 @@ web::WebUIIOSDataSource* CreateSignInInternalsHTMLSource() {
 
 SignInInternalsUIIOS::SignInInternalsUIIOS(web::WebUIIOS* web_ui)
     : WebUIIOSController(web_ui) {
-  ios::ChromeBrowserState* browser_state =
-      ios::ChromeBrowserState::FromWebUIIOS(web_ui);
+  ChromeBrowserState* browser_state = ChromeBrowserState::FromWebUIIOS(web_ui);
   DCHECK(browser_state);
   web::WebUIIOSDataSource::Add(browser_state,
                                CreateSignInInternalsHTMLSource());
@@ -47,8 +47,8 @@ SignInInternalsUIIOS::SignInInternalsUIIOS(web::WebUIIOS* web_ui)
 }
 
 SignInInternalsUIIOS::~SignInInternalsUIIOS() {
-  ios::ChromeBrowserState* browser_state =
-      ios::ChromeBrowserState::FromWebUIIOS(web_ui());
+  ChromeBrowserState* browser_state =
+      ChromeBrowserState::FromWebUIIOS(web_ui());
   DCHECK(browser_state);
   AboutSigninInternals* about_signin_internals =
       ios::AboutSigninInternalsFactory::GetForBrowserState(browser_state);
@@ -61,8 +61,8 @@ bool SignInInternalsUIIOS::OverrideHandleWebUIIOSMessage(
     const std::string& name,
     const base::ListValue& content) {
   if (name == "getSigninInfo") {
-    ios::ChromeBrowserState* browser_state =
-        ios::ChromeBrowserState::FromWebUIIOS(web_ui());
+    ChromeBrowserState* browser_state =
+        ChromeBrowserState::FromWebUIIOS(web_ui());
     DCHECK(browser_state);
 
     AboutSigninInternals* about_signin_internals =
@@ -76,9 +76,9 @@ bool SignInInternalsUIIOS::OverrideHandleWebUIIOSMessage(
       std::vector<const base::Value*> args{&status};
       web_ui()->CallJavascriptFunction(
           "chrome.signin.getSigninInfo.handleReply", args);
-      identity::IdentityManager* identity_manager =
+      signin::IdentityManager* identity_manager =
           IdentityManagerFactory::GetForBrowserState(browser_state);
-      identity::AccountsInCookieJarInfo accounts_in_cookie_jar =
+      signin::AccountsInCookieJarInfo accounts_in_cookie_jar =
           identity_manager->GetAccountsInCookieJar();
       if (accounts_in_cookie_jar.accounts_are_fresh) {
         about_signin_internals->OnAccountsInCookieUpdated(

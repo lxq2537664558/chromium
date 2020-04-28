@@ -68,7 +68,6 @@ static_library("libxslt") {
     "src/libxslt/xsltlocale.h",
     "src/libxslt/xsltutils.c",
     "src/libxslt/xsltutils.h",
-    "src/libxslt/xsltwin32config.h.in",
     "win32/config.h",
   ]
 
@@ -97,7 +96,7 @@ static_library("libxslt") {
     include_dirs = [ "mac" ]
   }
 
-  deps = [
-    "//third_party/libxml",
-  ]
+  deps = [ "//third_party/libxml" ]
+
+  visibility = [ "//third_party/blink/renderer/*" ]
 }

@@ -12,11 +12,9 @@
 static const double kSubtleOpacityScale = 0.45;
 static const double kPronouncedOpacityScale = 1.0;
 
-// How long the hover state takes.
-static const int kTrackHoverDurationMs = 200;
-
 GlowHoverController::GlowHoverController(views::View* view)
-    : view_(view),
+    : AnimationDelegateViews(view),
+      view_(view),
       animation_(this),
       opacity_scale_(kSubtleOpacityScale),
       subtle_opacity_scale_(kSubtleOpacityScale) {
@@ -44,7 +42,7 @@ void GlowHoverController::Show(TabStyle::ShowHoverStyle style) {
   switch (style) {
     case TabStyle::ShowHoverStyle::kSubtle:
       opacity_scale_ = subtle_opacity_scale_;
-      animation_.SetSlideDuration(kTrackHoverDurationMs);
+      animation_.SetSlideDuration(base::TimeDelta::FromMilliseconds(200));
       animation_.SetTweenType(gfx::Tween::EASE_OUT);
       animation_.Show();
       break;

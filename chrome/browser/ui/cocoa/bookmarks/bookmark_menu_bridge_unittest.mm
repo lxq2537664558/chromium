@@ -2,16 +2,21 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "chrome/browser/ui/cocoa/bookmarks/bookmark_menu_bridge.h"
+
 #import <AppKit/AppKit.h>
 
+#include "base/guid.h"
 #include "base/strings/string16.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/app/chrome_command_ids.h"
-#include "chrome/browser/ui/cocoa/bookmarks/bookmark_menu_bridge.h"
-#include "chrome/browser/ui/cocoa/test/cocoa_profile_test.h"
+#include "chrome/browser/bookmarks/bookmark_model_factory.h"
+#include "chrome/browser/ui/cocoa/test/cocoa_test_helper.h"
+#include "chrome/test/base/browser_with_test_window_test.h"
 #include "chrome/test/base/testing_profile.h"
 #include "components/bookmarks/browser/bookmark_model.h"
+#include "components/bookmarks/test/bookmark_test_helpers.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #import "testing/gtest_mac.h"
 #include "testing/platform_test.h"
@@ -20,22 +25,24 @@ using base::ASCIIToUTF16;
 using bookmarks::BookmarkModel;
 using bookmarks::BookmarkNode;
 
-// TODO(jrg): see refactor comment in bookmark_bar_state_controller_unittest.mm
-class BookmarkMenuBridgeTest : public CocoaProfileTest {
+class BookmarkMenuBridgeTest : public BrowserWithTestWindowTest {
  public:
   BookmarkMenuBridgeTest() {}
 
   void SetUp() override {
-     CocoaProfileTest::SetUp();
-     ASSERT_TRUE(profile());
+    BrowserWithTestWindowTest::SetUp();
 
-     menu_.reset([[NSMenu alloc] initWithTitle:@"test"]);
-     bridge_ = std::make_unique<BookmarkMenuBridge>(profile(), menu_);
+    profile()->CreateBookmarkModel(true);
+    bookmarks::test::WaitForBookmarkModelToLoad(
+        BookmarkModelFactory::GetForBrowserContext(profile()));
+    menu_.reset([[NSMenu alloc] initWithTitle:@"test"]);
+
+    bridge_ = std::make_unique<BookmarkMenuBridge>(profile(), menu_);
   }
 
   void TearDown() override {
     bridge_ = nullptr;
-    CocoaProfileTest::TearDown();
+    BrowserWithTestWindowTest::TearDown();
   }
 
   void UpdateRootMenu() { bridge_->UpdateMenu(menu_, nullptr); }
@@ -75,6 +82,8 @@ class BookmarkMenuBridgeTest : public CocoaProfileTest {
   std::unique_ptr<BookmarkMenuBridge> bridge_;
 
  private:
+  CocoaTestHelper cocoa_test_helper_;
+
   DISALLOW_COPY_AND_ASSIGN(BookmarkMenuBridgeTest);
 };
 
@@ -95,7 +104,7 @@ TEST_F(BookmarkMenuBridgeTest, TestBookmarkMenuAutoSeparator) {
   EXPECT_EQ(2, [menu_ numberOfItems]);
   // Remove the new bookmark and reload and we should have 0 items again
   // because the separator should have been removed as well.
-  model->Remove(parent->GetChild(0));
+  model->Remove(parent->children().front().get());
   UpdateRootMenu();
   EXPECT_EQ(0, [menu_ numberOfItems]);
 }
@@ -255,7 +264,7 @@ TEST_F(BookmarkMenuBridgeTest, TestGetMenuItemForNode) {
   // There will be a new submenu each time, Cocoa will update it if needed.
   bridge_->UpdateMenu([[menu_ itemAtIndex:1] submenu], folder);
 
-  EXPECT_TRUE(MenuItemForNode(bridge_.get(), folder->GetChild(0)));
+  EXPECT_TRUE(MenuItemForNode(bridge_.get(), folder->children().front().get()));
 
   model->AddURL(folder, 1, ASCIIToUTF16("Test 2"), GURL("http://second-test"));
 
@@ -272,13 +281,13 @@ TEST_F(BookmarkMenuBridgeTest, TestGetMenuItemForNode) {
   EXPECT_FALSE([old_menu delegate]);
 
   bridge_->UpdateMenu([[menu_ itemAtIndex:1] submenu], folder);
-  EXPECT_TRUE(MenuItemForNode(bridge_.get(), folder->GetChild(0)));
-  EXPECT_TRUE(MenuItemForNode(bridge_.get(), folder->GetChild(1)));
+  EXPECT_TRUE(MenuItemForNode(bridge_.get(), folder->children()[0].get()));
+  EXPECT_TRUE(MenuItemForNode(bridge_.get(), folder->children()[1].get()));
 
-  const BookmarkNode* removed_node = folder->GetChild(0);
-  EXPECT_EQ(2, folder->child_count());
-  model->Remove(folder->GetChild(0));
-  EXPECT_EQ(1, folder->child_count());
+  const BookmarkNode* removed_node = folder->children()[0].get();
+  EXPECT_EQ(2u, folder->children().size());
+  model->Remove(folder->children()[0].get());
+  EXPECT_EQ(1u, folder->children().size());
 
   EXPECT_FALSE(menu_is_valid());
   UpdateRootMenu();
@@ -286,15 +295,16 @@ TEST_F(BookmarkMenuBridgeTest, TestGetMenuItemForNode) {
   // Initially both will be false, but the submenu corresponding to the folder
   // will have a delegate set again, allowing it to be updated on demand.
   EXPECT_FALSE(MenuItemForNode(bridge_.get(), removed_node));
-  EXPECT_FALSE(MenuItemForNode(bridge_.get(), folder->GetChild(0)));
+  EXPECT_FALSE(MenuItemForNode(bridge_.get(), folder->children()[0].get()));
 
   UpdateRootMenu();
   bridge_->UpdateMenu([[menu_ itemAtIndex:1] submenu], folder);
 
   EXPECT_FALSE(MenuItemForNode(bridge_.get(), removed_node));
-  EXPECT_TRUE(MenuItemForNode(bridge_.get(), folder->GetChild(0)));
+  EXPECT_TRUE(MenuItemForNode(bridge_.get(), folder->children()[0].get()));
 
-  const BookmarkNode empty_node(GURL("http://no-where/"));
+  const BookmarkNode empty_node(/*id=*/0, base::GenerateGUID(),
+                                GURL("http://no-where/"));
   EXPECT_FALSE(MenuItemForNode(bridge_.get(), &empty_node));
   EXPECT_FALSE(MenuItemForNode(bridge_.get(), nullptr));
 }

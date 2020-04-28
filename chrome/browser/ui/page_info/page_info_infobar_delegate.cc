@@ -4,13 +4,13 @@
 
 #include "chrome/browser/ui/page_info/page_info_infobar_delegate.h"
 
-#include "base/logging.h"
+#include "base/check_op.h"
 #include "base/strings/utf_string_conversions.h"
 #include "build/build_config.h"
-#include "chrome/app/vector_icons/vector_icons.h"
 #include "chrome/browser/infobars/infobar_service.h"
 #include "components/infobars/core/infobar.h"
 #include "components/strings/grit/components_strings.h"
+#include "components/vector_icons/vector_icons.h"
 #include "content/public/browser/web_contents.h"
 #include "ui/base/l10n/l10n_util.h"
 
@@ -30,7 +30,7 @@ PageInfoInfoBarDelegate::GetIdentifier() const {
 }
 
 const gfx::VectorIcon& PageInfoInfoBarDelegate::GetVectorIcon() const {
-  return kSettingsIcon;
+  return vector_icons::kSettingsIcon;
 }
 
 base::string16 PageInfoInfoBarDelegate::GetMessageText() const {

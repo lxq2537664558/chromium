@@ -7,6 +7,7 @@
 
 #include <map>
 #include <memory>
+#include <string>
 #include <vector>
 
 #include "base/callback_forward.h"
@@ -15,9 +16,9 @@
 #include "base/memory/weak_ptr.h"
 #include "chrome/browser/installable/installable_data.h"
 #include "chrome/browser/installable/installable_logging.h"
-#include "chrome/browser/installable/installable_metrics.h"
 #include "chrome/browser/installable/installable_params.h"
 #include "chrome/browser/installable/installable_task_queue.h"
+#include "content/public/browser/installability_error.h"
 #include "content/public/browser/service_worker_context.h"
 #include "content/public/browser/service_worker_context_observer.h"
 #include "content/public/browser/web_contents_observer.h"
@@ -39,6 +40,14 @@ class InstallableManager
   // Returns the minimum icon size in pixels for a site to be installable.
   static int GetMinimumIconSizeInPx();
 
+  // Returns true if the overall security state of |web_contents| is sufficient
+  // to be considered installable.
+  static bool IsContentSecure(content::WebContents* web_contents);
+
+  // Returns true for localhost and URLs that have been explicitly marked as
+  // secure via a flag.
+  static bool IsOriginConsideredSecure(const GURL& url);
+
   // Get the installable data, fetching the resources specified in |params|.
   // |callback| is invoked synchronously (i.e. not via PostTask on the UI thread
   // when the data is ready; the synchronous execution ensures that the
@@ -56,22 +65,11 @@ class InstallableManager
   // passing a list of human-readable strings describing the errors encountered
   // during the run. The list is empty if no errors were encountered.
   void GetAllErrors(
-      base::OnceCallback<void(std::vector<std::string> errors)> callback);
+      base::OnceCallback<void(std::vector<content::InstallabilityError>
+                                  installability_errors)> callback);
 
-  // Called via AppBannerManagerAndroid to record metrics on how often the
-  // installable check is completed when the menu or add to homescreen menu item
-  // is opened on Android.
-  void RecordMenuOpenHistogram();
-  void RecordMenuItemAddToHomescreenHistogram();
-
-  // Called via AddToHomescreenDataFetcher to record metrics on how often the
-  // installable check is completed before timing out when a user is shown the
-  // add to homescreen dialog for a shortcut or PWA on Android.
-  void RecordAddToHomescreenNoTimeout();
-  void RecordAddToHomescreenManifestAndIconTimeout();
-  void RecordAddToHomescreenInstallabilityTimeout();
-
-  bool IsContentSecureForTesting();
+  void GetPrimaryIcon(
+      base::OnceCallback<void(const SkBitmap* primaryIcon)> callback);
 
  protected:
   // For mocking in tests.
@@ -96,6 +94,8 @@ class InstallableManager
                            ManifestUrlChangeFlushesState);
 
   using IconPurpose = blink::Manifest::ImageResource::Purpose;
+
+  enum class IconUsage { kPrimary, kSplash };
 
   struct EligiblityProperty {
     EligiblityProperty();
@@ -135,6 +135,7 @@ class InstallableManager
     IconProperty& operator=(IconProperty&& other);
 
     InstallableStatusCode error;
+    IconPurpose purpose;
     GURL url;
     std::unique_ptr<SkBitmap> icon;
     bool fetched;
@@ -144,16 +145,17 @@ class InstallableManager
     DISALLOW_COPY_AND_ASSIGN(IconProperty);
   };
 
-  // Returns true if |purpose| matches any fetched icon, or false if no icon has
-  // been requested yet or there is no match.
-  bool IsIconFetched(const IconPurpose purpose) const;
-  bool IsPrimaryIconFetched(const InstallableParams& params) const;
+  // Returns true if an icon for the given usage is fetched successfully, or
+  // doesn't need to fallback to another icon purpose (i.e. MASKABLE icon
+  // allback to ANY icon).
+  bool IsIconFetchComplete(const IconUsage usage) const;
 
-  // Sets the icon matching |purpose| as fetched.
-  void SetIconFetched(const IconPurpose purpose);
+  // Returns true if we have tried fetching maskable icon. Note that this also
+  // returns true if the fallback icon(IconPurpose::ANY) is fetched.
+  bool IsMaskableIconFetched(const IconUsage usage) const;
 
-  // Gets the purpose of the icon to use as a primary icon.
-  IconPurpose GetPrimaryIconPurpose(const InstallableParams& params) const;
+  // Sets the icon matching |usage| as fetched.
+  void SetIconFetched(const IconUsage usage);
 
   // Returns a vector with all errors encountered for the resources requested in
   // |params|, or an empty vector if there is no error.
@@ -165,9 +167,9 @@ class InstallableManager
   InstallableStatusCode valid_manifest_error() const;
   void set_valid_manifest_error(InstallableStatusCode error_code);
   InstallableStatusCode worker_error() const;
-  InstallableStatusCode icon_error(const IconPurpose purpose);
-  GURL& icon_url(const IconPurpose purpose);
-  const SkBitmap* icon(const IconPurpose purpose);
+  InstallableStatusCode icon_error(const IconUsage usage);
+  GURL& icon_url(const IconUsage usage);
+  const SkBitmap* icon(const IconUsage usage);
 
   // Returns the WebContents to which this object is attached, or nullptr if the
   // WebContents doesn't exist or is currently being destroyed.
@@ -175,8 +177,6 @@ class InstallableManager
 
   // Returns true if |params| requires no more work to be done.
   bool IsComplete(const InstallableParams& params) const;
-
-  void ResolveMetrics(const InstallableParams& params, bool check_passed);
 
   // Resets members to empty and removes all queued tasks.
   // Called when navigating to a new page or if the WebContents is destroyed
@@ -188,6 +188,7 @@ class InstallableManager
   void SetManifestDependentTasksComplete();
 
   // Methods coordinating and dispatching work for the current task.
+  void CleanupAndStartNextTask();
   void RunCallback(InstallableTask task,
                    std::vector<InstallableStatusCode> errors);
   void WorkOnTask();
@@ -198,21 +199,25 @@ class InstallableManager
   void OnDidGetManifest(const GURL& manifest_url,
                         const blink::Manifest& manifest);
 
-  void CheckManifestValid(bool check_webapp_manifest_display);
+  void CheckManifestValid(bool check_webapp_manifest_display,
+                          bool prefer_maskable_icon);
   bool IsManifestValidForWebApp(const blink::Manifest& manifest,
-                                bool check_webapp_manifest_display);
+                                bool check_webapp_manifest_display,
+                                bool prefer_maskable_icon);
   void CheckServiceWorker();
   void OnDidCheckHasServiceWorker(content::ServiceWorkerCapability capability);
 
   void CheckAndFetchBestIcon(int ideal_icon_size_in_px,
                              int minimum_icon_size_in_px,
-                             const IconPurpose purpose);
+                             const IconPurpose purpose,
+                             const IconUsage usage);
   void OnIconFetched(const GURL icon_url,
-                     const IconPurpose purpose,
+                     const IconUsage usage,
                      const SkBitmap& bitmap);
 
   // content::ServiceWorkerContextObserver overrides
   void OnRegistrationCompleted(const GURL& pattern) override;
+  void OnDestruct(content::ServiceWorkerContext* context) override;
 
   // content::WebContentsObserver overrides
   void DidFinishNavigation(content::NavigationHandle* handle) override;
@@ -226,14 +231,13 @@ class InstallableManager
   bool has_worker();
 
   InstallableTaskQueue task_queue_;
-  std::unique_ptr<InstallableMetrics> metrics_;
 
   // Installable properties cached on this object.
   std::unique_ptr<EligiblityProperty> eligibility_;
   std::unique_ptr<ManifestProperty> manifest_;
   std::unique_ptr<ValidManifestProperty> valid_manifest_;
   std::unique_ptr<ServiceWorkerProperty> worker_;
-  std::map<IconPurpose, IconProperty> icons_;
+  std::map<IconUsage, IconProperty> icons_;
 
   // Owned by the storage partition attached to the content::WebContents which
   // this object is scoped to.
@@ -243,7 +247,7 @@ class InstallableManager
   // which queries the full PWA parameters.
   bool has_pwa_check_;
 
-  base::WeakPtrFactory<InstallableManager> weak_factory_;
+  base::WeakPtrFactory<InstallableManager> weak_factory_{this};
 
   WEB_CONTENTS_USER_DATA_KEY_DECL();
 

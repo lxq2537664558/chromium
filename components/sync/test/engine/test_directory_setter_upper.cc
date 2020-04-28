@@ -6,6 +6,7 @@
 
 #include <utility>
 
+#include "base/bind_helpers.h"
 #include "base/files/file_util.h"
 #include "base/location.h"
 #include "base/strings/string_util.h"
@@ -30,9 +31,10 @@ void TestDirectorySetterUpper::SetUp() {
       MakeWeakHandle(test_transaction_observer_->AsWeakPtr());
 
   directory_ = std::make_unique<syncable::Directory>(
-      std::make_unique<syncable::InMemoryDirectoryBackingStore>(name_),
-      MakeWeakHandle(handler_.GetWeakPtr()), base::Closure(),
-      &encryption_handler_, encryption_handler_.cryptographer());
+      std::make_unique<syncable::InMemoryDirectoryBackingStore>(
+          name_, "kTestCacheGuid"),
+      MakeWeakHandle(handler_.GetWeakPtr()), base::NullCallback(),
+      &encryption_handler_);
   ASSERT_EQ(syncable::OPENED_NEW,
             directory_->Open(name_, &delegate_, transaction_observer));
 }
@@ -47,8 +49,7 @@ void TestDirectorySetterUpper::SetUpWith(
 
   directory_ = std::make_unique<syncable::Directory>(
       std::move(directory_store), MakeWeakHandle(handler_.GetWeakPtr()),
-      base::Closure(), &encryption_handler_,
-      encryption_handler_.cryptographer());
+      base::NullCallback(), &encryption_handler_);
   ASSERT_EQ(syncable::OPENED_EXISTING,
             directory_->Open(name_, &delegate_, transaction_observer));
 }
@@ -72,6 +73,12 @@ void TestDirectorySetterUpper::RunInvariantCheck() {
   // The TestUnrecoverableErrorHandler that this directory was constructed with
   // will handle error reporting, so we can safely ignore the return value.
   directory()->FullyCheckTreeInvariants(&trans);
+}
+
+DirectoryCryptographer* TestDirectorySetterUpper::GetCryptographer(
+    const syncable::BaseTransaction* trans) {
+  DCHECK_EQ(directory_.get(), trans->directory());
+  return encryption_handler_.GetMutableCryptographer();
 }
 
 }  // namespace syncer

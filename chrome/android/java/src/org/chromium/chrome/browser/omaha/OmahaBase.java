@@ -8,13 +8,15 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.os.Build;
-import android.support.annotation.IntDef;
 import android.text.format.DateUtils;
 
+import androidx.annotation.IntDef;
+import androidx.annotation.VisibleForTesting;
+
 import org.chromium.base.ApiCompatibilityUtils;
+import org.chromium.base.ContextUtils;
 import org.chromium.base.Log;
 import org.chromium.base.StreamUtil;
-import org.chromium.base.VisibleForTesting;
 import org.chromium.chrome.browser.ChromeVersionInfo;
 
 import java.io.BufferedOutputStream;
@@ -61,10 +63,12 @@ public class OmahaBase {
     public static class VersionConfig {
         public final String latestVersion;
         public final String downloadUrl;
+        public final int serverDate;
 
-        protected VersionConfig(String latestVersion, String downloadUrl) {
+        protected VersionConfig(String latestVersion, String downloadUrl, int serverDate) {
             this.latestVersion = latestVersion;
             this.downloadUrl = downloadUrl;
+            this.serverDate = serverDate;
         }
     }
 
@@ -74,6 +78,7 @@ public class OmahaBase {
     static final String PREF_INSTALL_SOURCE = "installSource";
     static final String PREF_LATEST_VERSION = "latestVersion";
     static final String PREF_MARKET_URL = "marketURL";
+    static final String PREF_SERVER_DATE = "serverDate";
     static final String PREF_PERSISTED_REQUEST_ID = "persistedRequestID";
     static final String PREF_SEND_INSTALL_EVENT = "sendInstallEvent";
     static final String PREF_TIMESTAMP_FOR_NEW_REQUEST = "timestampForNewRequest";
@@ -82,6 +87,8 @@ public class OmahaBase {
     static final String PREF_TIMESTAMP_OF_REQUEST = "timestampOfRequest";
 
     static final int MIN_API_JOB_SCHEDULER = Build.VERSION_CODES.M;
+
+    private static final int UNKNOWN_DATE = -2;
 
     /** Whether or not the Omaha server should really be contacted. */
     private static boolean sIsDisabled;
@@ -123,6 +130,7 @@ public class OmahaBase {
     private long mTimestampOfInstall;
     private long mTimestampForNextPostAttempt;
     private long mTimestampForNewRequest;
+    private int mServerDate;
     private String mInstallSource;
     protected VersionConfig mVersionConfig;
     protected boolean mSendInstallEvent;
@@ -240,8 +248,9 @@ public class OmahaBase {
                     currentTimestamp, mTimestampOfInstall, mCurrentRequest.isSendInstallEvent());
             String version =
                     VersionNumberGetter.getInstance().getCurrentlyUsedVersion(getContext());
-            String xml = getRequestGenerator().generateXML(
-                    sessionID, version, installAgeInDays, mCurrentRequest);
+            String xml = getRequestGenerator().generateXML(sessionID, version, installAgeInDays,
+                    mVersionConfig == null ? UNKNOWN_DATE : mVersionConfig.serverDate,
+                    mCurrentRequest);
 
             // Send the request to the server & wait for a response.
             String response = postRequest(currentTimestamp, xml);
@@ -381,7 +390,7 @@ public class OmahaBase {
         ExponentialBackoffScheduler scheduler = getBackoffScheduler();
         long currentTime = scheduler.getCurrentTime();
 
-        SharedPreferences preferences = OmahaBase.getSharedPreferences(context);
+        SharedPreferences preferences = OmahaBase.getSharedPreferences();
         mTimestampForNewRequest =
                 preferences.getLong(OmahaBase.PREF_TIMESTAMP_FOR_NEW_REQUEST, currentTime);
         mTimestampForNextPostAttempt =
@@ -430,7 +439,7 @@ public class OmahaBase {
      * Writes out the current state to a file.
      */
     private void saveState(Context context) {
-        SharedPreferences prefs = OmahaBase.getSharedPreferences(context);
+        SharedPreferences prefs = OmahaBase.getSharedPreferences();
         SharedPreferences.Editor editor = prefs.edit();
         editor.putBoolean(OmahaBase.PREF_SEND_INSTALL_EVENT, mSendInstallEvent);
         editor.putLong(OmahaBase.PREF_TIMESTAMP_OF_INSTALL, mTimestampOfInstall);
@@ -477,7 +486,7 @@ public class OmahaBase {
 
     /** Checks whether Chrome has ever tried contacting Omaha before. */
     public static boolean isProbablyFreshInstall(Context context) {
-        SharedPreferences prefs = getSharedPreferences(context);
+        SharedPreferences prefs = getSharedPreferences();
         return prefs.getLong(PREF_TIMESTAMP_OF_INSTALL, -1) == -1;
     }
 
@@ -526,8 +535,9 @@ public class OmahaBase {
     }
 
     /** Returns the Omaha SharedPreferences. */
-    static SharedPreferences getSharedPreferences(Context context) {
-        return context.getSharedPreferences(PREF_PACKAGE, Context.MODE_PRIVATE);
+    public static SharedPreferences getSharedPreferences() {
+        return ContextUtils.getApplicationContext().getSharedPreferences(
+                PREF_PACKAGE, Context.MODE_PRIVATE);
     }
 
     static void setVersionConfig(SharedPreferences.Editor editor, VersionConfig versionConfig) {
@@ -535,10 +545,14 @@ public class OmahaBase {
                 versionConfig == null ? "" : versionConfig.latestVersion);
         editor.putString(
                 OmahaBase.PREF_MARKET_URL, versionConfig == null ? "" : versionConfig.downloadUrl);
+        if (versionConfig != null) {
+            editor.putInt(OmahaBase.PREF_SERVER_DATE, versionConfig.serverDate);
+        }
     }
 
     static VersionConfig getVersionConfig(SharedPreferences sharedPref) {
         return new VersionConfig(sharedPref.getString(OmahaBase.PREF_LATEST_VERSION, ""),
-                sharedPref.getString(OmahaBase.PREF_MARKET_URL, ""));
+                sharedPref.getString(OmahaBase.PREF_MARKET_URL, ""),
+                sharedPref.getInt(OmahaBase.PREF_SERVER_DATE, -2));
     }
 }

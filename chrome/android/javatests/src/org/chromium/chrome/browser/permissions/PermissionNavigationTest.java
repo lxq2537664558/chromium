@@ -15,11 +15,12 @@ import org.chromium.base.test.util.CallbackHelper;
 import org.chromium.base.test.util.CommandLineFlags;
 import org.chromium.base.test.util.Feature;
 import org.chromium.base.test.util.RetryOnFailure;
-import org.chromium.chrome.browser.ChromeSwitches;
+import org.chromium.chrome.browser.flags.ChromeSwitches;
 import org.chromium.chrome.browser.permissions.PermissionTestRule.DialogShownCriteria;
 import org.chromium.chrome.browser.tab.EmptyTabObserver;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
+import org.chromium.chrome.test.util.browser.LocationSettingsTestUtil;
 import org.chromium.content_public.browser.NavigationHandle;
 import org.chromium.content_public.browser.test.util.CriteriaHelper;
 
@@ -40,6 +41,11 @@ public class PermissionNavigationTest {
     @Before
     public void setUp() throws Exception {
         mPermissionRule.setUpActivity();
+
+        // Some bots on continuous integration may have the system-level location setting off, in
+        // which case the permission request would be auto-denied as it will not have a user
+        // gesture. See: GeolocationPermissionContextAndroid::CanShowLocationSettingsDialog().
+        LocationSettingsTestUtil.setSystemLocationSettingEnabled(true);
     }
 
     /**
@@ -51,7 +57,6 @@ public class PermissionNavigationTest {
     @Test
     @MediumTest
     @Feature({"Permissions"})
-    @CommandLineFlags.Add("enable-features=" + PermissionTestRule.MODAL_FLAG)
     public void testNavigationDismissesModalPermissionPrompt() throws Exception {
         mPermissionRule.setUpUrl(TEST_FILE);
         mPermissionRule.runJavaScriptCodeInCurrentTab("requestGeolocationPermission()");

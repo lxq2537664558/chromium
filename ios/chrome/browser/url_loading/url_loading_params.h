@@ -5,9 +5,8 @@
 #ifndef IOS_CHROME_BROWSER_URL_LOADING_URL_LOADING_PARAMS_H_
 #define IOS_CHROME_BROWSER_URL_LOADING_URL_LOADING_PARAMS_H_
 
-#import "ios/chrome/browser/ui/chrome_load_params.h"
 #import "ios/chrome/browser/ui/commands/open_new_tab_command.h"
-#import "ios/web/public/navigation_manager.h"
+#import "ios/web/public/navigation/navigation_manager.h"
 #include "ui/base/window_open_disposition.h"
 
 // Enum of ways of changing loading behavior, that can be passed around
@@ -16,6 +15,7 @@ enum class UrlLoadStrategy {
   NORMAL = 0,
 
   ALWAYS_NEW_FOREGROUND_TAB = 1 << 0,
+  ALWAYS_IN_INCOGNITO = 1 << 1,
 };
 
 // UrlLoadingService wrapper around web::NavigationManager::WebLoadParams,

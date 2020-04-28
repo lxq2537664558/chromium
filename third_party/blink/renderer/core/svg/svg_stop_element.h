@@ -33,15 +33,13 @@ class SVGStopElement final : public SVGElement {
   DEFINE_WRAPPERTYPEINFO();
 
  public:
-  DECLARE_NODE_FACTORY(SVGStopElement);
-
   explicit SVGStopElement(Document&);
 
   Color StopColorIncludingOpacity() const;
 
   SVGAnimatedNumber* offset() const { return offset_.Get(); }
 
-  void Trace(blink::Visitor*) override;
+  void Trace(Visitor*) override;
 
  protected:
   void DidRecalcStyle(const StyleRecalcChange) override;

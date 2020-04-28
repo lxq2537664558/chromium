@@ -6,10 +6,11 @@
 
 #include <string>
 
+#include "base/check.h"
 #include "base/json/json_file_value_serializer.h"
 #include "base/json/json_reader.h"
-#include "base/logging.h"
 #include "base/macros.h"
+#include "base/notreached.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/values.h"
 #include "chromeos/network/network_ui_data.h"
@@ -165,7 +166,7 @@ TEST(ONCUtils, ProxySettingsToProxyConfig) {
       ReadTestJson("proxy_config_from_onc.json");
   ASSERT_TRUE(additional_tests->is_list());
   for (const base::Value& value : additional_tests->GetList())
-    list_of_tests->GetList().push_back(value.Clone());
+    list_of_tests->Append(value.Clone());
 
   int index = 0;
   for (const base::Value& test_case : list_of_tests->GetList()) {

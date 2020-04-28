@@ -4,13 +4,12 @@
 
 #include <string>
 
-#include "base/test/scoped_feature_list.h"
+#include "build/build_config.h"
 #include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/extensions/extension_browsertest.h"
 #include "chrome/browser/search/instant_service.h"
 #include "chrome/browser/search/instant_service_factory.h"
 #include "chrome/browser/search/instant_service_observer.h"
-#include "chrome/browser/search/ntp_features.h"
 #include "chrome/browser/search/search.h"
 #include "chrome/browser/themes/theme_service.h"
 #include "chrome/browser/themes/theme_service_factory.h"
@@ -23,21 +22,29 @@
 #include "chrome/common/search/instant_types.h"
 #include "chrome/common/url_constants.h"
 #include "chrome/test/base/in_process_browser_test.h"
+#include "components/image_fetcher/core/mock_image_fetcher.h"
+#include "components/policy/core/browser/browser_policy_connector.h"
+#include "components/policy/core/common/mock_configuration_policy_provider.h"
+#include "components/policy/policy_constants.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/test_utils.h"
 #include "extensions/browser/extension_registry.h"
+#include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
-namespace {
+using LocalNTPCustomBackgroundsTest = InProcessBrowserTest;
 
-class LocalNTPCustomBackgroundsTest : public InProcessBrowserTest {
+class TestInstantService {
  public:
-  LocalNTPCustomBackgroundsTest() {
-    feature_list_.InitWithFeatures({features::kUseGoogleLocalNtp}, {});
+  explicit TestInstantService(Profile* profile) {
+    instant_service = InstantServiceFactory::GetForProfile(profile);
+    instant_service->SetImageFetcherForTesting(
+        new testing::NiceMock<image_fetcher::MockImageFetcher>());
   }
+  InstantService* get_instant_service() { return instant_service; }
 
  private:
-  base::test::ScopedFeatureList feature_list_;
+  InstantService* instant_service;
 };
 
 IN_PROC_BROWSER_TEST_F(LocalNTPCustomBackgroundsTest,
@@ -51,29 +58,30 @@ IN_PROC_BROWSER_TEST_F(LocalNTPCustomBackgroundsTest,
   local_ntp_test_utils::NavigateToNTPAndWaitUntilLoaded(browser());
 
   // Check that a URL with no attributions can be set.
-  InstantService* instant_service =
-      InstantServiceFactory::GetForProfile(browser()->profile());
-  instant_service->AddValidBackdropUrlForTesting(GURL("https://www.test.com/"));
-  EXPECT_TRUE(content::ExecuteScript(active_tab,
-                                     "window.chrome.embeddedSearch.newTabPage."
-                                     "setBackgroundURL('https://www.test.com/"
-                                     "')"));
-  observer.WaitForThemeInfoUpdated("https://www.test.com/", "", "", "");
+  TestInstantService test_instant_service(browser()->profile());
+  test_instant_service.get_instant_service()->AddValidBackdropUrlForTesting(
+      GURL("https://www.test.com/"));
+  EXPECT_TRUE(content::ExecuteScript(
+      active_tab,
+      "window.chrome.embeddedSearch.newTabPage."
+      "setBackgroundInfo('https://www.test.com/', '', '', '', '')"));
+
+  observer.WaitForNtpThemeUpdated("https://www.test.com/", "", "", "");
 
   // Check that a URL with attributions can be set.
   EXPECT_TRUE(content::ExecuteScript(active_tab,
                                      "window.chrome.embeddedSearch.newTabPage."
-                                     "setBackgroundURLWithAttributions('https:/"
+                                     "setBackgroundInfo('https:/"
                                      "/www.test.com/', 'attr1', 'attr2', "
-                                     "'https://www.attribution.com/')"));
-  observer.WaitForThemeInfoUpdated("https://www.test.com/", "attr1", "attr2",
-                                   "https://www.attribution.com/");
+                                     "'https://www.attribution.com/', '')"));
+  observer.WaitForNtpThemeUpdated("https://www.test.com/", "attr1", "attr2",
+                                  "https://www.attribution.com/");
 
   // Setting the background URL to an empty string should clear everything.
   EXPECT_TRUE(content::ExecuteScript(
       active_tab,
-      "window.chrome.embeddedSearch.newTabPage.setBackgroundURL('')"));
-  observer.WaitForThemeInfoUpdated("", "", "", "");
+      "window.chrome.embeddedSearch.newTabPage.resetBackgroundInfo()"));
+  observer.WaitForNtpThemeUpdated("", "", "", "");
 }
 
 IN_PROC_BROWSER_TEST_F(LocalNTPCustomBackgroundsTest, AttributionSetAndReset) {
@@ -86,32 +94,32 @@ IN_PROC_BROWSER_TEST_F(LocalNTPCustomBackgroundsTest, AttributionSetAndReset) {
   local_ntp_test_utils::NavigateToNTPAndWaitUntilLoaded(browser());
 
   // Set a custom background attribution via the EmbeddedSearch API.
-  InstantService* instant_service =
-      InstantServiceFactory::GetForProfile(browser()->profile());
-  instant_service->AddValidBackdropUrlForTesting(GURL("https://www.test.com/"));
+  TestInstantService test_instant_service(browser()->profile());
+  test_instant_service.get_instant_service()->AddValidBackdropUrlForTesting(
+      GURL("https://www.test.com/"));
   EXPECT_TRUE(content::ExecuteScript(active_tab,
                                      "window.chrome.embeddedSearch.newTabPage."
-                                     "setBackgroundURLWithAttributions('https:/"
+                                     "setBackgroundInfo('https:/"
                                      "/www.test.com/', 'attr1', 'attr2', "
-                                     "'https://www.attribution.com/')"));
-  observer.WaitForThemeInfoUpdated("https://www.test.com/", "attr1", "attr2",
-                                   "https://www.attribution.com/");
+                                     "'https://www.attribution.com/', '')"));
+  observer.WaitForNtpThemeUpdated("https://www.test.com/", "attr1", "attr2",
+                                  "https://www.attribution.com/");
 
   // Check that the custom background element has the correct attribution
   // applied.
   bool result = false;
   EXPECT_TRUE(instant_test_utils::GetBoolFromJS(
       active_tab,
-      "document.querySelector('.attr1').innerText === 'attr1' && "
-      "document.querySelector('.attr2').innerText === 'attr2'",
+      "document.querySelector('#attr1').innerText === 'attr1' && "
+      "document.querySelector('#attr2').innerText === 'attr2'",
       &result));
   EXPECT_TRUE(result);
 
   // Reset custom background via the EmbeddedSearch API.
   EXPECT_TRUE(content::ExecuteScript(active_tab,
                                      "window.chrome.embeddedSearch.newTabPage."
-                                     "setBackgroundURL('')"));
-  observer.WaitForThemeInfoUpdated("", "", "", "");
+                                     "resetBackgroundInfo()"));
+  observer.WaitForNtpThemeUpdated("", "", "", "");
 
   // Check that the custom background attribution was cleared.
   EXPECT_TRUE(instant_test_utils::GetBoolFromJS(
@@ -130,17 +138,16 @@ IN_PROC_BROWSER_TEST_F(LocalNTPCustomBackgroundsTest,
   local_ntp_test_utils::NavigateToNTPAndWaitUntilLoaded(browser());
 
   // Set a custom background image via the EmbeddedSearch API.
-  InstantService* instant_service =
-      InstantServiceFactory::GetForProfile(browser()->profile());
-  instant_service->AddValidBackdropUrlForTesting(
+  TestInstantService test_instant_service(browser()->profile());
+  test_instant_service.get_instant_service()->AddValidBackdropUrlForTesting(
       GURL("chrome-search://local-ntp/background1.jpg"));
   EXPECT_TRUE(content::ExecuteScript(
       active_tab,
       "window.chrome.embeddedSearch.newTabPage."
-      "setBackgroundURL('chrome-search://local-ntp/background1.jpg"
-      "')"));
-  observer.WaitForThemeInfoUpdated("chrome-search://local-ntp/background1.jpg",
-                                   "", "", "");
+      "setBackgroundInfo('chrome-search://local-ntp/background1.jpg"
+      "', '', '' ,'' ,'')"));
+  observer.WaitForNtpThemeUpdated("chrome-search://local-ntp/background1.jpg",
+                                  "", "", "");
 
   // Check that the custom background element has the correct attribution with
   // the scrim applied.
@@ -156,8 +163,8 @@ IN_PROC_BROWSER_TEST_F(LocalNTPCustomBackgroundsTest,
   // Clear the custom background image via the EmbeddedSearch API.
   EXPECT_TRUE(content::ExecuteScript(active_tab,
                                      "window.chrome.embeddedSearch.newTabPage."
-                                     "setBackgroundURL('')"));
-  observer.WaitForThemeInfoUpdated("", "", "", "");
+                                     "resetBackgroundInfo()"));
+  observer.WaitForNtpThemeUpdated("", "", "", "");
 
   // Check that the custom background was cleared.
   EXPECT_TRUE(instant_test_utils::GetBoolFromJS(
@@ -176,17 +183,16 @@ IN_PROC_BROWSER_TEST_F(LocalNTPCustomBackgroundsTest,
   local_ntp_test_utils::NavigateToNTPAndWaitUntilLoaded(browser());
 
   // Set a custom background image via the EmbeddedSearch API.
-  InstantService* instant_service =
-      InstantServiceFactory::GetForProfile(browser()->profile());
-  instant_service->AddValidBackdropUrlForTesting(
+  TestInstantService test_instant_service(browser()->profile());
+  test_instant_service.get_instant_service()->AddValidBackdropUrlForTesting(
       GURL("chrome-search://local-ntp/background1.jpg"));
   ASSERT_TRUE(content::ExecuteScript(
       active_tab,
       "window.chrome.embeddedSearch.newTabPage."
-      "setBackgroundURL('chrome-search://local-ntp/background1.jpg"
-      "')"));
-  observer.WaitForThemeInfoUpdated("chrome-search://local-ntp/background1.jpg",
-                                   "", "", "");
+      "setBackgroundInfo('chrome-search://local-ntp/background1.jpg"
+      "', '', '', '', '')"));
+  observer.WaitForNtpThemeUpdated("chrome-search://local-ntp/background1.jpg",
+                                  "", "", "");
 
   // Check that the custom background element has the correct attribution with
   // the scrim applied.
@@ -234,8 +240,13 @@ IN_PROC_BROWSER_TEST_F(LocalNTPCustomBackgroundsTest,
 class LocalNTPCustomBackgroundsThemeTest
     : public extensions::ExtensionBrowserTest {
  public:
-  LocalNTPCustomBackgroundsThemeTest() {
-    feature_list_.InitWithFeatures({features::kUseGoogleLocalNtp}, {});
+  void SetUp() override {
+    EXPECT_CALL(policy_provider_, IsInitializationComplete(testing::_))
+        .WillRepeatedly(testing::Return(true));
+    policy::BrowserPolicyConnector::SetPolicyProviderForTesting(
+        &policy_provider_);
+
+    extensions::ExtensionBrowserTest::SetUp();
   }
 
  protected:
@@ -271,8 +282,7 @@ class LocalNTPCustomBackgroundsThemeTest
     ASSERT_EQ(new_theme->name(), theme_name);
   }
 
- private:
-  base::test::ScopedFeatureList feature_list_;
+  policy::MockConfigurationPolicyProvider policy_provider_;
 };
 
 IN_PROC_BROWSER_TEST_F(LocalNTPCustomBackgroundsThemeTest,
@@ -286,24 +296,24 @@ IN_PROC_BROWSER_TEST_F(LocalNTPCustomBackgroundsThemeTest,
   local_ntp_test_utils::NavigateToNTPAndWaitUntilLoaded(browser());
 
   // Set a custom background attribution via the EmbeddedSearch API.
-  InstantService* instant_service =
-      InstantServiceFactory::GetForProfile(profile());
-  instant_service->AddValidBackdropUrlForTesting(GURL("https://www.test.com/"));
+  TestInstantService test_instant_service(browser()->profile());
+  test_instant_service.get_instant_service()->AddValidBackdropUrlForTesting(
+      GURL("https://www.test.com/"));
   ASSERT_TRUE(content::ExecuteScript(active_tab,
                                      "window.chrome.embeddedSearch.newTabPage."
-                                     "setBackgroundURLWithAttributions('https:/"
+                                     "setBackgroundInfo('https:/"
                                      "/www.test.com/', 'attr1', 'attr2', "
-                                     "'https://www.attribution.com/')"));
-  observer.WaitForThemeInfoUpdated("https://www.test.com/", "attr1", "attr2",
-                                   "https://www.attribution.com/");
+                                     "'https://www.attribution.com/', '')"));
+  observer.WaitForNtpThemeUpdated("https://www.test.com/", "attr1", "attr2",
+                                  "https://www.attribution.com/");
 
   // Check that the custom background element has the correct attribution
   // applied.
   bool result = false;
   ASSERT_TRUE(instant_test_utils::GetBoolFromJS(
       active_tab,
-      "document.querySelector('.attr1').innerText === 'attr1' && "
-      "document.querySelector('.attr2').innerText === 'attr2'",
+      "document.querySelector('#attr1').innerText === 'attr1' && "
+      "document.querySelector('#attr2').innerText === 'attr2'",
       &result));
   EXPECT_TRUE(result);
   // Apply a custom background still count as using default theme
@@ -328,8 +338,8 @@ IN_PROC_BROWSER_TEST_F(LocalNTPCustomBackgroundsThemeTest,
   // Check that the custom background element maintains the correct attribution.
   ASSERT_TRUE(instant_test_utils::GetBoolFromJS(
       active_tab,
-      "document.querySelector('.attr1').innerText === 'attr1' && "
-      "document.querySelector('.attr2').innerText === 'attr2'",
+      "document.querySelector('#attr1').innerText === 'attr1' && "
+      "document.querySelector('#attr2').innerText === 'attr2'",
       &result));
   EXPECT_TRUE(result);
 }
@@ -345,17 +355,16 @@ IN_PROC_BROWSER_TEST_F(LocalNTPCustomBackgroundsThemeTest,
   local_ntp_test_utils::NavigateToNTPAndWaitUntilLoaded(browser());
 
   // Set a custom background image via the EmbeddedSearch API.
-  InstantService* instant_service =
-      InstantServiceFactory::GetForProfile(profile());
-  instant_service->AddValidBackdropUrlForTesting(
+  TestInstantService test_instant_service(browser()->profile());
+  test_instant_service.get_instant_service()->AddValidBackdropUrlForTesting(
       GURL("chrome-search://local-ntp/background1.jpg"));
   ASSERT_TRUE(content::ExecuteScript(
       active_tab,
       "window.chrome.embeddedSearch.newTabPage."
-      "setBackgroundURL('chrome-search://local-ntp/background1.jpg"
-      "')"));
-  observer.WaitForThemeInfoUpdated("chrome-search://local-ntp/background1.jpg",
-                                   "", "", "");
+      "setBackgroundInfo('chrome-search://local-ntp/background1.jpg"
+      "', '', '', '', '')"));
+  observer.WaitForNtpThemeUpdated("chrome-search://local-ntp/background1.jpg",
+                                  "", "", "");
 
   // Check that the custom background element has the correct attribution with
   // the scrim applied.
@@ -404,23 +413,22 @@ IN_PROC_BROWSER_TEST_F(LocalNTPCustomBackgroundsThemeTest,
   bool result = false;
   ASSERT_TRUE(instant_test_utils::GetBoolFromJS(
       active_tab,
-      "window.chrome.embeddedSearch.newTabPage.themeBackgroundInfo."
+      "window.chrome.embeddedSearch.newTabPage.ntpTheme."
       "attributionUrl !== ''",
       &result));
   EXPECT_TRUE(result);
 
   // Set a custom background image via the EmbeddedSearch API.
-  InstantService* instant_service =
-      InstantServiceFactory::GetForProfile(profile());
-  instant_service->AddValidBackdropUrlForTesting(
+  TestInstantService test_instant_service(browser()->profile());
+  test_instant_service.get_instant_service()->AddValidBackdropUrlForTesting(
       GURL("chrome-search://local-ntp/background1.jpg"));
   ASSERT_TRUE(content::ExecuteScript(
       active_tab,
       "window.chrome.embeddedSearch.newTabPage."
-      "setBackgroundURL('chrome-search://local-ntp/background1.jpg"
-      "')"));
-  observer.WaitForThemeInfoUpdated("chrome-search://local-ntp/background1.jpg",
-                                   "", "", "");
+      "setBackgroundInfo('chrome-search://local-ntp/background1.jpg"
+      "', '', '', '', '')"));
+  observer.WaitForNtpThemeUpdated("chrome-search://local-ntp/background1.jpg",
+                                  "", "", "");
 
   // Check that the custom background element has the correct attribution with
   // the scrim applied.
@@ -435,11 +443,73 @@ IN_PROC_BROWSER_TEST_F(LocalNTPCustomBackgroundsThemeTest,
   EXPECT_FALSE(observer.IsUsingDefaultTheme());
   ASSERT_TRUE(instant_test_utils::GetBoolFromJS(
       active_tab,
-      "window.chrome.embeddedSearch.newTabPage.themeBackgroundInfo."
+      "window.chrome.embeddedSearch.newTabPage.ntpTheme."
       "attributionUrl === ''",
       &result));
   EXPECT_TRUE(result);
 }
+
+IN_PROC_BROWSER_TEST_F(LocalNTPCustomBackgroundsThemeTest,
+                       CustomBackgroundEnabledPolicy) {
+  content::WebContents* active_tab =
+      local_ntp_test_utils::OpenNewTab(browser(), GURL("about:blank"));
+  local_ntp_test_utils::NavigateToNTPAndWaitUntilLoaded(browser());
+
+  InstantService* instant_service =
+      InstantServiceFactory::GetForProfile(profile());
+  TestInstantServiceObserver observer(instant_service);
+
+  // Set a custom background image via the EmbeddedSearch API.
+  instant_service->AddValidBackdropUrlForTesting(
+      GURL("chrome-search://local-ntp/background1.jpg"));
+  EXPECT_TRUE(content::ExecuteScript(
+      active_tab,
+      "window.chrome.embeddedSearch.newTabPage."
+      "setBackgroundInfo('chrome-search://local-ntp/background1.jpg"
+      "', '', '' ,'' ,'')"));
+  observer.WaitForNtpThemeUpdated("chrome-search://local-ntp/background1.jpg",
+                                  "", "", "");
+  EXPECT_FALSE(instant_service->IsCustomBackgroundDisabledByPolicy());
+
+  policy::PolicyMap policies1;
+  policies1.Set(policy::key::kNTPCustomBackgroundEnabled,
+                policy::POLICY_LEVEL_MANDATORY, policy::POLICY_SCOPE_USER,
+                policy::POLICY_SOURCE_CLOUD,
+                std::make_unique<base::Value>(false), nullptr);
+  policy_provider_.UpdateChromePolicy(policies1);
+  base::RunLoop().RunUntilIdle();
+
+  // Make sure setting the policy to false clears the background and prevents
+  // setting one in the UI.
+  observer.WaitForNtpThemeUpdated("", "", "", "");
+  EXPECT_TRUE(observer.IsCustomBackgroundDisabledByPolicy());
+
+  policy::PolicyMap policies2;
+  policies2.Set(policy::key::kNTPCustomBackgroundEnabled,
+                policy::POLICY_LEVEL_MANDATORY, policy::POLICY_SCOPE_USER,
+                policy::POLICY_SOURCE_CLOUD,
+                std::make_unique<base::Value>(true), nullptr);
+  policy_provider_.UpdateChromePolicy(policies2);
+  base::RunLoop().RunUntilIdle();
+
+  // Make sure setting the policy to true does not restore the background yet
+  // allows setting one in the UI.
+  observer.WaitForNtpThemeUpdated("", "", "", "");
+  EXPECT_FALSE(observer.IsCustomBackgroundDisabledByPolicy());
+
+  policy::PolicyMap policies3;
+  policy_provider_.UpdateChromePolicy(policies3);
+  base::RunLoop().RunUntilIdle();
+
+  // Make sure clearing the policy to true does not restore the background yet
+  // allows setting one in the UI.
+  observer.WaitForNtpThemeUpdated("", "", "", "");
+  EXPECT_FALSE(observer.IsCustomBackgroundDisabledByPolicy());
+}
+
+// TODO(crbug/980638): Update/Remove when Linux and/or ChromeOS support dark
+// mode.
+#if defined(OS_WIN) || defined(OS_MACOSX)
 
 // Tests that dark mode styling is properly applied when a theme and/or custom
 // background is set.
@@ -453,11 +523,17 @@ class LocalNTPBackgroundsAndDarkModeTest
   void SetUpOnMainThread() override {
     LocalNTPCustomBackgroundsThemeTest::SetUpOnMainThread();
 
+    theme()->AddColorSchemeNativeThemeObserver(
+        ui::NativeTheme::GetInstanceForWeb());
+
     // Enable dark mode.
     instant_service =
         InstantServiceFactory::GetForProfile(browser()->profile());
     theme()->SetDarkMode(true);
-    instant_service->SetDarkModeThemeForTesting(theme());
+    instant_service->SetNativeThemeForTesting(theme());
+    theme()->NotifyObservers();
+    instant_service->SetImageFetcherForTesting(
+        new testing::NiceMock<image_fetcher::MockImageFetcher>());
   }
 
   InstantService* instant_service;
@@ -477,10 +553,10 @@ IN_PROC_BROWSER_TEST_F(LocalNTPBackgroundsAndDarkModeTest,
   ASSERT_TRUE(content::ExecuteScript(
       active_tab,
       "window.chrome.embeddedSearch.newTabPage."
-      "setBackgroundURL('chrome-search://local-ntp/background1.jpg"
-      "')"));
-  observer.WaitForThemeInfoUpdated("chrome-search://local-ntp/background1.jpg",
-                                   "", "", "");
+      "setBackgroundInfo('chrome-search://local-ntp/background1.jpg"
+      "', '', '', '', '')"));
+  observer.WaitForNtpThemeUpdated("chrome-search://local-ntp/background1.jpg",
+                                  "", "", "");
 
   // Elements other than chips (i.e. Most Visited, etc.) should have dark mode
   // applied.
@@ -537,10 +613,10 @@ IN_PROC_BROWSER_TEST_F(LocalNTPBackgroundsAndDarkModeTest,
   ASSERT_TRUE(content::ExecuteScript(
       active_tab,
       "window.chrome.embeddedSearch.newTabPage."
-      "setBackgroundURL('chrome-search://local-ntp/background1.jpg"
-      "')"));
-  observer.WaitForThemeInfoUpdated("chrome-search://local-ntp/background1.jpg",
-                                   "", "", "");
+      "setBackgroundInfo('chrome-search://local-ntp/background1.jpg',"
+      "'', '', '', '')"));
+  observer.WaitForNtpThemeUpdated("chrome-search://local-ntp/background1.jpg",
+                                  "", "", "");
 
   // Switch to waiting for the theme to get applied. With img
   ASSERT_NO_FATAL_FAILURE(InstallThemeAndVerify("theme_minimal", "minimal"));
@@ -553,4 +629,4 @@ IN_PROC_BROWSER_TEST_F(LocalNTPBackgroundsAndDarkModeTest,
   EXPECT_TRUE(GetIsLightChipsApplied(active_tab));
 }
 
-}  // namespace
+#endif

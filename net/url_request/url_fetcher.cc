@@ -12,6 +12,17 @@ namespace net {
 URLFetcher::~URLFetcher() = default;
 
 // static
+void URLFetcher::CancelAll() {
+  URLFetcherImpl::CancelAll();
+}
+
+// static
+void URLFetcher::SetIgnoreCertificateRequests(bool ignored) {
+  URLFetcherImpl::SetIgnoreCertificateRequests(ignored);
+}
+
+#if (!defined(OS_WIN) && !defined(OS_LINUX)) || defined(OS_CHROMEOS)
+// static
 std::unique_ptr<URLFetcher> URLFetcher::Create(
     const GURL& url,
     URLFetcher::RequestType request_type,
@@ -27,6 +38,7 @@ std::unique_ptr<URLFetcher> URLFetcher::Create(
     URLFetcherDelegate* d) {
   return Create(id, url, request_type, d, MISSING_TRAFFIC_ANNOTATION);
 }
+#endif
 
 // static
 std::unique_ptr<URLFetcher> URLFetcher::Create(
@@ -49,16 +61,6 @@ std::unique_ptr<URLFetcher> URLFetcher::Create(
                                              traffic_annotation)
                  : std::unique_ptr<URLFetcher>(new URLFetcherImpl(
                        url, request_type, d, traffic_annotation));
-}
-
-// static
-void URLFetcher::CancelAll() {
-  URLFetcherImpl::CancelAll();
-}
-
-// static
-void URLFetcher::SetIgnoreCertificateRequests(bool ignored) {
-  URLFetcherImpl::SetIgnoreCertificateRequests(ignored);
 }
 
 }  // namespace net

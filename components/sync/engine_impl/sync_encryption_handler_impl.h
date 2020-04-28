@@ -17,9 +17,9 @@
 #include "base/optional.h"
 #include "base/sequence_checker.h"
 #include "base/time/time.h"
-#include "components/sync/base/cryptographer.h"
 #include "components/sync/engine/sync_encryption_handler.h"
 #include "components/sync/nigori/keystore_keys_handler.h"
+#include "components/sync/syncable/directory_cryptographer.h"
 #include "components/sync/syncable/nigori_handler.h"
 
 namespace syncer {
@@ -52,9 +52,10 @@ class SyncEncryptionHandlerImpl : public KeystoreKeysHandler,
                                   public SyncEncryptionHandler,
                                   public syncable::NigoriHandler {
  public:
+  // |encryptor| and |user_share| must outlive this object.
   SyncEncryptionHandlerImpl(
       UserShare* user_share,
-      Encryptor* encryptor,
+      const Encryptor* encryptor,
       const std::string& restored_key_for_bootstrapping,
       const std::string& restored_keystore_key_for_bootstrapping,
       const base::RepeatingCallback<std::string()>& random_salt_generator);
@@ -63,42 +64,54 @@ class SyncEncryptionHandlerImpl : public KeystoreKeysHandler,
   // SyncEncryptionHandler implementation.
   void AddObserver(Observer* observer) override;
   void RemoveObserver(Observer* observer) override;
-  void Init() override;
+  bool Init() override;
   void SetEncryptionPassphrase(const std::string& passphrase) override;
   void SetDecryptionPassphrase(const std::string& passphrase) override;
+  void AddTrustedVaultDecryptionKeys(
+      const std::vector<std::vector<uint8_t>>& keys) override;
   void EnableEncryptEverything() override;
   bool IsEncryptEverythingEnabled() const override;
+  base::Time GetKeystoreMigrationTime() const override;
+  KeystoreKeysHandler* GetKeystoreKeysHandler() override;
 
   // NigoriHandler implementation.
   // Note: all methods are invoked while the caller holds a transaction.
-  void ApplyNigoriUpdate(const sync_pb::NigoriSpecifics& nigori,
+  bool ApplyNigoriUpdate(const sync_pb::NigoriSpecifics& nigori,
                          syncable::BaseTransaction* const trans) override;
   void UpdateNigoriFromEncryptedTypes(
       sync_pb::NigoriSpecifics* nigori,
-      syncable::BaseTransaction* const trans) const override;
+      const syncable::BaseTransaction* const trans) const override;
   // Can be called from any thread.
+  const Cryptographer* GetCryptographer(
+      const syncable::BaseTransaction* const trans) const override;
+  const DirectoryCryptographer* GetDirectoryCryptographer(
+      const syncable::BaseTransaction* const trans) const override;
   ModelTypeSet GetEncryptedTypes(
-      syncable::BaseTransaction* const trans) const override;
+      const syncable::BaseTransaction* const trans) const override;
   PassphraseType GetPassphraseType(
-      syncable::BaseTransaction* const trans) const override;
+      const syncable::BaseTransaction* const trans) const override;
 
   // KeystoreKeysHandler implementation.
   bool NeedKeystoreKey() const override;
-  bool SetKeystoreKeys(const std::vector<std::string>& keys) override;
+  bool SetKeystoreKeys(const std::vector<std::vector<uint8_t>>& keys) override;
 
   // Unsafe getters. Use only if sync is not up and running and there is no risk
   // of other threads calling this.
-  Cryptographer* GetCryptographerUnsafe();
+
   ModelTypeSet GetEncryptedTypesUnsafe();
 
   bool MigratedToKeystore();
-  base::Time migration_time() const;
   base::Time custom_passphrase_time() const;
 
   // Restore a saved nigori obtained from OnLocalSetPassphraseEncryption.
   //
   // Writes the nigori to the Directory and updates the Cryptographer.
-  void RestoreNigori(const SyncEncryptionHandler::NigoriState& nigori_state);
+  void RestoreNigoriForTesting(
+      const sync_pb::NigoriSpecifics& nigori_specifics);
+
+  // Returns mutable DirectoryCryptographer, used only in tests to manipulate it
+  // directly.
+  DirectoryCryptographer* GetMutableCryptographerForTesting();
 
  private:
   friend class SyncEncryptionHandlerImplTest;
@@ -135,13 +148,11 @@ class SyncEncryptionHandlerImpl : public KeystoreKeysHandler,
   // accessed via UnlockVault(..) and UnlockVaultMutable(..), which enforce
   // that a transaction is held.
   struct Vault {
-    Vault(Encryptor* encryptor,
-          ModelTypeSet encrypted_types,
-          PassphraseType passphrase_type);
+    Vault(ModelTypeSet encrypted_types, PassphraseType passphrase_type);
     ~Vault();
 
     // Sync's cryptographer. Used for encrypting and decrypting sync data.
-    Cryptographer cryptographer;
+    DirectoryCryptographer cryptographer;
     // The set of types that require encryption.
     ModelTypeSet encrypted_types;
     // The current state of the passphrase required to decrypt the encryption
@@ -177,7 +188,15 @@ class SyncEncryptionHandlerImpl : public KeystoreKeysHandler,
     kNotEncryptEverythingWithExplicitPassphrase = 4,
     kOldPassphraseType = 5,
     kServerKeyRotation = 6,
-    kMaxValue = kServerKeyRotation
+    kInitialization = 7,
+    kMaxValue = kInitialization
+  };
+
+  // Enumeration of possible outcomes of ApplyNigoriUpdateImpl.
+  enum class ApplyNigoriUpdateResult {
+    kSuccess,
+    kUnsupportedRemoteState,
+    kRemoteMustBeCorrected,
   };
 
   // Iterate over all encrypted types ensuring each entry is properly encrypted.
@@ -187,11 +206,10 @@ class SyncEncryptionHandlerImpl : public KeystoreKeysHandler,
   //
   // Assumes |nigori| is already present in the Sync Directory.
   //
-  // Returns true on success, false if |nigori| was incompatible, and the
-  // nigori node must be corrected.
   // Note: must be called from within a transaction.
-  bool ApplyNigoriUpdateImpl(const sync_pb::NigoriSpecifics& nigori,
-                             syncable::BaseTransaction* const trans);
+  ApplyNigoriUpdateResult ApplyNigoriUpdateImpl(
+      const sync_pb::NigoriSpecifics& nigori,
+      syncable::BaseTransaction* const trans);
 
   // Wrapper around WriteEncryptionStateToNigori that creates a new write
   // transaction. Because this function can trigger a migration,
@@ -272,8 +290,8 @@ class SyncEncryptionHandlerImpl : public KeystoreKeysHandler,
 
   // Helper methods for ensuring transactions are held when accessing
   // |vault_unsafe_|.
-  Vault* UnlockVaultMutable(syncable::BaseTransaction* const trans);
-  const Vault& UnlockVault(syncable::BaseTransaction* const trans) const;
+  Vault* UnlockVaultMutable(const syncable::BaseTransaction* const trans);
+  const Vault& UnlockVault(const syncable::BaseTransaction* const trans) const;
 
   // Helper method for determining if migration of a nigori node should be
   // triggered or not. In case migration shouldn't be triggered the method will
@@ -288,7 +306,7 @@ class SyncEncryptionHandlerImpl : public KeystoreKeysHandler,
   // CUSTOM_PASSPHRASE).
   NigoriMigrationReason GetMigrationReason(
       const sync_pb::NigoriSpecifics& nigori,
-      const Cryptographer& cryptographer,
+      const DirectoryCryptographer& cryptographer,
       PassphraseType passphrase_type) const;
 
   // Tries to perform the actual migration of the |nigori_node| to support
@@ -303,7 +321,7 @@ class SyncEncryptionHandlerImpl : public KeystoreKeysHandler,
   // |encrypted_blob|'s contents didn't already contain the key.
   // The keystore decryptor token is the serialized current default encryption
   // key, encrypted with the keystore key.
-  bool GetKeystoreDecryptor(const Cryptographer& cryptographer,
+  bool GetKeystoreDecryptor(const DirectoryCryptographer& cryptographer,
                             const std::string& keystore_key,
                             sync_pb::EncryptedData* encrypted_blob);
 
@@ -313,14 +331,14 @@ class SyncEncryptionHandlerImpl : public KeystoreKeysHandler,
   // Will not update the default key.
   bool AttemptToInstallKeybag(const sync_pb::EncryptedData& keybag,
                               bool update_default,
-                              Cryptographer* cryptographer);
+                              DirectoryCryptographer* cryptographer);
 
   // Helper method for decrypting pending keys with the keystore bootstrap.
   // If successful, the default will become the key encrypted in the keystore
   // bootstrap, and will return true. Else will return false.
   bool DecryptPendingKeysWithKeystoreKey(
       const sync_pb::EncryptedData& keystore_bootstrap,
-      Cryptographer* cryptographer);
+      DirectoryCryptographer* cryptographer);
 
   // Helper to enable encrypt everything, notifying observers if necessary.
   // Will not perform re-encryption.
@@ -338,7 +356,11 @@ class SyncEncryptionHandlerImpl : public KeystoreKeysHandler,
   base::ObserverList<SyncEncryptionHandler::Observer>::Unchecked observers_;
 
   // The current user share (for creating transactions).
-  UserShare* user_share_;
+  UserShare* const user_share_;
+
+  // Used for encryption/decryption of keystore keys and the key derived from
+  // custom passphrase in order to store them locally.
+  const Encryptor* const encryptor_;
 
   // Container for all data that can be accessed from multiple threads. Do not
   // access this object directly. Instead access it via UnlockVault(..) and
@@ -365,7 +387,7 @@ class SyncEncryptionHandlerImpl : public KeystoreKeysHandler,
   int nigori_overwrite_count_;
 
   // The time the nigori was migrated to support keystore encryption.
-  base::Time migration_time_;
+  base::Time keystore_migration_time_;
 
   // The time the custom passphrase was set for this account. Not valid
   // if there is no custom passphrase or the custom passphrase was set
@@ -383,7 +405,7 @@ class SyncEncryptionHandlerImpl : public KeystoreKeysHandler,
   // only.
   bool migration_attempted_;
 
-  base::WeakPtrFactory<SyncEncryptionHandlerImpl> weak_ptr_factory_;
+  base::WeakPtrFactory<SyncEncryptionHandlerImpl> weak_ptr_factory_{this};
 
   DISALLOW_COPY_AND_ASSIGN(SyncEncryptionHandlerImpl);
 };

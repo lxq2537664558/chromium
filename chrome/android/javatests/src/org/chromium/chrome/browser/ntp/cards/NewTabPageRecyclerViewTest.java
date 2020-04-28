@@ -5,14 +5,16 @@
 package org.chromium.chrome.browser.ntp.cards;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
 import android.content.res.Resources;
 import android.support.test.InstrumentationRegistry;
 import android.support.test.filters.MediumTest;
-import android.support.v7.widget.RecyclerView;
-import android.support.v7.widget.RecyclerView.ViewHolder;
 import android.view.View;
+
+import androidx.recyclerview.widget.RecyclerView;
+import androidx.recyclerview.widget.RecyclerView.ViewHolder;
 
 import org.junit.After;
 import org.junit.Before;
@@ -21,14 +23,12 @@ import org.junit.Test;
 import org.junit.runner.RunWith;
 
 import org.chromium.base.test.util.CommandLineFlags;
-import org.chromium.base.test.util.DisabledTest;
 import org.chromium.base.test.util.Feature;
 import org.chromium.base.test.util.Restriction;
 import org.chromium.base.test.util.RetryOnFailure;
 import org.chromium.chrome.R;
-import org.chromium.chrome.browser.ChromeFeatureList;
-import org.chromium.chrome.browser.ChromeSwitches;
-import org.chromium.chrome.browser.UrlConstants;
+import org.chromium.chrome.browser.flags.ChromeFeatureList;
+import org.chromium.chrome.browser.flags.ChromeSwitches;
 import org.chromium.chrome.browser.native_page.ContextMenuManager;
 import org.chromium.chrome.browser.ntp.NewTabPage;
 import org.chromium.chrome.browser.ntp.NewTabPageView;
@@ -45,12 +45,12 @@ import org.chromium.chrome.test.util.ChromeTabUtils;
 import org.chromium.chrome.test.util.NewTabPageTestUtils;
 import org.chromium.chrome.test.util.browser.Features;
 import org.chromium.chrome.test.util.browser.RecyclerViewTestUtils;
-import org.chromium.chrome.test.util.browser.suggestions.FakeMostVisitedSites;
 import org.chromium.chrome.test.util.browser.suggestions.FakeSuggestionsSource;
 import org.chromium.chrome.test.util.browser.suggestions.SuggestionsDependenciesRule;
+import org.chromium.chrome.test.util.browser.suggestions.mostvisited.FakeMostVisitedSites;
+import org.chromium.components.embedder_support.util.UrlConstants;
 import org.chromium.content_public.browser.test.util.TestThreadUtils;
 import org.chromium.content_public.browser.test.util.TestTouchUtils;
-import org.chromium.content_public.browser.test.util.TouchCommon;
 import org.chromium.net.test.EmbeddedTestServer;
 import org.chromium.ui.test.util.UiRestriction;
 
@@ -95,8 +95,7 @@ public class NewTabPageRecyclerViewTest {
     private FakeSuggestionsSource mSource;
 
     @Before
-    public void setUp() throws Exception {
-
+    public void setUp() {
         mTestServer = EmbeddedTestServer.createAndStartServer(InstrumentationRegistry.getContext());
 
         FakeMostVisitedSites mostVisitedSites = new FakeMostVisitedSites();
@@ -136,15 +135,14 @@ public class NewTabPageRecyclerViewTest {
     }
 
     @After
-    public void tearDown() throws Exception {
+    public void tearDown() {
         mTestServer.stopAndDestroyServer();
-
     }
 
     @Test
     @MediumTest
     @Feature({"NewTabPage"})
-    public void testClickSuggestion() throws InterruptedException {
+    public void testClickSuggestion() {
         setSuggestionsAndWaitForUpdate(10);
         List<SnippetArticle> suggestions = mSource.getSuggestionsForCategory(TEST_CATEGORY);
 
@@ -156,18 +154,15 @@ public class NewTabPageRecyclerViewTest {
             TestTouchUtils.performClickOnMainSync(
                     InstrumentationRegistry.getInstrumentation(), suggestionView);
         });
-        assertEquals(suggestion.mUrl, mTab.getUrl());
+        assertEquals(suggestion.mUrl, mTab.getUrlString());
     }
 
     @Test
-    //@MediumTest
-    //@Feature({"NewTabPage"})
-    @DisabledTest(message = "crbug.com/793054")
-    public void testAllDismissed() throws InterruptedException, TimeoutException {
+    @MediumTest
+    @Feature({"NewTabPage"})
+    public void testAllDismissed() throws TimeoutException {
         setSuggestionsAndWaitForUpdate(3);
         assertEquals(3, mSource.getSuggestionsForCategory(TEST_CATEGORY).size());
-        assertEquals(RecyclerView.NO_POSITION,
-                getAdapter().getFirstPositionForType(ItemViewType.ALL_DISMISSED));
         assertEquals(1, mSource.getCategories().length);
         assertEquals(TEST_CATEGORY, mSource.getCategories()[0]);
 
@@ -175,22 +170,18 @@ public class NewTabPageRecyclerViewTest {
         int signinPromoPosition = getAdapter().getFirstPositionForType(ItemViewType.PROMO);
         dismissItemAtPosition(signinPromoPosition);
 
-        // Dismiss all the cards, including status cards, which dismisses the associated category.
+        // Dismiss all the cards. Then, we are left with the status card,
+        // which shouldn't be dismissible.
         while (true) {
             int cardPosition = getAdapter().getFirstCardPosition();
             if (cardPosition == RecyclerView.NO_POSITION) break;
+            final ViewHolder viewHolder = getViewHolderAtPosition(cardPosition);
+            if (viewHolder.getItemViewType() == ItemViewType.STATUS) {
+                assertFalse(((NewTabPageViewHolder) viewHolder).isDismissable());
+                break;
+            }
             dismissItemAtPosition(cardPosition);
         }
-        assertEquals(0, mSource.getCategories().length);
-
-        // Click the refresh button on the all dismissed item.
-        int allDismissedPosition = getAdapter().getFirstPositionForType(ItemViewType.ALL_DISMISSED);
-        assertTrue(allDismissedPosition != RecyclerView.NO_POSITION);
-        View allDismissedView = getViewHolderAtPosition(allDismissedPosition).itemView;
-        TouchCommon.singleClickView(allDismissedView.findViewById(R.id.action_button));
-        RecyclerViewTestUtils.waitForViewToDetach(getRecyclerView(), allDismissedView);
-        assertEquals(1, mSource.getCategories().length);
-        assertEquals(TEST_CATEGORY, mSource.getCategories()[0]);
     }
 
     @Test
@@ -211,45 +202,6 @@ public class NewTabPageRecyclerViewTest {
 
         suggestions = mSource.getSuggestionsForCategory(TEST_CATEGORY);
         assertEquals(9, suggestions.size());
-    }
-
-    @Test
-    @MediumTest
-    @Feature({"NewTabPage"})
-    public void testDismissStatusCardWithContextMenu() throws Exception {
-        setSuggestionsAndWaitForUpdate(0);
-        assertArrayEquals(new int[] {TEST_CATEGORY}, mSource.getCategories());
-
-        // Scroll the status card into view.
-        int cardPosition = getAdapter().getFirstPositionForType(ItemViewType.STATUS);
-        assertEquals(ItemViewType.STATUS, getAdapter().getItemViewType(cardPosition));
-
-        View statusCardView = getViewHolderAtPosition(cardPosition).itemView;
-
-        // Dismiss the status card using the context menu.
-        invokeContextMenu(statusCardView, ContextMenuManager.ContextMenuItemId.REMOVE);
-        RecyclerViewTestUtils.waitForViewToDetach(getRecyclerView(), statusCardView);
-
-        assertArrayEquals(new int[0], mSource.getCategories());
-    }
-
-    @Test
-    @MediumTest
-    @Feature({"NewTabPage"})
-    public void testDismissActionItemWithContextMenu() throws Exception {
-        setSuggestionsAndWaitForUpdate(0);
-        assertArrayEquals(new int[] {TEST_CATEGORY}, mSource.getCategories());
-
-        // Scroll the action item into view.
-        int actionItemPosition = getAdapter().getFirstPositionForType(ItemViewType.ACTION);
-        assertEquals(ItemViewType.ACTION, getAdapter().getItemViewType(actionItemPosition));
-        View actionItemView = getViewHolderAtPosition(actionItemPosition).itemView;
-
-        // Dismiss the action item using the context menu.
-        invokeContextMenu(actionItemView, ContextMenuManager.ContextMenuItemId.REMOVE);
-        RecyclerViewTestUtils.waitForViewToDetach(getRecyclerView(), actionItemView);
-
-        assertArrayEquals(new int[0], mSource.getCategories());
     }
 
     @Test
@@ -368,10 +320,9 @@ public class NewTabPageRecyclerViewTest {
      * Dismiss the item at the given {@code position} and wait until it has been removed from the
      * {@link RecyclerView}.
      * @param position the adapter position to remove.
-     * @throws InterruptedException
      * @throws TimeoutException
      */
-    private void dismissItemAtPosition(int position) throws InterruptedException, TimeoutException {
+    private void dismissItemAtPosition(int position) throws TimeoutException {
         final ViewHolder viewHolder = getViewHolderAtPosition(position);
         TestThreadUtils.runOnUiThreadBlocking(
                 () -> { getRecyclerView().dismissItemWithAnimation(viewHolder); });

@@ -13,15 +13,13 @@
 #include "base/bind.h"
 #include "base/macros.h"
 #include "base/run_loop.h"
-#include "base/test/scoped_task_environment.h"
-#include "content/public/renderer/fixed_received_data.h"
+#include "base/test/task_environment.h"
 #include "extensions/common/message_bundle.h"
 #include "ipc/ipc_sender.h"
 #include "ipc/ipc_sync_message.h"
 #include "mojo/public/cpp/system/data_pipe_utils.h"
 #include "net/base/net_errors.h"
 #include "net/url_request/redirect_info.h"
-#include "net/url_request/url_request_status.h"
 #include "services/network/public/cpp/url_loader_completion_status.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -72,9 +70,9 @@ class MockRequestPeer : public content::RequestPeer {
   MOCK_METHOD2(OnUploadProgress, void(uint64_t position, uint64_t size));
   MOCK_METHOD2(OnReceivedRedirect,
                bool(const net::RedirectInfo& redirect_info,
-                    const network::ResourceResponseInfo& info));
+                    network::mojom::URLResponseHeadPtr head));
   MOCK_METHOD1(OnReceivedResponse,
-               void(const network::ResourceResponseInfo& info));
+               void(network::mojom::URLResponseHeadPtr head));
   void OnStartLoadingResponseBody(
       mojo::ScopedDataPipeConsumerHandle body) override {
     body_handle_ = std::move(body);
@@ -86,9 +84,6 @@ class MockRequestPeer : public content::RequestPeer {
                             base::Unretained(this)));
   }
   MOCK_METHOD2(OnDownloadedData, void(int len, int encoded_data_length));
-  void OnReceivedData(std::unique_ptr<RequestPeer::ReceivedData>) override {
-    NOTREACHED();
-  }
   MOCK_METHOD1(OnReceivedDataInternal, void(std::string data));
   MOCK_METHOD1(OnTransferSizeUpdated, void(int transfer_size_diff));
   MOCK_METHOD1(OnCompletedRequest,
@@ -181,7 +176,7 @@ class ExtensionLocalizationPeerTest : public testing::Test {
     return consumer;
   }
 
-  base::test::ScopedTaskEnvironment scoped_environment_;
+  base::test::TaskEnvironment scoped_environment_;
   std::unique_ptr<MockIpcMessageSender> sender_;
   MockRequestPeer* original_peer_;
   std::unique_ptr<ExtensionLocalizationPeer> filter_peer_;
@@ -201,7 +196,7 @@ TEST_F(ExtensionLocalizationPeerTest, CreateWithValidInput) {
 
 MATCHER_P(IsURLRequestEqual, status, "") { return arg.status() == status; }
 
-TEST_F(ExtensionLocalizationPeerTest, OnCompletedRequestBadURLRequestStatus) {
+TEST_F(ExtensionLocalizationPeerTest, OnCompletedRequestBadURLLoaderStatus) {
   SetUpExtensionLocalizationPeer("text/css", GURL(kExtensionUrl_1));
 
   // This test simulates completion before receiving the response header.

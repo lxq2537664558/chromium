@@ -27,6 +27,8 @@
 #include "components/language/core/browser/pref_names.h"
 #include "components/proxy_config/proxy_config_dictionary.h"
 #include "components/proxy_config/proxy_config_pref_names.h"
+#include "components/safe_browsing/core/common/safe_browsing_prefs.h"
+#include "components/safe_browsing/core/common/safebrowsing_switches.h"
 #include "components/sync/base/pref_names.h"
 #include "content/public/common/content_switches.h"
 #include "services/network/public/cpp/network_switches.h"
@@ -49,11 +51,6 @@ const CommandLinePrefStore::SwitchToPreferenceMapEntry
         {switches::kAuthAndroidNegotiateAccountType,
          prefs::kAuthAndroidNegotiateAccountType},
 #endif
-        // TODO(https://crbug.com/917107 and http://crbug.com/937451): This is
-        // not the ideal way to implement this. Refactor enterprise policy and
-        // command line handling so that this line isn't necessary, if possible.
-        {network::switches::kUnsafelyTreatInsecureOriginAsSecure,
-         prefs::kUnsafelyTreatInsecureOriginAsSecure},
 #if defined(OS_CHROMEOS)
         {switches::kSchedulerConfiguration, prefs::kSchedulerConfiguration},
 #endif
@@ -72,12 +69,13 @@ const CommandLinePrefStore::BooleanSwitchToPreferenceMapEntry
          true},
         {switches::kAllowOutdatedPlugins, prefs::kPluginsAllowOutdated, true},
         {switches::kNoPings, prefs::kEnableHyperlinkAuditing, false},
-        {network::switches::kNoReferrers, prefs::kEnableReferrers, false},
         {switches::kAllowRunningInsecureContent,
          prefs::kWebKitAllowRunningInsecureContent, true},
         {switches::kAllowCrossOriginAuthPrompt,
          prefs::kAllowCrossOriginAuthPrompt, true},
         {switches::kDisablePrintPreview, prefs::kPrintPreviewDisabled, true},
+        {safe_browsing::switches::kSbEnableEnhancedProtection,
+         prefs::kSafeBrowsingEnhanced, true},
 #if defined(OS_CHROMEOS)
         {chromeos::switches::kEnableTouchpadThreeFingerClick,
          prefs::kEnableTouchpadThreeFingerClick, true},
@@ -86,7 +84,6 @@ const CommandLinePrefStore::BooleanSwitchToPreferenceMapEntry
         {chromeos::switches::kEnableCastReceiver, prefs::kCastReceiverEnabled,
          true},
 #endif
-        {switches::kUnsafePacUrl, prefs::kPacHttpsUrlStrippingEnabled, false},
         {switches::kEnableLocalSyncBackend,
          syncer::prefs::kEnableLocalSyncBackend, true},
 #if !defined(OS_CHROMEOS) && !defined(OS_ANDROID)
@@ -98,9 +95,7 @@ const CommandLinePrefStore::BooleanSwitchToPreferenceMapEntry
 
 const CommandLinePrefStore::SwitchToPreferenceMapEntry
     ChromeCommandLinePrefStore::integer_switch_map_[] = {
-      { switches::kDiskCacheSize, prefs::kDiskCacheSize },
-      { switches::kMediaCacheSize, prefs::kMediaCacheSize },
-    };
+        {switches::kDiskCacheSize, prefs::kDiskCacheSize}};
 
 ChromeCommandLinePrefStore::ChromeCommandLinePrefStore(
     const base::CommandLine* command_line)

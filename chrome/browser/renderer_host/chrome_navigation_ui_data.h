@@ -21,7 +21,6 @@ class NavigationHandle;
 
 enum class WindowOpenDisposition;
 
-// PlzNavigate
 // Contains data that is passed from the UI thread to the IO thread at the
 // beginning of each navigation. The class is instantiated on the UI thread,
 // then a copy created using Clone is passed to the content::ResourceRequestInfo
@@ -40,7 +39,7 @@ class ChromeNavigationUIData : public content::NavigationUIData {
   // Creates a new ChromeNavigationUIData that is a deep copy of the original.
   // Any changes to the original after the clone is created will not be
   // reflected in the clone.  All owned data members are deep copied.
-  std::unique_ptr<content::NavigationUIData> Clone() const override;
+  std::unique_ptr<content::NavigationUIData> Clone() override;
 
 #if BUILDFLAG(ENABLE_EXTENSIONS)
   void SetExtensionNavigationUIData(

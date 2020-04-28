@@ -32,7 +32,6 @@
 #include "third_party/blink/renderer/platform/bindings/exception_state.h"
 #include "third_party/blink/renderer/platform/bindings/script_state.h"
 #include "third_party/blink/renderer/platform/heap/heap.h"
-#include "third_party/blink/renderer/platform/mediastream/media_stream_center.h"
 #include "third_party/blink/renderer/platform/mediastream/media_stream_source.h"
 
 namespace blink {
@@ -103,7 +102,7 @@ MediaStream* MediaStream::Create(ExecutionContext* context,
 
 MediaStream::MediaStream(ExecutionContext* context,
                          MediaStreamDescriptor* stream_descriptor)
-    : ContextClient(context),
+    : ExecutionContextClient(context),
       descriptor_(stream_descriptor),
       scheduled_event_timer_(
           context->GetTaskRunner(TaskType::kMediaElementEvent),
@@ -114,8 +113,8 @@ MediaStream::MediaStream(ExecutionContext* context,
   uint32_t number_of_audio_tracks = descriptor_->NumberOfAudioComponents();
   audio_tracks_.ReserveCapacity(number_of_audio_tracks);
   for (uint32_t i = 0; i < number_of_audio_tracks; i++) {
-    MediaStreamTrack* new_track =
-        MediaStreamTrack::Create(context, descriptor_->AudioComponent(i));
+    auto* new_track = MakeGarbageCollected<MediaStreamTrack>(
+        context, descriptor_->AudioComponent(i));
     new_track->RegisterMediaStream(this);
     audio_tracks_.push_back(new_track);
   }
@@ -123,8 +122,8 @@ MediaStream::MediaStream(ExecutionContext* context,
   uint32_t number_of_video_tracks = descriptor_->NumberOfVideoComponents();
   video_tracks_.ReserveCapacity(number_of_video_tracks);
   for (uint32_t i = 0; i < number_of_video_tracks; i++) {
-    MediaStreamTrack* new_track =
-        MediaStreamTrack::Create(context, descriptor_->VideoComponent(i));
+    auto* new_track = MakeGarbageCollected<MediaStreamTrack>(
+        context, descriptor_->VideoComponent(i));
     new_track->RegisterMediaStream(this);
     video_tracks_.push_back(new_track);
   }
@@ -138,7 +137,7 @@ MediaStream::MediaStream(ExecutionContext* context,
                          MediaStreamDescriptor* stream_descriptor,
                          const MediaStreamTrackVector& audio_tracks,
                          const MediaStreamTrackVector& video_tracks)
-    : ContextClient(context),
+    : ExecutionContextClient(context),
       descriptor_(stream_descriptor),
       scheduled_event_timer_(
           context->GetTaskRunner(TaskType::kMediaElementEvent),
@@ -168,7 +167,7 @@ MediaStream::MediaStream(ExecutionContext* context,
 MediaStream::MediaStream(ExecutionContext* context,
                          const MediaStreamTrackVector& audio_tracks,
                          const MediaStreamTrackVector& video_tracks)
-    : ContextClient(context),
+    : ExecutionContextClient(context),
       scheduled_event_timer_(
           context->GetTaskRunner(TaskType::kMediaElementEvent),
           this,
@@ -403,8 +402,8 @@ void MediaStream::AddTrackByComponentAndFireEvents(
   DCHECK(component);
   if (!GetExecutionContext())
     return;
-  MediaStreamTrack* track =
-      MediaStreamTrack::Create(GetExecutionContext(), component);
+  auto* track =
+      MakeGarbageCollected<MediaStreamTrack>(GetExecutionContext(), component);
   AddTrackAndFireEvents(track);
 }
 
@@ -439,8 +438,8 @@ void MediaStream::RemoveTrackByComponentAndFireEvents(
   MediaStreamTrack* track = (*tracks)[index];
   track->UnregisterMediaStream(this);
   tracks->EraseAt(index);
-  ScheduleDispatchEvent(
-      MediaStreamTrackEvent::Create(event_type_names::kRemovetrack, track));
+  ScheduleDispatchEvent(MakeGarbageCollected<MediaStreamTrackEvent>(
+      event_type_names::kRemovetrack, track));
 
   if (active() && EmptyOrOnlyEndedTracks()) {
     descriptor_->SetActive(false);
@@ -461,8 +460,8 @@ void MediaStream::AddTrackAndFireEvents(MediaStreamTrack* track) {
   track->RegisterMediaStream(this);
   descriptor_->AddComponent(track->Component());
 
-  ScheduleDispatchEvent(
-      MediaStreamTrackEvent::Create(event_type_names::kAddtrack, track));
+  ScheduleDispatchEvent(MakeGarbageCollected<MediaStreamTrackEvent>(
+      event_type_names::kAddtrack, track));
 
   if (!active() && !track->Ended()) {
     descriptor_->SetActive(true);
@@ -479,7 +478,7 @@ void MediaStream::ScheduleDispatchEvent(Event* event) {
   scheduled_events_.push_back(event);
 
   if (!scheduled_event_timer_.IsActive())
-    scheduled_event_timer_.StartOneShot(TimeDelta(), FROM_HERE);
+    scheduled_event_timer_.StartOneShot(base::TimeDelta(), FROM_HERE);
 }
 
 void MediaStream::ScheduledEventTimerFired(TimerBase*) {
@@ -496,14 +495,14 @@ void MediaStream::ScheduledEventTimerFired(TimerBase*) {
   events.clear();
 }
 
-void MediaStream::Trace(blink::Visitor* visitor) {
+void MediaStream::Trace(Visitor* visitor) {
   visitor->Trace(audio_tracks_);
   visitor->Trace(video_tracks_);
   visitor->Trace(descriptor_);
   visitor->Trace(observers_);
   visitor->Trace(scheduled_events_);
   EventTargetWithInlineData::Trace(visitor);
-  ContextClient::Trace(visitor);
+  ExecutionContextClient::Trace(visitor);
   MediaStreamDescriptorClient::Trace(visitor);
 }
 

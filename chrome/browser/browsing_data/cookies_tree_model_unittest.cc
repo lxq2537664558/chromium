@@ -10,22 +10,22 @@
 #include "base/memory/ptr_util.h"
 #include "base/run_loop.h"
 #include "base/strings/utf_string_conversions.h"
-#include "chrome/browser/browsing_data/mock_browsing_data_appcache_helper.h"
-#include "chrome/browser/browsing_data/mock_browsing_data_cache_storage_helper.h"
-#include "chrome/browser/browsing_data/mock_browsing_data_cookie_helper.h"
-#include "chrome/browser/browsing_data/mock_browsing_data_database_helper.h"
-#include "chrome/browser/browsing_data/mock_browsing_data_file_system_helper.h"
 #include "chrome/browser/browsing_data/mock_browsing_data_flash_lso_helper.h"
-#include "chrome/browser/browsing_data/mock_browsing_data_indexed_db_helper.h"
-#include "chrome/browser/browsing_data/mock_browsing_data_local_storage_helper.h"
 #include "chrome/browser/browsing_data/mock_browsing_data_media_license_helper.h"
 #include "chrome/browser/browsing_data/mock_browsing_data_quota_helper.h"
-#include "chrome/browser/browsing_data/mock_browsing_data_service_worker_helper.h"
-#include "chrome/browser/browsing_data/mock_browsing_data_shared_worker_helper.h"
 #include "chrome/browser/content_settings/cookie_settings_factory.h"
 #include "chrome/browser/content_settings/host_content_settings_map_factory.h"
 #include "chrome/browser/content_settings/mock_settings_observer.h"
 #include "chrome/test/base/testing_profile.h"
+#include "components/browsing_data/content/mock_appcache_helper.h"
+#include "components/browsing_data/content/mock_cache_storage_helper.h"
+#include "components/browsing_data/content/mock_cookie_helper.h"
+#include "components/browsing_data/content/mock_database_helper.h"
+#include "components/browsing_data/content/mock_file_system_helper.h"
+#include "components/browsing_data/content/mock_indexed_db_helper.h"
+#include "components/browsing_data/content/mock_local_storage_helper.h"
+#include "components/browsing_data/content/mock_service_worker_helper.h"
+#include "components/browsing_data/content/mock_shared_worker_helper.h"
 #include "components/content_settings/core/browser/cookie_settings.h"
 #include "components/content_settings/core/browser/host_content_settings_map.h"
 #include "components/prefs/pref_service.h"
@@ -33,7 +33,7 @@
 #include "content/public/browser/notification_details.h"
 #include "content/public/browser/notification_types.h"
 #include "content/public/browser/storage_usage_info.h"
-#include "content/public/test/test_browser_thread_bundle.h"
+#include "content/public/test/browser_task_environment.h"
 #include "extensions/buildflags/buildflags.h"
 #include "net/url_request/url_request_context.h"
 #include "net/url_request/url_request_context_getter.h"
@@ -62,27 +62,27 @@ class CookiesTreeModelTest : public testing::Test {
   void SetUp() override {
     profile_.reset(new TestingProfile());
     mock_browsing_data_cookie_helper_ =
-        new MockBrowsingDataCookieHelper(profile_.get());
+        new browsing_data::MockCookieHelper(profile_.get());
     mock_browsing_data_database_helper_ =
-        new MockBrowsingDataDatabaseHelper(profile_.get());
+        new browsing_data::MockDatabaseHelper(profile_.get());
     mock_browsing_data_local_storage_helper_ =
-        new MockBrowsingDataLocalStorageHelper(profile_.get());
+        new browsing_data::MockLocalStorageHelper(profile_.get());
     mock_browsing_data_session_storage_helper_ =
-        new MockBrowsingDataLocalStorageHelper(profile_.get());
+        new browsing_data::MockLocalStorageHelper(profile_.get());
     mock_browsing_data_appcache_helper_ =
-        new MockBrowsingDataAppCacheHelper(profile_.get());
+        new browsing_data::MockAppCacheHelper(profile_.get());
     mock_browsing_data_indexed_db_helper_ =
-        new MockBrowsingDataIndexedDBHelper(profile_.get());
+        new browsing_data::MockIndexedDBHelper(profile_.get());
     mock_browsing_data_file_system_helper_ =
-        new MockBrowsingDataFileSystemHelper(profile_.get());
+        new browsing_data::MockFileSystemHelper(profile_.get());
     mock_browsing_data_quota_helper_ =
         new MockBrowsingDataQuotaHelper(profile_.get());
     mock_browsing_data_service_worker_helper_ =
-        new MockBrowsingDataServiceWorkerHelper(profile_.get());
+        new browsing_data::MockServiceWorkerHelper(profile_.get());
     mock_browsing_data_shared_worker_helper_ =
-        new MockBrowsingDataSharedWorkerHelper(profile_.get());
+        new browsing_data::MockSharedWorkerHelper(profile_.get());
     mock_browsing_data_cache_storage_helper_ =
-        new MockBrowsingDataCacheStorageHelper(profile_.get());
+        new browsing_data::MockCacheStorageHelper(profile_.get());
     mock_browsing_data_flash_lso_helper_ =
         new MockBrowsingDataFlashLSOHelper(profile_.get());
     mock_browsing_data_media_license_helper_ =
@@ -92,7 +92,7 @@ class CookiesTreeModelTest : public testing::Test {
     scoped_refptr<content_settings::CookieSettings> cookie_settings =
         new content_settings::CookieSettings(
             HostContentSettingsMapFactory::GetForProfile(profile_.get()),
-            profile_->GetPrefs(),
+            profile_->GetPrefs(), profile_->IsIncognitoProfile(),
             kExtensionScheme);
 #if BUILDFLAG(ENABLE_EXTENSIONS)
     special_storage_policy_ =
@@ -230,13 +230,10 @@ class CookiesTreeModelTest : public testing::Test {
       CookieTreeNode::DetailedInfo::NodeType node_type,
       content_settings::CookieSettings* cookie_settings,
       const GURL& expected_url) {
-    if (!node->empty()) {
-      for (int i = 0; i < node->child_count(); ++i) {
-        const CookieTreeNode* child = node->GetChild(i);
-        CheckContentSettingsUrlForHostNodes(child,
-                                            child->GetDetailedInfo().node_type,
-                                            cookie_settings, expected_url);
-      }
+    for (const auto& child : node->children()) {
+      CheckContentSettingsUrlForHostNodes(child.get(),
+                                          child->GetDetailedInfo().node_type,
+                                          cookie_settings, expected_url);
     }
 
     ASSERT_EQ(node_type, node->GetDetailedInfo().node_type);
@@ -261,11 +258,10 @@ class CookiesTreeModelTest : public testing::Test {
   std::string GetNodesOfChildren(
       const CookieTreeNode* node,
       CookieTreeNode::DetailedInfo::NodeType node_type) {
-    if (!node->empty()) {
+    if (!node->children().empty()) {
       std::string retval;
-      for (int i = 0; i < node->child_count(); ++i) {
-        retval += GetNodesOfChildren(node->GetChild(i), node_type);
-      }
+      for (const auto& child : node->children())
+        retval += GetNodesOfChildren(child.get(), node_type);
       return retval;
     }
 
@@ -399,29 +395,29 @@ class CookiesTreeModelTest : public testing::Test {
 #endif
   }
 
-  content::TestBrowserThreadBundle thread_bundle_;
+  content::BrowserTaskEnvironment task_environment_;
   std::unique_ptr<TestingProfile> profile_;
-  scoped_refptr<MockBrowsingDataCookieHelper>
+  scoped_refptr<browsing_data::MockCookieHelper>
       mock_browsing_data_cookie_helper_;
-  scoped_refptr<MockBrowsingDataDatabaseHelper>
+  scoped_refptr<browsing_data::MockDatabaseHelper>
       mock_browsing_data_database_helper_;
-  scoped_refptr<MockBrowsingDataLocalStorageHelper>
+  scoped_refptr<browsing_data::MockLocalStorageHelper>
       mock_browsing_data_local_storage_helper_;
-  scoped_refptr<MockBrowsingDataLocalStorageHelper>
+  scoped_refptr<browsing_data::MockLocalStorageHelper>
       mock_browsing_data_session_storage_helper_;
-  scoped_refptr<MockBrowsingDataAppCacheHelper>
+  scoped_refptr<browsing_data::MockAppCacheHelper>
       mock_browsing_data_appcache_helper_;
-  scoped_refptr<MockBrowsingDataIndexedDBHelper>
+  scoped_refptr<browsing_data::MockIndexedDBHelper>
       mock_browsing_data_indexed_db_helper_;
-  scoped_refptr<MockBrowsingDataFileSystemHelper>
+  scoped_refptr<browsing_data::MockFileSystemHelper>
       mock_browsing_data_file_system_helper_;
   scoped_refptr<MockBrowsingDataQuotaHelper>
       mock_browsing_data_quota_helper_;
-  scoped_refptr<MockBrowsingDataServiceWorkerHelper>
+  scoped_refptr<browsing_data::MockServiceWorkerHelper>
       mock_browsing_data_service_worker_helper_;
-  scoped_refptr<MockBrowsingDataSharedWorkerHelper>
+  scoped_refptr<browsing_data::MockSharedWorkerHelper>
       mock_browsing_data_shared_worker_helper_;
-  scoped_refptr<MockBrowsingDataCacheStorageHelper>
+  scoped_refptr<browsing_data::MockCacheStorageHelper>
       mock_browsing_data_cache_storage_helper_;
   scoped_refptr<MockBrowsingDataFlashLSOHelper>
       mock_browsing_data_flash_lso_helper_;
@@ -488,7 +484,7 @@ TEST_F(CookiesTreeModelTest, RemoveAll) {
     // 2 nodes - root and app
     SCOPED_TRACE("After removing");
     EXPECT_EQ(1, cookies_model->GetRoot()->GetTotalNodeCount());
-    EXPECT_EQ(0, cookies_model->GetRoot()->child_count());
+    EXPECT_EQ(0u, cookies_model->GetRoot()->children().size());
     EXPECT_EQ(std::string(), GetDisplayedCookies(cookies_model.get()));
     EXPECT_TRUE(mock_browsing_data_cookie_helper_->AllDeleted());
     EXPECT_TRUE(mock_browsing_data_database_helper_->AllDeleted());
@@ -538,7 +534,7 @@ TEST_F(CookiesTreeModelTest, Remove) {
   // check that the state makes sense. Initially there are 71 total nodes.
 
   // xyz.com -> flash_lsos (2 nodes)
-  DeleteStoredObjects(cookies_model->GetRoot()->GetChild(22));
+  DeleteStoredObjects(cookies_model->GetRoot()->children()[22].get());
   {
     SCOPED_TRACE("`xyz.com` removed.");
     EXPECT_STREQ("A,B,C", GetDisplayedCookies(cookies_model.get()).c_str());
@@ -569,7 +565,7 @@ TEST_F(CookiesTreeModelTest, Remove) {
   }
 
   // swhost2 -> service worker -> https://swhost1:2 (3 objects)
-  DeleteStoredObjects(cookies_model->GetRoot()->GetChild(21));
+  DeleteStoredObjects(cookies_model->GetRoot()->children()[21].get());
   {
     SCOPED_TRACE("`swhost2` removed.");
     EXPECT_STREQ("A,B,C", GetDisplayedCookies(cookies_model.get()).c_str());
@@ -599,7 +595,7 @@ TEST_F(CookiesTreeModelTest, Remove) {
   }
 
   // swhost1 -> service worker -> https://swhost1:1 (3 nodes)
-  DeleteStoredObjects(cookies_model->GetRoot()->GetChild(20));
+  DeleteStoredObjects(cookies_model->GetRoot()->children()[20].get());
   {
     SCOPED_TRACE("`swhost1` removed.");
     EXPECT_STREQ("A,B,C", GetDisplayedCookies(cookies_model.get()).c_str());
@@ -629,7 +625,7 @@ TEST_F(CookiesTreeModelTest, Remove) {
 
   // sharedworkerhost2 -> shared worker -> https://sharedworkerhost2:2 (3
   // objects)
-  DeleteStoredObjects(cookies_model->GetRoot()->GetChild(19));
+  DeleteStoredObjects(cookies_model->GetRoot()->children()[19].get());
   {
     SCOPED_TRACE("`sharedworkerhost2` removed.");
     EXPECT_STREQ("A,B,C", GetDisplayedCookies(cookies_model.get()).c_str());
@@ -656,7 +652,7 @@ TEST_F(CookiesTreeModelTest, Remove) {
   }
 
   // sharedworkerhost1 -> shared worker -> https://sharedworkerhost1:1 (3 nodes)
-  DeleteStoredObjects(cookies_model->GetRoot()->GetChild(18));
+  DeleteStoredObjects(cookies_model->GetRoot()->children()[18].get());
   {
     SCOPED_TRACE("`sharedworkerhost1` removed.");
     EXPECT_STREQ("A,B,C", GetDisplayedCookies(cookies_model.get()).c_str());
@@ -682,7 +678,7 @@ TEST_F(CookiesTreeModelTest, Remove) {
   }
 
   // quotahost2 -> quotahost2 (2 objects)
-  DeleteStoredObjects(cookies_model->GetRoot()->GetChild(17));
+  DeleteStoredObjects(cookies_model->GetRoot()->children()[17].get());
   {
     SCOPED_TRACE("`quotahost2` removed.");
     EXPECT_STREQ("A,B,C", GetDisplayedCookies(cookies_model.get()).c_str());
@@ -709,7 +705,7 @@ TEST_F(CookiesTreeModelTest, Remove) {
   }
 
   // quotahost1 -> quotahost1 (2 objects)
-  DeleteStoredObjects(cookies_model->GetRoot()->GetChild(16));
+  DeleteStoredObjects(cookies_model->GetRoot()->children()[16].get());
   {
     SCOPED_TRACE("`quotahost1` removed.");
     EXPECT_STREQ("A,B,C", GetDisplayedCookies(cookies_model.get()).c_str());
@@ -734,7 +730,7 @@ TEST_F(CookiesTreeModelTest, Remove) {
   }
 
   // media2 -> media_licenses -> media_license (3 objects)
-  DeleteStoredObjects(cookies_model->GetRoot()->GetChild(15));
+  DeleteStoredObjects(cookies_model->GetRoot()->children()[15].get());
   {
     SCOPED_TRACE("`media2` removed.");
     EXPECT_STREQ("A,B,C", GetDisplayedCookies(cookies_model.get()).c_str());
@@ -759,7 +755,7 @@ TEST_F(CookiesTreeModelTest, Remove) {
   }
 
   // media1 -> media_licenses -> media_license (3 objects)
-  DeleteStoredObjects(cookies_model->GetRoot()->GetChild(14));
+  DeleteStoredObjects(cookies_model->GetRoot()->children()[14].get());
   {
     SCOPED_TRACE("`media1` removed.");
     EXPECT_STREQ("A,B,C", GetDisplayedCookies(cookies_model.get()).c_str());
@@ -783,7 +779,7 @@ TEST_F(CookiesTreeModelTest, Remove) {
   }
 
   // idbhost2 -> indexeddb -> http://idbhost2:2/ (3 objects)
-  DeleteStoredObjects(cookies_model->GetRoot()->GetChild(13));
+  DeleteStoredObjects(cookies_model->GetRoot()->children()[13].get());
   {
     SCOPED_TRACE("`idbhost2` removed.");
     EXPECT_STREQ("A,B,C", GetDisplayedCookies(cookies_model.get()).c_str());
@@ -807,7 +803,7 @@ TEST_F(CookiesTreeModelTest, Remove) {
   }
 
   // idbhost1 -> indexeddb -> http://idbhost1:1/ (3 objects)
-  DeleteStoredObjects(cookies_model->GetRoot()->GetChild(12));
+  DeleteStoredObjects(cookies_model->GetRoot()->children()[12].get());
   {
     SCOPED_TRACE("`idbhost1` removed.");
     EXPECT_STREQ("A,B,C", GetDisplayedCookies(cookies_model.get()).c_str());
@@ -831,7 +827,7 @@ TEST_F(CookiesTreeModelTest, Remove) {
 
   // host2 -> localstorage -> http://host2:2/,
   //       -> sessionstorage -> http://host2:2/ (5 objects)
-  DeleteStoredObjects(cookies_model->GetRoot()->GetChild(11));
+  DeleteStoredObjects(cookies_model->GetRoot()->children()[11].get());
   {
     SCOPED_TRACE("`host2` removed.");
     EXPECT_STREQ("A,B,C", GetDisplayedCookies(cookies_model.get()).c_str());
@@ -855,7 +851,7 @@ TEST_F(CookiesTreeModelTest, Remove) {
 
   // host1 -> localstorage -> http://host1:1/,
   //       -> sessionstorage -> http://host1:1/ (5 objects)
-  DeleteStoredObjects(cookies_model->GetRoot()->GetChild(10));
+  DeleteStoredObjects(cookies_model->GetRoot()->children()[10].get());
   {
     SCOPED_TRACE("`host1` removed.");
     EXPECT_STREQ("A,B,C", GetDisplayedCookies(cookies_model.get()).c_str());
@@ -876,7 +872,7 @@ TEST_F(CookiesTreeModelTest, Remove) {
   }
 
   // gdbhost2 -> database -> http://gdbhost2:2/ (3 objects)
-  DeleteStoredObjects(cookies_model->GetRoot()->GetChild(9));
+  DeleteStoredObjects(cookies_model->GetRoot()->children()[9].get());
   {
     SCOPED_TRACE("`gdbhost2` removed.");
     EXPECT_STREQ("A,B,C", GetDisplayedCookies(cookies_model.get()).c_str());
@@ -895,7 +891,7 @@ TEST_F(CookiesTreeModelTest, Remove) {
     EXPECT_EQ(28, cookies_model->GetRoot()->GetTotalNodeCount());
   }
   // gdbhost1 -> database -> http://gdbhost1:1/ (3 objects)
-  DeleteStoredObjects(cookies_model->GetRoot()->GetChild(8));
+  DeleteStoredObjects(cookies_model->GetRoot()->children()[8].get());
   {
     SCOPED_TRACE("`gdbhost1` removed.");
     EXPECT_STREQ("A,B,C", GetDisplayedCookies(cookies_model.get()).c_str());
@@ -915,7 +911,7 @@ TEST_F(CookiesTreeModelTest, Remove) {
   }
 
   // fshost3 -> filesystem -> http://fshost3:1/ (3 objects)
-  DeleteStoredObjects(cookies_model->GetRoot()->GetChild(7));
+  DeleteStoredObjects(cookies_model->GetRoot()->children()[7].get());
   {
     SCOPED_TRACE("`fshost3` removed.");
     EXPECT_STREQ("A,B,C", GetDisplayedCookies(cookies_model.get()).c_str());
@@ -935,7 +931,7 @@ TEST_F(CookiesTreeModelTest, Remove) {
   }
 
   // fshost2 -> filesystem -> http://fshost2:1/ (3 objects)
-  DeleteStoredObjects(cookies_model->GetRoot()->GetChild(6));
+  DeleteStoredObjects(cookies_model->GetRoot()->children()[6].get());
   {
     SCOPED_TRACE("`fshost2` removed.");
     EXPECT_STREQ("A,B,C", GetDisplayedCookies(cookies_model.get()).c_str());
@@ -955,7 +951,7 @@ TEST_F(CookiesTreeModelTest, Remove) {
   }
 
   // fshost1 -> filesystem -> http://fshost1:1/ (3 objects)
-  DeleteStoredObjects(cookies_model->GetRoot()->GetChild(5));
+  DeleteStoredObjects(cookies_model->GetRoot()->children()[5].get());
   {
     SCOPED_TRACE("`fshost1` removed.");
     EXPECT_STREQ("A,B,C", GetDisplayedCookies(cookies_model.get()).c_str());
@@ -974,7 +970,7 @@ TEST_F(CookiesTreeModelTest, Remove) {
   }
 
   // foo3 -> cookies -> c (3 objects)
-  DeleteStoredObjects(cookies_model->GetRoot()->GetChild(4));
+  DeleteStoredObjects(cookies_model->GetRoot()->children()[4].get());
   {
     SCOPED_TRACE("`foo3` removed.");
     EXPECT_STREQ("A,B", GetDisplayedCookies(cookies_model.get()).c_str());
@@ -993,7 +989,7 @@ TEST_F(CookiesTreeModelTest, Remove) {
   }
 
   // foo2 -> cookies -> b (3 objects)
-  DeleteStoredObjects(cookies_model->GetRoot()->GetChild(3));
+  DeleteStoredObjects(cookies_model->GetRoot()->children()[3].get());
   {
     SCOPED_TRACE("`foo2` removed.");
     EXPECT_STREQ("A", GetDisplayedCookies(cookies_model.get()).c_str());
@@ -1012,7 +1008,7 @@ TEST_F(CookiesTreeModelTest, Remove) {
   }
 
   // foo1 -> cookies -> a (3 objects)
-  DeleteStoredObjects(cookies_model->GetRoot()->GetChild(2));
+  DeleteStoredObjects(cookies_model->GetRoot()->children()[2].get());
   {
     SCOPED_TRACE("`foo1` removed.");
     EXPECT_STREQ("", GetDisplayedCookies(cookies_model.get()).c_str());
@@ -1031,7 +1027,7 @@ TEST_F(CookiesTreeModelTest, Remove) {
   }
 
   // cshost2 -> cache storage -> https://cshost2:2/ (3 objects)
-  DeleteStoredObjects(cookies_model->GetRoot()->GetChild(1));
+  DeleteStoredObjects(cookies_model->GetRoot()->children()[1].get());
   {
     SCOPED_TRACE("`cshost2` removed.");
     EXPECT_STREQ("", GetDisplayedCookies(cookies_model.get()).c_str());
@@ -1050,7 +1046,7 @@ TEST_F(CookiesTreeModelTest, Remove) {
   }
 
   // cshost1 -> cache storage -> https://cshost1:1/ (3 objects)
-  DeleteStoredObjects(cookies_model->GetRoot()->GetChild(0));
+  DeleteStoredObjects(cookies_model->GetRoot()->children()[0].get());
   {
     SCOPED_TRACE("`cshost1` removed.");
     EXPECT_STREQ("", GetDisplayedCookies(cookies_model.get()).c_str());
@@ -1072,7 +1068,8 @@ TEST_F(CookiesTreeModelTest, RemoveCookiesNode) {
   std::unique_ptr<CookiesTreeModel> cookies_model(
       CreateCookiesTreeModelWithInitialSample());
 
-  DeleteStoredObjects(cookies_model->GetRoot()->GetChild(2)->GetChild(0));
+  DeleteStoredObjects(
+      cookies_model->GetRoot()->children()[2]->children()[0].get());
   {
     SCOPED_TRACE("First cookies origin removed");
     EXPECT_STREQ("B,C", GetDisplayedCookies(cookies_model.get()).c_str());
@@ -1103,7 +1100,8 @@ TEST_F(CookiesTreeModelTest, RemoveCookiesNode) {
               GetDisplayedMediaLicenses(cookies_model.get()));
   }
 
-  DeleteStoredObjects(cookies_model->GetRoot()->GetChild(8)->GetChild(0));
+  DeleteStoredObjects(
+      cookies_model->GetRoot()->children()[8]->children()[0].get());
   {
     SCOPED_TRACE("First database origin removed");
     EXPECT_STREQ("B,C", GetDisplayedCookies(cookies_model.get()).c_str());
@@ -1131,7 +1129,8 @@ TEST_F(CookiesTreeModelTest, RemoveCookiesNode) {
     EXPECT_EQ(67, cookies_model->GetRoot()->GetTotalNodeCount());
   }
 
-  DeleteStoredObjects(cookies_model->GetRoot()->GetChild(10)->GetChild(0));
+  DeleteStoredObjects(
+      cookies_model->GetRoot()->children()[10]->children()[0].get());
   {
     SCOPED_TRACE("First local storage origin removed");
     EXPECT_STREQ("B,C", GetDisplayedCookies(cookies_model.get()).c_str());
@@ -1164,7 +1163,8 @@ TEST_F(CookiesTreeModelTest, RemoveCookieNode) {
   std::unique_ptr<CookiesTreeModel> cookies_model(
       CreateCookiesTreeModelWithInitialSample());
 
-  DeleteStoredObjects(cookies_model->GetRoot()->GetChild(3)->GetChild(0));
+  DeleteStoredObjects(
+      cookies_model->GetRoot()->children()[3]->children()[0].get());
   {
     SCOPED_TRACE("Second origin COOKIES node removed");
     EXPECT_STREQ("A,C", GetDisplayedCookies(cookies_model.get()).c_str());
@@ -1195,7 +1195,8 @@ TEST_F(CookiesTreeModelTest, RemoveCookieNode) {
     EXPECT_EQ(69, cookies_model->GetRoot()->GetTotalNodeCount());
   }
 
-  DeleteStoredObjects(cookies_model->GetRoot()->GetChild(8)->GetChild(0));
+  DeleteStoredObjects(
+      cookies_model->GetRoot()->children()[8]->children()[0].get());
   {
     SCOPED_TRACE("First database origin removed");
     EXPECT_STREQ("A,C", GetDisplayedCookies(cookies_model.get()).c_str());
@@ -1223,7 +1224,8 @@ TEST_F(CookiesTreeModelTest, RemoveCookieNode) {
     EXPECT_EQ(67, cookies_model->GetRoot()->GetTotalNodeCount());
   }
 
-  DeleteStoredObjects(cookies_model->GetRoot()->GetChild(10)->GetChild(0));
+  DeleteStoredObjects(
+      cookies_model->GetRoot()->children()[10]->children()[0].get());
   {
     SCOPED_TRACE("First local storage origin removed");
     EXPECT_STREQ("A,C", GetDisplayedCookies(cookies_model.get()).c_str());
@@ -1346,7 +1348,7 @@ TEST_F(CookiesTreeModelTest, RemoveSingleCookieNode) {
     EXPECT_EQ("https://cshost1:1/,https://cshost2:2/",
               GetDisplayedCacheStorages(&cookies_model));
   }
-  DeleteStoredObjects(cookies_model.GetRoot()->GetChild(4));
+  DeleteStoredObjects(cookies_model.GetRoot()->children()[4].get());
   {
     SCOPED_TRACE("Third cookie origin removed");
     EXPECT_STREQ("A,B", GetDisplayedCookies(&cookies_model).c_str());
@@ -1469,8 +1471,11 @@ TEST_F(CookiesTreeModelTest, RemoveSingleCookieNodeOf3) {
     EXPECT_EQ("https://cshost1:1/,https://cshost2:2/",
               GetDisplayedCacheStorages(&cookies_model));
   }
-  DeleteStoredObjects(
-      cookies_model.GetRoot()->GetChild(4)->GetChild(0)->GetChild(1));
+  DeleteStoredObjects(cookies_model.GetRoot()
+                          ->children()[4]
+                          ->children()[0]
+                          ->children()[1]
+                          .get());
   {
     SCOPED_TRACE("Middle cookie in third cookie origin removed");
     EXPECT_STREQ("A,B,C,E", GetDisplayedCookies(&cookies_model).c_str());
@@ -1532,7 +1537,7 @@ TEST_F(CookiesTreeModelTest, RemoveSecondOrigin) {
     EXPECT_EQ(12, cookies_model.GetRoot()->GetTotalNodeCount());
     EXPECT_STREQ("A,B,C,D,E", GetDisplayedCookies(&cookies_model).c_str());
   }
-  DeleteStoredObjects(cookies_model.GetRoot()->GetChild(1));
+  DeleteStoredObjects(cookies_model.GetRoot()->children()[1].get());
   {
     SCOPED_TRACE("Second origin removed");
     EXPECT_STREQ("A,C,D,E", GetDisplayedCookies(&cookies_model).c_str());
@@ -1583,7 +1588,7 @@ TEST_F(CookiesTreeModelTest, OriginOrdering) {
         GetDisplayedCookies(&cookies_model).c_str());
   }
   // Delete "E"
-  DeleteStoredObjects(cookies_model.GetRoot()->GetChild(1));
+  DeleteStoredObjects(cookies_model.GetRoot()->children()[1].get());
   {
     EXPECT_STREQ("F,C,B,A,G,D,H", GetDisplayedCookies(&cookies_model).c_str());
   }
@@ -1621,10 +1626,10 @@ TEST_F(CookiesTreeModelTest, ContentSettings) {
   CookieTreeHostNode* origin =
       root->GetOrCreateHostNode(host);
 
-  EXPECT_EQ(1, origin->child_count());
+  EXPECT_EQ(1u, origin->children().size());
   EXPECT_TRUE(origin->CanCreateContentException());
   EXPECT_CALL(observer, OnContentSettingsChanged(
-                            content_settings, CONTENT_SETTINGS_TYPE_COOKIES,
+                            content_settings, ContentSettingsType::COOKIES,
                             false, ContentSettingsPattern::FromURL(host),
                             ContentSettingsPattern::Wildcard(), false))
       .Times(2);

@@ -10,7 +10,7 @@
 #include "base/bind.h"
 #include "base/stl_util.h"
 #include "base/strings/string_number_conversions.h"
-#include "components/sync/base/hash_util.h"
+#include "components/sync/base/client_tag_hash.h"
 #include "components/sync/model/conflict_resolution.h"
 #include "components/sync/model/model_type_store.h"
 #include "components/sync/model/mutable_data_batch.h"
@@ -65,9 +65,9 @@ std::string FakeModelTypeSyncBridge::ClientTagFromKey(const std::string& key) {
 }
 
 // static
-std::string FakeModelTypeSyncBridge::TagHashFromKey(const std::string& key) {
-  return GenerateSyncableHash(PREFERENCES,
-                              FakeModelTypeSyncBridge::ClientTagFromKey(key));
+ClientTagHash FakeModelTypeSyncBridge::TagHashFromKey(const std::string& key) {
+  return ClientTagHash::FromUnhashed(
+      PREFERENCES, FakeModelTypeSyncBridge::ClientTagFromKey(key));
 }
 
 // static
@@ -87,7 +87,7 @@ std::unique_ptr<EntityData> FakeModelTypeSyncBridge::GenerateEntityData(
   std::unique_ptr<EntityData> entity_data = std::make_unique<EntityData>();
   entity_data->client_tag_hash = TagHashFromKey(key);
   entity_data->specifics = GenerateSpecifics(key, value);
-  entity_data->non_unique_name = key;
+  entity_data->name = key;
   return entity_data;
 }
 
@@ -229,8 +229,8 @@ base::Optional<ModelError> FakeModelTypeSyncBridge::MergeSyncData(
     std::string storage_key = change->storage_key();
     EXPECT_NE(SupportsGetStorageKey(), storage_key.empty());
     if (storage_key.empty()) {
-      if (base::ContainsKey(values_to_ignore_,
-                            change->data().specifics.preference().value())) {
+      if (base::Contains(values_to_ignore_,
+                         change->data().specifics.preference().value())) {
         change_processor()->UntrackEntityForClientTagHash(
             change->data().client_tag_hash);
         continue;
@@ -359,10 +359,9 @@ bool FakeModelTypeSyncBridge::SupportsGetStorageKey() const {
 }
 
 ConflictResolution FakeModelTypeSyncBridge::ResolveConflict(
-    const EntityData& local_data,
+    const std::string& storage_key,
     const EntityData& remote_data) const {
-  DCHECK(conflict_resolution_);
-  return std::move(*conflict_resolution_);
+  return conflict_resolution_;
 }
 
 void FakeModelTypeSyncBridge::ApplyStopSyncChanges(
@@ -373,8 +372,7 @@ void FakeModelTypeSyncBridge::ApplyStopSyncChanges(
 
 void FakeModelTypeSyncBridge::SetConflictResolution(
     ConflictResolution resolution) {
-  conflict_resolution_ =
-      std::make_unique<ConflictResolution>(std::move(resolution));
+  conflict_resolution_ = resolution;
 }
 
 void FakeModelTypeSyncBridge::ErrorOnNextCall() {
@@ -387,7 +385,7 @@ std::unique_ptr<EntityData> FakeModelTypeSyncBridge::CopyEntityData(
   auto new_data = std::make_unique<EntityData>();
   new_data->id = old_data.id;
   new_data->client_tag_hash = old_data.client_tag_hash;
-  new_data->non_unique_name = old_data.non_unique_name;
+  new_data->name = old_data.name;
   new_data->specifics = old_data.specifics;
   new_data->creation_time = old_data.creation_time;
   new_data->modification_time = old_data.modification_time;

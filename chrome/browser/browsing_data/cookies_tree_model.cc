@@ -9,38 +9,43 @@
 #include <algorithm>
 #include <functional>
 #include <map>
+#include <numeric>
 #include <utility>
 #include <vector>
 
 #include "base/bind.h"
 #include "base/bind_helpers.h"
 #include "base/memory/ptr_util.h"
+#include "base/run_loop.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/test/bind_test_util.h"
 #include "build/build_config.h"
-#include "chrome/app/vector_icons/vector_icons.h"
-#include "chrome/browser/browsing_data/browsing_data_appcache_helper.h"
-#include "chrome/browser/browsing_data/browsing_data_cache_storage_helper.h"
-#include "chrome/browser/browsing_data/browsing_data_cookie_helper.h"
-#include "chrome/browser/browsing_data/browsing_data_database_helper.h"
-#include "chrome/browser/browsing_data/browsing_data_file_system_helper.h"
+#include "chrome/browser/browsing_data/browsing_data_file_system_util.h"
 #include "chrome/browser/browsing_data/browsing_data_flash_lso_helper.h"
-#include "chrome/browser/browsing_data/browsing_data_indexed_db_helper.h"
-#include "chrome/browser/browsing_data/browsing_data_local_storage_helper.h"
 #include "chrome/browser/browsing_data/browsing_data_quota_helper.h"
-#include "chrome/browser/browsing_data/browsing_data_service_worker_helper.h"
-#include "chrome/browser/browsing_data/browsing_data_shared_worker_helper.h"
 #include "chrome/browser/content_settings/cookie_settings_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/grit/generated_resources.h"
 #include "chrome/grit/theme_resources.h"
+#include "components/browsing_data/content/appcache_helper.h"
+#include "components/browsing_data/content/cache_storage_helper.h"
+#include "components/browsing_data/content/cookie_helper.h"
+#include "components/browsing_data/content/database_helper.h"
+#include "components/browsing_data/content/file_system_helper.h"
+#include "components/browsing_data/content/indexed_db_helper.h"
+#include "components/browsing_data/content/local_storage_helper.h"
+#include "components/browsing_data/content/service_worker_helper.h"
+#include "components/browsing_data/content/shared_worker_helper.h"
 #include "components/content_settings/core/browser/cookie_settings.h"
+#include "components/vector_icons/vector_icons.h"
 #include "content/public/browser/storage_partition.h"
 #include "content/public/browser/storage_usage_info.h"
 #include "content/public/common/url_constants.h"
 #include "extensions/buildflags/buildflags.h"
 #include "net/base/registry_controlled_domains/registry_controlled_domain.h"
 #include "net/cookies/canonical_cookie.h"
+#include "net/cookies/cookie_util.h"
 #include "net/url_request/url_request_context.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/resource/resource_bundle.h"
@@ -99,12 +104,10 @@ std::string CanonicalizeHost(const GURL& url) {
     return std::string(url::kFileScheme) + url::kStandardSchemeSeparator;
   }
 
+  std::string retval = net::registry_controlled_domains::GetDomainAndRegistry(
+      url, net::registry_controlled_domains::INCLUDE_PRIVATE_REGISTRIES);
   std::string host = url.host();
-  std::string retval =
-      net::registry_controlled_domains::GetDomainAndRegistry(
-          host,
-          net::registry_controlled_domains::INCLUDE_PRIVATE_REGISTRIES);
-  if (!retval.length())  // Is an IP address or other special origin.
+  if (retval.empty())  // Is an IP address or other special origin.
     return host;
 
   std::string::size_type position = host.rfind(retval);
@@ -244,7 +247,7 @@ CookieTreeNode::DetailedInfo& CookieTreeNode::DetailedInfo::InitIndexedDB(
 }
 
 CookieTreeNode::DetailedInfo& CookieTreeNode::DetailedInfo::InitFileSystem(
-    const BrowsingDataFileSystemHelper::FileSystemInfo* file_system_info) {
+    const browsing_data::FileSystemHelper::FileSystemInfo* file_system_info) {
   Init(TYPE_FILE_SYSTEM);
   this->file_system_info = file_system_info;
   this->origin = file_system_info->origin;
@@ -267,7 +270,7 @@ CookieTreeNode::DetailedInfo& CookieTreeNode::DetailedInfo::InitServiceWorker(
 }
 
 CookieTreeNode::DetailedInfo& CookieTreeNode::DetailedInfo::InitSharedWorker(
-    const BrowsingDataSharedWorkerHelper::SharedWorkerInfo*
+    const browsing_data::SharedWorkerHelper::SharedWorkerInfo*
         shared_worker_info) {
   Init(TYPE_SHARED_WORKER);
   this->shared_worker_info = shared_worker_info;
@@ -318,11 +321,10 @@ int64_t CookieTreeNode::InclusiveSize() const {
 }
 
 int CookieTreeNode::NumberOfCookies() const {
-  int number_of_cookies = 0;
-  for (int i = 0; i < this->child_count(); ++i) {
-    number_of_cookies += this->GetChild(i)->NumberOfCookies();
-  }
-  return number_of_cookies;
+  return std::accumulate(children().cbegin(), children().cend(), 0,
+                         [](int total, const auto& child) {
+                           return total + child->NumberOfCookies();
+                         });
 }
 
 void CookieTreeNode::AddChildSortedByTitle(
@@ -330,7 +332,8 @@ void CookieTreeNode::AddChildSortedByTitle(
   DCHECK(new_child);
   auto iter = std::lower_bound(children().begin(), children().end(), new_child,
                                NodeTitleComparator());
-  GetModel()->Add(this, std::move(new_child), iter - children().begin());
+  GetModel()->Add(this, std::move(new_child),
+                  size_t{iter - children().begin()});
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -546,8 +549,8 @@ class CookieTreeIndexedDBNode : public CookieTreeNode {
     LocalDataContainer* container = GetLocalDataContainerForNode(this);
 
     if (container) {
-      container->indexed_db_helper_->DeleteIndexedDB(
-          usage_info_->origin.GetURL());
+      container->indexed_db_helper_->DeleteIndexedDB(usage_info_->origin,
+                                                     base::DoNothing());
       container->indexed_db_info_list_.erase(usage_info_);
     }
   }
@@ -578,7 +581,7 @@ class CookieTreeFileSystemNode : public CookieTreeNode {
   // |file_system_info| should remain valid at least as long as the
   // CookieTreeFileSystemNode is valid.
   explicit CookieTreeFileSystemNode(
-      std::list<BrowsingDataFileSystemHelper::FileSystemInfo>::iterator
+      std::list<browsing_data::FileSystemHelper::FileSystemInfo>::iterator
           file_system_info)
       : CookieTreeNode(base::UTF8ToUTF16(file_system_info->origin.Serialize())),
         file_system_info_(file_system_info) {}
@@ -609,7 +612,7 @@ class CookieTreeFileSystemNode : public CookieTreeNode {
  private:
   // file_system_info_ expected to remain valid as long as the
   // CookieTreeFileSystemNode is valid.
-  std::list<BrowsingDataFileSystemHelper::FileSystemInfo>::iterator
+  std::list<browsing_data::FileSystemHelper::FileSystemInfo>::iterator
       file_system_info_;
 
   DISALLOW_COPY_AND_ASSIGN(CookieTreeFileSystemNode);
@@ -701,7 +704,7 @@ class CookieTreeSharedWorkerNode : public CookieTreeNode {
   // |shared_worker_info| should remain valid at least as long as the
   // CookieTreeSharedWorkerNode is valid.
   explicit CookieTreeSharedWorkerNode(
-      std::list<BrowsingDataSharedWorkerHelper::SharedWorkerInfo>::iterator
+      std::list<browsing_data::SharedWorkerHelper::SharedWorkerInfo>::iterator
           shared_worker_info)
       : CookieTreeNode(base::UTF8ToUTF16(shared_worker_info->worker.spec())),
         shared_worker_info_(shared_worker_info) {}
@@ -727,7 +730,7 @@ class CookieTreeSharedWorkerNode : public CookieTreeNode {
  private:
   // |shared_worker_info_| is expected to remain valid as long as the
   // CookieTreeSharedWorkerNode is valid.
-  std::list<BrowsingDataSharedWorkerHelper::SharedWorkerInfo>::iterator
+  std::list<browsing_data::SharedWorkerHelper::SharedWorkerInfo>::iterator
       shared_worker_info_;
 
   DISALLOW_COPY_AND_ASSIGN(CookieTreeSharedWorkerNode);
@@ -752,8 +755,7 @@ class CookieTreeCacheStorageNode : public CookieTreeNode {
     LocalDataContainer* container = GetLocalDataContainerForNode(this);
 
     if (container) {
-      container->cache_storage_helper_->DeleteCacheStorage(
-          usage_info_->origin.GetURL());
+      container->cache_storage_helper_->DeleteCacheStorage(usage_info_->origin);
       container->cache_storage_info_list_.erase(usage_info_);
     }
   }
@@ -847,8 +849,9 @@ CookieTreeHostNode* CookieTreeRootNode::GetOrCreateHostNode(const GURL& url) {
   }
   // Node doesn't exist, insert the new one into the (ordered) children.
   DCHECK(model_);
-  return static_cast<CookieTreeHostNode*>(model_->Add(
-      this, std::move(host_node), (host_node_iterator - children().begin())));
+  return static_cast<CookieTreeHostNode*>(
+      model_->Add(this, std::move(host_node),
+                  size_t{host_node_iterator - children().begin()}));
 }
 
 CookiesTreeModel* CookieTreeRootNode::GetModel() const {
@@ -892,11 +895,10 @@ class CookieTreeCollectionNode : public CookieTreeNode {
   ~CookieTreeCollectionNode() override {}
 
   int64_t InclusiveSize() const final {
-    int64_t total_size = 0;
-    for (int i = 0; i < this->child_count(); ++i) {
-      total_size += this->GetChild(i)->InclusiveSize();
-    }
-    return total_size;
+    return std::accumulate(children().cbegin(), children().cend(), int64_t{0},
+                           [](int64_t total, const auto& child) {
+                             return total + child->InclusiveSize();
+                           });
   }
 
  private:
@@ -1329,11 +1331,10 @@ bool CookieTreeHostNode::CanCreateContentException() const {
 }
 
 int64_t CookieTreeHostNode::InclusiveSize() const {
-  int64_t total_size = 0;
-  for (int i = 0; i < this->child_count(); ++i) {
-    total_size += this->GetChild(i)->InclusiveSize();
-  }
-  return total_size;
+  return std::accumulate(children().cbegin(), children().cend(), int64_t{0},
+                         [](int64_t total, const auto& child) {
+                           return total + child->InclusiveSize();
+                         });
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -1383,11 +1384,11 @@ CookiesTreeModel::~CookiesTreeModel() {
 // static
 int CookiesTreeModel::GetSendForMessageID(const net::CanonicalCookie& cookie) {
   if (cookie.IsSecure()) {
-    if (cookie.SameSite() != net::CookieSameSite::NO_RESTRICTION)
+    if (!cookie.IsEffectivelySameSiteNone())
       return IDS_COOKIES_COOKIE_SENDFOR_SECURE_SAME_SITE;
     return IDS_COOKIES_COOKIE_SENDFOR_SECURE;
   }
-  if (cookie.SameSite() != net::CookieSameSite::NO_RESTRICTION)
+  if (!cookie.IsEffectivelySameSiteNone())
     return IDS_COOKIES_COOKIE_SENDFOR_SAME_SITE;
   return IDS_COOKIES_COOKIE_SENDFOR_ANY;
 }
@@ -1399,8 +1400,8 @@ int CookiesTreeModel::GetSendForMessageID(const net::CanonicalCookie& cookie) {
 // Returns the set of icons for the nodes in the tree. You only need override
 // this if you don't want to use the default folder icons.
 void CookiesTreeModel::GetIcons(std::vector<gfx::ImageSkia>* icons) {
-  icons->push_back(
-      gfx::CreateVectorIcon(kCookieIcon, 18, gfx::kChromeIconGrey));
+  icons->push_back(gfx::CreateVectorIcon(vector_icons::kCookieIcon, 18,
+                                         gfx::kChromeIconGrey));
   icons->push_back(*ui::ResourceBundle::GetSharedInstance()
                         .GetNativeImageNamed(IDR_COOKIE_STORAGE_ICON)
                         .ToImageSkia());
@@ -1451,7 +1452,7 @@ void CookiesTreeModel::DeleteCookieNode(CookieTreeNode* cookie_node) {
   cookie_node->DeleteStoredObjects();
   CookieTreeNode* parent_node = cookie_node->parent();
   Remove(parent_node, cookie_node);
-  if (parent_node->empty())
+  if (parent_node->children().empty())
     DeleteCookieNode(parent_node);
 }
 
@@ -1610,13 +1611,14 @@ void CookiesTreeModel::PopulateCookieInfoWithFilter(
   notifier->StartBatchUpdate();
   for (auto it = container->cookie_list_.begin();
        it != container->cookie_list_.end(); ++it) {
-    std::string domain = it->Domain();
-    if (domain.length() > 1 && domain[0] == '.')
-      domain = domain.substr(1);
-
     // Cookies ignore schemes, so group all HTTP and HTTPS cookies together.
-    GURL source(std::string(url::kHttpScheme) + url::kStandardSchemeSeparator +
-                domain + "/");
+    // TODO(crbug.com/1031721): This will not be true when Scheme-Bound Cookies
+    // is implemented. Investigate whether passing it->SourceScheme() instead of
+    // false is appropriate here.
+    GURL source = (it->Domain() == ".")
+                      ? GURL("http://./")
+                      : net::cookie_util::CookieOriginToURL(
+                            it->Domain(), false /* is_https */);
 
     if (filter.empty() || (CookieTreeHostNode::TitleForUrl(source)
                                .find(filter) != base::string16::npos)) {
@@ -1957,19 +1959,22 @@ std::unique_ptr<CookiesTreeModel> CookiesTreeModel::CreateForProfile(
   auto* file_system_context = storage_partition->GetFileSystemContext();
 
   auto container = std::make_unique<LocalDataContainer>(
-      new BrowsingDataCookieHelper(storage_partition),
-      new BrowsingDataDatabaseHelper(profile),
-      new BrowsingDataLocalStorageHelper(profile),
+      new browsing_data::CookieHelper(storage_partition),
+      new browsing_data::DatabaseHelper(profile),
+      new browsing_data::LocalStorageHelper(profile),
       /*session_storage_helper=*/nullptr,
-      new BrowsingDataAppCacheHelper(storage_partition->GetAppCacheService()),
-      new BrowsingDataIndexedDBHelper(storage_partition->GetIndexedDBContext()),
-      BrowsingDataFileSystemHelper::Create(file_system_context),
+      new browsing_data::AppCacheHelper(
+          storage_partition->GetAppCacheService()),
+      new browsing_data::IndexedDBHelper(storage_partition),
+      browsing_data::FileSystemHelper::Create(
+          file_system_context,
+          browsing_data_file_system_util::GetAdditionalFileSystemTypes()),
       BrowsingDataQuotaHelper::Create(profile),
-      new BrowsingDataServiceWorkerHelper(
+      new browsing_data::ServiceWorkerHelper(
           storage_partition->GetServiceWorkerContext()),
-      new BrowsingDataSharedWorkerHelper(storage_partition,
-                                         profile->GetResourceContext()),
-      new BrowsingDataCacheStorageHelper(
+      new browsing_data::SharedWorkerHelper(storage_partition,
+                                            profile->GetResourceContext()),
+      new browsing_data::CacheStorageHelper(
           storage_partition->GetCacheStorageContext()),
 #if defined(OS_ANDROID)
       // Android doesn't have flash LSO hence it cannot be created for

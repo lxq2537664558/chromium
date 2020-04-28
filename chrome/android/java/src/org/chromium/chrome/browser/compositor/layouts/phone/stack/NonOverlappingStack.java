@@ -8,7 +8,8 @@ import android.animation.Animator;
 import android.animation.AnimatorListenerAdapter;
 import android.animation.AnimatorSet;
 import android.content.Context;
-import android.support.annotation.IntDef;
+
+import androidx.annotation.IntDef;
 
 import org.chromium.chrome.browser.compositor.animation.CompositorAnimationHandler;
 import org.chromium.chrome.browser.compositor.animation.CompositorAnimator;
@@ -179,7 +180,11 @@ public class NonOverlappingStack extends Stack {
         updateScrollSnap();
     }
 
-    @Override
+    /**
+     * @return The index of the currently centered tab. If we're not currently snapped to a tab
+     *         (e.g. we're in the process of animating a scroll or the user is currently dragging),
+     *         returns the index of the tab closest to the center.
+     */
     public int getCenteredTabIndex() {
         return Math.round(-mScrollOffset / mSpacing);
     }

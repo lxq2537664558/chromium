@@ -13,7 +13,7 @@
 #include "base/callback.h"
 #include "base/macros.h"
 #include "base/memory/weak_ptr.h"
-#include "components/safe_browsing/db/util.h"
+#include "components/safe_browsing/core/db/util.h"
 #include "extensions/browser/blacklist_state.h"
 
 namespace network {
@@ -65,7 +65,7 @@ class BlacklistStateFetcher {
   // Callbacks by extension ID.
   CallbackMultiMap callbacks_;
 
-  base::WeakPtrFactory<BlacklistStateFetcher> weak_ptr_factory_;
+  base::WeakPtrFactory<BlacklistStateFetcher> weak_ptr_factory_{this};
 
   DISALLOW_COPY_AND_ASSIGN(BlacklistStateFetcher);
 };

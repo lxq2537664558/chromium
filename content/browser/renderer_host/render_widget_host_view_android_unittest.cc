@@ -10,10 +10,11 @@
 #include "cc/layers/layer.h"
 #include "components/viz/common/surfaces/local_surface_id_allocation.h"
 #include "content/browser/renderer_host/mock_render_widget_host.h"
+#include "content/public/test/browser_task_environment.h"
 #include "content/public/test/mock_render_process_host.h"
 #include "content/public/test/test_browser_context.h"
-#include "content/public/test/test_browser_thread_bundle.h"
 #include "content/test/mock_render_widget_host_delegate.h"
+#include "content/test/test_view_android_delegate.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/android/view_android.h"
 
@@ -34,11 +35,14 @@ class RenderWidgetHostViewAndroidTest : public testing::Test {
       const base::Optional<viz::LocalSurfaceIdAllocation>&
           child_local_surface_id_allocation);
   void WasEvicted();
+  ui::ViewAndroid* GetViewAndroid() { return &native_view_; }
 
  protected:
   // testing::Test:
   void SetUp() override;
   void TearDown() override;
+
+  std::unique_ptr<TestViewAndroidDelegate> test_view_android_delegate_;
 
  private:
   std::unique_ptr<TestBrowserContext> browser_context_;
@@ -51,7 +55,7 @@ class RenderWidgetHostViewAndroidTest : public testing::Test {
   std::unique_ptr<MockRenderWidgetHost> host_;
   RenderWidgetHostViewAndroid* render_widget_host_view_android_;
 
-  TestBrowserThreadBundle thread_bundle_;
+  BrowserTaskEnvironment task_environment_;
 
   DISALLOW_COPY_AND_ASSIGN(RenderWidgetHostViewAndroidTest);
 };
@@ -86,6 +90,7 @@ void RenderWidgetHostViewAndroidTest::SetUp() {
   EXPECT_EQ(&parent_view_, native_view_.parent());
   render_widget_host_view_android_ =
       new RenderWidgetHostViewAndroid(host_.get(), &native_view_);
+  test_view_android_delegate_.reset(new TestViewAndroidDelegate());
 }
 
 void RenderWidgetHostViewAndroidTest::TearDown() {
@@ -121,6 +126,41 @@ TEST_F(RenderWidgetHostViewAndroidTest, NoSurfaceSynchronizationWhileEvicted) {
   // crash in DelegatedFrameHostAndroid.
   EXPECT_FALSE(SynchronizeVisualProperties(
       cc::DeadlinePolicy::UseDefaultDeadline(), initial_allocation));
+}
+
+// Tests insetting the Visual Viewport.
+TEST_F(RenderWidgetHostViewAndroidTest, InsetVisualViewport) {
+  // Android default viewport should not have an inset bottom.
+  RenderWidgetHostViewAndroid* rwhva = render_widget_host_view_android();
+  EXPECT_EQ(0, GetViewAndroid()->GetViewportInsetBottom());
+
+  // Set up SurfaceId checking.
+  const viz::LocalSurfaceIdAllocation& surface_id_allocation =
+      rwhva->GetLocalSurfaceIdAllocation();
+  viz::LocalSurfaceId original_surface =
+      surface_id_allocation.local_surface_id();
+
+  // Set up our test delegate connected to this ViewAndroid.
+  test_view_android_delegate_->SetupTestDelegate(GetViewAndroid());
+  EXPECT_EQ(0, GetViewAndroid()->GetViewportInsetBottom());
+
+  JNIEnv* env = base::android::AttachCurrentThread();
+
+  // Now inset the bottom and make sure the surface changes, and the inset is
+  // known to our ViewAndroid.
+  test_view_android_delegate_->InsetViewportBottom(100);
+  EXPECT_EQ(100, GetViewAndroid()->GetViewportInsetBottom());
+  rwhva->OnViewportInsetBottomChanged(env, nullptr);
+  viz::LocalSurfaceId inset_surface = surface_id_allocation.local_surface_id();
+  EXPECT_TRUE(inset_surface.IsNewerThan(original_surface));
+
+  // Reset the bottom; should go back to the original inset and have a new
+  // surface.
+  test_view_android_delegate_->InsetViewportBottom(0);
+  rwhva->OnViewportInsetBottomChanged(env, nullptr);
+  EXPECT_EQ(0, GetViewAndroid()->GetViewportInsetBottom());
+  EXPECT_TRUE(
+      surface_id_allocation.local_surface_id().IsNewerThan(inset_surface));
 }
 
 }  // namespace content

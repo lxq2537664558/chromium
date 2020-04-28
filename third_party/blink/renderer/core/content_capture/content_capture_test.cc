@@ -8,6 +8,7 @@
 #include "third_party/blink/public/web/web_content_capture_client.h"
 #include "third_party/blink/public/web/web_content_holder.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_gc_controller.h"
+#include "third_party/blink/renderer/core/dom/dom_node_ids.h"
 #include "third_party/blink/renderer/core/dom/element.h"
 #include "third_party/blink/renderer/core/dom/node.h"
 #include "third_party/blink/renderer/core/frame/web_local_frame_impl.h"
@@ -19,18 +20,13 @@
 #include "third_party/blink/renderer/core/testing/page_test_base.h"
 #include "third_party/blink/renderer/core/testing/sim/sim_request.h"
 #include "third_party/blink/renderer/core/testing/sim/sim_test.h"
+#include "third_party/blink/renderer/platform/heap/heap.h"
 
 namespace blink {
 
 class WebContentCaptureClientTestHelper : public WebContentCaptureClient {
  public:
-  WebContentCaptureClientTestHelper(NodeHolder::Type type)
-      : node_holder_type_(type) {}
   ~WebContentCaptureClientTestHelper() override = default;
-
-  NodeHolder::Type GetNodeHolderType() const override {
-    return node_holder_type_;
-  }
 
   void GetTaskTimingParameters(base::TimeDelta& short_delay,
                                base::TimeDelta& long_delay) const override {
@@ -46,41 +42,52 @@ class WebContentCaptureClientTestHelper : public WebContentCaptureClient {
     return base::TimeDelta::FromMilliseconds(500);
   }
 
-  void DidCaptureContent(
-      const std::vector<scoped_refptr<WebContentHolder>>& data,
-      bool first_data) override {
+  void DidCaptureContent(const WebVector<WebContentHolder>& data,
+                         bool first_data) override {
     data_ = data;
     first_data_ = first_data;
-    for (auto d : data)
-      all_text_.push_back(d->GetValue().Utf8());
+    for (auto& d : data)
+      all_text_.push_back(d.GetValue().Utf8());
   }
 
-  void DidRemoveContent(const std::vector<int64_t>& data) override {
+  void DidUpdateContent(const WebVector<WebContentHolder>& data) override {
+    updated_data_ = data;
+    for (auto& d : data)
+      updated_text_.push_back(d.GetValue().Utf8());
+  }
+
+  void DidRemoveContent(WebVector<int64_t> data) override {
     removed_data_ = data;
   }
 
   bool FirstData() const { return first_data_; }
 
-  const std::vector<scoped_refptr<WebContentHolder>>& Data() const {
-    return data_;
+  const WebVector<WebContentHolder>& Data() const { return data_; }
+
+  const WebVector<WebContentHolder>& UpdatedData() const {
+    return updated_data_;
   }
 
-  const std::vector<std::string>& AllText() const { return all_text_; }
+  const Vector<std::string>& AllText() const { return all_text_; }
 
-  const std::vector<int64_t>& RemovedData() const { return removed_data_; }
+  const Vector<std::string>& UpdatedText() const { return updated_text_; }
+
+  const WebVector<int64_t>& RemovedData() const { return removed_data_; }
 
   void ResetResults() {
     first_data_ = false;
-    data_.clear();
-    removed_data_.clear();
+    data_.Clear();
+    updated_data_.Clear();
+    removed_data_.Clear();
   }
 
  private:
   bool first_data_ = false;
-  std::vector<scoped_refptr<WebContentHolder>> data_;
-  std::vector<int64_t> removed_data_;
-  NodeHolder::Type node_holder_type_;
-  std::vector<std::string> all_text_;
+  WebVector<WebContentHolder> data_;
+  WebVector<WebContentHolder> updated_data_;
+  WebVector<int64_t> removed_data_;
+  Vector<std::string> all_text_;
+  Vector<std::string> updated_text_;
 };
 
 class ContentCaptureTaskTestHelper : public ContentCaptureTask {
@@ -112,23 +119,27 @@ class ContentCaptureManagerTestHelper : public ContentCaptureManager {
   ContentCaptureManagerTestHelper(
       LocalFrame& local_frame_root,
       WebContentCaptureClientTestHelper& content_capture_client)
-      : ContentCaptureManager(local_frame_root,
-                              content_capture_client.GetNodeHolderType()) {
-    content_capture_task_ = base::MakeRefCounted<ContentCaptureTaskTestHelper>(
+      : ContentCaptureManager(local_frame_root) {
+    content_capture_task_ = MakeGarbageCollected<ContentCaptureTaskTestHelper>(
         local_frame_root, GetTaskSessionForTesting(), content_capture_client);
   }
 
-  scoped_refptr<ContentCaptureTaskTestHelper> GetContentCaptureTask() {
+  ContentCaptureTaskTestHelper* GetContentCaptureTask() {
     return content_capture_task_;
   }
 
+  void Trace(Visitor* visitor) override {
+    visitor->Trace(content_capture_task_);
+    ContentCaptureManager::Trace(visitor);
+  }
+
  protected:
-  scoped_refptr<ContentCaptureTask> CreateContentCaptureTask() override {
+  ContentCaptureTask* CreateContentCaptureTask() override {
     return content_capture_task_;
   }
 
  private:
-  scoped_refptr<ContentCaptureTaskTestHelper> content_capture_task_;
+  Member<ContentCaptureTaskTestHelper> content_capture_task_;
 };
 
 class ContentCaptureLocalFrameClientHelper : public EmptyLocalFrameClient {
@@ -144,15 +155,13 @@ class ContentCaptureLocalFrameClientHelper : public EmptyLocalFrameClient {
   WebContentCaptureClient& client_;
 };
 
-class ContentCaptureTest
-    : public PageTestBase,
-      public ::testing::WithParamInterface<NodeHolder::Type> {
+class ContentCaptureTest : public PageTestBase {
  public:
   ContentCaptureTest() { EnablePlatform(); }
 
   void SetUp() override {
     content_capture_client_ =
-        std::make_unique<WebContentCaptureClientTestHelper>(GetParam());
+        std::make_unique<WebContentCaptureClientTestHelper>();
     local_frame_client_ =
         MakeGarbageCollected<ContentCaptureLocalFrameClientHelper>(
             *content_capture_client_);
@@ -178,19 +187,20 @@ class ContentCaptureTest
     // Setup captured content to ContentCaptureTask, it isn't necessary once
     // ContentCaptureManager is created by LocalFrame.
     content_capture_manager_->GetContentCaptureTask()
-        ->SetCapturedContentForTesting(node_holders_);
+        ->SetCapturedContentForTesting(node_ids_);
   }
 
   void CreateTextNodeAndNotifyManager() {
     Document& doc = GetDocument();
     Node* node = doc.createTextNode("New Text");
-    Element* element = Element::Create(html_names::kPTag, &doc);
+    Element* element = MakeGarbageCollected<Element>(html_names::kPTag, &doc);
     element->appendChild(node);
     Element* div_element = GetElementById("d1");
     div_element->appendChild(element);
     UpdateAllLifecyclePhasesForTest();
-    created_node_holder_ = GetContentCaptureManager()->GetNodeHolder(*node);
-    std::vector<NodeHolder> captured_content{created_node_holder_};
+    GetContentCaptureManager()->ScheduleTaskIfNeeded();
+    created_node_id_ = DOMNodeIds::IdForNode(node);
+    Vector<DOMNodeId> captured_content{created_node_id_};
     content_capture_manager_->GetContentCaptureTask()
         ->SetCapturedContentForTesting(captured_content);
   }
@@ -203,7 +213,7 @@ class ContentCaptureTest
     return content_capture_client_.get();
   }
 
-  scoped_refptr<ContentCaptureTaskTestHelper> GetContentCaptureTask() const {
+  ContentCaptureTaskTestHelper* GetContentCaptureTask() const {
     return GetContentCaptureManager()->GetContentCaptureTask();
   }
 
@@ -217,20 +227,38 @@ class ContentCaptureTest
     platform()->RunForPeriod(GetWebContentCaptureClient()->GetTaskLongDelay());
   }
 
-  void RemoveNode(NodeHolder node_holder, Node* node) {
+  void RemoveNode(Node* node) {
     // Remove the node.
     node->remove();
-    GetContentCaptureManager()->OnLayoutTextWillBeDestroyed(node_holder);
+    GetContentCaptureManager()->OnLayoutTextWillBeDestroyed(*node);
+  }
+
+  void RemoveUnsentNode(const WebVector<WebContentHolder>& sent_nodes) {
+    // Find a node isn't in sent_nodes
+    for (auto node : nodes_) {
+      bool found_in_sent = false;
+      for (auto& sent : sent_nodes) {
+        found_in_sent = (node->nodeValue().Utf8().c_str() == sent.GetValue());
+        if (found_in_sent)
+          break;
+      }
+      if (!found_in_sent) {
+        RemoveNode(node);
+        return;
+      }
+    }
+    // Didn't find unsent nodes.
+    NOTREACHED();
   }
 
   size_t GetExpectedFirstResultSize() { return ContentCaptureTask::kBatchSize; }
 
   size_t GetExpectedSecondResultSize() {
-    return node_holders_.size() - GetExpectedFirstResultSize();
+    return node_ids_.size() - GetExpectedFirstResultSize();
   }
 
-  const std::vector<NodeHolder>& NodeHolders() const { return node_holders_; }
-  const std::vector<Node*> Nodes() const { return nodes_; }
+  const Vector<DOMNodeId>& NodeIds() const { return node_ids_; }
+  const Vector<Persistent<Node>> Nodes() const { return nodes_; }
 
  private:
   void ResetResult() {
@@ -239,8 +267,7 @@ class ContentCaptureTest
 
   // TODO(michaelbai): Remove this once integrate with LayoutText.
   void InitNodeHolders() {
-    std::vector<std::string> ids{"p1", "p2", "p3", "p4",
-                                 "p5", "p6", "p7", "p8"};
+    Vector<std::string> ids{"p1", "p2", "p3", "p4", "p5", "p6", "p7", "p8"};
     for (auto id : ids) {
       Node* node = GetElementById(id.c_str())->firstChild();
       CHECK(node);
@@ -248,24 +275,20 @@ class ContentCaptureTest
       CHECK(layout_object);
       CHECK(layout_object->IsText());
       nodes_.push_back(node);
-      node_holders_.push_back(GetContentCaptureManager()->GetNodeHolder(*node));
+      GetContentCaptureManager()->ScheduleTaskIfNeeded();
+      node_ids_.push_back(DOMNodeIds::IdForNode(node));
     }
   }
 
-  std::vector<Node*> nodes_;
-  std::vector<NodeHolder> node_holders_;
+  Vector<Persistent<Node>> nodes_;
+  Vector<DOMNodeId> node_ids_;
   std::unique_ptr<WebContentCaptureClientTestHelper> content_capture_client_;
   Persistent<ContentCaptureManagerTestHelper> content_capture_manager_;
   Persistent<ContentCaptureLocalFrameClientHelper> local_frame_client_;
-  NodeHolder created_node_holder_;
+  DOMNodeId created_node_id_ = kInvalidDOMNodeId;
 };
 
-INSTANTIATE_TEST_SUITE_P(,
-                         ContentCaptureTest,
-                         testing::Values(NodeHolder::Type::kID,
-                                         NodeHolder::Type::kTextHolder));
-
-TEST_P(ContentCaptureTest, Basic) {
+TEST_F(ContentCaptureTest, Basic) {
   RunContentCaptureTask();
   EXPECT_EQ(ContentCaptureTask::TaskState::kStop,
             GetContentCaptureTask()->GetTaskStateForTesting());
@@ -274,7 +297,7 @@ TEST_P(ContentCaptureTest, Basic) {
             GetWebContentCaptureClient()->Data().size());
 }
 
-TEST_P(ContentCaptureTest, PauseAndResume) {
+TEST_F(ContentCaptureTest, PauseAndResume) {
   // The task stops before captures content.
   GetContentCaptureTask()->SetTaskStopState(
       ContentCaptureTask::TaskState::kCaptureContent);
@@ -314,7 +337,7 @@ TEST_P(ContentCaptureTest, PauseAndResume) {
             GetWebContentCaptureClient()->Data().size());
 }
 
-TEST_P(ContentCaptureTest, NodeOnlySendOnce) {
+TEST_F(ContentCaptureTest, NodeOnlySendOnce) {
   // Send all nodes
   RunContentCaptureTask();
   EXPECT_FALSE(GetWebContentCaptureClient()->Data().empty());
@@ -327,7 +350,7 @@ TEST_P(ContentCaptureTest, NodeOnlySendOnce) {
   EXPECT_TRUE(GetWebContentCaptureClient()->RemovedData().empty());
 }
 
-TEST_P(ContentCaptureTest, RemoveNodeBeforeSendingOut) {
+TEST_F(ContentCaptureTest, RemoveNodeBeforeSendingOut) {
   // Capture the content, but didn't send them.
   GetContentCaptureTask()->SetTaskStopState(
       ContentCaptureTask::TaskState::kProcessCurrentSession);
@@ -335,7 +358,7 @@ TEST_P(ContentCaptureTest, RemoveNodeBeforeSendingOut) {
   EXPECT_TRUE(GetWebContentCaptureClient()->Data().empty());
 
   // Remove the node and sent the captured content out.
-  RemoveNode(NodeHolders().at(0), Nodes().at(0));
+  RemoveNode(Nodes().at(0));
   GetContentCaptureTask()->SetTaskStopState(
       ContentCaptureTask::TaskState::kProcessRetryTask);
   RunContentCaptureTask();
@@ -353,7 +376,7 @@ TEST_P(ContentCaptureTest, RemoveNodeBeforeSendingOut) {
   EXPECT_EQ(0u, GetWebContentCaptureClient()->RemovedData().size());
 }
 
-TEST_P(ContentCaptureTest, RemoveNodeInBetweenSendingOut) {
+TEST_F(ContentCaptureTest, RemoveNodeInBetweenSendingOut) {
   // Capture the content, but didn't send them.
   GetContentCaptureTask()->SetTaskStopState(
       ContentCaptureTask::TaskState::kProcessCurrentSession);
@@ -368,9 +391,8 @@ TEST_P(ContentCaptureTest, RemoveNodeInBetweenSendingOut) {
             GetWebContentCaptureClient()->Data().size());
   EXPECT_EQ(0u, GetWebContentCaptureClient()->RemovedData().size());
 
-  // This depends on the DocumentSession returning the unsent nodes reversely.
-  // Remove the first node and sent the captured content out.
-  RemoveNode(NodeHolders().at(0), Nodes().at(0));
+  // This relies on each node to have different value.
+  RemoveUnsentNode(GetWebContentCaptureClient()->Data());
   GetContentCaptureTask()->SetTaskStopState(
       ContentCaptureTask::TaskState::kProcessRetryTask);
   RunContentCaptureTask();
@@ -384,7 +406,7 @@ TEST_P(ContentCaptureTest, RemoveNodeInBetweenSendingOut) {
   EXPECT_EQ(0u, GetWebContentCaptureClient()->RemovedData().size());
 }
 
-TEST_P(ContentCaptureTest, RemoveNodeAfterSendingOut) {
+TEST_F(ContentCaptureTest, RemoveNodeAfterSendingOut) {
   // Captures the content, but didn't send them.
   GetContentCaptureTask()->SetTaskStopState(
       ContentCaptureTask::TaskState::kProcessCurrentSession);
@@ -406,13 +428,13 @@ TEST_P(ContentCaptureTest, RemoveNodeAfterSendingOut) {
   EXPECT_EQ(0u, GetWebContentCaptureClient()->RemovedData().size());
 
   // Remove the node.
-  RemoveNode(NodeHolders().at(0), Nodes().at(0));
+  RemoveNode(Nodes().at(0));
   RunLongDelayContentCaptureTask();
   EXPECT_EQ(0u, GetWebContentCaptureClient()->Data().size());
   EXPECT_EQ(1u, GetWebContentCaptureClient()->RemovedData().size());
 }
 
-TEST_P(ContentCaptureTest, TaskHistogramReporter) {
+TEST_F(ContentCaptureTest, TaskHistogramReporter) {
   // This performs gc for all DocumentSession, flushes the existing
   // SentContentCount and give a clean baseline for histograms.
   // We are not sure if it always work, maybe still be the source of flaky.
@@ -427,8 +449,6 @@ TEST_P(ContentCaptureTest, TaskHistogramReporter) {
   histograms.ExpectTotalCount(
       ContentCaptureTaskHistogramReporter::kCaptureContentTime, 0u);
   histograms.ExpectTotalCount(
-      ContentCaptureTaskHistogramReporter::kCaptureOneContentTime, 0u);
-  histograms.ExpectTotalCount(
       ContentCaptureTaskHistogramReporter::kSendContentTime, 0u);
   histograms.ExpectTotalCount(
       ContentCaptureTaskHistogramReporter::kCaptureContentDelayTime, 0u);
@@ -442,8 +462,6 @@ TEST_P(ContentCaptureTest, TaskHistogramReporter) {
   // Verify has one CaptureContentTime record.
   histograms.ExpectTotalCount(
       ContentCaptureTaskHistogramReporter::kCaptureContentTime, 1u);
-  histograms.ExpectTotalCount(
-      ContentCaptureTaskHistogramReporter::kCaptureOneContentTime, 1u);
   histograms.ExpectTotalCount(
       ContentCaptureTaskHistogramReporter::kSendContentTime, 0u);
   histograms.ExpectTotalCount(
@@ -461,8 +479,6 @@ TEST_P(ContentCaptureTest, TaskHistogramReporter) {
   histograms.ExpectTotalCount(
       ContentCaptureTaskHistogramReporter::kCaptureContentTime, 1u);
   histograms.ExpectTotalCount(
-      ContentCaptureTaskHistogramReporter::kCaptureOneContentTime, 1u);
-  histograms.ExpectTotalCount(
       ContentCaptureTaskHistogramReporter::kSendContentTime, 1u);
   histograms.ExpectTotalCount(
       ContentCaptureTaskHistogramReporter::kCaptureContentDelayTime, 1u);
@@ -478,8 +494,6 @@ TEST_P(ContentCaptureTest, TaskHistogramReporter) {
   histograms.ExpectTotalCount(
       ContentCaptureTaskHistogramReporter::kCaptureContentTime, 1u);
   histograms.ExpectTotalCount(
-      ContentCaptureTaskHistogramReporter::kCaptureOneContentTime, 1u);
-  histograms.ExpectTotalCount(
       ContentCaptureTaskHistogramReporter::kSendContentTime, 2u);
   histograms.ExpectTotalCount(
       ContentCaptureTaskHistogramReporter::kCaptureContentDelayTime, 1u);
@@ -494,8 +508,6 @@ TEST_P(ContentCaptureTest, TaskHistogramReporter) {
   histograms.ExpectTotalCount(
       ContentCaptureTaskHistogramReporter::kCaptureContentTime, 2u);
   histograms.ExpectTotalCount(
-      ContentCaptureTaskHistogramReporter::kCaptureOneContentTime, 2u);
-  histograms.ExpectTotalCount(
       ContentCaptureTaskHistogramReporter::kSendContentTime, 3u);
   histograms.ExpectTotalCount(
       ContentCaptureTaskHistogramReporter::kCaptureContentDelayTime, 2u);
@@ -507,8 +519,6 @@ TEST_P(ContentCaptureTest, TaskHistogramReporter) {
   histograms.ExpectTotalCount(
       ContentCaptureTaskHistogramReporter::kCaptureContentTime, 2u);
   histograms.ExpectTotalCount(
-      ContentCaptureTaskHistogramReporter::kCaptureOneContentTime, 2u);
-  histograms.ExpectTotalCount(
       ContentCaptureTaskHistogramReporter::kSendContentTime, 3u);
   histograms.ExpectTotalCount(
       ContentCaptureTaskHistogramReporter::kCaptureContentDelayTime, 2u);
@@ -519,13 +529,45 @@ TEST_P(ContentCaptureTest, TaskHistogramReporter) {
       ContentCaptureTaskHistogramReporter::kSentContentCount, 9u, 1u);
 }
 
+TEST_F(ContentCaptureTest, RescheduleTask) {
+  // This test assumes test runs much faster than task's long delay which is 5s.
+  Persistent<ContentCaptureTaskTestHelper> task = GetContentCaptureTask();
+  task->CancelTaskForTesting();
+  EXPECT_TRUE(task->GetTaskNextFireIntervalForTesting().is_zero());
+  task->Schedule(ContentCaptureTask::ScheduleReason::kContentChange);
+  auto begin = base::TimeTicks::Now();
+  base::TimeDelta interval1 = task->GetTaskNextFireIntervalForTesting();
+  task->Schedule(ContentCaptureTask::ScheduleReason::kScrolling);
+  base::TimeDelta interval2 = task->GetTaskNextFireIntervalForTesting();
+  auto test_running_time = base::TimeTicks::Now() - begin;
+  // The interval1 will be greater than interval2 even the task wasn't
+  // rescheduled, removing the test_running_time from interval1 make sure
+  // task rescheduled.
+  EXPECT_GT(interval1 - test_running_time, interval2);
+}
+
+TEST_F(ContentCaptureTest, NotRescheduleTask) {
+  // This test assumes test runs much faster than task's long delay which is 5s.
+  Persistent<ContentCaptureTaskTestHelper> task = GetContentCaptureTask();
+  task->CancelTaskForTesting();
+  EXPECT_TRUE(task->GetTaskNextFireIntervalForTesting().is_zero());
+  task->Schedule(ContentCaptureTask::ScheduleReason::kContentChange);
+  auto begin = base::TimeTicks::Now();
+  base::TimeDelta interval1 = task->GetTaskNextFireIntervalForTesting();
+  task->Schedule(ContentCaptureTask::ScheduleReason::kContentChange);
+  base::TimeDelta interval2 = task->GetTaskNextFireIntervalForTesting();
+  auto test_running_time = base::TimeTicks::Now() - begin;
+  EXPECT_GE(interval1, interval2);
+  EXPECT_LE(interval1 - test_running_time, interval2);
+}
+
 // TODO(michaelbai): use RenderingTest instead of PageTestBase for multiple
 // frame test.
-class ContentCaptureSimTest
-    : public SimTest,
-      public ::testing::WithParamInterface<NodeHolder::Type> {
+class ContentCaptureSimTest : public SimTest {
  public:
-  ContentCaptureSimTest() : client_(GetParam()), child_client_(GetParam()) {}
+  static const char* kEditableContent;
+
+  ContentCaptureSimTest() : client_(), child_client_() {}
   void SetUp() override {
     SimTest::SetUp();
     MainFrame().SetContentCaptureClient(&client_);
@@ -553,9 +595,9 @@ class ContentCaptureSimTest
     } else if (type == ContentType::kChildFrame) {
       SetCapturedContent(child_frame_content_);
     } else if (type == ContentType::kAll) {
-      std::vector<NodeHolder> holders(main_frame_content_);
-      holders.insert(holders.end(), child_frame_content_.begin(),
-                     child_frame_content_.end());
+      Vector<DOMNodeId> holders(main_frame_content_);
+      holders.AppendRange(child_frame_content_.begin(),
+                          child_frame_content_.end());
       SetCapturedContent(holders);
     }
   }
@@ -570,12 +612,27 @@ class ContentCaptureSimTest
     child_frame_expected_text_.push_back("New Text");
   }
 
-  const std::vector<std::string>& MainFrameExpectedText() const {
+  void InsertMainFrameEditableContent(const std::string& content,
+                                      unsigned offset) {
+    InsertNodeContent(GetDocument(), "editable_id", content, offset);
+  }
+
+  void DeleteMainFrameEditableContent(unsigned offset, unsigned length) {
+    DeleteNodeContent(GetDocument(), "editable_id", offset, length);
+  }
+
+  const Vector<std::string>& MainFrameExpectedText() const {
     return main_frame_expected_text_;
   }
 
-  const std::vector<std::string>& ChildFrameExpectedText() const {
+  const Vector<std::string>& ChildFrameExpectedText() const {
     return child_frame_expected_text_;
+  }
+
+  void ReplaceMainFrameExpectedText(const std::string& old_text,
+                                    const std::string& new_text) {
+    std::replace(main_frame_expected_text_.begin(),
+                 main_frame_expected_text_.end(), old_text, new_text);
   }
 
  private:
@@ -595,6 +652,7 @@ class ContentCaptureSimTest
       <p id='p5'>Hello World5</p>
       <p id='p6'>Hello World6</p>
       <p id='p7'>Hello World7</p>
+      <div id='editable_id'>editable</div>
       <svg>
       <text id="s8">Hello World8</text>
       </svg>
@@ -611,55 +669,75 @@ class ContentCaptureSimTest
     static_cast<WebLocalFrame*>(MainFrame().FindFrameByName("frame"))
         ->SetContentCaptureClient(&child_client_);
     auto* child_frame =
-        ToHTMLIFrameElement(GetDocument().getElementById("frame"));
+        To<HTMLIFrameElement>(GetDocument().getElementById("frame"));
     child_document_ = child_frame->contentDocument();
-    child_document_->UpdateStyleAndLayout();
+    child_document_->UpdateStyleAndLayout(DocumentUpdateReason::kTest);
     Compositor().BeginFrame();
     InitMainFrameNodeHolders();
     InitChildFrameNodeHolders(*child_document_);
   }
 
   void InitMainFrameNodeHolders() {
-    std::vector<std::string> ids = {"p1", "p2", "p3", "p4",
-                                    "p5", "p6", "p7", "s8"};
-    main_frame_expected_text_ = {"Hello World1", "Hello World2", "Hello World3",
-                                 "Hello World4", "Hello World5", "Hello World6",
-                                 "Hello World7", "Hello World8"};
+    Vector<std::string> ids = {"p1", "p2", "p3", "p4",         "p5",
+                               "p6", "p7", "s8", "editable_id"};
+    main_frame_expected_text_ = {
+        "Hello World1", "Hello World2", "Hello World3",
+        "Hello World4", "Hello World5", "Hello World6",
+        "Hello World7", "Hello World8", kEditableContent};
     InitNodeHolders(main_frame_content_, ids, GetDocument());
-    EXPECT_EQ(8u, main_frame_content_.size());
+    EXPECT_EQ(9u, main_frame_content_.size());
   }
 
   void InitChildFrameNodeHolders(const Document& doc) {
-    std::vector<std::string> ids = {"c1", "c2"};
+    Vector<std::string> ids = {"c1", "c2"};
     child_frame_expected_text_ = {"Hello World11", "Hello World12"};
     InitNodeHolders(child_frame_content_, ids, doc);
     EXPECT_EQ(2u, child_frame_content_.size());
   }
 
-  void InitNodeHolders(std::vector<NodeHolder>& buffer,
-                       const std::vector<std::string>& ids,
+  void InitNodeHolders(Vector<DOMNodeId>& buffer,
+                       const Vector<std::string>& ids,
                        const Document& document) {
     for (auto id : ids) {
       LayoutText* layout_text = ToLayoutText(
           document.getElementById(id.c_str())->firstChild()->GetLayoutObject());
-      EXPECT_TRUE(layout_text->HasNodeHolder());
-      buffer.push_back(layout_text->EnsureNodeHolder());
+      EXPECT_TRUE(layout_text->HasNodeId());
+      buffer.push_back(layout_text->EnsureNodeId());
     }
   }
 
-  void AddNodeToDocument(Document& doc, std::vector<NodeHolder>& buffer) {
+  void AddNodeToDocument(Document& doc, Vector<DOMNodeId>& buffer) {
     Node* node = doc.createTextNode("New Text");
-    Element* element = Element::Create(html_names::kPTag, &doc);
+    auto* element = MakeGarbageCollected<Element>(html_names::kPTag, &doc);
     element->appendChild(node);
     Element* div_element = doc.getElementById("d1");
     div_element->appendChild(element);
     Compositor().BeginFrame();
     LayoutText* layout_text = ToLayoutText(node->GetLayoutObject());
-    EXPECT_TRUE(layout_text->HasNodeHolder());
-    buffer.insert(buffer.begin(), layout_text->EnsureNodeHolder());
+    EXPECT_TRUE(layout_text->HasNodeId());
+    buffer.push_front(layout_text->EnsureNodeId());
   }
 
-  void SetCapturedContent(const std::vector<NodeHolder>& captured_content) {
+  void InsertNodeContent(Document& doc,
+                         const std::string& id,
+                         const std::string& content,
+                         unsigned offset) {
+    To<Text>(doc.getElementById(id.c_str())->firstChild())
+        ->insertData(offset, String(content.c_str()),
+                     IGNORE_EXCEPTION_FOR_TESTING);
+    Compositor().BeginFrame();
+  }
+
+  void DeleteNodeContent(Document& doc,
+                         const std::string& id,
+                         unsigned offset,
+                         unsigned length) {
+    To<Text>(doc.getElementById(id.c_str())->firstChild())
+        ->deleteData(offset, length, IGNORE_EXCEPTION_FOR_TESTING);
+    Compositor().BeginFrame();
+  }
+
+  void SetCapturedContent(const Vector<DOMNodeId>& captured_content) {
     GetDocument()
         .GetFrame()
         ->LocalFrameRoot()
@@ -668,24 +746,21 @@ class ContentCaptureSimTest
         ->SetCapturedContentForTesting(captured_content);
   }
 
-  std::vector<std::string> main_frame_expected_text_;
-  std::vector<std::string> child_frame_expected_text_;
-  std::vector<NodeHolder> main_frame_content_;
-  std::vector<NodeHolder> child_frame_content_;
+  Vector<std::string> main_frame_expected_text_;
+  Vector<std::string> child_frame_expected_text_;
+  Vector<DOMNodeId> main_frame_content_;
+  Vector<DOMNodeId> child_frame_content_;
   WebContentCaptureClientTestHelper client_;
   WebContentCaptureClientTestHelper child_client_;
   Persistent<Document> child_document_;
 };
 
-INSTANTIATE_TEST_SUITE_P(,
-                         ContentCaptureSimTest,
-                         testing::Values(NodeHolder::Type::kID,
-                                         NodeHolder::Type::kTextHolder));
+const char* ContentCaptureSimTest::kEditableContent = "editable";
 
-TEST_P(ContentCaptureSimTest, MultiFrame) {
+TEST_F(ContentCaptureSimTest, MultiFrame) {
   SetCapturedContent(ContentType::kAll);
   RunContentCaptureTaskUntil(ContentCaptureTask::TaskState::kStop);
-  EXPECT_EQ(3u, Client().Data().size());
+  EXPECT_EQ(4u, Client().Data().size());
   EXPECT_EQ(2u, ChildClient().Data().size());
   EXPECT_THAT(Client().AllText(),
               testing::UnorderedElementsAreArray(MainFrameExpectedText()));
@@ -693,7 +768,7 @@ TEST_P(ContentCaptureSimTest, MultiFrame) {
               testing::UnorderedElementsAreArray(ChildFrameExpectedText()));
 }
 
-TEST_P(ContentCaptureSimTest, AddNodeToMultiFrame) {
+TEST_F(ContentCaptureSimTest, AddNodeToMultiFrame) {
   SetCapturedContent(ContentType::kMainFrame);
   // Stops after capturing content.
   RunContentCaptureTaskUntil(
@@ -710,7 +785,7 @@ TEST_P(ContentCaptureSimTest, AddNodeToMultiFrame) {
 
   // Sends the reset of data
   RunContentCaptureTaskUntil(ContentCaptureTask::TaskState::kProcessRetryTask);
-  EXPECT_EQ(3u, Client().Data().size());
+  EXPECT_EQ(4u, Client().Data().size());
   EXPECT_FALSE(Client().FirstData());
   EXPECT_TRUE(ChildClient().Data().empty());
   EXPECT_THAT(Client().AllText(),
@@ -733,6 +808,106 @@ TEST_P(ContentCaptureSimTest, AddNodeToMultiFrame) {
   EXPECT_THAT(ChildClient().AllText(),
               testing::UnorderedElementsAreArray(ChildFrameExpectedText()));
   EXPECT_TRUE(ChildClient().FirstData());
+}
+
+TEST_F(ContentCaptureSimTest, ChangeNode) {
+  SetCapturedContent(ContentType::kMainFrame);
+  RunContentCaptureTaskUntil(ContentCaptureTask::TaskState::kStop);
+  EXPECT_EQ(4u, Client().Data().size());
+  EXPECT_FALSE(Client().FirstData());
+  EXPECT_TRUE(ChildClient().Data().empty());
+  EXPECT_THAT(Client().AllText(),
+              testing::UnorderedElementsAreArray(MainFrameExpectedText()));
+  Vector<std::string> expected_text_update;
+  std::string insert_text = "content ";
+
+  // Changed content to 'content editable'.
+  InsertMainFrameEditableContent(insert_text, 0);
+  SetCapturedContent(ContentType::kMainFrame);
+  RunContentCaptureTaskUntil(ContentCaptureTask::TaskState::kStop);
+  EXPECT_EQ(1u, Client().UpdatedData().size());
+  EXPECT_FALSE(Client().FirstData());
+  EXPECT_TRUE(ChildClient().Data().empty());
+  expected_text_update.push_back(insert_text + kEditableContent);
+  EXPECT_THAT(Client().UpdatedText(),
+              testing::UnorderedElementsAreArray(expected_text_update));
+
+  // Changing content multiple times before capturing.
+  std::string insert_text1 = "i";
+  // Changed content to 'content ieditable'.
+  InsertMainFrameEditableContent(insert_text1, insert_text.size());
+  std::string insert_text2 = "s ";
+  // Changed content to 'content is editable'.
+  InsertMainFrameEditableContent(insert_text2,
+                                 insert_text.size() + insert_text1.size());
+
+  SetCapturedContent(ContentType::kMainFrame);
+  RunContentCaptureTaskUntil(ContentCaptureTask::TaskState::kStop);
+  EXPECT_EQ(1u, Client().UpdatedData().size());
+  EXPECT_FALSE(Client().FirstData());
+  EXPECT_TRUE(ChildClient().Data().empty());
+  expected_text_update.push_back(insert_text + insert_text1 + insert_text2 +
+                                 kEditableContent);
+  EXPECT_THAT(Client().UpdatedText(),
+              testing::UnorderedElementsAreArray(expected_text_update));
+}
+
+TEST_F(ContentCaptureSimTest, ChangeNodeBeforeCapture) {
+  // Changed content to 'content editable' before capture.
+  std::string insert_text = "content ";
+  InsertMainFrameEditableContent(insert_text, 0);
+  // Changing content multiple times before capturing.
+  std::string insert_text1 = "i";
+  // Changed content to 'content ieditable'.
+  InsertMainFrameEditableContent(insert_text1, insert_text.size());
+  std::string insert_text2 = "s ";
+  // Changed content to 'content is editable'.
+  InsertMainFrameEditableContent(insert_text2,
+                                 insert_text.size() + insert_text1.size());
+
+  // The changed content shall be captured as new content.
+  ReplaceMainFrameExpectedText(
+      kEditableContent,
+      insert_text + insert_text1 + insert_text2 + kEditableContent);
+  SetCapturedContent(ContentType::kMainFrame);
+  RunContentCaptureTaskUntil(ContentCaptureTask::TaskState::kStop);
+  EXPECT_EQ(4u, Client().Data().size());
+  EXPECT_FALSE(Client().FirstData());
+  EXPECT_TRUE(ChildClient().Data().empty());
+  EXPECT_TRUE(ChildClient().UpdatedData().empty());
+  EXPECT_THAT(Client().AllText(),
+              testing::UnorderedElementsAreArray(MainFrameExpectedText()));
+}
+
+TEST_F(ContentCaptureSimTest, DeleteNodeContent) {
+  SetCapturedContent(ContentType::kMainFrame);
+  RunContentCaptureTaskUntil(ContentCaptureTask::TaskState::kStop);
+  EXPECT_EQ(4u, Client().Data().size());
+  EXPECT_FALSE(Client().FirstData());
+  EXPECT_TRUE(ChildClient().Data().empty());
+  EXPECT_THAT(Client().AllText(),
+              testing::UnorderedElementsAreArray(MainFrameExpectedText()));
+
+  // Deleted 4 char, changed content to 'edit'.
+  DeleteMainFrameEditableContent(4, 4);
+  SetCapturedContent(ContentType::kMainFrame);
+  RunContentCaptureTaskUntil(ContentCaptureTask::TaskState::kStop);
+  EXPECT_EQ(1u, Client().UpdatedData().size());
+  EXPECT_FALSE(Client().FirstData());
+  EXPECT_TRUE(ChildClient().Data().empty());
+  Vector<std::string> expected_text_update;
+  expected_text_update.push_back("edit");
+  EXPECT_THAT(Client().UpdatedText(),
+              testing::UnorderedElementsAreArray(expected_text_update));
+
+  // Emptied content, the node shall be removed.
+  DeleteMainFrameEditableContent(0, 4);
+  SetCapturedContent(ContentType::kMainFrame);
+  RunContentCaptureTaskUntil(ContentCaptureTask::TaskState::kStop);
+  EXPECT_TRUE(Client().UpdatedData().empty());
+  EXPECT_FALSE(Client().FirstData());
+  EXPECT_TRUE(ChildClient().Data().empty());
+  EXPECT_EQ(1u, Client().RemovedData().size());
 }
 
 }  // namespace blink

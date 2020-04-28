@@ -11,6 +11,7 @@
 typedef NS_ENUM(NSInteger, PopupMenuAction) {
   PopupMenuActionReload,
   PopupMenuActionStop,
+  PopupMenuActionOpenDownloads,
   PopupMenuActionOpenNewTab,
   PopupMenuActionOpenNewIncognitoTab,
   PopupMenuActionReadLater,
@@ -22,9 +23,11 @@ typedef NS_ENUM(NSInteger, PopupMenuAction) {
   PopupMenuActionSiteInformation,
   PopupMenuActionReportIssue,
   PopupMenuActionHelp,
+  PopupMenuActionTextZoom,
 #if !defined(NDEBUG)
   PopupMenuActionViewSource,
 #endif  // !defined(NDEBUG)
+  PopupMenuActionOpenNewWindow,
   PopupMenuActionBookmarks,
   PopupMenuActionReadingList,
   PopupMenuActionRecentTabs,
@@ -34,6 +37,8 @@ typedef NS_ENUM(NSInteger, PopupMenuAction) {
   PopupMenuActionNavigate,
   PopupMenuActionPasteAndGo,
   PopupMenuActionVoiceSearch,
+  PopupMenuActionSearch,
+  PopupMenuActionIncognitoSearch,
   PopupMenuActionQRCodeSearch,
   PopupMenuActionSearchCopiedImage,
   // Language selection popup menu
@@ -44,6 +49,11 @@ typedef NS_ENUM(NSInteger, PopupMenuAction) {
   PopupMenuActionNeverTranslateSourceLanguage,
   PopupMenuActionNeverTranslateSite,
   PopupMenuActionChangeSourceLanguage,
+  // Badge overflow popup menu
+  PopupMenuActionShowSavePasswordOptions,
+  PopupMenuActionShowUpdatePasswordOptions,
+  PopupMenuActionShowSaveCardOptions,
+  PopupMenuActionShowTranslateOptions,
 };
 
 // Protocol defining a popup item.

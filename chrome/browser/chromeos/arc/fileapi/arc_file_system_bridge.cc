@@ -16,6 +16,7 @@
 #include "base/posix/eintr_wrapper.h"
 #include "base/system/sys_info.h"
 #include "base/task/post_task.h"
+#include "base/task/thread_pool.h"
 #include "base/threading/scoped_blocking_call.h"
 #include "chrome/browser/chromeos/arc/fileapi/arc_select_files_handler.h"
 #include "chrome/browser/chromeos/arc/fileapi/chrome_content_provider_url_util.h"
@@ -37,7 +38,7 @@
 #include "mojo/public/cpp/platform/platform_handle.h"
 #include "mojo/public/cpp/system/platform_handle.h"
 #include "net/base/escape.h"
-#include "storage/browser/fileapi/file_system_context.h"
+#include "storage/browser/file_system/file_system_context.h"
 #include "url/gurl.h"
 
 namespace {
@@ -74,12 +75,12 @@ scoped_refptr<storage::FileSystemContext> GetFileSystemContext(
 }
 
 // Converts the given URL to a FileSystemURL.
-storage::FileSystemURL GetFileSystemURL(
-    scoped_refptr<storage::FileSystemContext> context,
+file_manager::util::FileSystemURLAndHandle GetFileSystemURL(
+    const storage::FileSystemContext& context,
     const GURL& url) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
   return file_manager::util::CreateIsolatedURLFromVirtualPath(
-      *context, /* empty origin */ GURL(),
+      context, /* empty origin */ GURL(),
       chromeos::ExternalFileURLToVirtualPath(url));
 }
 
@@ -93,7 +94,7 @@ void GetFileSizeOnIOThread(scoped_refptr<storage::FileSystemContext> context,
       url,
       storage::FileSystemOperation::GET_METADATA_FIELD_IS_DIRECTORY |
           storage::FileSystemOperation::GET_METADATA_FIELD_SIZE,
-      base::Bind(
+      base::BindOnce(
           [](ArcFileSystemBridge::GetFileSizeCallback callback,
              base::File::Error result, const base::File::Info& file_info) {
             int64_t size = -1;
@@ -101,8 +102,8 @@ void GetFileSizeOnIOThread(scoped_refptr<storage::FileSystemContext> context,
                 file_info.size >= 0) {
               size = file_info.size;
             }
-            base::PostTaskWithTraits(FROM_HERE, {content::BrowserThread::UI},
-                                     base::BindOnce(std::move(callback), size));
+            base::PostTask(FROM_HERE, {content::BrowserThread::UI},
+                           base::BindOnce(std::move(callback), size));
           },
           base::Passed(&callback)));
 }
@@ -175,14 +176,16 @@ ArcFileSystemBridge::ArcFileSystemBridge(content::BrowserContext* context,
                                          ArcBridgeService* bridge_service)
     : profile_(Profile::FromBrowserContext(context)),
       bridge_service_(bridge_service),
-      select_files_handler_(std::make_unique<ArcSelectFilesHandler>(context)),
-      weak_ptr_factory_(this) {
+      select_files_handlers_manager_(
+          std::make_unique<ArcSelectFilesHandlersManager>(context)) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
   bridge_service_->file_system()->SetHost(this);
+  bridge_service_->file_system()->AddObserver(this);
 }
 
 ArcFileSystemBridge::~ArcFileSystemBridge() {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  bridge_service_->file_system()->RemoveObserver(this);
   bridge_service_->file_system()->SetHost(nullptr);
 }
 
@@ -219,15 +222,18 @@ void ArcFileSystemBridge::GetFileName(const std::string& url,
                                       GetFileNameCallback callback) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
   GURL url_decoded = DecodeFromChromeContentProviderUrl(GURL(url));
-  if (url_decoded.is_empty() || !IsUrlAllowed(url_decoded)) {
+  std::string unescaped_file_name;
+  // It's generally not safe to unescape path separators in strings to be used
+  // in file paths.
+  if (url_decoded.is_empty() || !IsUrlAllowed(url_decoded) ||
+      !net::UnescapeBinaryURLComponentSafe(url_decoded.ExtractFileName(),
+                                           true /* fail_on_path_separators */,
+                                           &unescaped_file_name)) {
     LOG(ERROR) << "Invalid URL: " << url << " " << url_decoded;
     std::move(callback).Run(base::nullopt);
     return;
   }
-  std::move(callback).Run(net::UnescapeURLComponent(
-      url_decoded.ExtractFileName(),
-      net::UnescapeRule::SPACES |
-          net::UnescapeRule::URL_SPECIAL_CHARS_EXCEPT_PATH_SEPARATORS));
+  std::move(callback).Run(unescaped_file_name);
 }
 
 void ArcFileSystemBridge::GetFileSize(const std::string& url,
@@ -241,11 +247,17 @@ void ArcFileSystemBridge::GetFileSize(const std::string& url,
   }
   scoped_refptr<storage::FileSystemContext> context =
       GetFileSystemContext(profile_, url_decoded);
-  base::PostTaskWithTraits(
+  file_manager::util::FileSystemURLAndHandle file_system_url_and_handle =
+      GetFileSystemURL(*context, url_decoded);
+  base::PostTask(
       FROM_HERE, {content::BrowserThread::IO},
-      base::BindOnce(&GetFileSizeOnIOThread, context,
-                     GetFileSystemURL(context, url_decoded),
-                     std::move(callback)));
+      base::BindOnce(&GetFileSizeOnIOThread, std::move(context),
+                     file_system_url_and_handle.url, std::move(callback)));
+  // TODO(https://crbug.com/963027): This is currently leaking the isolated
+  // file system, the file system should somehow be revoked when the url
+  // returned by GetFileSystemURL is no longer needed.
+  storage::IsolatedContext::GetInstance()->AddReference(
+      file_system_url_and_handle.handle.id());
 }
 
 void ArcFileSystemBridge::GetFileType(const std::string& url,
@@ -259,11 +271,11 @@ void ArcFileSystemBridge::GetFileType(const std::string& url,
   }
   scoped_refptr<storage::FileSystemContext> context =
       GetFileSystemContext(profile_, url_decoded);
-  storage::FileSystemURL file_system_url =
-      GetFileSystemURL(context, url_decoded);
+  file_manager::util::FileSystemURLAndHandle file_system_url_and_handle =
+      GetFileSystemURL(*context, url_decoded);
   extensions::app_file_handler_util::GetMimeTypeForLocalPath(
-      profile_, file_system_url.path(),
-      base::Bind(
+      profile_, file_system_url_and_handle.url.path(),
+      base::BindOnce(
           [](GetFileTypeCallback callback, const std::string& mime_type) {
             std::move(callback).Run(mime_type.empty()
                                         ? base::nullopt
@@ -309,30 +321,27 @@ void ArcFileSystemBridge::OpenFileToRead(const std::string& url,
     return;
   }
 
-  base::PostTaskWithTraitsAndReplyWithResult(
+  base::ThreadPool::PostTaskAndReplyWithResult(
       FROM_HERE, {base::MayBlock()},
       base::BindOnce(&OpenDriveFSFileToRead, fs_path), std::move(callback));
 }
 
 void ArcFileSystemBridge::SelectFiles(mojom::SelectFilesRequestPtr request,
                                       SelectFilesCallback callback) {
-  select_files_handler_->SelectFiles(std::move(request), std::move(callback));
+  select_files_handlers_manager_->SelectFiles(std::move(request),
+                                              std::move(callback));
 }
 
 void ArcFileSystemBridge::OnFileSelectorEvent(
     mojom::FileSelectorEventPtr event,
     ArcFileSystemBridge::OnFileSelectorEventCallback callback) {
   std::string track;
-  if (!IsTestImageBuild()) {
-    LOG(ERROR) << "OnFileSelectorEvent is only allowed under test conditions";
-    std::move(callback).Run();
-    return;
-  }
-  select_files_handler_->OnFileSelectorEvent(std::move(event),
-                                             std::move(callback));
+  select_files_handlers_manager_->OnFileSelectorEvent(std::move(event),
+                                                      std::move(callback));
 }
 
 void ArcFileSystemBridge::GetFileSelectorElements(
+    mojom::GetFileSelectorElementsRequestPtr request,
     GetFileSelectorElementsCallback callback) {
   if (!IsTestImageBuild()) {
     LOG(ERROR)
@@ -340,7 +349,8 @@ void ArcFileSystemBridge::GetFileSelectorElements(
     std::move(callback).Run(mojom::FileSelectorElements::New());
     return;
   }
-  select_files_handler_->GetFileSelectorElements(std::move(callback));
+  select_files_handlers_manager_->GetFileSelectorElements(std::move(request),
+                                                          std::move(callback));
 }
 
 void ArcFileSystemBridge::OpenFileToReadAfterGetFileSize(
@@ -402,11 +412,18 @@ bool ArcFileSystemBridge::HandleReadRequest(const std::string& id,
   const GURL& url = it_url->second;
   scoped_refptr<storage::FileSystemContext> context =
       GetFileSystemContext(profile_, url);
+  file_manager::util::FileSystemURLAndHandle file_system_url_and_handle =
+      GetFileSystemURL(*context, url);
   *it_forwarder = FileStreamForwarderPtr(new FileStreamForwarder(
-      context, GetFileSystemURL(context, url), offset, size,
+      std::move(context), file_system_url_and_handle.url, offset, size,
       std::move(pipe_write_end),
       base::BindOnce(&ArcFileSystemBridge::OnReadRequestCompleted,
                      weak_ptr_factory_.GetWeakPtr(), id, it_forwarder)));
+  // TODO(https://crbug.com/963027): This is currently leaking the isolated
+  // file system, the file system should somehow be revoked when the url
+  // returned by GetFileSystemURL is no longer needed.
+  storage::IsolatedContext::GetInstance()->AddReference(
+      file_system_url_and_handle.handle.id());
   return true;
 }
 
@@ -421,6 +438,12 @@ void ArcFileSystemBridge::OnReadRequestCompleted(
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
   LOG_IF(ERROR, !result) << "Failed to read " << id;
   file_stream_forwarders_.erase(it);
+}
+
+void ArcFileSystemBridge::OnConnectionClosed() {
+  LOG(WARNING) << "FileSystem connection has been closed. "
+               << "Closing SelectFileDialogs owned by ARC apps, if any.";
+  select_files_handlers_manager_->DeleteAllHandlers();
 }
 
 }  // namespace arc

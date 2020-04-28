@@ -9,8 +9,8 @@
 #include "base/bind.h"
 #include "chrome/browser/chromeos/authpolicy/authpolicy_helper.h"
 #include "chrome/browser/chromeos/login/oobe_screen.h"
-#include "chrome/browser/chromeos/login/screens/core_oobe_view.h"
 #include "chrome/browser/chromeos/login/ui/login_display_host.h"
+#include "chrome/browser/ui/webui/chromeos/login/core_oobe_handler.h"
 #include "chrome/browser/ui/webui/chromeos/login/signin_screen_handler.h"
 #include "chrome/grit/generated_resources.h"
 #include "chromeos/login/auth/key.h"
@@ -42,9 +42,7 @@ ActiveDirectoryPasswordChangeScreenHandler::
     : BaseScreenHandler(OobeScreen::SCREEN_ACTIVE_DIRECTORY_PASSWORD_CHANGE,
                         js_calls_container),
       authpolicy_login_helper_(std::make_unique<AuthPolicyHelper>()),
-      core_oobe_view_(core_oobe_view),
-      weak_factory_(this) {
-}
+      core_oobe_view_(core_oobe_view) {}
 
 ActiveDirectoryPasswordChangeScreenHandler::
     ~ActiveDirectoryPasswordChangeScreenHandler() {}

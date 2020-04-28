@@ -46,8 +46,7 @@ class MarkupAccumulator {
   STACK_ALLOCATED();
 
  public:
-  MarkupAccumulator(AbsoluteURLs,
-                    SerializationType = SerializationType::kAsOwnerDocument);
+  MarkupAccumulator(AbsoluteURLs, SerializationType, IncludeShadowRoots);
   virtual ~MarkupAccumulator();
 
   template <typename Strategy>
@@ -60,9 +59,10 @@ class MarkupAccumulator {
 
   MarkupFormatter formatter_;
   StringBuilder markup_;
+  IncludeShadowRoots include_shadow_roots_;
 
  private:
-  bool SerializeAsHTMLDocument(const Node&) const;
+  bool SerializeAsHTML() const;
   String ToString() { return markup_.ToString(); }
 
   void AppendString(const String&);

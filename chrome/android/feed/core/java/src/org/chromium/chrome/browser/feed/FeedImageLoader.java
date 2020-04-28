@@ -9,24 +9,24 @@ import android.graphics.Bitmap;
 import android.graphics.drawable.BitmapDrawable;
 import android.graphics.drawable.Drawable;
 import android.net.Uri;
-import android.support.annotation.DrawableRes;
-import android.support.v7.content.res.AppCompatResources;
 import android.text.TextUtils;
 
-import com.google.android.libraries.feed.common.functional.Consumer;
-import com.google.android.libraries.feed.host.imageloader.BundledAssets;
-import com.google.android.libraries.feed.host.imageloader.ImageLoaderApi;
+import androidx.annotation.DrawableRes;
+import androidx.annotation.VisibleForTesting;
+import androidx.appcompat.content.res.AppCompatResources;
 
 import org.chromium.base.Callback;
+import org.chromium.base.Consumer;
 import org.chromium.base.DiscardableReferencePool;
 import org.chromium.base.SysUtils;
-import org.chromium.base.VisibleForTesting;
 import org.chromium.base.task.PostTask;
-import org.chromium.chrome.R;
+import org.chromium.chrome.browser.feed.library.api.host.imageloader.BundledAssets;
+import org.chromium.chrome.browser.feed.library.api.host.imageloader.ImageLoaderApi;
 import org.chromium.chrome.browser.image_fetcher.ImageFetcher;
 import org.chromium.chrome.browser.image_fetcher.ImageFetcherConfig;
 import org.chromium.chrome.browser.image_fetcher.ImageFetcherFactory;
 import org.chromium.chrome.browser.suggestions.ThumbnailGradient;
+import org.chromium.chrome.feed.R;
 import org.chromium.content_public.browser.UiThreadTaskTraits;
 
 import java.util.Iterator;
@@ -142,10 +142,21 @@ public class FeedImageLoader implements ImageLoaderApi {
      */
     private @DrawableRes int lookupDrawableIdentifier(String resourceName) {
         switch (resourceName) {
+            case BundledAssets.AMP_ICON:
+            case BundledAssets.AMP_ICON_DARK_BG:
+                return R.drawable.ic_amp_24dp;
+            case BundledAssets.MENU_ICON:
+                return R.drawable.ic_more_vert_24dp_on_light_bg;
+            case BundledAssets.MENU_ICON_DARK_BG:
+                return R.drawable.ic_more_vert_24dp_on_dark_bg;
             case BundledAssets.OFFLINE_INDICATOR_BADGE:
-                return R.drawable.offline_pin_round;
+                return R.drawable.ic_offline_pin_24dp_on_light_bg;
+            case BundledAssets.OFFLINE_INDICATOR_BADGE_DARK_BG:
+                return R.drawable.ic_offline_pin_24dp_on_dark_bg;
             case BundledAssets.VIDEO_INDICATOR_BADGE:
-                return R.drawable.ic_play_circle_filled_grey;
+                return R.drawable.ic_play_circle_filled_24dp_on_light_bg;
+            case BundledAssets.VIDEO_INDICATOR_BADGE_DARK_BG:
+                return R.drawable.ic_play_circle_filled_24dp_on_dark_bg;
         }
 
         return 0;

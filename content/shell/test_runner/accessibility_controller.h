@@ -9,7 +9,6 @@
 
 #include "base/macros.h"
 #include "base/memory/weak_ptr.h"
-#include "content/shell/test_runner/test_runner_export.h"
 #include "content/shell/test_runner/web_ax_object_proxy.h"
 #include "third_party/blink/public/web/web_ax_object.h"
 #include "v8/include/v8.h"
@@ -21,11 +20,11 @@ class WebString;
 class WebView;
 }
 
-namespace test_runner {
+namespace content {
 
 class WebViewTestProxy;
 
-class TEST_RUNNER_EXPORT AccessibilityController {
+class AccessibilityController {
  public:
   explicit AccessibilityController(WebViewTestProxy* web_view_test_proxy);
   ~AccessibilityController();
@@ -33,8 +32,11 @@ class TEST_RUNNER_EXPORT AccessibilityController {
   void Reset();
   void Install(blink::WebLocalFrame* frame);
   bool ShouldLogAccessibilityEvents();
-  void NotificationReceived(const blink::WebAXObject& target,
+  void NotificationReceived(blink::WebLocalFrame* frame,
+                            const blink::WebAXObject& target,
                             const std::string& notification_name);
+  void PostNotification(const blink::WebAXObject& target,
+                        const std::string& notification_name);
 
  private:
   friend class AccessibilityControllerBindings;
@@ -65,11 +67,11 @@ class TEST_RUNNER_EXPORT AccessibilityController {
 
   std::unique_ptr<blink::WebAXContext> ax_context_;
 
-  base::WeakPtrFactory<AccessibilityController> weak_factory_;
+  base::WeakPtrFactory<AccessibilityController> weak_factory_{this};
 
   DISALLOW_COPY_AND_ASSIGN(AccessibilityController);
 };
 
-}  // namespace test_runner
+}  // namespace content
 
 #endif  // CONTENT_SHELL_TEST_RUNNER_ACCESSIBILITY_CONTROLLER_H_

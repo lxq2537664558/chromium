@@ -11,10 +11,12 @@
 
 #include "base/macros.h"
 #include "base/memory/ref_counted.h"
+#include "base/memory/weak_ptr.h"
 #include "base/time/time.h"
 #include "base/timer/timer.h"
 #include "net/base/net_export.h"
 #include "net/dns/host_resolver.h"
+#include "net/dns/public/resolve_error_info.h"
 #include "net/log/net_log_with_source.h"
 #include "net/socket/transport_connect_job.h"
 
@@ -50,6 +52,7 @@ class NET_EXPORT_PRIVATE WebSocketTransportConnectJob : public ConnectJob {
   // ConnectJob methods.
   LoadState GetLoadState() const override;
   bool HasEstablishedConnection() const override;
+  ResolveErrorInfo GetResolveErrorInfo() const override;
 
  private:
   friend class WebSocketTransportConnectSubJob;
@@ -104,6 +107,10 @@ class NET_EXPORT_PRIVATE WebSocketTransportConnectJob : public ConnectJob {
 
   bool had_ipv4_;
   bool had_ipv6_;
+
+  ResolveErrorInfo resolve_error_info_;
+
+  base::WeakPtrFactory<WebSocketTransportConnectJob> weak_ptr_factory_{this};
 
   DISALLOW_COPY_AND_ASSIGN(WebSocketTransportConnectJob);
 };

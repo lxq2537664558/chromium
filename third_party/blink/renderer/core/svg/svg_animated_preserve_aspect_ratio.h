@@ -45,13 +45,6 @@ class SVGAnimatedPreserveAspectRatio
   USING_GARBAGE_COLLECTED_MIXIN(SVGAnimatedPreserveAspectRatio);
 
  public:
-  static SVGAnimatedPreserveAspectRatio* Create(
-      SVGElement* context_element,
-      const QualifiedName& attribute_name) {
-    return MakeGarbageCollected<SVGAnimatedPreserveAspectRatio>(context_element,
-                                                                attribute_name);
-  }
-
   SVGAnimatedPreserveAspectRatio(SVGElement* context_element,
                                  const QualifiedName& attribute_name)
       : SVGAnimatedProperty<SVGPreserveAspectRatio>(
@@ -59,7 +52,7 @@ class SVGAnimatedPreserveAspectRatio
             attribute_name,
             MakeGarbageCollected<SVGPreserveAspectRatio>()) {}
 
-  void Trace(blink::Visitor* visitor) override {
+  void Trace(Visitor* visitor) override {
     SVGAnimatedProperty<SVGPreserveAspectRatio>::Trace(visitor);
     ScriptWrappable::Trace(visitor);
   }

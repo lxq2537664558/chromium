@@ -47,14 +47,6 @@ class SVGAnimatedTransformList final
   USING_GARBAGE_COLLECTED_MIXIN(SVGAnimatedTransformList);
 
  public:
-  static SVGAnimatedTransformList* Create(
-      SVGElement* context_element,
-      const QualifiedName& attribute_name,
-      CSSPropertyID css_property_id = CSSPropertyID::kInvalid) {
-    return MakeGarbageCollected<SVGAnimatedTransformList>(
-        context_element, attribute_name, css_property_id);
-  }
-
   SVGAnimatedTransformList(SVGElement* context_element,
                            const QualifiedName& attribute_name,
                            CSSPropertyID css_property_id)
@@ -64,7 +56,7 @@ class SVGAnimatedTransformList final
             MakeGarbageCollected<SVGTransformList>(),
             css_property_id) {}
 
-  void Trace(blink::Visitor* visitor) override {
+  void Trace(Visitor* visitor) override {
     SVGAnimatedProperty<SVGTransformList>::Trace(visitor);
     ScriptWrappable::Trace(visitor);
   }

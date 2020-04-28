@@ -18,13 +18,13 @@ namespace content {
 
 class BackgroundFetchContext;
 class BackgroundFetchRegistrationId;
-class DevToolsBackgroundServicesContext;
+class DevToolsBackgroundServicesContextImpl;
 class ServiceWorkerContextWrapper;
 class ServiceWorkerRegistration;
 class ServiceWorkerVersion;
 
 // Responsible for dispatching the Background Fetch API events on a given
-// Service Worker. Must only be used on the IO thread.
+// Service Worker. Must only be used on the service worker core thread.
 class CONTENT_EXPORT BackgroundFetchEventDispatcher {
  public:
   // This enumeration is used for recording histograms. Treat as append-only.
@@ -40,7 +40,7 @@ class CONTENT_EXPORT BackgroundFetchEventDispatcher {
   BackgroundFetchEventDispatcher(
       BackgroundFetchContext* background_fetch_context,
       scoped_refptr<ServiceWorkerContextWrapper> service_worker_context,
-      DevToolsBackgroundServicesContext* devtools_context);
+      DevToolsBackgroundServicesContextImpl* devtools_context);
   ~BackgroundFetchEventDispatcher();
 
   // Dispatches one of the update, fail, or success events depending on the
@@ -59,7 +59,8 @@ class CONTENT_EXPORT BackgroundFetchEventDispatcher {
 
  private:
   using ServiceWorkerLoadedCallback =
-      base::Callback<void(scoped_refptr<ServiceWorkerVersion>, int request_id)>;
+      base::OnceCallback<void(scoped_refptr<ServiceWorkerVersion>,
+                              int request_id)>;
 
   // Dispatches the `backgroundfetchabort` event, which indicates that an active
   // background fetch was aborted by the user or another external event.
@@ -138,7 +139,7 @@ class CONTENT_EXPORT BackgroundFetchEventDispatcher {
       scoped_refptr<ServiceWorkerVersion> service_worker_version,
       int request_id);
 
-  // Informs the DevToolsBackgroundServicesContext of the completion event.
+  // Informs the DevToolsBackgroundServicesContextImpl of the completion event.
   void LogBackgroundFetchCompletionForDevTools(
       const BackgroundFetchRegistrationId& registration_id,
       ServiceWorkerMetrics::EventType event_type,
@@ -149,7 +150,7 @@ class CONTENT_EXPORT BackgroundFetchEventDispatcher {
   scoped_refptr<ServiceWorkerContextWrapper> service_worker_context_;
 
   // Owned by BackgroundFetchContext.
-  DevToolsBackgroundServicesContext* devtools_context_;
+  DevToolsBackgroundServicesContextImpl* devtools_context_;
 
   DISALLOW_COPY_AND_ASSIGN(BackgroundFetchEventDispatcher);
 };

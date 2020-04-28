@@ -29,14 +29,6 @@ class UtilityServiceFactory {
       mojo::PendingReceiver<service_manager::mojom::Service> receiver);
 
  private:
-  std::unique_ptr<service_manager::Service> CreateAudioService(
-      service_manager::mojom::ServiceRequest request);
-
-  // Allows embedders to register their interface implementations before the
-  // network or audio services are created. Used for testing.
-  std::unique_ptr<service_manager::BinderRegistry> network_registry_;
-  std::unique_ptr<service_manager::BinderRegistry> audio_registry_;
-
   DISALLOW_COPY_AND_ASSIGN(UtilityServiceFactory);
 };
 

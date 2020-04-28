@@ -35,7 +35,8 @@ GLOzone* SurfaceFactoryOzone::GetGLOzone(gl::GLImplementation implementation) {
 
 #if BUILDFLAG(ENABLE_VULKAN)
 std::unique_ptr<gpu::VulkanImplementation>
-SurfaceFactoryOzone::CreateVulkanImplementation() {
+SurfaceFactoryOzone::CreateVulkanImplementation(bool allow_protected_memory,
+                                                bool enforce_protected_memory) {
   return nullptr;
 }
 
@@ -65,16 +66,29 @@ std::unique_ptr<OverlaySurface> SurfaceFactoryOzone::CreateOverlaySurface(
 }
 
 std::unique_ptr<SurfaceOzoneCanvas> SurfaceFactoryOzone::CreateCanvasForWidget(
-    gfx::AcceleratedWidget widget) {
+    gfx::AcceleratedWidget widget,
+    scoped_refptr<base::SequencedTaskRunner> task_runner) {
   return nullptr;
 }
 
 scoped_refptr<gfx::NativePixmap> SurfaceFactoryOzone::CreateNativePixmap(
     gfx::AcceleratedWidget widget,
+    VkDevice vk_device,
     gfx::Size size,
     gfx::BufferFormat format,
-    gfx::BufferUsage usage) {
+    gfx::BufferUsage usage,
+    base::Optional<gfx::Size> framebuffer_size) {
   return nullptr;
+}
+
+void SurfaceFactoryOzone::CreateNativePixmapAsync(
+    gfx::AcceleratedWidget widget,
+    VkDevice vk_device,
+    gfx::Size size,
+    gfx::BufferFormat format,
+    gfx::BufferUsage usage,
+    NativePixmapCallback callback) {
+  std::move(callback).Run(nullptr);
 }
 
 scoped_refptr<gfx::NativePixmap>
@@ -98,5 +112,10 @@ SurfaceFactoryOzone::CreateNativePixmapForProtectedBufferHandle(
 void SurfaceFactoryOzone::SetGetProtectedNativePixmapDelegate(
     const GetProtectedNativePixmapCallback&
         get_protected_native_pixmap_callback) {}
+
+std::vector<gfx::BufferFormat>
+SurfaceFactoryOzone::GetSupportedFormatsForTexturing() const {
+  return std::vector<gfx::BufferFormat>();
+}
 
 }  // namespace ui

@@ -7,6 +7,7 @@
 #include <memory>
 
 #include "base/bind.h"
+#include "base/memory/ptr_util.h"
 #include "chrome/common/url_constants.h"
 #include "components/renderer_context_menu/context_menu_content_type.h"
 #include "content/public/browser/web_contents.h"
@@ -29,11 +30,6 @@
 #endif
 
 namespace {
-
-bool CheckInternalResourcesURL(const GURL& url) {
-  return url.SchemeIs(content::kChromeUIScheme) &&
-         (url.host_piece() == chrome::kChromeUISyncResourcesHost);
-}
 
 bool IsUserSessionBlocked() {
 #if defined(OS_CHROMEOS)
@@ -74,17 +70,7 @@ std::unique_ptr<ContextMenuContentType> ContextMenuContentTypeFactory::Create(
   if (IsUserSessionBlocked())
     return std::make_unique<NullContextMenuContentType>(web_contents, params);
 
-  std::unique_ptr<ContextMenuContentType> content_type =
-      CreateInternal(web_contents, params);
-  SetInternalResourcesURLChecker(content_type.get());
-  return content_type;
-}
-
-// static.
-void ContextMenuContentTypeFactory::SetInternalResourcesURLChecker(
-    ContextMenuContentType* content_type) {
-  content_type->set_internal_resources_url_checker(
-      base::Bind(&CheckInternalResourcesURL));
+  return CreateInternal(web_contents, params);
 }
 
 // static

@@ -9,20 +9,27 @@ import android.graphics.Rect;
 import android.os.Handler;
 import android.os.Parcel;
 
-import org.chromium.base.Callback;
+import androidx.annotation.Nullable;
+
 import org.chromium.content_public.browser.AccessibilitySnapshotCallback;
 import org.chromium.content_public.browser.ImageDownloadCallback;
 import org.chromium.content_public.browser.JavaScriptCallback;
 import org.chromium.content_public.browser.MessagePort;
 import org.chromium.content_public.browser.NavigationController;
 import org.chromium.content_public.browser.RenderFrameHost;
+import org.chromium.content_public.browser.RenderWidgetHostView;
 import org.chromium.content_public.browser.ViewEventSink;
+import org.chromium.content_public.browser.Visibility;
 import org.chromium.content_public.browser.WebContents;
 import org.chromium.content_public.browser.WebContentsObserver;
 import org.chromium.ui.OverscrollRefreshHandler;
 import org.chromium.ui.base.EventForwarder;
 import org.chromium.ui.base.ViewAndroidDelegate;
 import org.chromium.ui.base.WindowAndroid;
+import org.chromium.url.GURL;
+
+import java.util.Collections;
+import java.util.List;
 
 /**
  * Mock class for {@link WebContents}.
@@ -66,6 +73,9 @@ public class MockWebContents implements WebContents {
     }
 
     @Override
+    public void clearNativeReference() {}
+
+    @Override
     public NavigationController getNavigationController() {
         return null;
     }
@@ -76,12 +86,38 @@ public class MockWebContents implements WebContents {
     }
 
     @Override
+    public RenderFrameHost getFocusedFrame() {
+        return null;
+    }
+
+    @Override
+    @Nullable
+    public RenderWidgetHostView getRenderWidgetHostView() {
+        return null;
+    }
+
+    @Override
+    public List<? extends WebContents> getInnerWebContents() {
+        return Collections.emptyList();
+    }
+
+    @Override
+    public @Visibility int getVisibility() {
+        return Visibility.VISIBLE;
+    }
+
+    @Override
     public String getTitle() {
         return null;
     }
 
     @Override
-    public String getVisibleUrl() {
+    public GURL getVisibleUrl() {
+        return null;
+    }
+
+    @Override
+    public String getVisibleUrlString() {
         return null;
     }
 
@@ -99,6 +135,9 @@ public class MockWebContents implements WebContents {
     public boolean isLoadingToDifferentDocument() {
         return false;
     }
+
+    @Override
+    public void dispatchBeforeUnload(boolean autoCancel) {}
 
     @Override
     public void stop() {}
@@ -119,11 +158,6 @@ public class MockWebContents implements WebContents {
     public void setAudioMuted(boolean mute) {}
 
     @Override
-    public int getBackgroundColor() {
-        return 0;
-    }
-
-    @Override
     public boolean isShowingInterstitialPage() {
         return false;
     }
@@ -134,7 +168,10 @@ public class MockWebContents implements WebContents {
     }
 
     @Override
-    public boolean isReady() {
+    public void setFocus(boolean hasFocus) {}
+
+    @Override
+    public boolean isFullscreenForCurrentTab() {
         return false;
     }
 
@@ -174,8 +211,8 @@ public class MockWebContents implements WebContents {
     public void addMessageToDevToolsConsole(int level, String message) {}
 
     @Override
-    public void postMessageToFrame(String frameName, String message, String sourceOrigin,
-            String targetOrigin, MessagePort[] ports) {}
+    public void postMessageToMainFrame(
+            String message, String sourceOrigin, String targetOrigin, MessagePort[] ports) {}
 
     @Override
     public MessagePort[] createMessageChannel() {
@@ -189,6 +226,11 @@ public class MockWebContents implements WebContents {
 
     @Override
     public int getThemeColor() {
+        return 0;
+    }
+
+    @Override
+    public float getLoadProgress() {
         return 0;
     }
 
@@ -216,11 +258,7 @@ public class MockWebContents implements WebContents {
     public void setOverscrollRefreshHandler(OverscrollRefreshHandler handler) {}
 
     @Override
-    public void writeContentBitmapToDiskAsync(
-            int width, int height, String path, Callback<String> callback) {}
-
-    @Override
-    public void reloadLoFiImages() {}
+    public void setSpatialNavigationDisabled(boolean disabled) {}
 
     @Override
     public int downloadImage(String url, boolean isFavicon, int maxBitmapSize, boolean bypassCache,
@@ -261,4 +299,10 @@ public class MockWebContents implements WebContents {
 
     @Override
     public void setDisplayCutoutSafeArea(Rect insets) {}
+
+    @Override
+    public void notifyRendererPreferenceUpdate() {}
+
+    @Override
+    public void notifyBrowserControlsHeightChanged() {}
 }

@@ -13,6 +13,7 @@
 #include "base/time/time.h"
 #include "base/timer/timer.h"
 #include "net/base/ip_endpoint.h"
+#include "net/base/isolation_info.h"
 #include "net/base/load_flags.h"
 #include "net/base/url_util.h"
 #include "net/http/http_request_headers.h"
@@ -93,6 +94,7 @@ class Delegate : public URLRequest::Delegate {
                               SSLCertRequestInfo* cert_request_info) override;
 
   void OnSSLCertificateError(URLRequest* request,
+                             int net_error,
                              const SSLInfo& ssl_info,
                              bool fatal) override;
 
@@ -112,7 +114,8 @@ class WebSocketStreamRequestImpl : public WebSocketStreamRequestAPI {
       const std::vector<std::string>& requested_subprotocols,
       const URLRequestContext* context,
       const url::Origin& origin,
-      const GURL& site_for_cookies,
+      const SiteForCookies& site_for_cookies,
+      const net::NetworkIsolationKey& network_isolation_key,
       const HttpRequestHeaders& additional_headers,
       std::unique_ptr<WebSocketStream::ConnectDelegate> connect_delegate,
       std::unique_ptr<WebSocketStreamRequestAPI> api_delegate)
@@ -122,7 +125,6 @@ class WebSocketStreamRequestImpl : public WebSocketStreamRequestAPI {
                                             &delegate_,
                                             kTrafficAnnotation)),
         connect_delegate_(std::move(connect_delegate)),
-        perform_upgrade_has_been_called_(false),
         api_delegate_(std::move(api_delegate)) {
     HttpRequestHeaders headers = additional_headers;
     headers.SetHeader(websockets::kUpgrade, websockets::kWebSocketLowercase);
@@ -140,6 +142,8 @@ class WebSocketStreamRequestImpl : public WebSocketStreamRequestAPI {
     url_request_->SetExtraRequestHeaders(headers);
     url_request_->set_initiator(origin);
     url_request_->set_site_for_cookies(site_for_cookies);
+    url_request_->set_isolation_info(IsolationInfo::CreatePartial(
+        IsolationInfo::RedirectMode::kUpdateNothing, network_isolation_key));
 
     auto create_helper = std::make_unique<WebSocketHandshakeStreamCreateHelper>(
         connect_delegate_.get(), requested_subprotocols, this);
@@ -181,24 +185,18 @@ class WebSocketStreamRequestImpl : public WebSocketStreamRequestAPI {
         kHandshakeTimeoutIntervalInSeconds));
     timer_ = std::move(timer);
     timer_->Start(FROM_HERE, timeout,
-                  base::Bind(&WebSocketStreamRequestImpl::OnTimeout,
-                             base::Unretained(this)));
+                  base::BindOnce(&WebSocketStreamRequestImpl::OnTimeout,
+                                 base::Unretained(this)));
     url_request_->Start();
   }
 
   void PerformUpgrade() {
     DCHECK(timer_);
-    CHECK(!perform_upgrade_has_been_called_);
-    // TODO(bnc): Change to DCHECK after https://crbug.com/850183 is fixed.
-    CHECK(connect_delegate_);
-
-    perform_upgrade_has_been_called_ = true;
+    DCHECK(connect_delegate_);
 
     timer_->Stop();
 
     if (!handshake_stream_) {
-      // TODO(https://crbug.com/850183):
-      // Find out why this can happen and make it stop.
       ReportFailureWithMessage(
           "No handshake stream has been created "
           "or handshake stream is already destroyed.");
@@ -208,9 +206,13 @@ class WebSocketStreamRequestImpl : public WebSocketStreamRequestAPI {
     std::unique_ptr<URLRequest> url_request = std::move(url_request_);
     WebSocketHandshakeStreamBase* handshake_stream = handshake_stream_.get();
     handshake_stream_.reset();
-    // TODO(bnc): Combine into one line after https://crbug.com/850183 is fixed.
-    std::unique_ptr<WebSocketStream> stream = handshake_stream->Upgrade();
-    connect_delegate_->OnSuccess(std::move(stream));
+    auto handshake_response_info =
+        std::make_unique<WebSocketHandshakeResponseInfo>(
+            url_request->url(), url_request->response_headers(),
+            url_request->GetResponseRemoteEndpoint(),
+            url_request->response_time());
+    connect_delegate_->OnSuccess(handshake_stream->Upgrade(),
+                                 std::move(handshake_response_info));
 
     // This is safe even if |this| has already been deleted.
     url_request->CancelWithError(ERR_WS_UPGRADE);
@@ -255,14 +257,6 @@ class WebSocketStreamRequestImpl : public WebSocketStreamRequestAPI {
     connect_delegate_->OnFailure(failure_message);
   }
 
-  void OnFinishOpeningHandshake() {
-    WebSocketDispatchOnFinishOpeningHandshake(
-        connect_delegate(), url_request_->url(),
-        url_request_->response_headers(),
-        url_request_->GetResponseRemoteEndpoint(),
-        url_request_->response_time());
-  }
-
   WebSocketStream::ConnectDelegate* connect_delegate() const {
     return connect_delegate_.get();
   }
@@ -274,8 +268,7 @@ class WebSocketStreamRequestImpl : public WebSocketStreamRequestAPI {
  private:
   void OnHandshakeStreamCreated(
       WebSocketHandshakeStreamBase* handshake_stream) {
-    // TODO(bnc): Change to DCHECK after https://crbug.com/850183 is fixed.
-    CHECK(handshake_stream);
+    DCHECK(handshake_stream);
 
     handshake_stream_ = handshake_stream->GetWeakPtr();
   }
@@ -298,9 +291,6 @@ class WebSocketStreamRequestImpl : public WebSocketStreamRequestAPI {
   // succeeded.
   base::WeakPtr<WebSocketHandshakeStreamBase> handshake_stream_;
 
-  // TODO(bnc): Remove after https://crbug.com/850183 is fixed.
-  bool perform_upgrade_has_been_called_;
-
   // The failure message supplied by WebSocketBasicHandshakeStream, if any.
   std::string failure_message_;
 
@@ -314,9 +304,12 @@ class WebSocketStreamRequestImpl : public WebSocketStreamRequestAPI {
 class SSLErrorCallbacks : public WebSocketEventInterface::SSLErrorCallbacks {
  public:
   explicit SSLErrorCallbacks(URLRequest* url_request)
-      : url_request_(url_request) {}
+      : url_request_(url_request->GetWeakPtr()) {}
 
   void CancelSSLRequest(int error, const SSLInfo* ssl_info) override {
+    if (!url_request_)
+      return;
+
     if (ssl_info) {
       url_request_->CancelWithSSLError(error, *ssl_info);
     } else {
@@ -325,11 +318,12 @@ class SSLErrorCallbacks : public WebSocketEventInterface::SSLErrorCallbacks {
   }
 
   void ContinueSSLRequest() override {
-    url_request_->ContinueDespiteLastError();
+    if (url_request_)
+      url_request_->ContinueDespiteLastError();
   }
 
  private:
-  URLRequest* url_request_;
+  base::WeakPtr<URLRequest> url_request_;
 };
 
 void Delegate::OnReceivedRedirect(URLRequest* request,
@@ -394,13 +388,11 @@ void Delegate::OnResponseStarted(URLRequest* request, int net_error) {
       return;
 
     case HTTP_UNAUTHORIZED:
-      owner_->OnFinishOpeningHandshake();
       owner_->ReportFailureWithMessage(
           "HTTP Authentication failed; no valid credentials available");
       return;
 
     case HTTP_PROXY_AUTHENTICATION_REQUIRED:
-      owner_->OnFinishOpeningHandshake();
       owner_->ReportFailureWithMessage("Proxy authentication failed");
       return;
 
@@ -453,10 +445,11 @@ void Delegate::OnCertificateRequested(URLRequest* request,
 }
 
 void Delegate::OnSSLCertificateError(URLRequest* request,
+                                     int net_error,
                                      const SSLInfo& ssl_info,
                                      bool fatal) {
   owner_->connect_delegate()->OnSSLCertificateError(
-      std::make_unique<SSLErrorCallbacks>(request), ssl_info, fatal);
+      std::make_unique<SSLErrorCallbacks>(request), net_error, ssl_info, fatal);
 }
 
 void Delegate::OnReadCompleted(URLRequest* request, int bytes_read) {
@@ -476,15 +469,16 @@ std::unique_ptr<WebSocketStreamRequest> WebSocketStream::CreateAndConnectStream(
     const GURL& socket_url,
     const std::vector<std::string>& requested_subprotocols,
     const url::Origin& origin,
-    const GURL& site_for_cookies,
+    const SiteForCookies& site_for_cookies,
+    const net::NetworkIsolationKey& network_isolation_key,
     const HttpRequestHeaders& additional_headers,
     URLRequestContext* url_request_context,
     const NetLogWithSource& net_log,
     std::unique_ptr<ConnectDelegate> connect_delegate) {
   auto request = std::make_unique<WebSocketStreamRequestImpl>(
       socket_url, requested_subprotocols, url_request_context, origin,
-      site_for_cookies, additional_headers, std::move(connect_delegate),
-      nullptr);
+      site_for_cookies, network_isolation_key, additional_headers,
+      std::move(connect_delegate), nullptr);
   request->Start(std::make_unique<base::OneShotTimer>());
   return std::move(request);
 }
@@ -494,7 +488,8 @@ WebSocketStream::CreateAndConnectStreamForTesting(
     const GURL& socket_url,
     const std::vector<std::string>& requested_subprotocols,
     const url::Origin& origin,
-    const GURL& site_for_cookies,
+    const SiteForCookies& site_for_cookies,
+    const net::NetworkIsolationKey& network_isolation_key,
     const HttpRequestHeaders& additional_headers,
     URLRequestContext* url_request_context,
     const NetLogWithSource& net_log,
@@ -503,24 +498,10 @@ WebSocketStream::CreateAndConnectStreamForTesting(
     std::unique_ptr<WebSocketStreamRequestAPI> api_delegate) {
   auto request = std::make_unique<WebSocketStreamRequestImpl>(
       socket_url, requested_subprotocols, url_request_context, origin,
-      site_for_cookies, additional_headers, std::move(connect_delegate),
-      std::move(api_delegate));
+      site_for_cookies, network_isolation_key, additional_headers,
+      std::move(connect_delegate), std::move(api_delegate));
   request->Start(std::move(timer));
   return std::move(request);
-}
-
-void WebSocketDispatchOnFinishOpeningHandshake(
-    WebSocketStream::ConnectDelegate* connect_delegate,
-    const GURL& url,
-    const scoped_refptr<HttpResponseHeaders>& headers,
-    const IPEndPoint& remote_endpoint,
-    base::Time response_time) {
-  DCHECK(connect_delegate);
-  if (headers.get()) {
-    connect_delegate->OnFinishOpeningHandshake(
-        std::make_unique<WebSocketHandshakeResponseInfo>(
-            url, headers, remote_endpoint, response_time));
-  }
 }
 
 }  // namespace net

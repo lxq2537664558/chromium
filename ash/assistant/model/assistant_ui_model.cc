@@ -5,14 +5,10 @@
 #include "ash/assistant/model/assistant_ui_model.h"
 
 #include "ash/assistant/model/assistant_ui_model_observer.h"
-#include "ash/public/cpp/app_list/app_list_features.h"
 
 namespace ash {
 
-AssistantUiModel::AssistantUiModel()
-    : ui_mode_(app_list_features::IsEmbeddedAssistantUIEnabled()
-                   ? AssistantUiMode::kLauncherEmbeddedUi
-                   : AssistantUiMode::kMainUi) {}
+AssistantUiModel::AssistantUiModel() = default;
 
 AssistantUiModel::~AssistantUiModel() = default;
 
@@ -24,22 +20,18 @@ void AssistantUiModel::RemoveObserver(AssistantUiModelObserver* observer) {
   observers_.RemoveObserver(observer);
 }
 
-void AssistantUiModel::SetUiMode(AssistantUiMode ui_mode) {
+void AssistantUiModel::SetUiMode(AssistantUiMode ui_mode,
+                                 bool due_to_interaction) {
   if (ui_mode == ui_mode_)
     return;
 
   ui_mode_ = ui_mode;
-  NotifyUiModeChanged();
+  NotifyUiModeChanged(due_to_interaction);
 }
 
 void AssistantUiModel::SetVisible(AssistantEntryPoint entry_point) {
   SetVisibility(AssistantVisibility::kVisible, entry_point,
                 /*exit_point=*/base::nullopt);
-}
-
-void AssistantUiModel::SetHidden(AssistantExitPoint exit_point) {
-  SetVisibility(AssistantVisibility::kHidden,
-                /*entry_point=*/base::nullopt, exit_point);
 }
 
 void AssistantUiModel::SetClosed(AssistantExitPoint exit_point) {
@@ -78,9 +70,9 @@ void AssistantUiModel::SetVisibility(
   NotifyUiVisibilityChanged(old_visibility, entry_point, exit_point);
 }
 
-void AssistantUiModel::NotifyUiModeChanged() {
+void AssistantUiModel::NotifyUiModeChanged(bool due_to_interaction) {
   for (AssistantUiModelObserver& observer : observers_)
-    observer.OnUiModeChanged(ui_mode_);
+    observer.OnUiModeChanged(ui_mode_, due_to_interaction);
 }
 
 void AssistantUiModel::NotifyUiVisibilityChanged(

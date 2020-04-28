@@ -32,8 +32,7 @@ ThreadControllerImpl::ThreadControllerImpl(
                                     ? funneled_sequence_manager->GetTaskRunner()
                                     : nullptr),
       time_source_(time_source),
-      work_deduplicator_(associated_thread_),
-      weak_factory_(this) {
+      work_deduplicator_(associated_thread_) {
   if (task_runner_ || funneled_sequence_manager_)
     work_deduplicator_.BindToCurrentThread();
   immediate_do_work_closure_ =
@@ -58,14 +57,6 @@ std::unique_ptr<ThreadControllerImpl> ThreadControllerImpl::Create(
       funneled_sequence_manager ? funneled_sequence_manager->GetTaskRunner()
                                 : nullptr,
       time_source));
-}
-
-std::unique_ptr<ThreadControllerImpl>
-ThreadControllerImpl::CreateSequenceFunneled(
-    scoped_refptr<SingleThreadTaskRunner> task_runner,
-    const TickClock* time_source) {
-  return WrapUnique(
-      new ThreadControllerImpl(nullptr, std::move(task_runner), time_source));
 }
 
 void ThreadControllerImpl::SetSequencedTaskSource(
@@ -164,7 +155,8 @@ void ThreadControllerImpl::WillQueueTask(PendingTask* pending_task,
 }
 
 void ThreadControllerImpl::DoWork(WorkType work_type) {
-  TRACE_EVENT0("sequence_manager", "ThreadControllerImpl::DoWork");
+  TRACE_EVENT0(TRACE_DISABLED_BY_DEFAULT("sequence_manager"),
+               "ThreadControllerImpl::DoWork");
 
   DCHECK_CALLED_ON_VALID_SEQUENCE(associated_thread_->sequence_checker);
   DCHECK(sequence_);
@@ -174,15 +166,22 @@ void ThreadControllerImpl::DoWork(WorkType work_type) {
   WeakPtr<ThreadControllerImpl> weak_ptr = weak_factory_.GetWeakPtr();
   // TODO(scheduler-dev): Consider moving to a time based work batch instead.
   for (int i = 0; i < main_sequence_only().work_batch_size_; i++) {
-    Optional<PendingTask> task = sequence_->TakeTask();
+    Task* task = sequence_->SelectNextTask();
     if (!task)
       break;
+
+    // Trace-parsing tools (DevTools, Lighthouse, etc) consume this event
+    // to determine long tasks.
+    // The event scope must span across DidRunTask call below to make sure
+    // it covers RunMicrotasks event.
+    // See https://crbug.com/681863 and https://crbug.com/874982
+    TRACE_EVENT0(TRACE_DISABLED_BY_DEFAULT("devtools.timeline"), "RunTask");
 
     {
       // Trace events should finish before we call DidRunTask to ensure that
       // SequenceManager trace events do not interfere with them.
       TRACE_TASK_EXECUTION("ThreadControllerImpl::RunTask", *task);
-      task_annotator_.RunTask("SequenceManager RunTask", &*task);
+      task_annotator_.RunTask("SequenceManager RunTask", task);
     }
 
     if (!weak_ptr)
@@ -315,7 +314,13 @@ MessagePump* ThreadControllerImpl::GetBoundMessagePump() const {
 void ThreadControllerImpl::AttachToMessagePump() {
   NOTREACHED();
 }
-#endif
+#endif  // OS_IOS || OS_ANDROID
+
+#if defined(OS_IOS)
+void ThreadControllerImpl::DetachFromMessagePump() {
+  NOTREACHED();
+}
+#endif  // OS_IOS
 
 }  // namespace internal
 }  // namespace sequence_manager

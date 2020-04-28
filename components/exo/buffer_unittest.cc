@@ -2,12 +2,13 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "components/exo/buffer.h"
+
 #include <GLES2/gl2extchromium.h>
 
 #include "ash/shell.h"
 #include "base/bind.h"
 #include "base/run_loop.h"
-#include "components/exo/buffer.h"
 #include "components/exo/frame_sink_resource_manager.h"
 #include "components/exo/surface_tree_host.h"
 #include "components/exo/test/exo_test_base.h"
@@ -18,17 +19,13 @@
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/aura/env.h"
 #include "ui/compositor/compositor.h"
-#include "ui/compositor/test/in_process_context_factory.h"
+#include "ui/compositor/test/in_process_context_provider.h"
 #include "ui/gfx/gpu_memory_buffer.h"
 
 namespace exo {
 namespace {
 
 using BufferTest = test::ExoTestBase;
-
-aura::Env* GetAuraEnv() {
-  return ash::Shell::Get()->aura_env();
-}
 
 void Release(int* release_call_count) {
   (*release_call_count)++;
@@ -39,7 +36,7 @@ void VerifySyncTokensInCompositorFrame(viz::CompositorFrame* frame) {
   for (auto& resource : frame->resource_list)
     sync_tokens.push_back(resource.mailbox_holder.sync_token.GetData());
   gpu::raster::RasterInterface* ri =
-      GetAuraEnv()
+      aura::Env::GetInstance()
           ->context_factory()
           ->SharedMainThreadRasterContextProvider()
           ->RasterInterface();
@@ -61,13 +58,13 @@ TEST_F(BufferTest, ReleaseCallback) {
   // Set the release callback.
   int release_call_count = 0;
   buffer->set_release_callback(
-      base::Bind(&Release, base::Unretained(&release_call_count)));
+      base::BindRepeating(&Release, base::Unretained(&release_call_count)));
 
   buffer->OnAttach();
   viz::TransferableResource resource;
   // Produce a transferable resource for the contents of the buffer.
   bool rv = buffer->ProduceTransferableResource(
-      frame_sink_holder->resource_manager(), false, &resource);
+      frame_sink_holder->resource_manager(), nullptr, false, &resource);
   ASSERT_TRUE(rv);
 
   // Release buffer.
@@ -99,11 +96,13 @@ TEST_F(BufferTest, IsLost) {
   // Acquire a texture transferable resource for the contents of the buffer.
   viz::TransferableResource resource;
   bool rv = buffer->ProduceTransferableResource(
-      frame_sink_holder->resource_manager(), false, &resource);
+      frame_sink_holder->resource_manager(), nullptr, false, &resource);
   ASSERT_TRUE(rv);
 
   scoped_refptr<viz::RasterContextProvider> context_provider =
-      GetAuraEnv()->context_factory()->SharedMainThreadRasterContextProvider();
+      aura::Env::GetInstance()
+          ->context_factory()
+          ->SharedMainThreadRasterContextProvider();
   if (context_provider) {
     gpu::raster::RasterInterface* ri = context_provider->RasterInterface();
     ri->LoseContextCHROMIUM(GL_GUILTY_CONTEXT_RESET_ARB,
@@ -124,7 +123,7 @@ TEST_F(BufferTest, IsLost) {
   // buffer.
   viz::TransferableResource new_resource;
   rv = buffer->ProduceTransferableResource(
-      frame_sink_holder->resource_manager(), false, &new_resource);
+      frame_sink_holder->resource_manager(), nullptr, false, &new_resource);
   ASSERT_TRUE(rv);
   buffer->OnDetach();
 
@@ -152,11 +151,16 @@ TEST_F(BufferTest, OnLostResources) {
   // Acquire a texture transferable resource for the contents of the buffer.
   viz::TransferableResource resource;
   bool rv = buffer->ProduceTransferableResource(
-      frame_sink_holder->resource_manager(), false, &resource);
+      frame_sink_holder->resource_manager(), nullptr, false, &resource);
   ASSERT_TRUE(rv);
 
-  static_cast<ui::InProcessContextFactory*>(GetAuraEnv()->context_factory())
-      ->SendOnLostSharedContext();
+  viz::RasterContextProvider* context_provider =
+      aura::Env::GetInstance()
+          ->context_factory()
+          ->SharedMainThreadRasterContextProvider()
+          .get();
+  static_cast<ui::InProcessContextProvider*>(context_provider)
+      ->SendOnContextLost();
 }
 
 TEST_F(BufferTest, SurfaceTreeHostDestruction) {
@@ -174,21 +178,21 @@ TEST_F(BufferTest, SurfaceTreeHostDestruction) {
   // Set the release callback.
   int release_call_count = 0;
   buffer->set_release_callback(
-      base::Bind(&Release, base::Unretained(&release_call_count)));
+      base::BindRepeating(&Release, base::Unretained(&release_call_count)));
 
   buffer->OnAttach();
   viz::TransferableResource resource;
   // Produce a transferable resource for the contents of the buffer.
   bool rv = buffer->ProduceTransferableResource(
-      frame_sink_holder->resource_manager(), false, &resource);
+      frame_sink_holder->resource_manager(), nullptr, false, &resource);
   ASSERT_TRUE(rv);
 
   // Submit frame with resource.
   {
     viz::CompositorFrame frame;
-    frame.metadata.begin_frame_ack.source_id =
+    frame.metadata.begin_frame_ack.frame_id.source_id =
         viz::BeginFrameArgs::kManualSourceId;
-    frame.metadata.begin_frame_ack.sequence_number =
+    frame.metadata.begin_frame_ack.frame_id.sequence_number =
         viz::BeginFrameArgs::kStartingFrameNumber;
     frame.metadata.begin_frame_ack.has_damage = true;
     frame.metadata.frame_token = 1;
@@ -227,22 +231,21 @@ TEST_F(BufferTest, SurfaceTreeHostLastFrame) {
   // Set the release callback.
   int release_call_count = 0;
   buffer->set_release_callback(
-      base::Bind(&Release, base::Unretained(&release_call_count)));
+      base::BindRepeating(&Release, base::Unretained(&release_call_count)));
 
   buffer->OnAttach();
   viz::TransferableResource resource;
   // Produce a transferable resource for the contents of the buffer.
   bool rv = buffer->ProduceTransferableResource(
-      frame_sink_holder->resource_manager(), false, &resource);
+      frame_sink_holder->resource_manager(), nullptr, false, &resource);
   ASSERT_TRUE(rv);
 
   // Submit frame with resource.
   {
     viz::CompositorFrame frame;
-    frame.metadata.begin_frame_ack.source_id =
-        viz::BeginFrameArgs::kManualSourceId;
-    frame.metadata.begin_frame_ack.sequence_number =
-        viz::BeginFrameArgs::kStartingFrameNumber;
+    frame.metadata.begin_frame_ack.frame_id =
+        viz::BeginFrameId(viz::BeginFrameArgs::kManualSourceId,
+                          viz::BeginFrameArgs::kStartingFrameNumber);
     frame.metadata.begin_frame_ack.has_damage = true;
     frame.metadata.frame_token = 1;
     frame.metadata.device_scale_factor = 1;
@@ -275,10 +278,9 @@ TEST_F(BufferTest, SurfaceTreeHostLastFrame) {
   // Submit frame without resource. This should cause buffer to be released.
   {
     viz::CompositorFrame frame;
-    frame.metadata.begin_frame_ack.source_id =
-        viz::BeginFrameArgs::kManualSourceId;
-    frame.metadata.begin_frame_ack.sequence_number =
-        viz::BeginFrameArgs::kStartingFrameNumber;
+    frame.metadata.begin_frame_ack.frame_id =
+        viz::BeginFrameId(viz::BeginFrameArgs::kManualSourceId,
+                          viz::BeginFrameArgs::kStartingFrameNumber);
     frame.metadata.begin_frame_ack.has_damage = true;
     frame.metadata.frame_token = 1;
     frame.metadata.device_scale_factor = 1;

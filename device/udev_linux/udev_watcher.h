@@ -6,6 +6,7 @@
 #define DEVICE_UDEV_LINUX_UDEV_WATCHER_H_
 
 #include <memory>
+#include <string>
 #include <vector>
 
 #include "base/files/file_descriptor_watcher_posix.h"
@@ -25,6 +26,7 @@ class UdevWatcher {
    public:
     virtual void OnDeviceAdded(ScopedUdevDevicePtr device) = 0;
     virtual void OnDeviceRemoved(ScopedUdevDevicePtr device) = 0;
+    virtual void OnDeviceChanged(ScopedUdevDevicePtr device) = 0;
 
    protected:
     virtual ~Observer();

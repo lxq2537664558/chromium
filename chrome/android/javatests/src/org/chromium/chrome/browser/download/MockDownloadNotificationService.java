@@ -10,7 +10,9 @@ import android.app.Notification;
 import android.content.Intent;
 import android.graphics.Bitmap;
 
-import org.chromium.chrome.browser.util.IntentUtils;
+import org.junit.Assert;
+
+import org.chromium.base.IntentUtils;
 import org.chromium.components.offline_items_collection.ContentId;
 import org.chromium.components.offline_items_collection.FailState;
 import org.chromium.components.offline_items_collection.OfflineItem.Progress;
@@ -122,5 +124,6 @@ public class MockDownloadNotificationService extends DownloadNotificationService
     @Override
     void resumeDownload(Intent intent) {
         mResumedDownloads.add(IntentUtils.safeGetStringExtra(intent, EXTRA_DOWNLOAD_CONTENTID_ID));
+        Assert.assertTrue(IntentUtils.safeGetBooleanExtra(intent, EXTRA_IS_AUTO_RESUMPTION, false));
     }
 }

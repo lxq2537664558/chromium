@@ -4,6 +4,8 @@
 
 #include "ash/magnifier/magnification_controller.h"
 
+#include "ash/keyboard/ui/keyboard_ui_controller.h"
+#include "ash/keyboard/ui/keyboard_util.h"
 #include "ash/magnifier/magnifier_test_utils.h"
 #include "ash/magnifier/magnifier_utils.h"
 #include "ash/public/cpp/ash_switches.h"
@@ -18,11 +20,10 @@
 #include "ui/base/ime/input_method.h"
 #include "ui/display/manager/display_manager.h"
 #include "ui/display/screen.h"
+#include "ui/display/test/display_manager_test_api.h"
 #include "ui/events/event_handler.h"
 #include "ui/events/test/event_generator.h"
 #include "ui/gfx/geometry/rect_conversions.h"
-#include "ui/keyboard/keyboard_controller.h"
-#include "ui/keyboard/keyboard_util.h"
 #include "ui/views/controls/textfield/textfield.h"
 #include "ui/views/layout/fill_layout.h"
 #include "ui/views/widget/widget.h"
@@ -74,6 +75,13 @@ class MagnificationControllerTest : public AshTestBase {
   }
 
  protected:
+  enum class ScrollDirection {
+    kPositiveX,
+    kNegativeX,
+    kPositiveY,
+    kNegativeY,
+  };
+
   std::unique_ptr<TouchEventWatcher> touch_event_watcher_;
 
   aura::Window* GetRootWindow() const { return Shell::GetPrimaryRootWindow(); }
@@ -85,8 +93,8 @@ class MagnificationControllerTest : public AshTestBase {
     return location.ToString();
   }
 
-  ash::MagnificationController* GetMagnificationController() const {
-    return ash::Shell::Get()->magnification_controller();
+  MagnificationController* GetMagnificationController() const {
+    return Shell::Get()->magnification_controller();
   }
 
   gfx::Rect GetViewport() const {
@@ -109,27 +117,60 @@ class MagnificationControllerTest : public AshTestBase {
     GetEventGenerator()->Dispatch(&event);
   }
 
-  void PerformTwoFingersScrollGesture() {
+  // Performs a two-finger scroll gesture in the given |direction|.
+  void PerformTwoFingersScrollGesture(ScrollDirection direction) {
     base::TimeTicks time = base::TimeTicks::Now();
     ui::PointerDetails pointer_details1(
         ui::EventPointerType::POINTER_TYPE_TOUCH, 0);
     ui::PointerDetails pointer_details2(
         ui::EventPointerType::POINTER_TYPE_TOUCH, 1);
 
-    DispatchTouchEvent(ui::ET_TOUCH_PRESSED, gfx::Point(150, 10), time,
-                       pointer_details1);
-    DispatchTouchEvent(ui::ET_TOUCH_PRESSED, gfx::Point(150, 20), time,
-                       pointer_details2);
+    // The offset by which the two fingers will move according to the given
+    // direction.
+    constexpr int kOffset = 50;
+    // The start and end points of both fingers.
+    gfx::Point start1(150, 150);
+    gfx::Point start2(150, 160);
+    gfx::Point end1 = start1;
+    gfx::Point end2 = start2;
 
-    DispatchTouchEvent(ui::ET_TOUCH_MOVED, gfx::Point(200, 10), time,
-                       pointer_details1);
-    DispatchTouchEvent(ui::ET_TOUCH_MOVED, gfx::Point(200, 20), time,
-                       pointer_details2);
+    gfx::Point offset;
+    switch (direction) {
+      case ScrollDirection::kPositiveX:
+        offset.Offset(kOffset, 0);
+        break;
 
-    DispatchTouchEvent(ui::ET_TOUCH_RELEASED, gfx::Point(200, 10), time,
-                       pointer_details1);
-    DispatchTouchEvent(ui::ET_TOUCH_RELEASED, gfx::Point(200, 20), time,
-                       pointer_details2);
+      case ScrollDirection::kNegativeX:
+        offset.Offset(-kOffset, 0);
+        break;
+
+      case ScrollDirection::kPositiveY:
+        offset.Offset(0, kOffset);
+        break;
+
+      case ScrollDirection::kNegativeY:
+        offset.Offset(0, -kOffset);
+        break;
+    }
+
+    // The above calculated offsets are in dip, so apply the display rotation
+    // transform to convert to pixel.
+    const auto display = display_manager()->GetDisplayAt(0);
+    gfx::Transform rotation_transform;
+    rotation_transform.Rotate(display.PanelRotationAsDegree());
+    rotation_transform.TransformPoint(&offset);
+
+    end1.Offset(offset.x(), offset.y());
+    end2.Offset(offset.x(), offset.y());
+
+    DispatchTouchEvent(ui::ET_TOUCH_PRESSED, start1, time, pointer_details1);
+    DispatchTouchEvent(ui::ET_TOUCH_PRESSED, start2, time, pointer_details2);
+
+    DispatchTouchEvent(ui::ET_TOUCH_MOVED, end1, time, pointer_details1);
+    DispatchTouchEvent(ui::ET_TOUCH_MOVED, end2, time, pointer_details2);
+
+    DispatchTouchEvent(ui::ET_TOUCH_RELEASED, end1, time, pointer_details1);
+    DispatchTouchEvent(ui::ET_TOUCH_RELEASED, end2, time, pointer_details2);
   }
 
   MagnifierTextInputTestHelper text_input_helper_;
@@ -279,7 +320,7 @@ TEST_F(MagnificationControllerTest, FollowFocusChanged) {
 }
 
 TEST_F(MagnificationControllerTest, PanWindow2xLeftToRight) {
-  const aura::Env* env = Shell::Get()->aura_env();
+  const aura::Env* env = aura::Env::GetInstance();
 
   ui::test::EventGenerator* event_generator = GetEventGenerator();
   event_generator->MoveMouseToInHost(gfx::Point(0, 0));
@@ -383,7 +424,7 @@ TEST_F(MagnificationControllerTest, PanWindow2xLeftToRight) {
 }
 
 TEST_F(MagnificationControllerTest, PanWindow2xRightToLeft) {
-  const aura::Env* env = Shell::Get()->aura_env();
+  const aura::Env* env = aura::Env::GetInstance();
 
   ui::test::EventGenerator* event_generator = GetEventGenerator();
   event_generator->MoveMouseToInHost(gfx::Point(799, 300));
@@ -436,7 +477,7 @@ TEST_F(MagnificationControllerTest, PanWindow2xRightToLeft) {
 }
 
 TEST_F(MagnificationControllerTest, PanWindowToRight) {
-  const aura::Env* env = Shell::Get()->aura_env();
+  const aura::Env* env = aura::Env::GetInstance();
 
   ui::test::EventGenerator* event_generator = GetEventGenerator();
   event_generator->MoveMouseToInHost(gfx::Point(400, 300));
@@ -482,7 +523,7 @@ TEST_F(MagnificationControllerTest, PanWindowToRight) {
 }
 
 TEST_F(MagnificationControllerTest, PanWindowToLeft) {
-  const aura::Env* env = Shell::Get()->aura_env();
+  const aura::Env* env = aura::Env::GetInstance();
 
   ui::test::EventGenerator* event_generator = GetEventGenerator();
   event_generator->MoveMouseToInHost(gfx::Point(400, 300));
@@ -865,7 +906,7 @@ TEST_F(MagnificationControllerTest, TwoFingersScroll) {
 
   const gfx::Point initial_position =
       GetMagnificationController()->GetWindowPosition();
-  PerformTwoFingersScrollGesture();
+  PerformTwoFingersScrollGesture(ScrollDirection::kPositiveX);
   const gfx::Point moved_position =
       GetMagnificationController()->GetWindowPosition();
 
@@ -881,7 +922,7 @@ TEST_F(MagnificationControllerTest, TwoFingersScroll) {
 
   const gfx::Point initial_position_zoomed =
       GetMagnificationController()->GetWindowPosition();
-  PerformTwoFingersScrollGesture();
+  PerformTwoFingersScrollGesture(ScrollDirection::kPositiveX);
   const gfx::Point moved_position_zoomed =
       GetMagnificationController()->GetWindowPosition();
 
@@ -894,6 +935,67 @@ TEST_F(MagnificationControllerTest, TwoFingersScroll) {
 
   // Scrolled delta becomes half with 4.0x compared to 2.0x.
   EXPECT_EQ(delta, delta_zoomed * 2);
+}
+
+TEST_F(MagnificationControllerTest, TwoFingersScrollRotation) {
+  const int64_t internal_display_id =
+      display::test::DisplayManagerTestApi(display_manager())
+          .SetFirstDisplayAsInternalDisplay();
+
+  GetMagnificationController()->SetEnabled(true);
+  ASSERT_EQ(2.0f, GetMagnificationController()->GetScale());
+
+  // Test two-finger scroll gestures in all rotations in all directions.
+  for (const auto& rotation :
+       {display::Display::ROTATE_0, display::Display::ROTATE_90,
+        display::Display::ROTATE_180, display::Display::ROTATE_270}) {
+    SCOPED_TRACE(::testing::Message() << "Testing in rotation: " << rotation);
+    display_manager()->SetDisplayRotation(
+        internal_display_id, rotation, display::Display::RotationSource::USER);
+
+    for (const auto& scroll_direction : {
+             ScrollDirection::kPositiveX,
+             ScrollDirection::kNegativeX,
+             ScrollDirection::kPositiveY,
+             ScrollDirection::kNegativeY,
+         }) {
+      SCOPED_TRACE(::testing::Message()
+                   << "Scroll direction: " << (int)scroll_direction);
+      const gfx::Point initial_position =
+          GetMagnificationController()->GetWindowPosition();
+      PerformTwoFingersScrollGesture(scroll_direction);
+      const gfx::Point moved_position =
+          GetMagnificationController()->GetWindowPosition();
+
+      // Confirm that two fingers scroll gesture moves viewport in the right
+      // direction.
+      switch (scroll_direction) {
+        case ScrollDirection::kPositiveX:
+          // Viewport moves horizontally to the left.
+          EXPECT_GT(initial_position.x(), moved_position.x());
+          EXPECT_EQ(initial_position.y(), moved_position.y());
+          break;
+
+        case ScrollDirection::kNegativeX:
+          // Viewport moves horizontally to the right.
+          EXPECT_GT(moved_position.x(), initial_position.x());
+          EXPECT_EQ(initial_position.y(), moved_position.y());
+          break;
+
+        case ScrollDirection::kPositiveY:
+          // Viewport moves vertically up.
+          EXPECT_EQ(initial_position.x(), moved_position.x());
+          EXPECT_GT(initial_position.y(), moved_position.y());
+          break;
+
+        case ScrollDirection::kNegativeY:
+          // Viewport moves vertically down.
+          EXPECT_EQ(initial_position.x(), moved_position.x());
+          EXPECT_GT(moved_position.y(), initial_position.y());
+          break;
+      }
+    }
+  }
 }
 
 TEST_F(MagnificationControllerTest, ZoomsIntoCenter) {
@@ -949,7 +1051,7 @@ TEST_F(MagnificationControllerTest, ZoomsIntoCenter) {
 TEST_F(MagnificationControllerTest, KeyboardOverscrollDisabled) {
   GetMagnificationController()->SetEnabled(false);
 
-  auto* keyboard_controller = keyboard::KeyboardController::Get();
+  auto* keyboard_controller = keyboard::KeyboardUIController::Get();
   bool old_keyboard_overscroll_value =
       keyboard_controller->IsKeyboardOverscrollEnabled();
 
@@ -980,7 +1082,7 @@ TEST_F(MagnificationControllerTest, DISABLED_TextfieldFocusedWithKeyboard) {
 
   // Set up and show the keyboard.
   keyboard::SetAccessibilityKeyboardEnabled(true);
-  auto* keyboard_controller = keyboard::KeyboardController::Get();
+  auto* keyboard_controller = keyboard::KeyboardUIController::Get();
   keyboard_controller->ShowKeyboard(true);
 
   // Focus on the text input field.
@@ -991,7 +1093,7 @@ TEST_F(MagnificationControllerTest, DISABLED_TextfieldFocusedWithKeyboard) {
   gfx::Rect viewport_outside_keyboard_bounds = GetViewport();
   viewport_outside_keyboard_bounds.set_height(
       viewport_outside_keyboard_bounds.height() -
-      keyboard_controller->visual_bounds_in_screen().height() /
+      keyboard_controller->GetVisualBoundsInScreen().height() /
           GetMagnificationController()->GetScale());
 
   gfx::Rect caret_bounds = text_input_helper_.GetCaretBounds();

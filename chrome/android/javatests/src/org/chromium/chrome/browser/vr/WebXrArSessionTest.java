@@ -5,12 +5,11 @@
 package org.chromium.chrome.browser.vr;
 
 import static org.chromium.chrome.browser.vr.WebXrArTestFramework.PAGE_LOAD_TIMEOUT_S;
-import static org.chromium.chrome.browser.vr.WebXrArTestFramework.POLL_TIMEOUT_LONG_MS;
+import static org.chromium.chrome.browser.vr.WebXrArTestFramework.POLL_TIMEOUT_SHORT_MS;
 
 import android.os.Build;
 import android.support.test.filters.MediumTest;
 
-import org.junit.Assert;
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
@@ -23,11 +22,16 @@ import org.chromium.base.test.params.ParameterSet;
 import org.chromium.base.test.params.ParameterizedRunner;
 import org.chromium.base.test.util.CommandLineFlags;
 import org.chromium.base.test.util.MinAndroidSdkLevel;
-import org.chromium.chrome.browser.ChromeSwitches;
+import org.chromium.chrome.browser.flags.ChromeSwitches;
 import org.chromium.chrome.browser.vr.rules.XrActivityRestriction;
-import org.chromium.chrome.browser.vr.util.XrTestRuleUtils;
+import org.chromium.chrome.browser.vr.util.ArTestRuleUtils;
+import org.chromium.chrome.browser.vr.util.PermissionUtils;
 import org.chromium.chrome.test.ChromeActivityTestRule;
 import org.chromium.chrome.test.ChromeJUnit4RunnerDelegate;
+import org.chromium.chrome.test.util.browser.Features.DisableFeatures;
+import org.chromium.chrome.test.util.browser.Features.EnableFeatures;
+import org.chromium.content_public.browser.ContentFeatureList;
+import org.chromium.content_public.browser.WebContents;
 
 import java.util.List;
 import java.util.concurrent.Callable;
@@ -37,13 +41,13 @@ import java.util.concurrent.Callable;
  */
 @RunWith(ParameterizedRunner.class)
 @UseRunnerDelegate(ChromeJUnit4RunnerDelegate.class)
-@CommandLineFlags.
-Add({ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE, "enable-features=WebXR,WebXRHitTest"})
+@CommandLineFlags.Add({ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE,
+        "enable-features=WebXR,WebXRARModule,WebXRHitTest,LogJsConsoleMessages"})
 @MinAndroidSdkLevel(Build.VERSION_CODES.N) // WebXR for AR is only supported on N+
 public class WebXrArSessionTest {
     @ClassParameter
     private static List<ParameterSet> sClassParams =
-            XrTestRuleUtils.generateDefaultTestRuleParameters();
+            ArTestRuleUtils.generateDefaultTestRuleParameters();
     @Rule
     public RuleChain mRuleChain;
 
@@ -52,11 +56,11 @@ public class WebXrArSessionTest {
 
     public WebXrArSessionTest(Callable<ChromeActivityTestRule> callable) throws Exception {
         mTestRule = callable.call();
-        mRuleChain = XrTestRuleUtils.wrapRuleInActivityRestrictionRule(mTestRule);
+        mRuleChain = ArTestRuleUtils.wrapRuleInActivityRestrictionRule(mTestRule);
     }
 
     @Before
-    public void setUp() throws Exception {
+    public void setUp() {
         mWebXrArTestFramework = new WebXrArTestFramework(mTestRule);
     }
 
@@ -66,12 +70,76 @@ public class WebXrArSessionTest {
     @Test
     @MediumTest
     @XrActivityRestriction({XrActivityRestriction.SupportedActivity.ALL})
-    public void testArRequestSessionSucceeds() throws InterruptedException {
-        mWebXrArTestFramework.loadUrlAndAwaitInitialization(
-                mWebXrArTestFramework.getEmbeddedServerUrlForHtmlTestFile(
-                        "test_ar_request_session_succeeds"),
-                PAGE_LOAD_TIMEOUT_S);
+    public void testArRequestSessionSucceeds() {
+        mWebXrArTestFramework.loadFileAndAwaitInitialization(
+                "test_ar_request_session_succeeds", PAGE_LOAD_TIMEOUT_S);
         mWebXrArTestFramework.enterSessionWithUserGestureOrFail();
+        mWebXrArTestFramework.assertNoJavaScriptErrors();
+    }
+
+    /**
+     * Tests that declining AR consent causes future attempts to still display the consent dialog.
+     * Consent-flow specific
+     */
+    @Test
+    @MediumTest
+    @XrActivityRestriction({XrActivityRestriction.SupportedActivity.ALL})
+    @DisableFeatures(ContentFeatureList.WEBXR_PERMISSIONS_API)
+    public void testConsentShowsAfterDecline() {
+        mWebXrArTestFramework.loadFileAndAwaitInitialization(
+                "test_ar_request_session_succeeds", PAGE_LOAD_TIMEOUT_S);
+        WebContents contents = mWebXrArTestFramework.getCurrentWebContents();
+
+        // Start session, decline consent prompt.
+        mWebXrArTestFramework.enterSessionWithUserGestureAndDeclineConsentOrFail(contents);
+        mWebXrArTestFramework.assertNoJavaScriptErrors();
+        PermissionUtils.waitForConsentPromptDismissal(mTestRule.getActivity());
+
+        // Start new session, accept consent prompt this time.
+        mWebXrArTestFramework.enterSessionWithUserGestureOrFail(contents);
+        mWebXrArTestFramework.endSession();
+        mWebXrArTestFramework.assertNoJavaScriptErrors();
+        mWebXrArTestFramework.pollJavaScriptBooleanOrFail(
+                "sessionInfos[sessionTypes.AR].currentSession == null", POLL_TIMEOUT_SHORT_MS);
+    }
+
+    @Test
+    @MediumTest
+    @XrActivityRestriction({XrActivityRestriction.SupportedActivity.ALL})
+    @DisableFeatures(ContentFeatureList.WEBXR_PERMISSIONS_API)
+    public void testConsentPersistanceOnSamePage() {
+        testConsentPersistanceOnSamePageImpl();
+    }
+
+    @Test
+    @MediumTest
+    @XrActivityRestriction({XrActivityRestriction.SupportedActivity.ALL})
+    @EnableFeatures(ContentFeatureList.WEBXR_PERMISSIONS_API)
+    public void testArPermissionPersistance() {
+        testConsentPersistanceOnSamePageImpl();
+    }
+
+    /**
+     * Tests that consenting causes future attempts to skip the consent dialog as long as no
+     * navigation occurs.
+     */
+    private void testConsentPersistanceOnSamePageImpl() {
+        mWebXrArTestFramework.loadFileAndAwaitInitialization(
+                "test_ar_request_session_succeeds", PAGE_LOAD_TIMEOUT_S);
+        WebContents contents = mWebXrArTestFramework.getCurrentWebContents();
+
+        // Start new session, accepting the consent prompt
+        mWebXrArTestFramework.enterSessionWithUserGestureOrFail(contents);
+        mWebXrArTestFramework.endSession();
+        mWebXrArTestFramework.assertNoJavaScriptErrors();
+        mWebXrArTestFramework.pollJavaScriptBooleanOrFail(
+                "sessionInfos[sessionTypes.AR].currentSession == null", POLL_TIMEOUT_SHORT_MS);
+
+        // Start yet another session, but go through a path that doesn't automatically handle
+        // the consent dialog to ensure that it doesn't actually appear.
+        mWebXrArTestFramework.enterSessionWithUserGesture();
+        mWebXrArTestFramework.pollJavaScriptBooleanOrFail(
+                "sessionInfos[sessionTypes.AR].currentSession != null", POLL_TIMEOUT_SHORT_MS);
         mWebXrArTestFramework.assertNoJavaScriptErrors();
     }
 
@@ -82,41 +150,13 @@ public class WebXrArSessionTest {
     @Test
     @MediumTest
     @XrActivityRestriction({XrActivityRestriction.SupportedActivity.ALL})
-    public void testRepeatedArSessionsSucceed() throws InterruptedException {
-        mWebXrArTestFramework.loadUrlAndAwaitInitialization(
-                mWebXrArTestFramework.getEmbeddedServerUrlForHtmlTestFile(
-                        "test_ar_request_session_succeeds"),
-                PAGE_LOAD_TIMEOUT_S);
+    public void testRepeatedArSessionsSucceed() {
+        mWebXrArTestFramework.loadFileAndAwaitInitialization(
+                "test_ar_request_session_succeeds", PAGE_LOAD_TIMEOUT_S);
         for (int i = 0; i < 2; i++) {
             mWebXrArTestFramework.enterSessionWithUserGestureOrFail();
             mWebXrArTestFramework.endSession();
         }
-        mWebXrArTestFramework.assertNoJavaScriptErrors();
-    }
-
-    /**
-     * Tests that repeated calls to requestSession on the same page only prompts the user for
-     * camera permissions once.
-     */
-    @Test
-    @MediumTest
-    @XrActivityRestriction({XrActivityRestriction.SupportedActivity.ALL})
-    public void testRepeatedArSessionsOnlyPromptPermissionsOnce() throws InterruptedException {
-        mWebXrArTestFramework.loadUrlAndAwaitInitialization(
-                mWebXrArTestFramework.getEmbeddedServerUrlForHtmlTestFile(
-                        "test_ar_request_session_succeeds"),
-                PAGE_LOAD_TIMEOUT_S);
-        Assert.assertTrue("First AR session request did not trigger permission prompt",
-                mWebXrArTestFramework.permissionRequestWouldTriggerPrompt("camera"));
-        mWebXrArTestFramework.enterSessionWithUserGestureOrFail();
-        mWebXrArTestFramework.endSession();
-        // Manually run through the same steps as enterArSessionOrFail so that we don't trigger
-        // its automatic permission acceptance.
-        Assert.assertFalse("Second AR session request triggered permission prompt",
-                mWebXrArTestFramework.permissionRequestWouldTriggerPrompt("camera"));
-        mWebXrArTestFramework.enterSessionWithUserGesture();
-        mWebXrArTestFramework.pollJavaScriptBooleanOrFail(
-                "sessionInfos[sessionTypes.AR].currentSession != null", POLL_TIMEOUT_LONG_MS);
         mWebXrArTestFramework.assertNoJavaScriptErrors();
     }
 }

@@ -110,6 +110,38 @@ unsigned NGLineInfo::InflowEndOffset() const {
   return StartOffset();
 }
 
+bool NGLineInfo::ShouldHangTrailingSpaces() const {
+  DCHECK(HasTrailingSpaces());
+  if (!line_style_->AutoWrap())
+    return false;
+  switch (text_align_) {
+    case ETextAlign::kStart:
+    case ETextAlign::kJustify:
+      return true;
+    case ETextAlign::kEnd:
+    case ETextAlign::kCenter:
+    case ETextAlign::kWebkitCenter:
+      return false;
+    case ETextAlign::kLeft:
+    case ETextAlign::kWebkitLeft:
+      return IsLtr(BaseDirection());
+    case ETextAlign::kRight:
+    case ETextAlign::kWebkitRight:
+      return IsRtl(BaseDirection());
+  }
+  NOTREACHED();
+}
+
+void NGLineInfo::UpdateTextAlign() {
+  text_align_ = line_style_->GetTextAlign(IsLastLine());
+
+  if (HasTrailingSpaces() && ShouldHangTrailingSpaces()) {
+    hang_width_ = ComputeTrailingSpaceWidth(&end_offset_for_justify_);
+  } else if (text_align_ == ETextAlign::kJustify) {
+    end_offset_for_justify_ = InflowEndOffset();
+  }
+}
+
 LayoutUnit NGLineInfo::ComputeTrailingSpaceWidth(
     unsigned* end_offset_out) const {
   if (!has_trailing_spaces_) {
@@ -163,6 +195,8 @@ LayoutUnit NGLineInfo::ComputeTrailingSpaceWidth(
         // not safe-to-break. We avoid reshaping in this case because the cost
         // is high and the difference is subtle for the purpose of this
         // function.
+        // TODO(kojii): This does not compute correctly for RTL. Need to re-work
+        // when we support UAX#9 L1.
         // TODO(kojii): Compute this without |CreateShapeResult|.
         scoped_refptr<ShapeResult> shape_result =
             item_result.shape_result->CreateShapeResult();
@@ -188,18 +222,7 @@ LayoutUnit NGLineInfo::ComputeWidth() const {
   for (const NGInlineItemResult& item_result : Results())
     inline_size += item_result.inline_size;
 
-  if (UNLIKELY(line_end_fragment_)) {
-    inline_size += line_end_fragment_->Size()
-                       .ConvertToLogical(LineStyle().GetWritingMode())
-                       .inline_size;
-  }
-
   return inline_size;
-}
-
-void NGLineInfo::SetLineEndFragment(
-    scoped_refptr<const NGPhysicalTextFragment> fragment) {
-  line_end_fragment_ = std::move(fragment);
 }
 
 }  // namespace blink

@@ -6,7 +6,7 @@
 
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/metrics/histogram_tester.h"
-#include "base/test/scoped_task_environment.h"
+#include "base/test/task_environment.h"
 #include "components/autofill/core/common/password_form.h"
 #include "components/password_manager/core/browser/password_manager_metrics_util.h"
 #include "components/strings/grit/components_strings.h"
@@ -120,14 +120,15 @@ class PasswordExporterTest : public PlatformTest {
   id password_exporter_delegate_;
   PasswordExporter* password_exporter_;
   MockReauthenticationModule* mock_reauthentication_module_;
-  base::test::ScopedTaskEnvironment scoped_task_environment_;
+  base::test::TaskEnvironment task_environment_;
   base::HistogramTester histogram_tester_;
 };
 
 // Tests that when reauthentication is successful, writing the passwords file
 // is attempted and a call to show the activity view is made.
 TEST_F(PasswordExporterTest, PasswordFileWriteReauthSucceeded) {
-  mock_reauthentication_module_.shouldSucceed = YES;
+  mock_reauthentication_module_.expectedResult =
+      ReauthenticationResult::kSuccess;
   FakePasswordFileWriter* fake_password_file_writer =
       [[FakePasswordFileWriter alloc] init];
   fake_password_file_writer.writingStatus = WriteToURLStatus::SUCCESS;
@@ -140,7 +141,7 @@ TEST_F(PasswordExporterTest, PasswordFileWriteReauthSucceeded) {
   [password_exporter_ startExportFlow:CreatePasswordList()];
 
   // Wait for all asynchronous tasks to complete.
-  scoped_task_environment_.RunUntilIdle();
+  task_environment_.RunUntilIdle();
 
   EXPECT_TRUE(fake_password_file_writer.writeAttempted);
 
@@ -148,21 +149,14 @@ TEST_F(PasswordExporterTest, PasswordFileWriteReauthSucceeded) {
   [fake_password_file_writer executeHandler];
 
   EXPECT_OCMOCK_VERIFY(password_exporter_delegate_);
-
-  histogram_tester_.ExpectTotalCount(
-      "PasswordManager.TimeReadingExportedPasswords", 1);
-  histogram_tester_.ExpectUniqueSample(
-      "PasswordManager.ExportPasswordsToCSVResult",
-      password_manager::metrics_util::ExportPasswordsResult::SUCCESS, 1);
-  histogram_tester_.ExpectUniqueSample(
-      "PasswordManager.ExportedPasswordsPerUserInCSV", 1, 1);
 }
 
 // Tests that if the file writing fails because of not enough disk space
 // the appropriate error is displayed and the export operation
 // is interrupted.
 TEST_F(PasswordExporterTest, WritingFailedOutOfDiskSpace) {
-  mock_reauthentication_module_.shouldSucceed = YES;
+  mock_reauthentication_module_.expectedResult =
+      ReauthenticationResult::kSuccess;
   FakePasswordFileWriter* fake_password_file_writer =
       [[FakePasswordFileWriter alloc] init];
   fake_password_file_writer.writingStatus =
@@ -179,7 +173,7 @@ TEST_F(PasswordExporterTest, WritingFailedOutOfDiskSpace) {
   [password_exporter_ startExportFlow:CreatePasswordList()];
 
   // Wait for all asynchronous tasks to complete.
-  scoped_task_environment_.RunUntilIdle();
+  task_environment_.RunUntilIdle();
 
   // Use @try/@catch as -reject raises an exception.
   @try {
@@ -194,21 +188,14 @@ TEST_F(PasswordExporterTest, WritingFailedOutOfDiskSpace) {
 
   // Failure to write the passwords file ends the export operation.
   EXPECT_EQ(ExportState::IDLE, password_exporter_.exportState);
-
-  histogram_tester_.ExpectTotalCount(
-      "PasswordManager.TimeReadingExportedPasswords", 1);
-  histogram_tester_.ExpectUniqueSample(
-      "PasswordManager.ExportPasswordsToCSVResult",
-      password_manager::metrics_util::ExportPasswordsResult::WRITE_FAILED, 1);
-  histogram_tester_.ExpectTotalCount(
-      "PasswordManager.ExportedPasswordsPerUserInCSV", 0);
 }
 
 // Tests that if a file write fails with an error other than not having
 // enough disk space, the appropriate error is displayed and the export
 // operation is interrupted.
 TEST_F(PasswordExporterTest, WritingFailedUnknownError) {
-  mock_reauthentication_module_.shouldSucceed = YES;
+  mock_reauthentication_module_.expectedResult =
+      ReauthenticationResult::kSuccess;
   FakePasswordFileWriter* fake_password_file_writer =
       [[FakePasswordFileWriter alloc] init];
   fake_password_file_writer.writingStatus = WriteToURLStatus::UNKNOWN_ERROR;
@@ -224,7 +211,7 @@ TEST_F(PasswordExporterTest, WritingFailedUnknownError) {
   [password_exporter_ startExportFlow:CreatePasswordList()];
 
   // Wait for all asynchronous tasks to complete.
-  scoped_task_environment_.RunUntilIdle();
+  task_environment_.RunUntilIdle();
 
   // Use @try/@catch as -reject raises an exception.
   @try {
@@ -239,19 +226,12 @@ TEST_F(PasswordExporterTest, WritingFailedUnknownError) {
 
   // Failure to write the passwords file ends the export operation.
   EXPECT_EQ(ExportState::IDLE, password_exporter_.exportState);
-
-  histogram_tester_.ExpectTotalCount(
-      "PasswordManager.TimeReadingExportedPasswords", 1);
-  histogram_tester_.ExpectUniqueSample(
-      "PasswordManager.ExportPasswordsToCSVResult",
-      password_manager::metrics_util::ExportPasswordsResult::WRITE_FAILED, 1);
-  histogram_tester_.ExpectTotalCount(
-      "PasswordManager.ExportedPasswordsPerUserInCSV", 0);
 }
 
 // Tests that when reauthentication fails the export flow is interrupted.
 TEST_F(PasswordExporterTest, ExportInterruptedWhenReauthFails) {
-  mock_reauthentication_module_.shouldSucceed = NO;
+  mock_reauthentication_module_.expectedResult =
+      ReauthenticationResult::kFailure;
   FakePasswordSerialzerBridge* fake_password_serializer_bridge =
       [[FakePasswordSerialzerBridge alloc] init];
   [password_exporter_
@@ -270,7 +250,7 @@ TEST_F(PasswordExporterTest, ExportInterruptedWhenReauthFails) {
     [password_exporter_ startExportFlow:CreatePasswordList()];
 
     // Wait for all asynchronous tasks to complete.
-    scoped_task_environment_.RunUntilIdle();
+    task_environment_.RunUntilIdle();
     EXPECT_OCMOCK_VERIFY(password_exporter_delegate_);
   } @catch (NSException* exception) {
     // The exception is raised when
@@ -285,26 +265,19 @@ TEST_F(PasswordExporterTest, ExportInterruptedWhenReauthFails) {
 
   // Make sure this test doesn't pass only because file writing hasn't finished
   // yet.
-  scoped_task_environment_.RunUntilIdle();
+  task_environment_.RunUntilIdle();
 
   // Serializing passwords has finished, but reauthentication was not
   // successful, so writing the file was not attempted.
   EXPECT_FALSE(fake_password_file_writer.writeAttempted);
   EXPECT_EQ(ExportState::IDLE, password_exporter_.exportState);
-
-  histogram_tester_.ExpectTotalCount(
-      "PasswordManager.TimeReadingExportedPasswords", 1);
-  histogram_tester_.ExpectUniqueSample(
-      "PasswordManager.ExportPasswordsToCSVResult",
-      password_manager::metrics_util::ExportPasswordsResult::USER_ABORTED, 1);
-  histogram_tester_.ExpectTotalCount(
-      "PasswordManager.ExportedPasswordsPerUserInCSV", 0);
 }
 
 // Tests that cancelling the export while serialization is still ongoing
 // waits for it to finish before cleaning up.
 TEST_F(PasswordExporterTest, CancelWaitsForSerializationFinished) {
-  mock_reauthentication_module_.shouldSucceed = YES;
+  mock_reauthentication_module_.expectedResult =
+      ReauthenticationResult::kSuccess;
   FakePasswordSerialzerBridge* fake_password_serializer_bridge =
       [[FakePasswordSerialzerBridge alloc] init];
   [password_exporter_
@@ -326,7 +299,7 @@ TEST_F(PasswordExporterTest, CancelWaitsForSerializationFinished) {
   @try {
     [fake_password_serializer_bridge executeHandler];
     // Wait for all asynchronous tasks to complete.
-    scoped_task_environment_.RunUntilIdle();
+    task_environment_.RunUntilIdle();
     EXPECT_OCMOCK_VERIFY(password_exporter_delegate_);
   } @catch (NSException* exception) {
     // The exception is raised when
@@ -336,20 +309,13 @@ TEST_F(PasswordExporterTest, CancelWaitsForSerializationFinished) {
   }
   EXPECT_FALSE(fake_password_file_writer.writeAttempted);
   EXPECT_EQ(ExportState::IDLE, password_exporter_.exportState);
-
-  histogram_tester_.ExpectTotalCount(
-      "PasswordManager.TimeReadingExportedPasswords", 1);
-  histogram_tester_.ExpectUniqueSample(
-      "PasswordManager.ExportPasswordsToCSVResult",
-      password_manager::metrics_util::ExportPasswordsResult::USER_ABORTED, 1);
-  histogram_tester_.ExpectTotalCount(
-      "PasswordManager.ExportedPasswordsPerUserInCSV", 0);
 }
 
 // Tests that if the export is cancelled before writing to file finishes
 // successfully the request to show the activity controller isn't made.
 TEST_F(PasswordExporterTest, CancelledBeforeWriteToFileFinishesSuccessfully) {
-  mock_reauthentication_module_.shouldSucceed = YES;
+  mock_reauthentication_module_.expectedResult =
+      ReauthenticationResult::kSuccess;
   FakePasswordFileWriter* fake_password_file_writer =
       [[FakePasswordFileWriter alloc] init];
   fake_password_file_writer.writingStatus = WriteToURLStatus::SUCCESS;
@@ -361,7 +327,7 @@ TEST_F(PasswordExporterTest, CancelledBeforeWriteToFileFinishesSuccessfully) {
 
   [password_exporter_ startExportFlow:CreatePasswordList()];
   // Wait for all asynchronous tasks to complete.
-  scoped_task_environment_.RunUntilIdle();
+  task_environment_.RunUntilIdle();
   [password_exporter_ cancelExport];
   EXPECT_EQ(ExportState::CANCELLING, password_exporter_.exportState);
 
@@ -376,20 +342,13 @@ TEST_F(PasswordExporterTest, CancelledBeforeWriteToFileFinishesSuccessfully) {
     GTEST_FAIL();
   }
   EXPECT_EQ(ExportState::IDLE, password_exporter_.exportState);
-
-  histogram_tester_.ExpectTotalCount(
-      "PasswordManager.TimeReadingExportedPasswords", 1);
-  histogram_tester_.ExpectUniqueSample(
-      "PasswordManager.ExportPasswordsToCSVResult",
-      password_manager::metrics_util::ExportPasswordsResult::USER_ABORTED, 1);
-  histogram_tester_.ExpectTotalCount(
-      "PasswordManager.ExportedPasswordsPerUserInCSV", 0);
 }
 
 // Tests that if the export is cancelled before writing to file fails
 // with an error, the request to show the error alert isn't made.
 TEST_F(PasswordExporterTest, CancelledBeforeWriteToFileFails) {
-  mock_reauthentication_module_.shouldSucceed = YES;
+  mock_reauthentication_module_.expectedResult =
+      ReauthenticationResult::kSuccess;
   FakePasswordFileWriter* fake_password_file_writer =
       [[FakePasswordFileWriter alloc] init];
   fake_password_file_writer.writingStatus = WriteToURLStatus::UNKNOWN_ERROR;
@@ -400,7 +359,7 @@ TEST_F(PasswordExporterTest, CancelledBeforeWriteToFileFails) {
 
   [password_exporter_ startExportFlow:CreatePasswordList()];
   // Wait for all asynchronous tasks to complete.
-  scoped_task_environment_.RunUntilIdle();
+  task_environment_.RunUntilIdle();
   [password_exporter_ cancelExport];
   EXPECT_EQ(ExportState::CANCELLING, password_exporter_.exportState);
 
@@ -415,14 +374,6 @@ TEST_F(PasswordExporterTest, CancelledBeforeWriteToFileFails) {
     GTEST_FAIL();
   }
   EXPECT_EQ(ExportState::IDLE, password_exporter_.exportState);
-
-  histogram_tester_.ExpectTotalCount(
-      "PasswordManager.TimeReadingExportedPasswords", 1);
-  histogram_tester_.ExpectUniqueSample(
-      "PasswordManager.ExportPasswordsToCSVResult",
-      password_manager::metrics_util::ExportPasswordsResult::USER_ABORTED, 1);
-  histogram_tester_.ExpectTotalCount(
-      "PasswordManager.ExportedPasswordsPerUserInCSV", 0);
 }
 
 }  // namespace

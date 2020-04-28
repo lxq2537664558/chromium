@@ -28,8 +28,8 @@
 
 #include <utility>
 
-#include "services/network/public/mojom/request_context_frame_type.mojom-blink.h"
 #include "third_party/blink/public/common/features.h"
+#include "third_party/blink/public/mojom/loader/request_context_frame_type.mojom-blink.h"
 #include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/loader/subresource_integrity_helper.h"
 #include "third_party/blink/renderer/platform/instrumentation/tracing/web_memory_allocator_dump.h"
@@ -47,8 +47,8 @@
 #include "third_party/blink/renderer/platform/loader/subresource_integrity.h"
 #include "third_party/blink/renderer/platform/network/mime/mime_type_registry.h"
 #include "third_party/blink/renderer/platform/runtime_enabled_features.h"
-#include "third_party/blink/renderer/platform/shared_buffer.h"
 #include "third_party/blink/renderer/platform/wtf/functional.h"
+#include "third_party/blink/renderer/platform/wtf/shared_buffer.h"
 
 namespace blink {
 
@@ -58,13 +58,12 @@ namespace {
 // defined in the Fetch spec:
 // https://fetch.spec.whatwg.org/#request-destination-script-like
 bool IsRequestContextSupported(mojom::RequestContextType request_context) {
-  // TODO(nhiroki): Support |kRequestContextSharedWorker| for module loading for
-  // shared workers (https://crbug.com/824646).
   // TODO(nhiroki): Support "audioworklet" and "paintworklet" destinations.
   switch (request_context) {
     case mojom::RequestContextType::SCRIPT:
     case mojom::RequestContextType::WORKER:
     case mojom::RequestContextType::SERVICE_WORKER:
+    case mojom::RequestContextType::SHARED_WORKER:
       return true;
     default:
       break;
@@ -86,9 +85,7 @@ ScriptResource* ScriptResource::Fetch(FetchParameters& params,
 
   if (streaming_allowed == kAllowStreaming) {
     // Start streaming the script as soon as we get it.
-    if (RuntimeEnabledFeatures::ScriptStreamingOnPreloadEnabled()) {
-      resource->StartStreaming(fetcher->GetTaskRunner());
-    }
+    resource->StartStreaming(fetcher->GetTaskRunner());
   } else {
     // Advance the |streaming_state_| to kStreamingNotAllowed by calling
     // SetClientIsWaitingForFinished unless it is explicitly allowed.'
@@ -107,6 +104,18 @@ ScriptResource* ScriptResource::Fetch(FetchParameters& params,
   }
 
   return resource;
+}
+
+ScriptResource* ScriptResource::CreateForTest(
+    const KURL& url,
+    const WTF::TextEncoding& encoding) {
+  ResourceRequest request(url);
+  request.SetCredentialsMode(network::mojom::CredentialsMode::kOmit);
+  ResourceLoaderOptions options;
+  TextResourceDecoderOptions decoder_options(
+      TextResourceDecoderOptions::kPlainTextContent, encoding);
+  return MakeGarbageCollected<ScriptResource>(request, options,
+                                              decoder_options);
 }
 
 ScriptResource::ScriptResource(
@@ -128,7 +137,7 @@ void ScriptResource::Prefinalize() {
   watcher_.reset();
 }
 
-void ScriptResource::Trace(blink::Visitor* visitor) {
+void ScriptResource::Trace(Visitor* visitor) {
   visitor->Trace(streamer_);
   visitor->Trace(response_body_loader_client_);
   TextResource::Trace(visitor);
@@ -202,13 +211,13 @@ CachedMetadataHandler* ScriptResource::CreateCachedMetadataHandler(
       Encoding(), std::move(send_callback));
 }
 
-void ScriptResource::SetSerializedCachedMetadata(const uint8_t* data,
-                                                 size_t size) {
-  Resource::SetSerializedCachedMetadata(data, size);
+void ScriptResource::SetSerializedCachedMetadata(mojo_base::BigBuffer data) {
+  // Resource ignores the cached metadata.
+  Resource::SetSerializedCachedMetadata(mojo_base::BigBuffer());
   ScriptCachedMetadataHandler* cache_handler =
       static_cast<ScriptCachedMetadataHandler*>(Resource::CacheHandler());
   if (cache_handler) {
-    cache_handler->SetSerializedCachedMetadata(data, size);
+    cache_handler->SetSerializedCachedMetadata(std::move(data));
   }
 }
 
@@ -220,7 +229,8 @@ void ScriptResource::DestroyDecodedDataForFailedRevalidation() {
   SetDecodedSize(0);
 }
 
-void ScriptResource::SetRevalidatingRequest(const ResourceRequest& request) {
+void ScriptResource::SetRevalidatingRequest(
+    const ResourceRequestHead& request) {
   CHECK_EQ(streaming_state_, StreamingState::kFinishedNotificationSent);
   if (streamer_) {
     CHECK(streamer_->IsStreamingFinished());
@@ -267,7 +277,15 @@ void ScriptResource::ResponseBodyReceived(
                   WTF::BindRepeating(&ScriptResource::OnDataPipeReadable,
                                      WrapWeakPersistent(this)));
   CHECK(data_pipe_);
-  watcher_->ArmOrNotify();
+
+  MojoResult ready_result;
+  mojo::HandleSignalsState ready_state;
+  MojoResult rv = watcher_->Arm(&ready_result, &ready_state);
+  if (rv == MOJO_RESULT_OK)
+    return;
+
+  DCHECK_EQ(MOJO_RESULT_FAILED_PRECONDITION, rv);
+  OnDataPipeReadable(ready_result, ready_state);
 }
 
 void ScriptResource::OnDataPipeReadable(MojoResult result,
@@ -290,6 +308,7 @@ void ScriptResource::OnDataPipeReadable(MojoResult result,
       // This means the producer finished and streamed to completion.
       watcher_.reset();
       response_body_loader_client_->DidFinishLoadingBody();
+      response_body_loader_client_ = nullptr;
       return;
 
     case MOJO_RESULT_SHOULD_WAIT:
@@ -300,6 +319,7 @@ void ScriptResource::OnDataPipeReadable(MojoResult result,
       // Some other error occurred.
       watcher_.reset();
       response_body_loader_client_->DidFailLoadingBody();
+      response_body_loader_client_ = nullptr;
       return;
   }
   CHECK(state.readable());
@@ -358,6 +378,7 @@ void ScriptResource::NotifyFinished() {
     case StreamingState::kStreamingNotAllowed:
       watcher_.reset();
       data_pipe_.reset();
+      response_body_loader_client_ = nullptr;
       AdvanceStreamingState(StreamingState::kFinishedNotificationSent);
       TextResource::NotifyFinished();
       break;
@@ -382,6 +403,7 @@ void ScriptResource::StreamingFinished() {
   // small) and b) an external error triggered the finished notification.
   watcher_.reset();
   data_pipe_.reset();
+  response_body_loader_client_ = nullptr;
   AdvanceStreamingState(StreamingState::kFinishedNotificationSent);
   TextResource::NotifyFinished();
 }
@@ -403,7 +425,7 @@ void ScriptResource::StartStreaming(
     return;
   }
 
-  static bool script_streaming_enabled =
+  static const bool script_streaming_enabled =
       base::FeatureList::IsEnabled(features::kScriptStreaming);
   if (!script_streaming_enabled) {
     return;
@@ -463,6 +485,7 @@ void ScriptResource::SetClientIsWaitingForFinished() {
   if (IsLoaded()) {
     watcher_.reset();
     data_pipe_.reset();
+    response_body_loader_client_ = nullptr;
     AdvanceStreamingState(StreamingState::kFinishedNotificationSent);
     TextResource::NotifyFinished();
   }
@@ -536,6 +559,7 @@ void ScriptResource::CheckStreamingState() const {
       CHECK(!streamer_ || streamer_->IsFinished());
       CHECK(!watcher_ || !watcher_->IsWatching());
       CHECK(!data_pipe_);
+      CHECK(!response_body_loader_client_);
       CHECK(IsLoaded());
       break;
   }

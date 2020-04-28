@@ -4,6 +4,8 @@
 
 #include "chrome/browser/chooser_controller/fake_bluetooth_chooser_controller.h"
 
+#include "base/check_op.h"
+#include "base/notreached.h"
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/grit/generated_resources.h"
 #include "ui/base/l10n/l10n_util.h"
@@ -34,6 +36,10 @@ base::string16 FakeBluetoothChooserController::GetNoOptionsText() const {
 base::string16 FakeBluetoothChooserController::GetOkButtonLabel() const {
   return l10n_util::GetStringUTF16(
       IDS_BLUETOOTH_DEVICE_CHOOSER_PAIR_BUTTON_TEXT);
+}
+
+bool FakeBluetoothChooserController::TableViewAlwaysDisabled() const {
+  return table_view_always_disabled_;
 }
 
 size_t FakeBluetoothChooserController::NumOptions() const {

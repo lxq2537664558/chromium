@@ -50,6 +50,17 @@ void AXInlineTextBox::Detach() {
   inline_text_box_ = nullptr;
 }
 
+bool AXInlineTextBox::IsLineBreakingObject() const {
+  if (IsDetached())
+    return AXObject::IsLineBreakingObject();
+
+  // If this object is a forced line break, or the parent is a <br>
+  // element, then this object is line breaking.
+  const AXObject* parent = ParentObject();
+  return inline_text_box_->IsLineBreak() ||
+         (parent && parent->RoleValue() == ax::mojom::Role::kLineBreak);
+}
+
 void AXInlineTextBox::GetRelativeBounds(AXObject** out_container,
                                         FloatRect& out_bounds_in_container,
                                         SkMatrix44& out_container_transform,
@@ -120,6 +131,13 @@ void AXInlineTextBox::GetWordBoundaries(Vector<int>& word_starts,
   }
 }
 
+unsigned AXInlineTextBox::TextOffsetInContainer(unsigned offset) const {
+  if (!inline_text_box_)
+    return 0;
+
+  return inline_text_box_->TextOffsetInContainer(offset);
+}
+
 String AXInlineTextBox::GetName(ax::mojom::NameFrom& name_from,
                                 AXObject::AXObjectVector* name_objects) const {
   if (!inline_text_box_)
@@ -168,27 +186,27 @@ Node* AXInlineTextBox::GetNode() const {
 }
 
 AXObject* AXInlineTextBox::NextOnLine() const {
+  if (inline_text_box_->IsLast())
+    return ParentObject()->NextOnLine();
+
   scoped_refptr<AbstractInlineTextBox> next_on_line =
       inline_text_box_->NextOnLine();
   if (next_on_line)
     return ax_object_cache_->GetOrCreate(next_on_line.get());
 
-  if (!inline_text_box_->IsLast())
-    return nullptr;
-
-  return ParentObject()->NextOnLine();
+  return nullptr;
 }
 
 AXObject* AXInlineTextBox::PreviousOnLine() const {
+  if (inline_text_box_->IsFirst())
+    return ParentObject()->PreviousOnLine();
+
   scoped_refptr<AbstractInlineTextBox> previous_on_line =
       inline_text_box_->PreviousOnLine();
   if (previous_on_line)
     return ax_object_cache_->GetOrCreate(previous_on_line.get());
 
-  if (!inline_text_box_->IsFirst())
-    return nullptr;
-
-  return ParentObject()->PreviousOnLine();
+  return nullptr;
 }
 
 }  // namespace blink

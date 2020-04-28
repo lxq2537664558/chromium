@@ -55,7 +55,7 @@ class SVGFilterPrimitiveStandardAttributes : public SVGElement {
   SVGAnimatedLength* height() const { return height_.Get(); }
   SVGAnimatedString* result() const { return result_.Get(); }
 
-  void Trace(blink::Visitor*) override;
+  void Trace(Visitor*) override;
 
   void PrimitiveAttributeChanged(const QualifiedName&);
   void Invalidate();
@@ -81,12 +81,13 @@ class SVGFilterPrimitiveStandardAttributes : public SVGElement {
 
 void InvalidateFilterPrimitiveParent(SVGElement&);
 
-inline bool IsSVGFilterPrimitiveStandardAttributes(const SVGElement& element) {
-  return element.IsFilterEffect();
-}
-
-DEFINE_SVGELEMENT_TYPE_CASTS_WITH_FUNCTION(
-    SVGFilterPrimitiveStandardAttributes);
+template <>
+struct DowncastTraits<SVGFilterPrimitiveStandardAttributes> {
+  static bool AllowFrom(const Node& node) {
+    auto* element = DynamicTo<SVGElement>(node);
+    return element && element->IsFilterEffect();
+  }
+};
 
 }  // namespace blink
 

@@ -12,9 +12,10 @@
 #include "base/hash/md5.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
-#include "base/synchronization/cancellation_flag.h"
+#include "base/synchronization/atomic_flag.h"
 #include "base/task/post_task.h"
 #include "base/task/task_traits.h"
+#include "base/task/thread_pool.h"
 #include "base/task_runner_util.h"
 #include "base/values.h"
 #include "chrome/browser/browser_process.h"
@@ -50,11 +51,9 @@ void AddPair(base::ListValue* list,
 
 }  // namespace
 
-ResettableSettingsSnapshot::ResettableSettingsSnapshot(
-    Profile* profile)
+ResettableSettingsSnapshot::ResettableSettingsSnapshot(Profile* profile)
     : startup_(SessionStartupPref::GetStartupPref(profile)),
-      shortcuts_determined_(false),
-      weak_ptr_factory_(this) {
+      shortcuts_determined_(false) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
   // URLs are always stored sorted.
   std::sort(startup_.urls.begin(), startup_.urls.end());
@@ -139,12 +138,12 @@ void ResettableSettingsSnapshot::RequestShortcuts(
   cancellation_flag_ = new SharedCancellationFlag;
 #if defined(OS_WIN)
   base::PostTaskAndReplyWithResult(
-      base::CreateCOMSTATaskRunnerWithTraits(
+      base::ThreadPool::CreateCOMSTATaskRunner(
           {base::MayBlock(), base::TaskPriority::USER_VISIBLE})
           .get(),
-      FROM_HERE, base::Bind(&GetChromeLaunchShortcuts, cancellation_flag_),
-      base::Bind(&ResettableSettingsSnapshot::SetShortcutsAndReport,
-                 weak_ptr_factory_.GetWeakPtr(), callback));
+      FROM_HERE, base::BindOnce(&GetChromeLaunchShortcuts, cancellation_flag_),
+      base::BindOnce(&ResettableSettingsSnapshot::SetShortcutsAndReport,
+                     weak_ptr_factory_.GetWeakPtr(), callback));
 #else   // defined(OS_WIN)
   // Shortcuts are only supported on Windows.
   std::vector<ShortcutCommand> no_shortcuts;
@@ -162,7 +161,7 @@ void ResettableSettingsSnapshot::SetShortcutsAndReport(
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
   shortcuts_ = shortcuts;
   shortcuts_determined_ = true;
-  cancellation_flag_ = NULL;
+  cancellation_flag_.reset();
 
   if (!callback.is_null())
     callback.Run();

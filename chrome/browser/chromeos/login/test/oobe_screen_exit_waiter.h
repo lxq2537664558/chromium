@@ -24,12 +24,12 @@ class OobeUI;
 class OobeScreenExitWaiter : public OobeUI::Observer,
                              public test::TestConditionWaiter {
  public:
-  explicit OobeScreenExitWaiter(OobeScreen target_screen);
+  explicit OobeScreenExitWaiter(OobeScreenId target_screen);
   ~OobeScreenExitWaiter() override;
 
   // OobeUI::Observer implementation:
-  void OnCurrentScreenChanged(OobeScreen current_screen,
-                              OobeScreen new_screen) override;
+  void OnCurrentScreenChanged(OobeScreenId current_screen,
+                              OobeScreenId new_screen) override;
   void OnDestroyingOobeUI() override;
 
   // TestConditionWaiter;
@@ -41,11 +41,11 @@ class OobeScreenExitWaiter : public OobeUI::Observer,
   OobeUI* GetOobeUI();
   void EndWait();
 
-  const OobeScreen target_screen_;
+  const OobeScreenId target_screen_;
 
   State state_ = State::IDLE;
 
-  ScopedObserver<OobeUI, OobeScreenExitWaiter> oobe_ui_observer_{this};
+  ScopedObserver<OobeUI, OobeUI::Observer> oobe_ui_observer_{this};
 
   std::unique_ptr<base::RunLoop> run_loop_;
 

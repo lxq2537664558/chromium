@@ -5,6 +5,7 @@
 #include "third_party/blink/renderer/core/workers/worklet_global_scope.h"
 
 #include <memory>
+#include "third_party/blink/public/common/browser_interface_broker_proxy.h"
 #include "third_party/blink/public/platform/task_type.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_source_code.h"
 #include "third_party/blink/renderer/bindings/core/v8/source_location.h"
@@ -31,13 +32,15 @@ namespace blink {
 WorkletGlobalScope::WorkletGlobalScope(
     std::unique_ptr<GlobalScopeCreationParams> creation_params,
     WorkerReportingProxy& reporting_proxy,
-    LocalFrame* frame)
+    LocalFrame* frame,
+    Agent* agent)
     : WorkletGlobalScope(std::move(creation_params),
                          reporting_proxy,
                          ToIsolate(frame),
                          ThreadType::kMainThread,
                          frame,
-                         nullptr /* worker_thread */) {}
+                         nullptr /* worker_thread */,
+                         agent) {}
 
 WorkletGlobalScope::WorkletGlobalScope(
     std::unique_ptr<GlobalScopeCreationParams> creation_params,
@@ -48,7 +51,8 @@ WorkletGlobalScope::WorkletGlobalScope(
                          worker_thread->GetIsolate(),
                          ThreadType::kOffMainThread,
                          nullptr /* frame */,
-                         worker_thread) {}
+                         worker_thread,
+                         nullptr /* agent */) {}
 
 // Partial implementation of the "set up a worklet environment settings object"
 // algorithm:
@@ -59,13 +63,19 @@ WorkletGlobalScope::WorkletGlobalScope(
     v8::Isolate* isolate,
     ThreadType thread_type,
     LocalFrame* frame,
-    WorkerThread* worker_thread)
+    WorkerThread* worker_thread,
+    Agent* agent)
     : WorkerOrWorkletGlobalScope(
           isolate,
+          SecurityOrigin::CreateUniqueOpaque(),
+          // TODO(tzik): Assign an Agent for Worklets after
+          // NonMainThreadScheduler gets ready to run microtasks.
+          agent,
           creation_params->global_scope_name,
           creation_params->parent_devtools_token,
           creation_params->v8_cache_options,
           creation_params->worker_clients,
+          std::move(creation_params->content_settings_client),
           std::move(creation_params->web_worker_fetch_context),
           reporting_proxy),
       url_(creation_params->script_url),
@@ -87,9 +97,6 @@ WorkletGlobalScope::WorkletGlobalScope(
   // Step 2: "Let inheritedAPIBaseURL be outsideSettings's API base URL."
   // |url_| is the inheritedAPIBaseURL passed from the parent Document.
 
-  // Step 3: "Let origin be a unique opaque origin."
-  SetSecurityOrigin(SecurityOrigin::CreateUniqueOpaque());
-
   // Step 5: "Let inheritedReferrerPolicy be outsideSettings's referrer policy."
   SetReferrerPolicy(creation_params->referrer_policy);
 
@@ -109,6 +116,11 @@ WorkletGlobalScope::WorkletGlobalScope(
 
 WorkletGlobalScope::~WorkletGlobalScope() = default;
 
+BrowserInterfaceBrokerProxy& WorkletGlobalScope::GetBrowserInterfaceBroker() {
+  NOTIMPLEMENTED();
+  return GetEmptyBrowserInterfaceBroker();
+}
+
 bool WorkletGlobalScope::IsMainThreadWorkletGlobalScope() const {
   return thread_type_ == ThreadType::kMainThread;
 }
@@ -121,32 +133,23 @@ ExecutionContext* WorkletGlobalScope::GetExecutionContext() const {
   return const_cast<WorkletGlobalScope*>(this);
 }
 
-bool WorkletGlobalScope::IsSecureContext(String& error_message) const {
-  // Until there are APIs that are available in worklets and that
-  // require a privileged context test that checks ancestors, just do
-  // a simple check here.
-  if (GetSecurityOrigin()->IsPotentiallyTrustworthy())
-    return true;
-  error_message = GetSecurityOrigin()->IsPotentiallyTrustworthyErrorMessage();
-  return false;
-}
-
 bool WorkletGlobalScope::IsContextThread() const {
   if (IsMainThreadWorkletGlobalScope())
     return IsMainThread();
   return worker_thread_->IsCurrentThread();
 }
 
-void WorkletGlobalScope::AddConsoleMessage(ConsoleMessage* console_message) {
+void WorkletGlobalScope::AddConsoleMessageImpl(ConsoleMessage* console_message,
+                                               bool discard_duplicates) {
   if (IsMainThreadWorkletGlobalScope()) {
-    frame_->Console().AddMessage(console_message);
+    frame_->Console().AddMessage(console_message, discard_duplicates);
     return;
   }
   worker_thread_->GetWorkerReportingProxy().ReportConsoleMessage(
       console_message->Source(), console_message->Level(),
       console_message->Message(), console_message->Location());
   worker_thread_->GetConsoleMessageStorage()->AddConsoleMessage(
-      worker_thread_->GlobalScope(), console_message);
+      worker_thread_->GlobalScope(), console_message, discard_duplicates);
 }
 
 void WorkletGlobalScope::ExceptionThrown(ErrorEvent* error_event) {
@@ -184,6 +187,13 @@ scoped_refptr<base::SingleThreadTaskRunner> WorkletGlobalScope::GetTaskRunner(
   return worker_thread_->GetTaskRunner(task_type);
 }
 
+FrameOrWorkerScheduler* WorkletGlobalScope::GetScheduler() {
+  DCHECK(IsContextThread());
+  if (IsMainThreadWorkletGlobalScope())
+    return frame_->GetFrameScheduler();
+  return worker_thread_->GetScheduler();
+}
+
 LocalFrame* WorkletGlobalScope::GetFrame() const {
   DCHECK(IsMainThreadWorkletGlobalScope());
   return frame_;
@@ -194,8 +204,9 @@ LocalFrame* WorkletGlobalScope::GetFrame() const {
 // https://drafts.css-houdini.org/worklets/#fetch-and-invoke-a-worklet-script
 void WorkletGlobalScope::FetchAndInvokeScript(
     const KURL& module_url_record,
-    network::mojom::FetchCredentialsMode credentials_mode,
+    network::mojom::CredentialsMode credentials_mode,
     const FetchClientSettingsObjectSnapshot& outside_settings_object,
+    WorkerResourceTimingNotifier& outside_resource_timing_notifier,
     scoped_refptr<base::SingleThreadTaskRunner> outside_settings_task_runner,
     WorkletPendingTasks* pending_tasks) {
   DCHECK(IsContextThread());
@@ -206,19 +217,19 @@ void WorkletGlobalScope::FetchAndInvokeScript(
   // moduleURLRecord, moduleResponsesMap, credentialOptions, outsideSettings,
   // and insideSettings when it asynchronously completes."
 
-  Modulator* modulator = Modulator::From(ScriptController()->GetScriptState());
-
   // Step 3 to 5 are implemented in
   // WorkletModuleTreeClient::NotifyModuleTreeLoadFinished.
-  WorkletModuleTreeClient* client =
-      MakeGarbageCollected<WorkletModuleTreeClient>(
-          modulator, std::move(outside_settings_task_runner), pending_tasks);
+  auto* client = MakeGarbageCollected<WorkletModuleTreeClient>(
+      ScriptController()->GetScriptState(),
+      std::move(outside_settings_task_runner), pending_tasks);
 
   // TODO(nhiroki): Pass an appropriate destination defined in each worklet
   // spec (e.g., "paint worklet", "audio worklet") (https://crbug.com/843980,
   // https://crbug.com/843982)
   auto destination = mojom::RequestContextType::SCRIPT;
-  FetchModuleScript(module_url_record, outside_settings_object, destination,
+  FetchModuleScript(module_url_record, outside_settings_object,
+                    outside_resource_timing_notifier, destination,
+                    network::mojom::RequestDestination::kScript,
                     credentials_mode,
                     ModuleScriptCustomFetchType::kWorkletAddModule, client);
 }
@@ -247,7 +258,7 @@ void WorkletGlobalScope::BindContentSecurityPolicyToExecutionContext() {
   GetContentSecurityPolicy()->SetupSelf(*document_security_origin_);
 }
 
-void WorkletGlobalScope::Trace(blink::Visitor* visitor) {
+void WorkletGlobalScope::Trace(Visitor* visitor) {
   visitor->Trace(frame_);
   WorkerOrWorkletGlobalScope::Trace(visitor);
 }

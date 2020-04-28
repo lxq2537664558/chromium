@@ -83,6 +83,7 @@ base::string16 WebUI::GetJavascriptCall(
 
 WebUIImpl::WebUIImpl(WebContentsImpl* contents)
     : bindings_(BINDINGS_POLICY_WEB_UI),
+      requestable_schemes_({kChromeUIScheme, url::kFileScheme}),
       web_contents_(contents),
       web_contents_observer_(new MainFrameNavigationObserver(this, contents)) {
   DCHECK(contents);
@@ -146,19 +147,19 @@ void WebUIImpl::RenderFrameReused(RenderFrameHost* render_frame_host) {
   }
 }
 
-void WebUIImpl::RenderFrameHostSwappingOut() {
+void WebUIImpl::RenderFrameHostUnloading() {
   DisallowJavascriptOnAllHandlers();
 }
 
-WebContents* WebUIImpl::GetWebContents() const {
+WebContents* WebUIImpl::GetWebContents() {
   return web_contents_;
 }
 
-float WebUIImpl::GetDeviceScaleFactor() const {
+float WebUIImpl::GetDeviceScaleFactor() {
   return GetScaleFactorForView(web_contents_->GetRenderWidgetHostView());
 }
 
-const base::string16& WebUIImpl::GetOverriddenTitle() const {
+const base::string16& WebUIImpl::GetOverriddenTitle() {
   return overridden_title_;
 }
 
@@ -166,7 +167,7 @@ void WebUIImpl::OverrideTitle(const base::string16& title) {
   overridden_title_ = title;
 }
 
-int WebUIImpl::GetBindings() const {
+int WebUIImpl::GetBindings() {
   return bindings_;
 }
 
@@ -174,7 +175,15 @@ void WebUIImpl::SetBindings(int bindings) {
   bindings_ = bindings;
 }
 
-WebUIController* WebUIImpl::GetController() const {
+const std::vector<std::string>& WebUIImpl::GetRequestableSchemes() {
+  return requestable_schemes_;
+}
+
+void WebUIImpl::AddRequestableScheme(const char* scheme) {
+  requestable_schemes_.push_back(scheme);
+}
+
+WebUIController* WebUIImpl::GetController() {
   return controller_.get();
 }
 

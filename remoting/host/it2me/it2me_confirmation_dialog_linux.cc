@@ -6,10 +6,10 @@
 
 #include <memory>
 #include <string>
+#include <utility>
 
 #include "base/bind.h"
 #include "base/callback.h"
-#include "base/callback_helpers.h"
 #include "base/i18n/message_formatter.h"
 #include "base/location.h"
 #include "base/logging.h"
@@ -75,9 +75,9 @@ void It2MeConfirmationDialogLinux::Show(const std::string& remote_user_email,
   CreateWindow(remote_user_email);
 
   dialog_timer_.Start(FROM_HERE, kDialogTimeout,
-                      base::Bind(&It2MeConfirmationDialogLinux::OnResponse,
-                                 base::Unretained(this),
-                                 /*dialog=*/nullptr, GTK_RESPONSE_NONE));
+                      base::BindOnce(&It2MeConfirmationDialogLinux::OnResponse,
+                                     base::Unretained(this),
+                                     /*dialog=*/nullptr, GTK_RESPONSE_NONE));
 }
 
 void It2MeConfirmationDialogLinux::Hide() {
@@ -148,8 +148,8 @@ void It2MeConfirmationDialogLinux::OnResponse(GtkDialog* dialog,
   DCHECK(result_callback_);
 
   Hide();
-  base::ResetAndReturn(&result_callback_).Run(
-      (response_id == GTK_RESPONSE_OK) ? Result::OK : Result::CANCEL);
+  std::move(result_callback_)
+      .Run((response_id == GTK_RESPONSE_OK) ? Result::OK : Result::CANCEL);
 }
 
 }  // namespace

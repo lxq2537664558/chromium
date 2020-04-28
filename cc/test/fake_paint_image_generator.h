@@ -33,7 +33,6 @@ class FakePaintImageGenerator : public PaintImageGenerator {
   FakePaintImageGenerator& operator=(const FakePaintImageGenerator&) = delete;
 
   // PaintImageGenerator implementation.
-  bool IsEligibleForAcceleratedDecoding() const override;
   sk_sp<SkData> GetEncodedData() const override;
   bool GetPixels(const SkImageInfo& info,
                  void* pixels,
@@ -50,6 +49,7 @@ class FakePaintImageGenerator : public PaintImageGenerator {
                       size_t frame_index,
                       uint32_t lazy_pixel_ref) override;
   SkISize GetSupportedDecodeSize(const SkISize& requested_size) const override;
+  const ImageHeaderMetadata* GetMetadataForDecodeAcceleration() const override;
 
   const base::flat_map<size_t, int>& frames_decoded() const {
     return frames_decoded_count_;
@@ -60,6 +60,9 @@ class FakePaintImageGenerator : public PaintImageGenerator {
   }
   void reset_frames_decoded() { frames_decoded_count_.clear(); }
   void SetExpectFallbackToRGB() { expect_fallback_to_rgb_ = true; }
+  void SetImageHeaderMetadata(const ImageHeaderMetadata& image_metadata) {
+    image_metadata_ = image_metadata;
+  }
 
  private:
   std::vector<uint8_t> image_backing_memory_;
@@ -73,6 +76,7 @@ class FakePaintImageGenerator : public PaintImageGenerator {
   // planes and after Chrome implements it, we should no longer expect RGB
   // fallback.
   bool expect_fallback_to_rgb_ = false;
+  ImageHeaderMetadata image_metadata_;
 };
 
 }  // namespace cc

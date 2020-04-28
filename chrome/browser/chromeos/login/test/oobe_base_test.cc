@@ -8,7 +8,6 @@
 #include "base/bind.h"
 #include "base/command_line.h"
 #include "base/location.h"
-#include "base/path_service.h"
 #include "base/run_loop.h"
 #include "base/single_thread_task_runner.h"
 #include "base/threading/thread_task_runner_handle.h"
@@ -23,9 +22,10 @@
 #include "chrome/browser/ui/webui/chromeos/login/oobe_ui.h"
 #include "chrome/browser/ui/webui/chromeos/login/signin_screen_handler.h"
 #include "chrome/browser/ui/webui/signin/signin_utils.h"
-#include "chrome/common/chrome_paths.h"
 #include "chrome/common/chrome_switches.h"
 #include "chromeos/constants/chromeos_switches.h"
+#include "chromeos/dbus/dbus_thread_manager.h"
+#include "chromeos/dbus/fake_update_engine_client.h"
 #include "chromeos/dbus/shill/fake_shill_manager_client.h"
 #include "components/policy/core/common/policy_switches.h"
 #include "components/user_manager/fake_user_manager.h"
@@ -36,8 +36,6 @@
 #include "content/public/test/test_utils.h"
 #include "google_apis/gaia/gaia_switches.h"
 #include "net/dns/mock_host_resolver.h"
-#include "net/test/embedded_test_server/http_request.h"
-#include "net/test/embedded_test_server/http_response.h"
 
 namespace chromeos {
 
@@ -50,23 +48,11 @@ OobeBaseTest::~OobeBaseTest() {}
 void OobeBaseTest::RegisterAdditionalRequestHandlers() {}
 
 void OobeBaseTest::SetUp() {
-  base::FilePath test_data_dir;
-  base::PathService::Get(chrome::DIR_TEST_DATA, &test_data_dir);
-  embedded_test_server()->ServeFilesFromDirectory(test_data_dir);
-
   RegisterAdditionalRequestHandlers();
-
-
-  // Don't spin up the IO thread yet since no threads are allowed while
-  // spawning sandbox host process. See crbug.com/322732.
-  ASSERT_TRUE(embedded_test_server()->InitializeAndListen());
-
   MixinBasedInProcessBrowserTest::SetUp();
 }
 
 void OobeBaseTest::SetUpCommandLine(base::CommandLine* command_line) {
-  if (ShouldForceWebUiLogin())
-    command_line->AppendSwitch(ash::switches::kShowWebUiLogin);
   command_line->AppendSwitch(chromeos::switches::kLoginManager);
   command_line->AppendSwitch(chromeos::switches::kForceLoginManagerInTests);
   if (!needs_background_networking_)
@@ -76,15 +62,35 @@ void OobeBaseTest::SetUpCommandLine(base::CommandLine* command_line) {
   MixinBasedInProcessBrowserTest::SetUpCommandLine(command_line);
 }
 
-void OobeBaseTest::SetUpOnMainThread() {
-  // Start the accept thread as the sandbox host process has already been
-  // spawned.
-  host_resolver()->AddRule("*", "127.0.0.1");
-  embedded_test_server()->StartAcceptingConnections();
-
+void OobeBaseTest::CreatedBrowserMainParts(
+    content::BrowserMainParts* browser_main_parts) {
+  // If the test initially shows views login screen, this notification might
+  // come before SetUpOnMainThread(), so the observer has to be set up early.
   login_screen_load_observer_.reset(new content::WindowedNotificationObserver(
       chrome::NOTIFICATION_LOGIN_OR_LOCK_WEBUI_VISIBLE,
       content::NotificationService::AllSources()));
+
+  MixinBasedInProcessBrowserTest::CreatedBrowserMainParts(browser_main_parts);
+}
+
+void OobeBaseTest::SetUpInProcessBrowserTestFixture() {
+  MixinBasedInProcessBrowserTest::SetUpInProcessBrowserTestFixture();
+
+  // UpdateEngineClientStubImpl have logic that simulates state changes
+  // based on timer. It is nice simulation for chromeos-on-linux, but
+  // may lead to flakiness in debug/*SAN tests.
+  // Set up FakeUpdateEngineClient that does not have any timer-based logic.
+  std::unique_ptr<DBusThreadManagerSetter> dbus_setter =
+      chromeos::DBusThreadManager::GetSetterForTesting();
+  update_engine_client_ = new FakeUpdateEngineClient;
+  dbus_setter->SetUpdateEngineClient(
+      std::unique_ptr<UpdateEngineClient>(update_engine_client_));
+}
+
+void OobeBaseTest::SetUpOnMainThread() {
+  ShillManagerClient::Get()->GetTestInterface()->SetupDefaultEnvironment();
+
+  host_resolver()->AddRule("*", "127.0.0.1");
 
   test::UserSessionManagerTestApi session_manager_test_api(
       UserSessionManager::GetInstance());
@@ -95,18 +101,7 @@ void OobeBaseTest::SetUpOnMainThread() {
   if (ShouldWaitForOobeUI()) {
     WaitForOobeUI();
   }
-
   MixinBasedInProcessBrowserTest::SetUpOnMainThread();
-}
-
-void OobeBaseTest::TearDownOnMainThread() {
-  MixinBasedInProcessBrowserTest::TearDownOnMainThread();
-  // Embedded test server should always be shutdown after any https forwarders.
-  EXPECT_TRUE(embedded_test_server()->ShutdownAndWaitUntilComplete());
-}
-
-bool OobeBaseTest::ShouldForceWebUiLogin() {
-  return true;
 }
 
 bool OobeBaseTest::ShouldWaitForOobeUI() {
@@ -124,6 +119,7 @@ void OobeBaseTest::WaitForOobeUI() {
           run_loop.QuitClosure())) {
     run_loop.Run();
   }
+  MaybeWaitForLoginScreenLoad();
 }
 
 void OobeBaseTest::WaitForGaiaPageLoad() {
@@ -176,11 +172,14 @@ void OobeBaseTest::WaitForGaiaPageEvent(const std::string& event) {
 void OobeBaseTest::WaitForSigninScreen() {
   WizardController* wizard_controller = WizardController::default_controller();
   if (wizard_controller)
-    wizard_controller->SkipToLoginForTesting(LoginScreenContext());
+    wizard_controller->SkipToLoginForTesting();
 
   WizardController::SkipPostLoginScreensForTesting();
 
-  login_screen_load_observer_->Wait();
+  MaybeWaitForLoginScreenLoad();
+}
+void OobeBaseTest::CheckJsExceptionErrors(int number) {
+  test::OobeJS().ExpectEQ("cr.ErrorStore.getInstance().length", number);
 }
 
 test::JSChecker OobeBaseTest::SigninFrameJS() {
@@ -191,6 +190,13 @@ test::JSChecker OobeBaseTest::SigninFrameJS() {
   // Fake GAIA / fake SAML pages do not use polymer-based UI.
   result.set_polymer_ui(false);
   return result;
+}
+
+void OobeBaseTest::MaybeWaitForLoginScreenLoad() {
+  if (!login_screen_load_observer_)
+    return;
+  login_screen_load_observer_->Wait();
+  login_screen_load_observer_.reset();
 }
 
 }  // namespace chromeos

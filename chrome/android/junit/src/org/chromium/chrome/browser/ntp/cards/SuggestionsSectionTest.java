@@ -44,7 +44,6 @@ import org.mockito.MockitoAnnotations;
 import org.robolectric.annotation.Config;
 
 import org.chromium.base.Callback;
-import org.chromium.base.metrics.RecordUserAction;
 import org.chromium.base.task.test.CustomShadowAsyncTask;
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.base.test.util.Feature;
@@ -61,12 +60,12 @@ import org.chromium.chrome.browser.suggestions.SuggestionsEventReporter;
 import org.chromium.chrome.browser.suggestions.SuggestionsNavigationDelegate;
 import org.chromium.chrome.browser.suggestions.SuggestionsRanker;
 import org.chromium.chrome.browser.suggestions.SuggestionsUiDelegate;
-import org.chromium.chrome.test.support.DisableHistogramsRule;
 import org.chromium.chrome.test.util.NewTabPageTestUtils;
 import org.chromium.chrome.test.util.browser.Features;
 import org.chromium.chrome.test.util.browser.offlinepages.FakeOfflinePageBridge;
 import org.chromium.chrome.test.util.browser.suggestions.ContentSuggestionsTestUtils.CategoryInfoBuilder;
 import org.chromium.chrome.test.util.browser.suggestions.FakeSuggestionsSource;
+import org.chromium.components.signin.identitymanager.IdentityManager;
 import org.chromium.ui.modelutil.ListObservable;
 import org.chromium.ui.modelutil.ListObservable.ListObserver;
 
@@ -85,8 +84,6 @@ import java.util.TreeSet;
 @RunWith(BaseRobolectricTestRunner.class)
 @Config(manifest = Config.NONE, shadows = {CustomShadowAsyncTask.class})
 public class SuggestionsSectionTest {
-    @Rule
-    public DisableHistogramsRule mDisableHistogramsRule = new DisableHistogramsRule();
 
     @Rule
     public TestRule mFeatureProcessor = new Features.JUnitProcessor();
@@ -108,13 +105,14 @@ public class SuggestionsSectionTest {
     private PrefServiceBridge mPrefServiceBridge;
     @Mock
     private SigninManager mSigninManager;
+    @Mock
+    private IdentityManager mIdentityManager;
 
     private FakeSuggestionsSource mSuggestionsSource;
     private FakeOfflinePageBridge mBridge;
 
     @Before
     public void setUp() {
-        RecordUserAction.setDisabledForTests(true);
         MockitoAnnotations.initMocks(this);
 
         mBridge = new FakeOfflinePageBridge();
@@ -134,16 +132,14 @@ public class SuggestionsSectionTest {
 
         // Set up a test account and initialize to the signed in state.
         NewTabPageTestUtils.setUpTestAccount();
-        SigninManager.setInstanceForTesting(mSigninManager);
-        when(mSigninManager.isSignedInOnNative()).thenReturn(false);
+        when(mSigninManager.getIdentityManager()).thenReturn(mIdentityManager);
+        when(mIdentityManager.hasPrimaryAccount()).thenReturn(false);
         when(mSigninManager.isSignInAllowed()).thenReturn(true);
     }
 
     @After
     public void tearDown() {
-        RecordUserAction.setDisabledForTests(false);
         PrefServiceBridge.setInstanceForTesting(null);
-        SigninManager.setInstanceForTesting(null);
     }
 
     @Test
@@ -159,9 +155,9 @@ public class SuggestionsSectionTest {
         assertEquals(ItemViewType.HEADER, section.getItemViewType(0));
         assertEquals(Collections.emptySet(), section.getItemDismissalGroup(0));
         assertEquals(ItemViewType.STATUS, section.getItemViewType(1));
-        assertEquals(setOf(1, 2), section.getItemDismissalGroup(1));
+        assertEquals(Collections.emptySet(), section.getItemDismissalGroup(1));
         assertEquals(ItemViewType.ACTION, section.getItemViewType(2));
-        assertEquals(setOf(1, 2), section.getItemDismissalGroup(2));
+        assertEquals(Collections.emptySet(), section.getItemDismissalGroup(2));
 
         // With snippets.
         section.appendSuggestions(snippets, /* keepSectionSize = */ true,
@@ -179,10 +175,10 @@ public class SuggestionsSectionTest {
         section.setHeaderVisibility(false);
 
         assertEquals(ItemViewType.STATUS, section.getItemViewType(0));
-        assertEquals(setOf(0, 1), section.getItemDismissalGroup(0));
+        assertEquals(Collections.emptySet(), section.getItemDismissalGroup(0));
 
         assertEquals(ItemViewType.ACTION, section.getItemViewType(1));
-        assertEquals(setOf(0, 1), section.getItemDismissalGroup(1));
+        assertEquals(Collections.emptySet(), section.getItemDismissalGroup(1));
     }
 
     @Test
@@ -191,7 +187,7 @@ public class SuggestionsSectionTest {
         SuggestionsSection section = createSectionWithFetchAction(false);
 
         assertEquals(ItemViewType.STATUS, section.getItemViewType(1));
-        assertEquals(Collections.singleton(1), section.getItemDismissalGroup(1));
+        assertEquals(Collections.emptySet(), section.getItemDismissalGroup(1));
     }
 
     @Test
@@ -201,7 +197,7 @@ public class SuggestionsSectionTest {
         section.setHeaderVisibility(false);
 
         assertEquals(ItemViewType.STATUS, section.getItemViewType(0));
-        assertEquals(Collections.singleton(0), section.getItemDismissalGroup(0));
+        assertEquals(Collections.emptySet(), section.getItemDismissalGroup(0));
     }
 
     @Test
@@ -320,21 +316,6 @@ public class SuggestionsSectionTest {
         assertEquals(3, section.getItemCount());
         assertEquals(ItemViewType.STATUS, section.getItemViewType(1));
         assertEquals(ItemViewType.ACTION, section.getItemViewType(2));
-    }
-
-    @Test
-    @Feature({"Ntp"})
-    public void testDismissSection() {
-        SuggestionsSection section = createSectionWithFetchAction(false);
-        section.setStatus(CategoryStatus.AVAILABLE);
-        Mockito.<ListObserver>reset(mObserver);
-        assertEquals(2, section.getItemCount());
-
-        @SuppressWarnings("unchecked")
-        Callback<String> callback = mock(Callback.class);
-        section.dismissItem(1, callback);
-        verify(mDelegate).dismissSection(section);
-        verify(callback).onResult(section.getCategoryInfo().getTitle());
     }
 
     @Test
@@ -574,7 +555,8 @@ public class SuggestionsSectionTest {
 
         // Tap the button
         verifyAction(section, ContentSuggestionsAdditionalAction.FETCH);
-        assertEquals(ActionItem.State.LOADING, section.getActionItemForTesting().getState());
+        assertEquals(
+                ActionItem.State.MORE_BUTTON_LOADING, section.getActionItemForTesting().getState());
 
         // Simulate receiving suggestions.
         section.setStatus(CategoryStatus.AVAILABLE);
@@ -658,7 +640,8 @@ public class SuggestionsSectionTest {
                 eq(REMOTE_TEST_CATEGORY), any(), any(), sourceOnFailureRunnable.capture());
 
         // Ensure the progress spinner is shown.
-        assertEquals(ActionItem.State.LOADING, section.getActionItemForTesting().getState());
+        assertEquals(
+                ActionItem.State.MORE_BUTTON_LOADING, section.getActionItemForTesting().getState());
 
         // Simulate a failure.
         sourceOnFailureRunnable.getValue().run();
@@ -1002,16 +985,14 @@ public class SuggestionsSectionTest {
     @Feature({"Ntp"})
     public void testGetItemDismissalGroupWithActionItem() {
         SuggestionsSection section = createSectionWithFetchAction(true);
-        assertThat(section.getItemDismissalGroup(1).size(), is(2));
-        assertThat(section.getItemDismissalGroup(1), contains(1, 2));
+        assertThat(section.getItemDismissalGroup(1).size(), is(0));
     }
 
     @Test
     @Feature({"Ntp"})
     public void testGetItemDismissalGroupWithoutActionItem() {
         SuggestionsSection section = createSectionWithFetchAction(false);
-        assertThat(section.getItemDismissalGroup(1).size(), is(1));
-        assertThat(section.getItemDismissalGroup(1), contains(1));
+        assertThat(section.getItemDismissalGroup(1).size(), is(0));
     }
 
     @Test
@@ -1062,8 +1043,8 @@ public class SuggestionsSectionTest {
     }
 
     private SuggestionsSection createSection(SuggestionsCategoryInfo info) {
-        SuggestionsSection section = new SuggestionsSection(
-                mDelegate, mUiDelegate, mock(SuggestionsRanker.class), mBridge, info);
+        SuggestionsSection section = new SuggestionsSection(mDelegate, mUiDelegate,
+                mock(SuggestionsRanker.class), mBridge, info, mSigninManager);
         section.addObserver(mObserver);
         return section;
     }

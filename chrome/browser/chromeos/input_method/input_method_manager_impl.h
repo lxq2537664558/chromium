@@ -15,8 +15,9 @@
 #include "base/macros.h"
 #include "base/observer_list.h"
 #include "base/threading/thread_checker.h"
+#include "chrome/browser/chromeos/input_method/assistive_window_controller.h"
 #include "chrome/browser/chromeos/input_method/candidate_window_controller.h"
-#include "chrome/browser/chromeos/login/ui/user_adding_screen.h"
+#include "chrome/browser/chromeos/input_method/ime_service_connector.h"
 #include "chrome/browser/profiles/profile.h"
 #include "ui/base/ime/chromeos/input_method_manager.h"
 #include "ui/base/ime/chromeos/input_method_util.h"
@@ -35,8 +36,7 @@ class ImeKeyboard;
 
 // The implementation of InputMethodManager.
 class InputMethodManagerImpl : public InputMethodManager,
-                               public CandidateWindowController::Observer,
-                               public UserAddingScreen::Observer {
+                               public CandidateWindowController::Observer {
  public:
   class StateImpl : public InputMethodManager::State {
    public:
@@ -116,6 +116,11 @@ class InputMethodManagerImpl : public InputMethodManager,
     void DisableInputView() override;
     const GURL& GetInputViewUrl() const override;
 
+    // Connect to an InputEngineManager instance in an IME Mojo service.
+    void ConnectMojoManager(
+        mojo::PendingReceiver<chromeos::ime::mojom::InputEngineManager>
+            receiver);
+
     // ------------------------- Data members.
     Profile* const profile;
 
@@ -162,6 +167,8 @@ class InputMethodManagerImpl : public InputMethodManager,
     // Returns the first hardware input method that is allowed or the first
     // allowed input method, if no hardware input method is allowed.
     std::string GetAllowedFallBackKeyboardLayout() const;
+
+    std::unique_ptr<ImeServiceConnector> ime_service_connector_;
   };
 
   // Constructs an InputMethodManager instance. The client is responsible for
@@ -189,13 +196,17 @@ class InputMethodManagerImpl : public InputMethodManager,
   std::unique_ptr<InputMethodDescriptors> GetSupportedInputMethods()
       const override;
   void ActivateInputMethodMenuItem(const std::string& key) override;
+  void ConnectInputEngineManager(
+      mojo::PendingReceiver<chromeos::ime::mojom::InputEngineManager> receiver)
+      override;
   bool IsISOLevel5ShiftUsedByCurrentInputMethod() const override;
   bool IsAltGrUsedByCurrentInputMethod() const override;
   void NotifyImeMenuItemsChanged(
       const std::string& engine_id,
       const std::vector<InputMethodManager::MenuItem>& items) override;
   void MaybeNotifyImeMenuActivationChanged() override;
-  void OverrideKeyboardKeyset(mojom::ImeKeyset keyset) override;
+  void OverrideKeyboardKeyset(
+      chromeos::input_method::ImeKeyset keyset) override;
   void SetImeMenuFeatureEnabled(ImeMenuFeature feature, bool enabled) override;
   bool GetImeMenuFeatureEnabled(ImeMenuFeature feature) const override;
   void NotifyObserversImeExtraInputStateChange() override;
@@ -205,10 +216,6 @@ class InputMethodManagerImpl : public InputMethodManager,
       const std::string& extension_id) override;
   void NotifyInputMethodExtensionRemoved(
       const std::string& extension_id) override;
-
-  // chromeos::UserAddingScreen:
-  void OnUserAddingStarted() override;
-  void OnUserAddingFinished() override;
 
   ImeKeyboard* GetImeKeyboard() override;
   InputMethodUtil* GetInputMethodUtil() override;
@@ -228,6 +235,9 @@ class InputMethodManagerImpl : public InputMethodManager,
   // Sets |candidate_window_controller_|.
   void SetCandidateWindowControllerForTesting(
       CandidateWindowController* candidate_window_controller);
+  // Sets |assistive_window_controller_|.
+  void SetAssistiveWindowControllerForTesting(
+      AssistiveWindowController* assistive_window_controller);
   // Sets |keyboard_|.
   void SetImeKeyboardForTesting(ImeKeyboard* keyboard);
   // Initialize |component_extension_manager_|.
@@ -245,6 +255,9 @@ class InputMethodManagerImpl : public InputMethodManager,
   // Creates and initializes |candidate_window_controller_| if it hasn't been
   // done.
   void MaybeInitializeCandidateWindowController();
+  // Creates and initializes |assistive_window_controller_| if it hasn't been
+  // done.
+  void MaybeInitializeAssistiveWindowController();
 
   // Returns Input Method that best matches given id.
   const InputMethodDescriptor* LookupInputMethod(
@@ -292,6 +305,9 @@ class InputMethodManagerImpl : public InputMethodManager,
   // The candidate window.  This will be deleted when the APP_TERMINATING
   // message is sent.
   std::unique_ptr<CandidateWindowController> candidate_window_controller_;
+  // The assistive window.  This will be deleted when the APP_TERMINATING
+  // message is sent.
+  std::unique_ptr<AssistiveWindowController> assistive_window_controller_;
 
   // An object which provides miscellaneous input method utility functions. Note
   // that |util_| is required to initialize |keyboard_|.
@@ -309,7 +325,7 @@ class InputMethodManagerImpl : public InputMethodManager,
   bool enable_extension_loading_;
 
   // Whether the expanded IME menu is activated.
-  bool is_ime_menu_activated_;
+  bool is_ime_menu_activated_ = false;
 
   // The enabled state of keyboard features.
   uint32_t features_enabled_state_;

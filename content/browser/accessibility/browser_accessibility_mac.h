@@ -27,16 +27,24 @@ CONTENT_EXPORT BrowserAccessibilityCocoa* ToBrowserAccessibilityCocoa(
 class BrowserAccessibilityMac : public BrowserAccessibility {
  public:
   // BrowserAccessibility overrides.
-  void NativeReleaseReference() override;
-  bool IsNative() const override;
+  ~BrowserAccessibilityMac() override;
   void OnDataChanged() override;
   uint32_t PlatformChildCount() const override;
   BrowserAccessibility* PlatformGetChild(uint32_t child_index) const override;
+
+  BrowserAccessibility* PlatformGetFirstChild() const override;
+  BrowserAccessibility* PlatformGetLastChild() const override;
+  BrowserAccessibility* PlatformGetNextSibling() const override;
+  BrowserAccessibility* PlatformGetPreviousSibling() const override;
 
   // The BrowserAccessibilityCocoa associated with us.
   BrowserAccessibilityCocoa* native_view() const {
     return browser_accessibility_cocoa_;
   }
+
+  // Refresh the native object associated with this.
+  // Useful for re-announcing the current focus when properties have changed.
+  void ReplaceNativeObject();
 
  private:
   // This gives BrowserAccessibility::Create access to the class constructor.

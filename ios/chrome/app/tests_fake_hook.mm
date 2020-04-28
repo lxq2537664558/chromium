@@ -16,9 +16,6 @@ bool DisableAppGroupAccess() {
 bool DisableContentSuggestions() {
   return false;
 }
-bool DisableContextualSearch() {
-  return false;
-}
 bool DisableFirstRun() {
   return false;
 }
@@ -30,6 +27,12 @@ bool DisableSigninRecallPromo() {
 }
 bool DisableUpdateService() {
   return false;
+}
+bool DisableMainThreadFreezeDetection() {
+  return false;
+}
+policy::ConfigurationPolicyProvider* GetOverriddenPlatformPolicyProvider() {
+  return nullptr;
 }
 void SetUpTestsIfPresent() {}
 void RunTestsIfPresent() {}

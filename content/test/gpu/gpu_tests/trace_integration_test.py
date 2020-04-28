@@ -81,13 +81,9 @@ _SWAP_CHAIN_PRESENTATION_MODE_COMPOSITION_FAILURE = 3
 # The following is defined for Chromium testing internal use.
 _SWAP_CHAIN_GET_FRAME_STATISTICS_MEDIA_FAILED = -1
 
-# Pixel format enums match OverlayFormat in config/gpu/gpu_info.h
-_SWAP_CHAIN_PIXEL_FORMAT_BGRA = 0
-_SWAP_CHAIN_PIXEL_FORMAT_YUY2 = 1
-_SWAP_CHAIN_PIXEL_FORMAT_NV12 = 2
-
 _GET_STATISTICS_EVENT_NAME = 'GetFrameStatisticsMedia'
 _SWAP_CHAIN_PRESENT_EVENT_NAME = 'SwapChain::Present'
+_PRESENT_TO_SWAP_CHAIN_EVENT_NAME = 'SwapChainPresenter::PresentToSwapChain'
 
 
 class TraceIntegrationTest(gpu_integration_test.GpuIntegrationTest):
@@ -104,21 +100,22 @@ class TraceIntegrationTest(gpu_integration_test.GpuIntegrationTest):
     # Include the device level trace tests, even though they're
     # currently skipped on all platforms, to give a hint that they
     # should perhaps be enabled in the future.
-    for p in pixel_test_pages.DefaultPages('TraceTest'):
+    namespace = pixel_test_pages.PixelTestPages
+    for p in namespace.DefaultPages('TraceTest'):
       yield (p.name, gpu_relative_path + p.url,
              {'browser_args': [],
               'category': cls._DisabledByDefaultTraceCategory('gpu.service'),
               'test_harness_script': webgl_test_harness_script,
               'finish_js_condition': 'domAutomationController._finished',
               'success_eval_func': 'CheckGLCategory'})
-    for p in pixel_test_pages.DefaultPages('DeviceTraceTest'):
+    for p in namespace.DefaultPages('DeviceTraceTest'):
       yield (p.name, gpu_relative_path + p.url,
              {'browser_args': [],
               'category': cls._DisabledByDefaultTraceCategory('gpu.device'),
               'test_harness_script': webgl_test_harness_script,
               'finish_js_condition': 'domAutomationController._finished',
               'success_eval_func': 'CheckGLCategory'})
-    for p in pixel_test_pages.DirectCompositionPages('VideoPathTraceTest'):
+    for p in namespace.DirectCompositionPages('VideoPathTraceTest'):
       yield (p.name, gpu_relative_path + p.url,
              {'browser_args': p.browser_args,
               'category': cls._DisabledByDefaultTraceCategory('gpu.service'),
@@ -126,7 +123,15 @@ class TraceIntegrationTest(gpu_integration_test.GpuIntegrationTest):
               'finish_js_condition': 'domAutomationController._finished',
               'success_eval_func': 'CheckVideoPath',
               'other_args': p.other_args})
-    for p in pixel_test_pages.DirectCompositionPages('OverlayModeTraceTest'):
+    for p in namespace.LowLatencySwapChainPages('SwapChainTraceTest'):
+      yield (p.name, gpu_relative_path + p.url,
+             {'browser_args': p.browser_args,
+              'category': 'gpu',
+              'test_harness_script': basic_test_harness_script,
+              'finish_js_condition': 'domAutomationController._finished',
+              'success_eval_func': 'CheckSwapChainPath',
+              'other_args': p.other_args})
+    for p in namespace.DirectCompositionPages('OverlayModeTraceTest'):
       if p.other_args and p.other_args.get('video_is_rotated', False):
         # For all drivers we tested, when a video is rotated, frames won't
         # be promoted to hardware overlays.
@@ -160,7 +165,7 @@ class TraceIntegrationTest(gpu_integration_test.GpuIntegrationTest):
     # Set up tracing.
     config = tracing_config.TracingConfig()
     config.chrome_trace_config.category_filter.AddExcludedCategory('*')
-    config.chrome_trace_config.category_filter.AddDisabledByDefault(category)
+    config.chrome_trace_config.category_filter.AddFilter(category)
     config.enable_chrome_trace = True
     tab = self.tab
     tab.browser.platform.tracing_controller.StartTracing(config, 60)
@@ -183,10 +188,6 @@ class TraceIntegrationTest(gpu_integration_test.GpuIntegrationTest):
       getattr(self, prefixed_func_name)(category, event_iter, other_args)
 
   @classmethod
-  def _CreateExpectations(cls):
-    raise NotImplementedError
-
-  @classmethod
   def SetUpProcess(cls):
     super(TraceIntegrationTest, cls).SetUpProcess()
     path_util.SetupTelemetryPaths()
@@ -199,7 +200,10 @@ class TraceIntegrationTest(gpu_integration_test.GpuIntegrationTest):
     # All tests receive the following options.
     return [
       '--enable-logging',
-      '--enable-experimental-web-platform-features'] + browser_args
+      '--enable-experimental-web-platform-features',
+      # All bots are connected with a power source, however, we want to to test
+      # with the code path that's enabled with battery power.
+      '--disable_vp_scaling=1'] + browser_args
 
   def _GetOverlayBotConfigHelper(self):
     system_info = self.browser.GetSystemInfo()
@@ -211,16 +215,6 @@ class TraceIntegrationTest(gpu_integration_test.GpuIntegrationTest):
     os_version_name = self.browser.platform.GetOSVersionName()
     return self.GetOverlayBotConfig(
         os_version_name, gpu.vendor_id, gpu.device_id)
-
-  @staticmethod
-  def _SwapChainPixelFormatToStr(pixel_format):
-    if pixel_format == _SWAP_CHAIN_PIXEL_FORMAT_BGRA:
-      return 'BGRA'
-    if pixel_format == _SWAP_CHAIN_PIXEL_FORMAT_YUY2:
-      return 'YUY2'
-    if pixel_format == _SWAP_CHAIN_PIXEL_FORMAT_NV12:
-      return 'NV12'
-    return str(pixel_format)
 
   @staticmethod
   def _SwapChainPresentationModeToStr(presentation_mode):
@@ -276,8 +270,7 @@ class TraceIntegrationTest(gpu_integration_test.GpuIntegrationTest):
     assert os_name and os_name.lower() == 'win'
 
     # Calculate expectations.
-    if other_args is None:
-      other_args = {}
+    other_args = other_args if other_args is not None else {}
     expect_yuy2 = other_args.get('expect_yuy2', False)
     zero_copy = other_args.get('zero_copy', False)
 
@@ -286,19 +279,21 @@ class TraceIntegrationTest(gpu_integration_test.GpuIntegrationTest):
       self.fail('Overlay bot config can not be determined')
     assert overlay_bot_config.get('direct_composition', False)
 
-    expected_pixel_format = _SWAP_CHAIN_PIXEL_FORMAT_NV12
+    expected_pixel_format = "NV12"
     supports_nv12_overlays = False
     if overlay_bot_config.get('supports_overlays', False):
       supports_yuy2_overlays = False
-      if overlay_bot_config.get('overlay_cap_yuy2', 'NONE') != 'NONE':
+      if overlay_bot_config['yuy2_overlay_support'] != 'NONE':
         supports_yuy2_overlays = True
-      if overlay_bot_config.get('overlay_cap_nv12', 'NONE') != 'NONE':
+      if overlay_bot_config['nv12_overlay_support'] != 'NONE':
         supports_nv12_overlays = True
       assert supports_yuy2_overlays or supports_nv12_overlays
       if expect_yuy2 or not supports_nv12_overlays:
-        expected_pixel_format = _SWAP_CHAIN_PIXEL_FORMAT_YUY2
+        expected_pixel_format = "YUY2"
     if not supports_nv12_overlays:
       zero_copy = False
+
+    expect_no_overlay = other_args.get('no_overlay', False)
 
     # Verify expectations through captured trace events.
     for event in event_iterator:
@@ -306,16 +301,15 @@ class TraceIntegrationTest(gpu_integration_test.GpuIntegrationTest):
         continue
       if event.name != _SWAP_CHAIN_PRESENT_EVENT_NAME:
         continue
+      if expect_no_overlay:
+        self.fail('Expected no overlay got %s' % _SWAP_CHAIN_PRESENT_EVENT_NAME)
       detected_pixel_format = event.args.get('PixelFormat', None)
       if detected_pixel_format is None:
         self.fail('PixelFormat is missing from event %s' %
                   _SWAP_CHAIN_PRESENT_EVENT_NAME)
       if expected_pixel_format != detected_pixel_format:
         self.fail('SwapChain pixel format mismatch, expected %s got %s' %
-            (TraceIntegrationTest._SwapChainPixelFormatToStr(
-                 expected_pixel_format),
-             TraceIntegrationTest._SwapChainPixelFormatToStr(
-                 detected_pixel_format)))
+            (expected_pixel_format, detected_pixel_format))
       detected_zero_copy = event.args.get('ZeroCopy', None)
       if detected_zero_copy is None:
         self.fail('ZeroCopy is missing from event %s' %
@@ -325,6 +319,8 @@ class TraceIntegrationTest(gpu_integration_test.GpuIntegrationTest):
                   (zero_copy, detected_zero_copy))
       break
     else:
+      if expect_no_overlay:
+        return
       self.fail('Events with name %s were not found' %
                 _SWAP_CHAIN_PRESENT_EVENT_NAME)
 
@@ -343,17 +339,26 @@ class TraceIntegrationTest(gpu_integration_test.GpuIntegrationTest):
     if overlay_bot_config.get('supports_overlays', False):
       expected_presentation_mode = _SWAP_CHAIN_PRESENTATION_MODE_OVERLAY
 
+    other_args = other_args if other_args is not None else {}
+    expect_no_overlay = other_args.get('no_overlay', False)
+
     presentation_mode_history = []
     for event in event_iterator:
       if event.category != category:
         continue
       if event.name != _GET_STATISTICS_EVENT_NAME:
         continue
+      if expect_no_overlay:
+        self.fail('Expected no overlay got %s' % _GET_STATISTICS_EVENT_NAME)
       detected_presentation_mode = event.args.get('CompositionMode', None)
       if detected_presentation_mode is None:
         self.fail('PresentationMode is missing from event %s' %
                   _GET_STATISTICS_EVENT_NAME)
       presentation_mode_history.append(detected_presentation_mode)
+
+    if expect_no_overlay:
+      return
+
     valid_entry_found = False
     for index in range(len(presentation_mode_history)):
       mode = presentation_mode_history[index]
@@ -371,9 +376,33 @@ class TraceIntegrationTest(gpu_integration_test.GpuIntegrationTest):
                    presentation_mode_history)))
       valid_entry_found = True
     if not valid_entry_found:
-      self.fail('No valid frame statistics being collected: %s',
+      self.fail('No valid frame statistics being collected: %s' %
           TraceIntegrationTest._SwapChainPresentationModeListToStr(
               presentation_mode_history))
+
+  def _EvaluateSuccess_CheckSwapChainPath(self, category, event_iterator,
+                                          other_args):
+    """Verified that swap chains were used for low latency canvas."""
+    os_name = self.browser.platform.GetOSName()
+    assert os_name and os_name.lower() == 'win'
+
+    overlay_bot_config = self.GetOverlayBotConfig()
+    if overlay_bot_config is None:
+      self.fail('Overlay bot config can not be determined')
+    assert overlay_bot_config.get('direct_composition', False)
+
+    # Verify expectations through captured trace events.
+    for event in event_iterator:
+      if event.category != category:
+        continue
+      if event.name != _PRESENT_TO_SWAP_CHAIN_EVENT_NAME:
+        continue
+      presentation_mode = event.args.get('image_type', None)
+      if presentation_mode == 'swap chain':
+        break
+    else:
+      self.fail('Events with name %s were not found' %
+                _SWAP_CHAIN_PRESENT_EVENT_NAME)
 
   @classmethod
   def ExpectationsFiles(cls):

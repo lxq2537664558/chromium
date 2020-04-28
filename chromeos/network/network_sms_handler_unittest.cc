@@ -10,7 +10,7 @@
 
 #include "base/command_line.h"
 #include "base/run_loop.h"
-#include "base/test/scoped_task_environment.h"
+#include "base/test/task_environment.h"
 #include "chromeos/constants/chromeos_switches.h"
 #include "chromeos/dbus/shill/shill_clients.h"
 #include "chromeos/dbus/shill/shill_device_client.h"
@@ -52,8 +52,8 @@ class TestObserver : public NetworkSmsHandler::Observer {
 class NetworkSmsHandlerTest : public testing::Test {
  public:
   NetworkSmsHandlerTest()
-      : scoped_task_environment_(
-            base::test::ScopedTaskEnvironment::MainThreadType::UI) {}
+      : task_environment_(
+            base::test::SingleThreadTaskEnvironment::MainThreadType::UI) {}
   ~NetworkSmsHandlerTest() override = default;
 
   void SetUp() override {
@@ -71,7 +71,7 @@ class NetworkSmsHandlerTest : public testing::Test {
                            "stub_cellular_device2");
 
     // This relies on the stub dbus implementations for ShillManagerClient,
-    // ShillDeviceClient, GsmSMSClient, ModemMessagingClient and SMSClient.
+    // ShillDeviceClient, ModemMessagingClient and SMSClient.
     // Initialize a sms handler. The stub dbus clients will not send the
     // first test message until RequestUpdate has been called.
     network_sms_handler_.reset(new NetworkSmsHandler());
@@ -89,7 +89,7 @@ class NetworkSmsHandlerTest : public testing::Test {
   }
 
  protected:
-  base::test::ScopedTaskEnvironment scoped_task_environment_;
+  base::test::SingleThreadTaskEnvironment task_environment_;
   std::unique_ptr<NetworkSmsHandler> network_sms_handler_;
   std::unique_ptr<TestObserver> test_observer_;
 };

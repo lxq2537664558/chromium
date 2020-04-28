@@ -14,7 +14,9 @@
 #include "net/base/completion_once_callback.h"
 #include "net/base/completion_repeating_callback.h"
 #include "net/base/net_export.h"
+#include "net/base/network_isolation_key.h"
 #include "net/base/privacy_mode.h"
+#include "net/dns/public/resolve_error_info.h"
 #include "net/socket/connect_job.h"
 #include "net/socket/connection_attempts.h"
 #include "net/socket/ssl_client_socket.h"
@@ -41,7 +43,8 @@ class NET_EXPORT_PRIVATE SSLSocketParams
                   scoped_refptr<HttpProxySocketParams> http_proxy_params,
                   const HostPortPair& host_and_port,
                   const SSLConfig& ssl_config,
-                  PrivacyMode privacy_mode);
+                  PrivacyMode privacy_mode,
+                  NetworkIsolationKey network_isolation_key);
 
   // Returns the type of the underlying connection.
   ConnectionType GetConnectionType() const;
@@ -59,6 +62,9 @@ class NET_EXPORT_PRIVATE SSLSocketParams
   const HostPortPair& host_and_port() const { return host_and_port_; }
   const SSLConfig& ssl_config() const { return ssl_config_; }
   PrivacyMode privacy_mode() const { return privacy_mode_; }
+  const NetworkIsolationKey& network_isolation_key() const {
+    return network_isolation_key_;
+  }
 
  private:
   friend class base::RefCounted<SSLSocketParams>;
@@ -70,6 +76,7 @@ class NET_EXPORT_PRIVATE SSLSocketParams
   const HostPortPair host_and_port_;
   const SSLConfig ssl_config_;
   const PrivacyMode privacy_mode_;
+  const NetworkIsolationKey network_isolation_key_;
 
   DISALLOW_COPY_AND_ASSIGN(SSLSocketParams);
 };
@@ -100,7 +107,7 @@ class NET_EXPORT_PRIVATE SSLConnectJob : public ConnectJob,
                         base::OnceClosure restart_with_auth_callback,
                         ConnectJob* job) override;
   ConnectionAttempts GetConnectionAttempts() const override;
-  std::unique_ptr<StreamSocket> PassProxySocketOnFailure() override;
+  ResolveErrorInfo GetResolveErrorInfo() const override;
   bool IsSSLError() const override;
   scoped_refptr<SSLCertRequestInfo> GetCertRequestInfo() override;
 
@@ -144,6 +151,8 @@ class NET_EXPORT_PRIVATE SSLConnectJob : public ConnectJob,
   // Otherwise, it returns a net error code.
   int ConnectInternal() override;
 
+  void ResetStateForRestart();
+
   void ChangePriorityInternal(RequestPriority priority) override;
 
   scoped_refptr<SSLSocketParams> params_;
@@ -157,12 +166,15 @@ class NET_EXPORT_PRIVATE SSLConnectJob : public ConnectJob,
   // True once SSL negotiation has started.
   bool ssl_negotiation_started_;
 
+  // True if legacy crypto should be disabled for the job's current connection
+  // attempt. On error, the connection will be retried with legacy crypto
+  // enabled.
+  bool disable_legacy_crypto_with_fallback_;
+
   scoped_refptr<SSLCertRequestInfo> ssl_cert_request_info_;
 
-  // True if a proxy returned a redirect, resulting in an error.
-  bool proxy_redirect_;
-
   ConnectionAttempts connection_attempts_;
+  ResolveErrorInfo resolve_error_info_;
   // The address of the server the connect job is connected to. Populated if
   // and only if the connect job is connected *directly* to the server (not
   // through an HTTPS CONNECT request or a SOCKS proxy).

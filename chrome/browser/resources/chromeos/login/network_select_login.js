@@ -3,13 +3,14 @@
 // found in the LICENSE file.
 
 /**
- * @fileoverview Polymer element wrapping cr-network-select for login/oobe.
+ * @fileoverview Polymer element wrapping network-select for login/oobe.
  */
 
 {
+  const mojom = chromeos.networkConfig.mojom;
+
   /**
    * Custom data that is stored with network element to trigger action.
-   *
    * @typedef {{onTap: !function()}}
    */
   let networkCustomItemCustomData;
@@ -32,7 +33,7 @@
        * True when connected to a network.
        * @private
        */
-      isConnected: {
+      isNetworkConnected: {
         type: Boolean,
         value: false,
         notify: true,
@@ -54,7 +55,7 @@
        */
       showTechnologyBadge_: {
         type: Boolean,
-        value: function() {
+        value() {
           return loadTimeData.valueExists('showTechnologyBadge') &&
               loadTimeData.getBoolean('showTechnologyBadge');
         }
@@ -82,61 +83,25 @@
     is_shown_: false,
 
     /** Refreshes the list of the networks. */
-    refresh: function() {
-      /** @type {!CrNetworkSelectElement} */ (this.$.networkSelect)
+    refresh() {
+      /** @type {!NetworkSelectElement} */ (this.$.networkSelect)
           .refreshNetworks();
       this.networkLastSelectedGuid_ = '';
     },
 
-    focus: function() {
+    focus() {
       this.$.networkSelect.focus();
     },
 
     /** Called when dialog is shown. */
-    onBeforeShow: function() {
+    onBeforeShow() {
       this.is_shown_ = true;
       this.attemptApplyConfiguration_();
     },
 
     /** Called when dialog is hidden. */
-    onBeforeHide: function() {
+    onBeforeHide() {
       this.is_shown_ = false;
-    },
-
-    /**
-     * Call after strings are loaded to set CrOncStrings for cr-network-select.
-     */
-    setCrOncStrings: function() {
-      CrOncStrings = {
-        OncTypeCellular: loadTimeData.getString('OncTypeCellular'),
-        OncTypeEthernet: loadTimeData.getString('OncTypeEthernet'),
-        OncTypeTether: loadTimeData.getString('OncTypeTether'),
-        OncTypeVPN: loadTimeData.getString('OncTypeVPN'),
-        OncTypeWiFi: loadTimeData.getString('OncTypeWiFi'),
-        OncTypeWiMAX: loadTimeData.getString('OncTypeWiMAX'),
-        networkListItemConnected:
-            loadTimeData.getString('networkListItemConnected'),
-        networkListItemConnecting:
-            loadTimeData.getString('networkListItemConnecting'),
-        networkListItemConnectingTo:
-            loadTimeData.getString('networkListItemConnectingTo'),
-        networkListItemInitializing:
-            loadTimeData.getString('networkListItemInitializing'),
-        networkListItemScanning:
-            loadTimeData.getString('networkListItemScanning'),
-        networkListItemNotConnected:
-            loadTimeData.getString('networkListItemNotConnected'),
-        networkListItemNoNetwork:
-            loadTimeData.getString('networkListItemNoNetwork'),
-        vpnNameTemplate: loadTimeData.getString('vpnNameTemplate'),
-
-        // Additional strings for custom items.
-        addWiFiListItemName: loadTimeData.getString('addWiFiListItemName'),
-        proxySettingsListItemName:
-            loadTimeData.getString('proxySettingsListItemName'),
-        offlineDemoSetupListItemName:
-            loadTimeData.getString('offlineDemoSetupListItemName'),
-      };
     },
 
     /**
@@ -144,7 +109,7 @@
      * when connected to a network.
      * @private
      */
-    getNetworkCustomItems_: function() {
+    getNetworkCustomItems_() {
       var self = this;
       var items = [];
       if (this.isOfflineDemoModeSetup) {
@@ -157,7 +122,7 @@
           },
         });
       }
-      if (this.isConnected) {
+      if (this.isNetworkConnected) {
         items.push({
           customItemName: 'proxySettingsListItemName',
           polymerIcon: 'oobe-network-20:add-proxy',
@@ -183,7 +148,7 @@
      *
      * @private
      */
-    openInternetDetailDialog_: function(item) {
+    openInternetDetailDialog_(item) {
       chrome.send('launchInternetDetailDialog');
     },
 
@@ -192,7 +157,7 @@
      *
      * @private
      */
-    openAddWiFiNetworkDialog_: function(item) {
+    openAddWiFiNetworkDialog_(item) {
       chrome.send('launchAddWiFiNetworkDialog');
     },
 
@@ -200,53 +165,54 @@
      * Offline demo setup button handler.
      * @private
      */
-    onOfflineDemoSetupClicked_: function(item) {
+    onOfflineDemoSetupClicked_(item) {
       chrome.send('login.NetworkScreen.userActed', ['offline-demo-setup']);
     },
 
     /**
-     * This is called when network setup is done.
-     *
+     * Called when network setup is done. Notifies parent that network setup is
+     * done.
      * @private
      */
-    onSelectedNetworkConnected_: function() {
+    onSelectedNetworkConnected_() {
       this.networkLastSelectedGuid_ = '';
-      chrome.send('login.NetworkScreen.userActed', ['continue']);
+      this.fire('selected-network-connected');
     },
 
     /**
      * Event triggered when the default network state may have changed.
-     * @param {!CustomEvent<CrOnc.NetworkStateProperties>} event
+     * @param {!CustomEvent<OncMojo.NetworkStateProperties>} event
      * @private
      */
-    onDefaultNetworkChanged_: function(event) {
-      var state = event.detail;
-      this.isConnected =
-          state && state.ConnectionState == CrOnc.ConnectionState.CONNECTED;
-      if (!this.isConnected || !this.is_shown_)
+    onDefaultNetworkChanged_(event) {
+      // Note: event.detail will be {} if there is no default network.
+      var networkState = event.detail.type ? event.detail : undefined;
+      this.isNetworkConnected = !!networkState &&
+          OncMojo.connectionStateIsConnected(networkState.connectionState);
+      if (!this.isNetworkConnected || !this.is_shown_)
         return;
       this.attemptApplyConfiguration_();
     },
 
     /**
-     * Event triggered when a cr-network-list-item connection state changes.
-     * @param {!CustomEvent<!CrOnc.NetworkStateProperties>} event
+     * Event triggered when a network-list-item connection state changes.
+     * @param {!CustomEvent<!OncMojo.NetworkStateProperties>} event
      * @private
      */
-    onNetworkConnectChanged_: function(event) {
-      var state = event.detail;
-      if (state && state.GUID == this.networkLastSelectedGuid_ &&
-          state.ConnectionState == CrOnc.ConnectionState.CONNECTED) {
+    onNetworkConnectChanged_(event) {
+      var networkState = event.detail;
+      if (networkState && networkState.guid == this.networkLastSelectedGuid_ &&
+          OncMojo.connectionStateIsConnected(networkState.connectionState)) {
         this.onSelectedNetworkConnected_();
       }
     },
 
     /**
      * Event triggered when a list of networks get changed.
-     * @param {!CustomEvent<!Array<!CrOnc.NetworkStateProperties>>} event
+     * @param {!CustomEvent<!Array<!OncMojo.NetworkStateProperties>>} event
      * @private
      */
-    onNetworkListChanged_: function(event) {
+    onNetworkListChanged_(event) {
       if (!this.is_shown_)
         return;
       this.attemptApplyConfiguration_();
@@ -256,7 +222,7 @@
      * Tries to apply OOBE configuration on current list of networks.
      * @private
      */
-    attemptApplyConfiguration_: function() {
+    attemptApplyConfiguration_() {
       if (this.configuration_applied_)
         return;
       var configuration = Oobe.getInstance().getOobeConfiguration();
@@ -268,13 +234,12 @@
         return;
       }
       var defaultNetwork = this.$.networkSelect.getDefaultNetwork();
-      if (configuration.networkUseConnected && defaultNetwork) {
-        if (defaultNetwork.ConnectionState == CrOnc.ConnectionState.CONNECTED) {
-          window.setTimeout(
-              this.handleNetworkSelection_.bind(this, defaultNetwork), 0);
-          this.configuration_applied_ = true;
-          return;
-        }
+      if (configuration.networkUseConnected && defaultNetwork &&
+          OncMojo.connectionStateIsConnected(defaultNetwork.connectionState)) {
+        window.setTimeout(
+            this.handleNetworkSelection_.bind(this, defaultNetwork), 0);
+        this.configuration_applied_ = true;
+        return;
       }
       if (configuration.networkSelectGuid) {
         var network =
@@ -290,26 +255,27 @@
 
     /**
      * This is called when user taps on network entry in networks list.
-     *
-     * @param {!CustomEvent<!CrOnc.NetworkStateProperties>} event
+     * @param {!CustomEvent<!OncMojo.NetworkStateProperties>} event
      * @private
      */
-    onNetworkListNetworkItemSelected_: function(event) {
+    onNetworkListNetworkItemSelected_(event) {
       this.handleNetworkSelection_(event.detail);
     },
 
     /**
      * Handles selection of particular network.
-     *
-     * @param {!CrOnc.NetworkStateProperties} state network state.
+     * @param {!OncMojo.NetworkStateProperties} networkState
      * @private
      */
-    handleNetworkSelection_: function(state) {
-      assert(state);
+    handleNetworkSelection_(networkState) {
+      assert(networkState);
+
+      var isNetworkConnected =
+          OncMojo.connectionStateIsConnected(networkState.connectionState);
+
       // If |configureConnected| is false and a connected network is selected,
       // continue to the next screen.
-      if (!this.configureConnected &&
-          state.ConnectionState == CrOnc.ConnectionState.CONNECTED) {
+      if (!this.configureConnected && isNetworkConnected) {
         this.onSelectedNetworkConnected_();
         return;
       }
@@ -318,45 +284,56 @@
       // is pending connection attempt. So even if new selection is currently
       // connected, it may get disconnected at any time.
       // So just send one more connection request to cancel current attempts.
-      this.networkLastSelectedGuid_ = (state ? state.GUID : '');
-
-      if (!state)
-        return;
+      this.networkLastSelectedGuid_ = networkState.guid;
 
       var self = this;
-      var networkStateCopy = Object.assign({}, state);
+      var oncType = OncMojo.getNetworkTypeString(networkState.type);
+      var guid = networkState.guid;
 
+      var shouldShowNetworkDetails = isNetworkConnected ||
+          networkState.connectionState ==
+              chromeos.networkConfig.mojom.ConnectionStateType.kConnecting;
       // Cellular should normally auto connect. If it is selected, show the
       // details UI since there is no configuration UI for Cellular.
-      if (state.Type == chrome.networkingPrivate.NetworkType.CELLULAR) {
-        chrome.send('showNetworkDetails', [state.Type, state.GUID]);
+      shouldShowNetworkDetails |= networkState.type ==
+          chromeos.networkConfig.mojom.NetworkType.kCellular;
+
+      if (shouldShowNetworkDetails) {
+        chrome.send('showNetworkDetails', [oncType, guid]);
         return;
       }
 
-      // Allow proxy to be set for connected networks.
-      if (state.ConnectionState == CrOnc.ConnectionState.CONNECTED) {
-        chrome.send('showNetworkDetails', [state.Type, state.GUID]);
+      if (!networkState.connectable || networkState.errorState) {
+        chrome.send('showNetworkConfig', [guid]);
         return;
       }
 
-      if (state.Connectable === false || state.ErrorState) {
-        chrome.send('showNetworkConfig', [state.GUID]);
-        return;
-      }
+      const networkConfig =
+          network_config.MojoInterfaceProviderImpl.getInstance()
+              .getMojoServiceRemote();
 
-      chrome.networkingPrivate.startConnect(state.GUID, () => {
-        const lastError = chrome.runtime.lastError;
-        if (!lastError)
-          return;
-        const message = lastError.message;
-        if (message == 'connecting' || message == 'connect-canceled' ||
-            message == 'connected' || message == 'Error.InvalidNetworkGuid') {
-          return;
+      networkConfig.startConnect(guid).then(response => {
+        switch (response.result) {
+          case mojom.StartConnectResult.kSuccess:
+            return;
+          case mojom.StartConnectResult.kInvalidGuid:
+          case mojom.StartConnectResult.kInvalidState:
+          case mojom.StartConnectResult.kCanceled:
+            // TODO(stevenjb/khorimoto): Consider handling these cases.
+            return;
+          case mojom.StartConnectResult.kNotConfigured:
+            if (!OncMojo.networkTypeIsMobile(networkState.type)) {
+              chrome.send('showNetworkConfig', [guid]);
+            } else {
+              console.error('Cellular network is not configured: ' + guid);
+            }
+            return;
+          case mojom.StartConnectResult.kBlocked:
+          case mojom.StartConnectResult.kUnknown:
+            console.error(
+                'startConnect failed for: ' + guid + ': ' + response.message);
+            return;
         }
-        console.error(
-            'networkingPrivate.startConnect error: ' + message +
-            ' For: ' + state.GUID);
-        chrome.send('showNetworkConfig', [state.GUID]);
       });
     },
 
@@ -364,7 +341,7 @@
      * @param {!CustomEvent<{customData:!networkCustomItemCustomData}>} event
      * @private
      */
-    onNetworkListCustomItemSelected_: function(event) {
+    onNetworkListCustomItemSelected_(event) {
       var itemState = event.detail;
       itemState.customData.onTap();
     },
@@ -374,7 +351,7 @@
      * part of offline demo mode setup changes.
      * @private
      */
-    onIsOfflineDemoModeSetupChanged_: function() {
+    onIsOfflineDemoModeSetupChanged_() {
       this.$.networkSelect.customItems = this.getNetworkCustomItems_();
     },
   });

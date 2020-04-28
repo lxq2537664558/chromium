@@ -33,10 +33,9 @@ class MockInputMethodEngine : public ui::IMEEngineHandlerInterface {
   void Enable(const std::string& component_id) override;
   void Disable() override;
   void Reset() override;
-  bool IsInterestedInKeyEvent() const override;
   void ProcessKeyEvent(const ui::KeyEvent& key_event,
                        KeyEventDoneCallback callback) override;
-  void SetSurroundingText(const std::string& text,
+  void SetSurroundingText(const base::string16& text,
                           uint32_t cursor_pos,
                           uint32_t anchor_pos,
                           uint32_t offset_pos) override;

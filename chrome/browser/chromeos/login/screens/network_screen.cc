@@ -10,8 +10,8 @@
 #include "chrome/browser/chromeos/login/helper.h"
 #include "chrome/browser/chromeos/login/oobe_screen.h"
 #include "chrome/browser/chromeos/login/screen_manager.h"
-#include "chrome/browser/chromeos/login/screens/network_screen_view.h"
 #include "chrome/browser/chromeos/login/wizard_controller.h"
+#include "chrome/browser/ui/webui/chromeos/login/network_screen_handler.h"
 #include "chrome/grit/chromium_strings.h"
 #include "chrome/grit/generated_resources.h"
 #include "chromeos/network/network_handler.h"
@@ -31,18 +31,29 @@ constexpr char kUserActionOfflineDemoSetup[] = "offline-demo-setup";
 namespace chromeos {
 
 // static
+std::string NetworkScreen::GetResultString(Result result) {
+  switch (result) {
+    case Result::CONNECTED:
+      return "Connected";
+    case Result::OFFLINE_DEMO_SETUP:
+      return "OfflineDemoSetup";
+    case Result::BACK:
+      return "Back";
+  }
+}
+
+// static
 NetworkScreen* NetworkScreen::Get(ScreenManager* manager) {
   return static_cast<NetworkScreen*>(
-      manager->GetScreen(OobeScreen::SCREEN_OOBE_NETWORK));
+      manager->GetScreen(NetworkScreenView::kScreenId));
 }
 
 NetworkScreen::NetworkScreen(NetworkScreenView* view,
                              const ScreenExitCallback& exit_callback)
-    : BaseScreen(OobeScreen::SCREEN_OOBE_NETWORK),
+    : BaseScreen(NetworkScreenView::kScreenId, OobeScreenPriority::DEFAULT),
       view_(view),
       exit_callback_(exit_callback),
-      network_state_helper_(std::make_unique<login::NetworkStateHelper>()),
-      weak_ptr_factory_(this) {
+      network_state_helper_(std::make_unique<login::NetworkStateHelper>()) {
   if (view_)
     view_->Bind(this);
 }
@@ -63,7 +74,7 @@ void NetworkScreen::OnViewDestroyed(NetworkScreenView* view) {
   }
 }
 
-void NetworkScreen::Show() {
+void NetworkScreen::ShowImpl() {
   if (DemoSetupController::IsOobeDemoSetupFlowInProgress()) {
     // Check if preinstalled resources are available. If so, we can allow
     // offline Demo Mode during Demo Mode network selection.
@@ -79,7 +90,7 @@ void NetworkScreen::Show() {
     view_->Show();
 }
 
-void NetworkScreen::Hide() {
+void NetworkScreen::HideImpl() {
   if (view_)
     view_->Hide();
 }

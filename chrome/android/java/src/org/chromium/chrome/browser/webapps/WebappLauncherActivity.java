@@ -5,33 +5,34 @@
 package org.chromium.chrome.browser.webapps;
 
 import android.app.Activity;
+import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
-import android.os.StrictMode;
 import android.os.SystemClock;
-import android.support.annotation.NonNull;
-import android.support.annotation.Nullable;
 import android.text.TextUtils;
 import android.util.Base64;
+
+import androidx.annotation.NonNull;
+import androidx.annotation.Nullable;
+import androidx.annotation.VisibleForTesting;
 
 import org.chromium.base.ApiCompatibilityUtils;
 import org.chromium.base.ApplicationStatus;
 import org.chromium.base.ContextUtils;
+import org.chromium.base.IntentUtils;
 import org.chromium.base.Log;
-import org.chromium.base.VisibleForTesting;
 import org.chromium.chrome.R;
 import org.chromium.chrome.browser.IntentHandler;
 import org.chromium.chrome.browser.ShortcutHelper;
 import org.chromium.chrome.browser.ShortcutSource;
+import org.chromium.chrome.browser.WarmupManager;
 import org.chromium.chrome.browser.document.ChromeLauncherActivity;
 import org.chromium.chrome.browser.firstrun.FirstRunFlowSequencer;
 import org.chromium.chrome.browser.metrics.LaunchMetrics;
-import org.chromium.chrome.browser.tab.Tab;
-import org.chromium.chrome.browser.util.IntentUtils;
 import org.chromium.webapk.lib.client.WebApkValidator;
 import org.chromium.webapk.lib.common.WebApkConstants;
 
@@ -49,6 +50,11 @@ public class WebappLauncherActivity extends Activity {
     public static final String ACTION_START_WEBAPP =
             "com.google.android.apps.chrome.webapps.WebappManager.ACTION_START_WEBAPP";
 
+    public static final String SECURE_WEBAPP_LAUNCHER =
+            "org.chromium.chrome.browser.webapps.SecureWebAppLauncher";
+    public static final String ACTION_START_SECURE_WEBAPP =
+            "org.chromium.chrome.browser.webapps.WebappManager.ACTION_START_SECURE_WEBAPP";
+
     /**
      * Delay in ms for relaunching WebAPK as a result of getting intent with extra
      * {@link WebApkConstants.EXTRA_RELAUNCH}. The delay was chosen arbirtarily and seems to
@@ -59,10 +65,10 @@ public class WebappLauncherActivity extends Activity {
     private static final String TAG = "webapps";
 
     /** Creates intent to relaunch WebAPK. */
-    public static Intent createRelaunchWebApkIntent(Intent sourceIntent, WebApkInfo webApkInfo) {
+    public static Intent createRelaunchWebApkIntent(Intent sourceIntent, WebappInfo webApkInfo) {
         assert webApkInfo != null;
 
-        Intent intent = new Intent(Intent.ACTION_VIEW, webApkInfo.uri());
+        Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(webApkInfo.url()));
         intent.setPackage(webApkInfo.webApkPackageName());
         intent.setFlags(
                 Intent.FLAG_ACTIVITY_NEW_TASK | ApiCompatibilityUtils.getActivityNewDocumentFlag());
@@ -82,22 +88,20 @@ public class WebappLauncherActivity extends Activity {
         WeakReference<WebappActivity> webappActivity =
                 WebappActivity.findWebappActivityWithTabId(tabId);
         if (webappActivity == null || webappActivity.get() == null) return false;
-
-        Tab tab = webappActivity.get().getActivityTab();
-        tab.getTabWebContentsDelegateAndroid().activateContents();
+        webappActivity.get().getWebContentsDelegate().activateContents();
         return true;
     }
 
     /**
      * Generates parameters for the WebAPK first run experience for the given intent. Returns null
-     * if the intent does not launch either a WebappLauncherActivity or a WebApkActivity. This
+     * if the intent does not launch either a WebappLauncherActivity or a WebAPK Activity. This
      * method is slow. It makes several PackageManager calls.
      */
-    public static @Nullable WebApkInfo maybeSlowlyGenerateWebApkInfoFromIntent(Intent fromIntent) {
-        // Check for intents targeted at WebApkActivity, WebApkActivity0-9,
+    public static @Nullable WebappInfo maybeSlowlyGenerateWebApkInfoFromIntent(Intent fromIntent) {
+        // Check for intents targeted at WebappActivity, WebappActivity0-9,
         // SameTaskWebApkActivity and WebappLauncherActivity.
         String targetActivityClassName = fromIntent.getComponent().getClassName();
-        if (!targetActivityClassName.startsWith(WebApkActivity.class.getName())
+        if (!targetActivityClassName.startsWith(WebappActivity.class.getName())
                 && !targetActivityClassName.equals(SameTaskWebApkActivity.class.getName())
                 && !targetActivityClassName.equals(WebappLauncherActivity.class.getName())) {
             return null;
@@ -109,6 +113,11 @@ public class WebappLauncherActivity extends Activity {
     @Override
     public void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+
+        // Close the notification tray.
+        ContextUtils.getApplicationContext().sendBroadcast(
+                new Intent(Intent.ACTION_CLOSE_SYSTEM_DIALOGS));
+
         long createTimestamp = SystemClock.elapsedRealtime();
         Intent intent = getIntent();
 
@@ -155,7 +164,13 @@ public class WebappLauncherActivity extends Activity {
         // does not specify required values such as the uri.
         if (webappInfo == null) return false;
 
-        String webappUrl = webappInfo.uri().toString();
+        // The component is not exported and can only be launched by Chrome.
+        if (intent.getComponent().equals(new ComponentName(
+                    ContextUtils.getApplicationContext(), SECURE_WEBAPP_LAUNCHER))) {
+            return true;
+        }
+
+        String webappUrl = webappInfo.url();
         String webappMac = IntentUtils.safeGetStringExtra(intent, ShortcutHelper.EXTRA_MAC);
 
         return (webappInfo.isForWebApk() || isValidMacForUrl(webappUrl, webappMac)
@@ -164,18 +179,7 @@ public class WebappLauncherActivity extends Activity {
 
     private static void launchWebapp(Activity launchingActivity, Intent intent,
             @NonNull WebappInfo webappInfo, long createTimestamp) {
-        String webappUrl = webappInfo.uri().toString();
-        int webappSource = webappInfo.source();
-
-        // Retrieves the source of the WebAPK from WebappDataStorage if it is unknown. The
-        // {@link webappSource} is only known in the cases of an external intent or a
-        // notification that launches a WebAPK. Otherwise, it's not trustworthy and we must read
-        // the SharedPreference to get the installation source.
-        if (webappInfo.isForWebApk() && webappSource == ShortcutSource.UNKNOWN) {
-            webappSource = getWebApkSource(webappInfo);
-        }
-        LaunchMetrics.recordHomeScreenLaunchIntoStandaloneActivity(
-                webappUrl, webappSource, webappInfo.displayMode());
+        LaunchMetrics.recordHomeScreenLaunchIntoStandaloneActivity(webappInfo);
 
         // Add all information needed to launch WebappActivity without {@link
         // WebappActivity#sWebappInfoMap} to launch intent. When the Android OS has killed a
@@ -183,36 +187,18 @@ public class WebappLauncherActivity extends Activity {
         // WebappActivity is launched without going through WebappLauncherActivity first.
         WebappActivity.addWebappInfo(webappInfo.id(), webappInfo);
 
-        Intent[] launchIntents =
-                createIntentsToLaunchForWebapp(intent, webappInfo, createTimestamp);
-        launchingActivity.startActivities(launchIntents);
-        if (IntentUtils.isIntentForNewTaskOrNewDocument(launchIntents[0])) {
+        Intent launchIntent = createIntentToLaunchForWebapp(intent, webappInfo, createTimestamp);
+
+        WarmupManager.getInstance().maybePrefetchDnsForUrlInBackground(
+                launchingActivity, webappInfo.url());
+
+        IntentUtils.safeStartActivity(launchingActivity, launchIntent);
+        if (IntentUtils.isIntentForNewTaskOrNewDocument(launchIntent)) {
             ApiCompatibilityUtils.finishAndRemoveTask(launchingActivity);
         } else {
             launchingActivity.finish();
             launchingActivity.overridePendingTransition(0, R.anim.no_anim);
         }
-    }
-
-    // Gets the source of a WebAPK from the WebappDataStorage if the source has been stored before.
-    private static int getWebApkSource(WebappInfo webappInfo) {
-        WebappDataStorage storage = null;
-
-        StrictMode.ThreadPolicy oldPolicy = StrictMode.allowThreadDiskReads();
-        try {
-            WebappRegistry.warmUpSharedPrefsForId(webappInfo.id());
-            storage = WebappRegistry.getInstance().getWebappDataStorage(webappInfo.id());
-        } finally {
-            StrictMode.setThreadPolicy(oldPolicy);
-        }
-
-        if (storage != null) {
-            int source = storage.getSource();
-            if (source != ShortcutSource.UNKNOWN) {
-                return source;
-            }
-        }
-        return ShortcutSource.WEBAPK_UNKNOWN;
     }
 
     /**
@@ -229,7 +215,7 @@ public class WebappLauncherActivity extends Activity {
     /** Relaunches WebAPK. */
     private static void relaunchWebApk(
             Activity launchingActivity, Intent sourceIntent, @NonNull WebappInfo info) {
-        Intent launchIntent = createRelaunchWebApkIntent(sourceIntent, (WebApkInfo) info);
+        Intent launchIntent = createRelaunchWebApkIntent(sourceIntent, info);
         launchAfterDelay(
                 launchingActivity.getApplicationContext(), launchIntent, WEBAPK_LAUNCH_DELAY_MS);
         ApiCompatibilityUtils.finishAndRemoveTask(launchingActivity);
@@ -282,13 +268,10 @@ public class WebappLauncherActivity extends Activity {
         if (info.isSplashProvidedByWebApk()) {
             return SameTaskWebApkActivity.class.getName();
         }
-        String activityName = info.isForWebApk() ? WebApkActivity.class.getName()
-                                                 : WebappActivity.class.getName();
+        String activityName = WebappActivity.class.getName();
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.LOLLIPOP) {
             // Specifically assign the app to a particular WebappActivity instance.
-            int namespace = info.isForWebApk()
-                    ? ActivityAssigner.ActivityAssignerNamespace.WEBAPK_NAMESPACE
-                    : ActivityAssigner.ActivityAssignerNamespace.WEBAPP_NAMESPACE;
+            int namespace = ActivityAssigner.ActivityAssignerNamespace.WEBAPP_NAMESPACE;
             int activityIndex = ActivityAssigner.instance(namespace).assign(info.id());
             activityName += String.valueOf(activityIndex);
         }
@@ -321,11 +304,9 @@ public class WebappLauncherActivity extends Activity {
         }
     }
 
-    /**
-     * Returns intents to launch for the web app. The output array should be sorted in the order
-     * that the intents should be dispatched with the intent to be dispatched first at index 0.
-     */
-    private static Intent[] createIntentsToLaunchForWebapp(
+    /** Returns intent to launch for the web app. */
+    @VisibleForTesting
+    public static Intent createIntentToLaunchForWebapp(
             Intent intent, @NonNull WebappInfo webappInfo, long createTimestamp) {
         String launchActivityClassName = selectWebappActivitySubclass(webappInfo);
 
@@ -333,29 +314,20 @@ public class WebappLauncherActivity extends Activity {
         // crbug.com/702998.
         finishIfReusingActivity(launchActivityClassName, webappInfo.id());
 
-        Intent showSplashIntent = null;
-        if (webappInfo.isSplashProvidedByWebApk()) {
-            showSplashIntent = new Intent(WebApkConstants.ACTION_SHOW_SPLASH);
-            showSplashIntent.setPackage(webappInfo.webApkPackageName());
-            showSplashIntent.setFlags(Intent.FLAG_ACTIVITY_NO_ANIMATION);
-        }
-
-        Intent webappActivityLaunchIntent = new Intent();
-        webappActivityLaunchIntent.setClassName(
-                ContextUtils.getApplicationContext(), launchActivityClassName);
-        webappInfo.setWebappIntentExtras(webappActivityLaunchIntent);
-        webappActivityLaunchIntent.setAction(Intent.ACTION_VIEW);
+        Intent launchIntent = new Intent();
+        launchIntent.setClassName(ContextUtils.getApplicationContext(), launchActivityClassName);
+        launchIntent.setAction(Intent.ACTION_VIEW);
 
         // On L+, firing intents with the exact same data should relaunch a particular
         // Activity.
-        webappActivityLaunchIntent.setData(
-                Uri.parse(WebappActivity.WEBAPP_SCHEME + "://" + webappInfo.id()));
+        launchIntent.setData(Uri.parse(WebappActivity.WEBAPP_SCHEME + "://" + webappInfo.id()));
 
-        IntentHandler.addTimestampToIntent(webappActivityLaunchIntent, createTimestamp);
-        // Pass through WebAPK shell launch timestamp to the new intent.
-        long shellLaunchTimestamp = IntentHandler.getWebApkShellLaunchTimestampFromIntent(intent);
-        IntentHandler.addShellLaunchTimestampToIntent(
-                webappActivityLaunchIntent, shellLaunchTimestamp);
+        IntentHandler.addTimestampToIntent(launchIntent, createTimestamp);
+        if (webappInfo.isForWebApk()) {
+            WebappIntentUtils.copyWebApkLaunchIntentExtras(intent, launchIntent);
+        } else {
+            WebappIntentUtils.copyWebappLaunchIntentExtras(intent, launchIntent);
+        }
 
         // Setting FLAG_ACTIVITY_CLEAR_TOP handles 2 edge cases:
         // - If a legacy PWA is launching from a notification, we want to ensure that the URL being
@@ -368,23 +340,21 @@ public class WebappLauncherActivity extends Activity {
         // CustomTabActivity activity and go back to the WebAPK activity. It is intentional that
         // Custom Tab will not be reachable with a back button.
         if (webappInfo.isSplashProvidedByWebApk()) {
-            webappActivityLaunchIntent.setFlags(
-                    Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_NO_ANIMATION);
+            launchIntent.setFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_NO_ANIMATION
+                    | Intent.FLAG_ACTIVITY_FORWARD_RESULT);
         } else {
-            webappActivityLaunchIntent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK
+            launchIntent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK
                     | ApiCompatibilityUtils.getActivityNewDocumentFlag()
                     | Intent.FLAG_ACTIVITY_CLEAR_TOP);
         }
 
-        return (showSplashIntent == null)
-                ? new Intent[] {webappActivityLaunchIntent}
-                : new Intent[] {webappActivityLaunchIntent, showSplashIntent};
+        return launchIntent;
     }
 
-    /** Tries to create WebappInfo/WebApkInfo for the intent. */
+    /** Tries to create WebappInfo for the intent. */
     @VisibleForTesting
     static WebappInfo tryCreateWebappInfo(Intent intent) {
-        // Builds WebApkInfo for the intent if the WebAPK package specified in the intent is a valid
+        // Builds WebappInfo for the intent if the WebAPK package specified in the intent is a valid
         // WebAPK and the URL specified in the intent can be fulfilled by the WebAPK.
         String webApkPackage =
                 IntentUtils.safeGetStringExtra(intent, WebApkConstants.EXTRA_WEBAPK_PACKAGE_NAME);

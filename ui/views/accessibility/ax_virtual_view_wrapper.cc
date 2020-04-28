@@ -34,9 +34,8 @@ AXAuraObjWrapper* AXVirtualViewWrapper::GetParent() {
 
 void AXVirtualViewWrapper::GetChildren(
     std::vector<AXAuraObjWrapper*>* out_children) {
-  for (int i = 0; i < virtual_view_->GetChildCount(); ++i)
-    out_children->push_back(
-        virtual_view_->child_at(i)->GetOrCreateWrapper(aura_obj_cache_));
+  for (const auto& child : virtual_view_->children())
+    out_children->push_back(child->GetOrCreateWrapper(aura_obj_cache_));
 }
 
 void AXVirtualViewWrapper::Serialize(ui::AXNodeData* out_node_data) {
@@ -50,6 +49,11 @@ int32_t AXVirtualViewWrapper::GetUniqueId() const {
 bool AXVirtualViewWrapper::HandleAccessibleAction(
     const ui::AXActionData& action) {
   return virtual_view_->HandleAccessibleAction(action);
+}
+
+std::string AXVirtualViewWrapper::ToString() const {
+  std::string description = "Virtual view child of ";
+  return description + virtual_view_->GetOwnerView()->GetClassName();
 }
 
 }  // namespace views

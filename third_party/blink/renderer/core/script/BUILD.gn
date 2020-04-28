@@ -5,8 +5,6 @@
 import("//third_party/blink/renderer/core/core.gni")
 
 blink_core_sources("script") {
-  split_count = 5
-
   sources = [
     "classic_pending_script.cc",
     "classic_pending_script.h",
@@ -26,10 +24,8 @@ blink_core_sources("script") {
     "ignore_destructive_write_count_incrementer.h",
     "import_map.cc",
     "import_map.h",
-    "layered_api.cc",
-    "layered_api.h",
-    "layered_api_module.h",
-    "layered_api_resources.h",
+    "js_module_script.cc",
+    "js_module_script.h",
     "modulator.cc",
     "modulator.h",
     "modulator_impl_base.cc",
@@ -46,8 +42,11 @@ blink_core_sources("script") {
     "module_script.h",
     "parsed_specifier.cc",
     "parsed_specifier.h",
+    "pending_import_map.cc",
+    "pending_import_map.h",
     "pending_script.cc",
     "pending_script.h",
+    "script.cc",
     "script.h",
     "script_element_base.cc",
     "script_element_base.h",
@@ -56,6 +55,8 @@ blink_core_sources("script") {
     "script_runner.cc",
     "script_runner.h",
     "script_scheduling_type.h",
+    "value_wrapper_synthetic_module_script.cc",
+    "value_wrapper_synthetic_module_script.h",
     "worker_modulator_impl.cc",
     "worker_modulator_impl.h",
     "worklet_modulator_impl.cc",
@@ -65,9 +66,7 @@ blink_core_sources("script") {
     "xml_parser_script_runner_host.h",
   ]
 
-  deps = [
-    "//third_party/blink/public:resources",
-  ]
+  deps = [ "//third_party/blink/public:resources" ]
 
   jumbo_excluded_sources = [ "modulator.cc" ]  # https://crbug.com/716395
 }

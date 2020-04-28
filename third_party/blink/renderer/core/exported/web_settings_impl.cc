@@ -45,7 +45,6 @@ WebSettingsImpl::WebSettingsImpl(Settings* settings,
       render_v_sync_notification_enabled_(false),
       auto_zoom_focused_node_to_legible_scale_(false),
       support_deprecated_target_density_dpi_(false),
-      viewport_meta_layout_size_quirk_(false),
       viewport_meta_non_user_scalable_quirk_(false),
       clobber_user_agent_initial_scale_quirk_(false) {
   DCHECK(settings);
@@ -181,11 +180,6 @@ void WebSettingsImpl::SetSupportDeprecatedTargetDensityDPI(
     bool support_deprecated_target_density_dpi) {
   support_deprecated_target_density_dpi_ =
       support_deprecated_target_density_dpi;
-}
-
-void WebSettingsImpl::SetViewportMetaLayoutSizeQuirk(
-    bool viewport_meta_layout_size_quirk) {
-  viewport_meta_layout_size_quirk_ = viewport_meta_layout_size_quirk;
 }
 
 void WebSettingsImpl::SetViewportMetaMergeContentQuirk(
@@ -341,10 +335,6 @@ void WebSettingsImpl::SetJavaScriptCanAccessClipboard(bool enabled) {
   settings_->SetJavaScriptCanAccessClipboard(enabled);
 }
 
-void WebSettingsImpl::SetXSSAuditorEnabled(bool enabled) {
-  settings_->SetXSSAuditorEnabled(enabled);
-}
-
 void WebSettingsImpl::SetTextTrackKindUserPreference(
     TextTrackKindUserPreference preference) {
   settings_->SetTextTrackKindUserPreference(
@@ -381,6 +371,18 @@ void WebSettingsImpl::SetTextTrackTextShadow(const WebString& shadow) {
 
 void WebSettingsImpl::SetTextTrackTextSize(const WebString& size) {
   settings_->SetTextTrackTextSize(size);
+}
+
+void WebSettingsImpl::SetTextTrackWindowColor(const WebString& color) {
+  settings_->SetTextTrackWindowColor(color);
+}
+
+void WebSettingsImpl::SetTextTrackWindowPadding(const WebString& padding) {
+  settings_->SetTextTrackWindowPadding(padding);
+}
+
+void WebSettingsImpl::SetTextTrackWindowRadius(const WebString& radius) {
+  settings_->SetTextTrackWindowRadius(radius);
 }
 
 void WebSettingsImpl::SetDNSPrefetchingEnabled(bool enabled) {
@@ -459,10 +461,6 @@ void WebSettingsImpl::SetEditingBehavior(EditingBehavior behavior) {
   settings_->SetEditingBehaviorType(static_cast<EditingBehaviorType>(behavior));
 }
 
-void WebSettingsImpl::SetMockScrollbarsEnabled(bool enabled) {
-  settings_->SetMockScrollbarsEnabled(enabled);
-}
-
 void WebSettingsImpl::SetHideScrollbars(bool enabled) {
   dev_tools_emulator_->SetHideScrollbars(enabled);
 }
@@ -487,10 +485,6 @@ void WebSettingsImpl::SetPreferCompositingToLCDTextEnabled(bool enabled) {
   dev_tools_emulator_->SetPreferCompositingToLCDTextEnabled(enabled);
 }
 
-void WebSettingsImpl::SetMinimumAccelerated2dCanvasSize(int num_pixels) {
-  settings_->SetMinimumAccelerated2dCanvasSize(num_pixels);
-}
-
 void WebSettingsImpl::SetHideDownloadUI(bool hide) {
   settings_->SetHideDownloadUI(hide);
 }
@@ -501,10 +495,6 @@ void WebSettingsImpl::SetPresentationReceiver(bool enabled) {
 
 void WebSettingsImpl::SetHighlightAds(bool enabled) {
   settings_->SetHighlightAds(enabled);
-}
-
-void WebSettingsImpl::SetHistoryEntryRequiresUserGesture(bool enabled) {
-  settings_->SetHistoryEntryRequiresUserGesture(enabled);
 }
 
 void WebSettingsImpl::SetHyperlinkAuditingEnabled(bool enabled) {
@@ -634,6 +624,10 @@ void WebSettingsImpl::SetSyncXHRInDocumentsEnabled(bool enabled) {
   settings_->SetSyncXHRInDocumentsEnabled(enabled);
 }
 
+void WebSettingsImpl::SetCaretBrowsingEnabled(bool enabled) {
+  settings_->SetCaretBrowsingEnabled(enabled);
+}
+
 void WebSettingsImpl::SetCookieEnabled(bool enabled) {
   dev_tools_emulator_->SetCookieEnabled(enabled);
 }
@@ -660,10 +654,6 @@ void WebSettingsImpl::SetSelectionStrategy(SelectionStrategyType strategy) {
 
 void WebSettingsImpl::SetSmartInsertDeleteEnabled(bool enabled) {
   settings_->SetSmartInsertDeleteEnabled(enabled);
-}
-
-void WebSettingsImpl::SetUseSolidColorScrollbars(bool enabled) {
-  settings_->SetUseSolidColorScrollbars(enabled);
 }
 
 void WebSettingsImpl::SetMainFrameResizesAreOrientationChanges(bool enabled) {
@@ -756,6 +746,26 @@ void WebSettingsImpl::SetLazyImageLoadingDistanceThresholdPx4G(
   settings_->SetLazyImageLoadingDistanceThresholdPx4G(distance_px);
 }
 
+void WebSettingsImpl::SetLazyImageFirstKFullyLoadUnknown(int num_images) {
+  settings_->SetLazyImageFirstKFullyLoadUnknown(num_images);
+}
+
+void WebSettingsImpl::SetLazyImageFirstKFullyLoadSlow2G(int num_images) {
+  settings_->SetLazyImageFirstKFullyLoadSlow2G(num_images);
+}
+
+void WebSettingsImpl::SetLazyImageFirstKFullyLoad2G(int num_images) {
+  settings_->SetLazyImageFirstKFullyLoad2G(num_images);
+}
+
+void WebSettingsImpl::SetLazyImageFirstKFullyLoad3G(int num_images) {
+  settings_->SetLazyImageFirstKFullyLoad3G(num_images);
+}
+
+void WebSettingsImpl::SetLazyImageFirstKFullyLoad4G(int num_images) {
+  settings_->SetLazyImageFirstKFullyLoad4G(num_images);
+}
+
 void WebSettingsImpl::SetForceDarkModeEnabled(bool enabled) {
   settings_->SetForceDarkModeEnabled(enabled);
 }
@@ -763,6 +773,11 @@ void WebSettingsImpl::SetForceDarkModeEnabled(bool enabled) {
 void WebSettingsImpl::SetPreferredColorScheme(
     PreferredColorScheme color_scheme) {
   settings_->SetPreferredColorScheme(color_scheme);
+}
+
+void WebSettingsImpl::SetNavigationControls(
+    NavigationControls navigation_controls) {
+  settings_->SetNavigationControls(navigation_controls);
 }
 
 STATIC_ASSERT_ENUM(WebSettings::ImageAnimationPolicy::kAllowed,

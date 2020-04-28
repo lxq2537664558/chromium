@@ -7,18 +7,20 @@ package org.chromium.chrome.browser.infobar;
 import android.content.Context;
 import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager.NameNotFoundException;
-import android.graphics.Bitmap;
-import android.graphics.BitmapFactory;
 import android.os.StrictMode;
+
+import androidx.annotation.DrawableRes;
 
 import org.chromium.base.CommandLine;
 import org.chromium.base.ThreadUtils;
 import org.chromium.chrome.R;
-import org.chromium.chrome.browser.UrlConstants;
-import org.chromium.chrome.browser.datareduction.DataReductionBrandingResourceProvider;
+import org.chromium.chrome.browser.about_settings.AboutSettingsBridge;
 import org.chromium.chrome.browser.datareduction.DataReductionPromoUtils;
 import org.chromium.chrome.browser.omaha.VersionNumberGetter;
-import org.chromium.chrome.browser.preferences.PrefServiceBridge;
+import org.chromium.chrome.browser.ui.messages.infobar.ConfirmInfoBar;
+import org.chromium.chrome.browser.ui.messages.infobar.InfoBarControlLayout;
+import org.chromium.chrome.browser.ui.messages.infobar.InfoBarLayout;
+import org.chromium.components.embedder_support.util.UrlConstants;
 import org.chromium.content_public.browser.WebContents;
 import org.chromium.net.GURLUtils;
 
@@ -38,7 +40,7 @@ public class DataReductionPromoInfoBar extends ConfirmInfoBar {
     private static final String FORCE_INFOBAR_SWITCH = "force-data-reduction-promo-infobar";
     private static final int NO_INSTALL_TIME = 0;
 
-    private static Bitmap sIcon;
+    private static @DrawableRes int sIconId;
     private static String sTitle;
     private static String sText;
     private static String sPrimaryButtonText;
@@ -69,7 +71,7 @@ public class DataReductionPromoInfoBar extends ConfirmInfoBar {
         if (!GURLUtils.getScheme(url).equals(UrlConstants.HTTP_SCHEME)) return false;
 
         int currentMilestone = VersionNumberGetter.getMilestoneFromVersionNumber(
-                PrefServiceBridge.getInstance().getAboutVersionStrings().getApplicationVersion());
+                AboutSettingsBridge.getApplicationVersion());
         String freOrSecondRunVersion =
                 DataReductionPromoUtils.getDisplayedFreOrSecondRunPromoVersion();
 
@@ -127,12 +129,10 @@ public class DataReductionPromoInfoBar extends ConfirmInfoBar {
             return false;
         }
 
-        DataReductionPromoInfoBar.launch(webContents,
-                BitmapFactory.decodeResource(context.getResources(), R.drawable.infobar_chrome),
+        DataReductionPromoInfoBar.launch(webContents, R.drawable.infobar_chrome,
                 context.getString(R.string.data_reduction_promo_infobar_title),
                 context.getString(R.string.data_reduction_promo_infobar_text),
-                context.getString(DataReductionBrandingResourceProvider.getDataSaverBrandedString(
-                        R.string.data_reduction_enable_button)),
+                context.getString(R.string.data_reduction_enable_button_lite_mode),
                 context.getString(R.string.no_thanks));
 
         return true;
@@ -161,29 +161,26 @@ public class DataReductionPromoInfoBar extends ConfirmInfoBar {
      * text. Clicking the link will open the specified settings page.
      *
      * @param webContents The {@link WebContents} in which to open the {@link InfoBar}.
-     * @param icon Bitmap to use for the {@link InfoBar} icon.
+     * @param iconId {@link DrawableRes} to use for the {@link InfoBar} icon.
      * @param title The title to display in the {@link InfoBar}.
      * @param text The text to display in the {@link InfoBar}.
      * @param primaryButtonText The text to display on the primary button.
      * @param secondaryButtonText The text to display on the secondary button.
      */
-    private static void launch(WebContents webContents,
-            Bitmap icon,
-            String title,
-            String text,
-            String primaryButtonText,
-            String secondaryButtonText) {
+    private static void launch(WebContents webContents, @DrawableRes int iconId, String title,
+            String text, String primaryButtonText, String secondaryButtonText) {
         sTitle = title;
         sText = text;
         sPrimaryButtonText = primaryButtonText;
         sSecondaryButtonText = secondaryButtonText;
-        sIcon = icon;
+        sIconId = iconId;
         DataReductionPromoInfoBarDelegate.launch(webContents);
         DataReductionPromoUtils.saveInfoBarPromoDisplayed();
     }
 
     DataReductionPromoInfoBar() {
-        super(0, sIcon, sTitle, null, sPrimaryButtonText, sSecondaryButtonText);
+        super(sIconId, R.color.infobar_icon_drawable_color, null, sTitle, null, sPrimaryButtonText,
+                sSecondaryButtonText);
     }
 
     @Override

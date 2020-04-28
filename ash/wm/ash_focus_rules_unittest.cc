@@ -5,7 +5,8 @@
 #include <memory>
 
 #include "ash/public/cpp/shell_window_ids.h"
-#include "ash/session/session_controller.h"
+#include "ash/session/session_controller_impl.h"
+#include "ash/session/test_pref_service_provider.h"
 #include "ash/session/test_session_controller_client.h"
 #include "ash/shell.h"
 #include "ash/test/ash_test_base.h"
@@ -15,7 +16,6 @@
 #include "ash/wm/lock_state_controller.h"
 #include "ash/wm/window_state.h"
 #include "ash/wm/window_util.h"
-#include "services/ws/public/mojom/window_tree_constants.mojom.h"
 #include "ui/aura/client/aura_constants.h"
 #include "ui/aura/client/window_parenting_client.h"
 #include "ui/base/ui_base_types.h"
@@ -32,9 +32,10 @@ namespace {
 // test lock screen widget.
 class LockScreenSessionControllerClient : public TestSessionControllerClient {
  public:
-  explicit LockScreenSessionControllerClient(SessionController* controller)
-      : TestSessionControllerClient(controller) {
-    InitializeAndBind();
+  LockScreenSessionControllerClient(SessionControllerImpl* controller,
+                                    TestPrefServiceProvider* prefs_provider)
+      : TestSessionControllerClient(controller, prefs_provider) {
+    InitializeAndSetClient();
     CreatePredefinedUserSessions(1);
   }
   ~LockScreenSessionControllerClient() override = default;
@@ -71,7 +72,7 @@ class LockScreenSessionControllerClient : public TestSessionControllerClient {
     params.parent = Shell::GetContainer(Shell::GetPrimaryRootWindow(),
                                         kShellWindowId_LockScreenContainer);
     params.ownership = views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET;
-    lock_screen_widget_->Init(params);
+    lock_screen_widget_->Init(std::move(params));
     lock_screen_widget_->SetContentsView(lock_view);
     lock_screen_widget_->Show();
     lock_screen_widget_->GetNativeView()->SetName("LockView");
@@ -96,7 +97,8 @@ class LockScreenAshFocusRulesTest : public AshTestBase {
     AshTestBase::SetUp();
     ash_test_helper()->set_test_session_controller_client(
         std::make_unique<LockScreenSessionControllerClient>(
-            Shell::Get()->session_controller()));
+            Shell::Get()->session_controller(),
+            ash_test_helper()->prefs_provider()));
   }
 
   aura::Window* CreateWindowInActiveDesk() {
@@ -110,7 +112,8 @@ class LockScreenAshFocusRulesTest : public AshTestBase {
   aura::Window* CreateWindowInAlwaysOnTopContainer() {
     aura::Window* window =
         CreateWindowInContainer(kShellWindowId_AlwaysOnTopContainer);
-    window->SetProperty(aura::client::kAlwaysOnTopKey, true);
+    window->SetProperty(aura::client::kZOrderingKey,
+                        ui::ZOrderLevel::kFloatingWindow);
     return window;
   }
 
@@ -146,9 +149,9 @@ class LockScreenAshFocusRulesTest : public AshTestBase {
     window->Init(ui::LAYER_TEXTURED);
     window->Show();
     window->SetProperty(aura::client::kResizeBehaviorKey,
-                        ws::mojom::kResizeBehaviorCanMaximize |
-                            ws::mojom::kResizeBehaviorCanMinimize |
-                            ws::mojom::kResizeBehaviorCanResize);
+                        aura::client::kResizeBehaviorCanMaximize |
+                            aura::client::kResizeBehaviorCanMinimize |
+                            aura::client::kResizeBehaviorCanResize);
     container->AddChild(window);
     return window;
   }
@@ -176,10 +179,9 @@ TEST_F(LockScreenAshFocusRulesTest, RegainFocusAfterUnlock) {
   EXPECT_TRUE(normal_window->HasFocus());
   EXPECT_FALSE(always_on_top_window->HasFocus());
 
-  wm::WindowState* normal_window_state =
-      wm::GetWindowState(normal_window.get());
-  wm::WindowState* always_on_top_window_state =
-      wm::GetWindowState(always_on_top_window.get());
+  WindowState* normal_window_state = WindowState::Get(normal_window.get());
+  WindowState* always_on_top_window_state =
+      WindowState::Get(always_on_top_window.get());
 
   EXPECT_TRUE(normal_window_state->CanActivate());
   EXPECT_TRUE(always_on_top_window_state->CanActivate());
@@ -211,7 +213,7 @@ TEST_F(LockScreenAshFocusRulesTest, PreventFocusChangeWithLockScreenPresent) {
   BlockUserSession(BLOCKED_BY_LOCK_SCREEN);
   EXPECT_TRUE(Shell::Get()->session_controller()->IsScreenLocked());
 
-  views::test::TestInitialFocusWidgetDelegate delegate(CurrentContext());
+  views::test::TestInitialFocusWidgetDelegate delegate(GetContext());
   EXPECT_FALSE(delegate.view()->HasFocus());
   delegate.GetWidget()->Show();
   EXPECT_FALSE(delegate.GetWidget()->IsActive());

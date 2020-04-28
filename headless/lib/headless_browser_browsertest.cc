@@ -21,6 +21,7 @@
 #include "content/public/common/content_switches.h"
 #include "content/public/common/url_constants.h"
 #include "content/public/test/browser_test.h"
+#include "content/public/test/no_renderer_crashes_assertion.h"
 #include "headless/lib/browser/headless_browser_context_impl.h"
 #include "headless/lib/browser/headless_web_contents_impl.h"
 #include "headless/lib/headless_macros.h"
@@ -40,6 +41,10 @@
 #include "ui/base/clipboard/clipboard.h"
 #include "ui/base/clipboard/scoped_clipboard_writer.h"
 #include "ui/gfx/geometry/size.h"
+
+#if defined(OS_MACOSX)
+#include "third_party/crashpad/crashpad/client/crash_report_database.h"
+#endif
 
 using testing::UnorderedElementsAre;
 
@@ -207,7 +212,13 @@ class HeadlessBrowserTestWithProxy : public HeadlessBrowserTest {
   net::SpawnedTestServer proxy_server_;
 };
 
-IN_PROC_BROWSER_TEST_F(HeadlessBrowserTestWithProxy, SetProxyConfig) {
+#if defined(OS_WIN)
+// TODO(crbug.com/1045971): Disabled due to flakiness.
+#define MAYBE_SetProxyConfig DISABLED_SetProxyConfig
+#else
+#define MAYBE_SetProxyConfig SetProxyConfig
+#endif
+IN_PROC_BROWSER_TEST_F(HeadlessBrowserTestWithProxy, MAYBE_SetProxyConfig) {
   std::unique_ptr<net::ProxyConfig> proxy_config(new net::ProxyConfig);
   proxy_config->proxy_rules().ParseFromString(
       proxy_server()->host_port_pair().ToString());
@@ -259,22 +270,28 @@ IN_PROC_BROWSER_TEST_F(HeadlessBrowserTest, ClipboardCopyPasteText) {
   ui::Clipboard* clipboard = ui::Clipboard::GetForCurrentThread();
   ASSERT_TRUE(clipboard);
   base::string16 paste_text = base::ASCIIToUTF16("Clippy!");
-  for (ui::ClipboardType type :
-       {ui::CLIPBOARD_TYPE_COPY_PASTE, ui::CLIPBOARD_TYPE_SELECTION,
-        ui::CLIPBOARD_TYPE_DRAG}) {
-    if (!ui::Clipboard::IsSupportedClipboardType(type))
+  for (ui::ClipboardBuffer buffer :
+       {ui::ClipboardBuffer::kCopyPaste, ui::ClipboardBuffer::kSelection,
+        ui::ClipboardBuffer::kDrag}) {
+    if (!ui::Clipboard::IsSupportedClipboardBuffer(buffer))
       continue;
     {
-      ui::ScopedClipboardWriter writer(type);
+      ui::ScopedClipboardWriter writer(buffer);
       writer.WriteText(paste_text);
     }
     base::string16 copy_text;
-    clipboard->ReadText(type, &copy_text);
+    clipboard->ReadText(buffer, &copy_text);
     EXPECT_EQ(paste_text, copy_text);
   }
 }
 
-IN_PROC_BROWSER_TEST_F(HeadlessBrowserTest, DefaultSizes) {
+#if defined(OS_WIN)
+// TODO(crbug.com/1045971): Disabled due to flakiness.
+#define MAYBE_DefaultSizes DISABLED_DefaultSizes
+#else
+#define MAYBE_DefaultSizes DefaultSizes
+#endif
+IN_PROC_BROWSER_TEST_F(HeadlessBrowserTest, MAYBE_DefaultSizes) {
   HeadlessBrowserContext* browser_context =
       browser()->CreateBrowserContextBuilder().Build();
 
@@ -466,6 +483,8 @@ class CrashReporterTest : public HeadlessBrowserTest,
 #define MAYBE_GenerateMinidump DISABLED_GenerateMinidump
 #endif  // defined(HEADLESS_USE_BREAKPAD) || defined(OS_MACOSX)
 IN_PROC_BROWSER_TEST_F(CrashReporterTest, MAYBE_GenerateMinidump) {
+  content::ScopedAllowRendererCrashes scoped_allow_renderer_crashes;
+
   // Navigates a tab to chrome://crash and checks that a minidump is generated.
   // Note that we only test renderer crashes here -- browser crashes need to be
   // tested with a separate harness.
@@ -486,17 +505,22 @@ IN_PROC_BROWSER_TEST_F(CrashReporterTest, MAYBE_GenerateMinidump) {
 
   // Check that one minidump got created.
   {
-#if defined(OS_MACOSX)
-    // Mac outputs dumps in the 'pending' directory.
-    crash_dumps_dir_ = crash_dumps_dir_.Append("pending");
-#endif
     base::ThreadRestrictions::SetIOAllowed(true);
+
+#if defined(OS_MACOSX)
+    auto database = crashpad::CrashReportDatabase::Initialize(crash_dumps_dir_);
+    std::vector<crashpad::CrashReportDatabase::Report> reports;
+    ASSERT_EQ(database->GetPendingReports(&reports),
+              crashpad::CrashReportDatabase::kNoError);
+    EXPECT_EQ(reports.size(), 1u);
+#else
     base::FileEnumerator it(crash_dumps_dir_, /* recursive */ false,
                             base::FileEnumerator::FILES);
     base::FilePath minidump = it.Next();
     EXPECT_FALSE(minidump.empty());
     EXPECT_EQ(FILE_PATH_LITERAL(".dmp"), minidump.Extension());
     EXPECT_TRUE(it.Next().empty());
+#endif
   }
 
   web_contents_->RemoveObserver(this);
@@ -601,7 +625,13 @@ IN_PROC_BROWSER_TEST_F(HeadlessBrowserTest, TraceUsingBrowserDevToolsTarget) {
   EXPECT_LT(0u, tracing_data->GetSize());
 }
 
-IN_PROC_BROWSER_TEST_F(HeadlessBrowserTest, WindowPrint) {
+#if defined(OS_WIN)
+// TODO(crbug.com/1045971): Disabled due to flakiness.
+#define MAYBE_WindowPrint DISABLED_WindowPrint
+#else
+#define MAYBE_WindowPrint WindowPrint
+#endif
+IN_PROC_BROWSER_TEST_F(HeadlessBrowserTest, MAYBE_WindowPrint) {
   EXPECT_TRUE(embedded_test_server()->Start());
 
   HeadlessBrowserContext* browser_context =
@@ -623,8 +653,14 @@ class HeadlessBrowserAllowInsecureLocalhostTest : public HeadlessBrowserTest {
   }
 };
 
+#if defined(OS_WIN)
+// TODO(crbug.com/1045971): Disabled due to flakiness.
+#define MAYBE_AllowInsecureLocalhostFlag DISABLED_AllowInsecureLocalhostFlag
+#else
+#define MAYBE_AllowInsecureLocalhostFlag AllowInsecureLocalhostFlag
+#endif
 IN_PROC_BROWSER_TEST_F(HeadlessBrowserAllowInsecureLocalhostTest,
-                       AllowInsecureLocalhostFlag) {
+                       MAYBE_AllowInsecureLocalhostFlag) {
   net::EmbeddedTestServer https_server(net::EmbeddedTestServer::TYPE_HTTPS);
   https_server.SetSSLConfig(net::EmbeddedTestServer::CERT_EXPIRED);
   https_server.ServeFilesFromSourceDirectory("headless/test/data");
@@ -646,7 +682,7 @@ IN_PROC_BROWSER_TEST_F(HeadlessBrowserAllowInsecureLocalhostTest,
 class HeadlessBrowserTestAppendCommandLineFlags : public HeadlessBrowserTest {
  public:
   HeadlessBrowserTestAppendCommandLineFlags() {
-    options()->append_command_line_flags_callback = base::Bind(
+    options()->append_command_line_flags_callback = base::BindRepeating(
         &HeadlessBrowserTestAppendCommandLineFlags::AppendCommandLineFlags,
         base::Unretained(this));
   }
@@ -692,7 +728,14 @@ IN_PROC_BROWSER_TEST_F(HeadlessBrowserTestAppendCommandLineFlags,
   (void)web_contents;
 }
 
-IN_PROC_BROWSER_TEST_F(HeadlessBrowserTest, ServerWantsClientCertificate) {
+#if defined(OS_WIN)
+// TODO(crbug.com/1045971): Disabled due to flakiness.
+#define MAYBE_ServerWantsClientCertificate DISABLED_ServerWantsClientCertificate
+#else
+#define MAYBE_ServerWantsClientCertificate ServerWantsClientCertificate
+#endif
+IN_PROC_BROWSER_TEST_F(HeadlessBrowserTest,
+                       MAYBE_ServerWantsClientCertificate) {
   net::SpawnedTestServer::SSLOptions ssl_options;
   ssl_options.request_client_certificate = true;
 
@@ -711,12 +754,16 @@ IN_PROC_BROWSER_TEST_F(HeadlessBrowserTest, ServerWantsClientCertificate) {
   EXPECT_TRUE(WaitForLoad(web_contents));
 }
 
-IN_PROC_BROWSER_TEST_F(HeadlessBrowserTest, AIAFetching) {
-  net::SpawnedTestServer::SSLOptions ssl_options(
-      net::SpawnedTestServer::SSLOptions::CERT_AUTO_AIA_INTERMEDIATE);
-  net::SpawnedTestServer server(
-      net::SpawnedTestServer::TYPE_HTTPS, ssl_options,
-      base::FilePath(FILE_PATH_LITERAL("net/data/ssl")));
+#if defined(OS_WIN)
+// TODO(crbug.com/1045971): Disabled due to flakiness.
+#define MAYBE_AIAFetching DISABLED_AIAFetching
+#else
+#define MAYBE_AIAFetching AIAFetching
+#endif
+IN_PROC_BROWSER_TEST_F(HeadlessBrowserTest, MAYBE_AIAFetching) {
+  net::EmbeddedTestServer server(net::EmbeddedTestServer::TYPE_HTTPS);
+  server.SetSSLConfig(net::EmbeddedTestServer::CERT_AUTO_AIA_INTERMEDIATE);
+  server.AddDefaultHandlers(base::FilePath(FILE_PATH_LITERAL("net/data/ssl")));
   ASSERT_TRUE(server.Start());
 
   HeadlessBrowserContext* browser_context =

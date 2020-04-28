@@ -46,7 +46,7 @@ class SyncSchedulerImpl : public SyncScheduler {
   ~SyncSchedulerImpl() override;
 
   void Start(Mode mode, base::Time last_poll_time) override;
-  void ScheduleConfiguration(const ConfigurationParams& params) override;
+  void ScheduleConfiguration(ConfigurationParams params) override;
   void Stop() override;
   void ScheduleLocalNudge(ModelTypeSet types,
                           const base::Location& nudge_location) override;
@@ -283,7 +283,7 @@ class SyncSchedulerImpl : public SyncScheduler {
 
   SEQUENCE_CHECKER(sequence_checker_);
 
-  base::WeakPtrFactory<SyncSchedulerImpl> weak_ptr_factory_;
+  base::WeakPtrFactory<SyncSchedulerImpl> weak_ptr_factory_{this};
 
   DISALLOW_COPY_AND_ASSIGN(SyncSchedulerImpl);
 };

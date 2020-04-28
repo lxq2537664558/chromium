@@ -13,10 +13,11 @@
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
 #include "content/public/browser/notification_database_data.h"
-#include "content/public/test/test_browser_thread_bundle.h"
+#include "content/public/test/browser_task_environment.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/common/notifications/notification_resources.h"
 #include "third_party/blink/public/common/notifications/platform_notification_data.h"
+#include "third_party/blink/public/mojom/notifications/notification.mojom.h"
 #include "third_party/leveldatabase/src/include/leveldb/db.h"
 #include "third_party/leveldatabase/src/include/leveldb/write_batch.h"
 #include "url/gurl.h"
@@ -43,7 +44,7 @@ const struct {
 class NotificationDatabaseTest : public ::testing::Test {
  public:
   NotificationDatabaseTest()
-      : thread_bundle_(TestBrowserThreadBundle::IO_MAINLOOP) {}
+      : task_environment_(BrowserTaskEnvironment::IO_MAINLOOP) {}
 
  protected:
   // Creates a new NotificationDatabase instance in memory.
@@ -117,7 +118,7 @@ class NotificationDatabaseTest : public ::testing::Test {
 
   NotificationDatabase::UkmCallback callback() { return callback_; }
 
-  TestBrowserThreadBundle thread_bundle_;  // Must be first member.
+  BrowserTaskEnvironment task_environment_;  // Must be first member.
 
   NotificationDatabase::UkmCallback callback_;
 };
@@ -610,6 +611,48 @@ TEST_F(NotificationDatabaseTest, DeleteNotificationDataDifferentOrigin) {
   EXPECT_EQ(
       NotificationDatabase::STATUS_OK,
       database->ReadNotificationData(notification_id, origin, &database_data));
+}
+
+TEST_F(NotificationDatabaseTest, DeleteInvalidNotificationResources) {
+  std::unique_ptr<NotificationDatabase> database(CreateDatabaseInMemory());
+  ASSERT_EQ(NotificationDatabase::STATUS_OK,
+            database->Open(true /* create_if_missing */));
+
+  // Deleting non-existing resources is not considered to be a failure.
+  ASSERT_EQ(NotificationDatabase::STATUS_OK,
+            database->DeleteNotificationResources("bad-id",
+                                                  GURL("https://chrome.com")));
+}
+
+TEST_F(NotificationDatabaseTest, DeleteNotificationResources) {
+  std::unique_ptr<NotificationDatabase> database(CreateDatabaseInMemory());
+  ASSERT_EQ(NotificationDatabase::STATUS_OK,
+            database->Open(true /* create_if_missing */));
+
+  const std::string notification_id = GenerateNotificationId();
+
+  blink::NotificationResources notification_resources;
+  NotificationDatabaseData database_data;
+  database_data.notification_id = notification_id;
+  database_data.notification_resources = notification_resources;
+
+  GURL origin("https://example.com");
+
+  ASSERT_EQ(NotificationDatabase::STATUS_OK,
+            database->WriteNotificationData(origin, database_data));
+
+  // Reading notification resources after writing should succeed.
+  EXPECT_EQ(NotificationDatabase::STATUS_OK,
+            database->ReadNotificationResources(notification_id, origin,
+                                                &notification_resources));
+
+  // Delete the notification resources for the notification which was just
+  // written to the database, and verify that reading them again will fail.
+  EXPECT_EQ(NotificationDatabase::STATUS_OK,
+            database->DeleteNotificationResources(notification_id, origin));
+  EXPECT_EQ(NotificationDatabase::STATUS_ERROR_NOT_FOUND,
+            database->ReadNotificationResources(notification_id, origin,
+                                                &notification_resources));
 }
 
 TEST_F(NotificationDatabaseTest, ReadAllNotificationData) {

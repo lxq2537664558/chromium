@@ -8,7 +8,7 @@
 #include "components/viz/common/resources/resource_format.h"
 #include "third_party/blink/renderer/platform/graphics/graphics_types.h"
 #include "third_party/blink/renderer/platform/platform_export.h"
-#include "third_party/blink/renderer/platform/wtf/allocator.h"
+#include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
 #include "third_party/skia/include/core/SkColorSpace.h"
 #include "third_party/skia/include/core/SkImageInfo.h"
 #include "ui/gfx/buffer_types.h"
@@ -25,18 +25,17 @@ class ColorSpace;
 
 namespace blink {
 
-enum CanvasColorSpace {
-  kSRGBCanvasColorSpace,
-  kLinearRGBCanvasColorSpace,
-  kRec2020CanvasColorSpace,
-  kP3CanvasColorSpace,
-  kMaxCanvasColorSpace = kP3CanvasColorSpace
+enum class CanvasColorSpace {
+  kSRGB,
+  kLinearRGB,
+  kRec2020,
+  kP3,
 };
 
-enum CanvasPixelFormat {
-  kRGBA8CanvasPixelFormat,
-  kF16CanvasPixelFormat,
-  kMaxCanvasPixelFormat = kF16CanvasPixelFormat
+enum class CanvasPixelFormat {
+  kRGBA8,
+  kBGRA8,
+  kF16,
 };
 
 class PLATFORM_EXPORT CanvasColorParams {
@@ -47,6 +46,13 @@ class PLATFORM_EXPORT CanvasColorParams {
   CanvasColorParams();
   CanvasColorParams(CanvasColorSpace, CanvasPixelFormat, OpacityMode);
   explicit CanvasColorParams(const SkImageInfo&);
+
+  static CanvasPixelFormat GetNativeCanvasPixelFormat() {
+    if (kN32_SkColorType == kRGBA_8888_SkColorType)
+      return CanvasPixelFormat::kRGBA8;
+    else if (kN32_SkColorType == kBGRA_8888_SkColorType)
+      return CanvasPixelFormat::kBGRA8;
+  }
 
   CanvasColorSpace ColorSpace() const { return color_space_; }
   CanvasPixelFormat PixelFormat() const { return pixel_format_; }
@@ -68,7 +74,6 @@ class PLATFORM_EXPORT CanvasColorParams {
 
   // The pixel format to use for allocating SkSurfaces.
   SkColorType GetSkColorType() const;
-  static SkColorType PixelFormatToSkColorType(CanvasPixelFormat pixel_format);
   uint8_t BytesPerPixel() const;
 
   // The color space in which pixels read from the canvas via a shader will be
@@ -79,8 +84,6 @@ class PLATFORM_EXPORT CanvasColorParams {
   // Return the color space of the underlying data for the canvas.
   gfx::ColorSpace GetStorageGfxColorSpace() const;
   sk_sp<SkColorSpace> GetSkColorSpace() const;
-  static sk_sp<SkColorSpace> CanvasColorSpaceToSkColorSpace(
-      CanvasColorSpace color_space);
   SkAlphaType GetSkAlphaType() const;
   const SkSurfaceProps* GetSkSurfaceProps() const;
 
@@ -96,8 +99,8 @@ class PLATFORM_EXPORT CanvasColorParams {
   CanvasColorParams(const sk_sp<SkColorSpace> color_space,
                     SkColorType color_type);
 
-  CanvasColorSpace color_space_ = kSRGBCanvasColorSpace;
-  CanvasPixelFormat pixel_format_ = kRGBA8CanvasPixelFormat;
+  CanvasColorSpace color_space_ = CanvasColorSpace::kSRGB;
+  CanvasPixelFormat pixel_format_ = GetNativeCanvasPixelFormat();
   OpacityMode opacity_mode_ = kNonOpaque;
 };
 

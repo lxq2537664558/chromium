@@ -7,11 +7,12 @@ package org.chromium.ui.modelutil;
 import android.content.Context;
 import android.content.res.Resources;
 import android.graphics.drawable.Drawable;
-import android.support.annotation.DrawableRes;
-import android.support.annotation.Nullable;
-import android.support.annotation.StringRes;
-import android.support.v4.util.ObjectsCompat;
-import android.support.v7.content.res.AppCompatResources;
+
+import androidx.annotation.DrawableRes;
+import androidx.annotation.Nullable;
+import androidx.annotation.StringRes;
+import androidx.appcompat.content.res.AppCompatResources;
+import androidx.core.util.ObjectsCompat;
 
 import org.chromium.base.annotations.RemovableInRelease;
 
@@ -61,7 +62,7 @@ public class PropertyModel extends PropertyObservable<PropertyKey> {
     }
 
     /** The key type for mutable boolean model properties. */
-    public final static class WritableBooleanPropertyKey extends ReadableBooleanPropertyKey {
+    public static final class WritableBooleanPropertyKey extends ReadableBooleanPropertyKey {
         /**
          * Constructs a new unnamed writable boolean property key.
          */
@@ -97,7 +98,7 @@ public class PropertyModel extends PropertyObservable<PropertyKey> {
     }
 
     /** The key type for mutable float model properties. */
-    public final static class WritableFloatPropertyKey extends ReadableFloatPropertyKey {
+    public static final class WritableFloatPropertyKey extends ReadableFloatPropertyKey {
         /**
          * Constructs a new unnamed writable float property key.
          */
@@ -133,7 +134,7 @@ public class PropertyModel extends PropertyObservable<PropertyKey> {
     }
 
     /** The key type for mutable int model properties. */
-    public final static class WritableIntPropertyKey extends ReadableIntPropertyKey {
+    public static final class WritableIntPropertyKey extends ReadableIntPropertyKey {
         /**
          * Constructs a new unnamed writable integer property key.
          */
@@ -177,7 +178,7 @@ public class PropertyModel extends PropertyObservable<PropertyKey> {
      *
      * @param <T> The type of the Object being tracked by the key.
      */
-    public final static class WritableObjectPropertyKey<T> extends ReadableObjectPropertyKey<T> {
+    public static final class WritableObjectPropertyKey<T> extends ReadableObjectPropertyKey<T> {
         private final boolean mSkipEquality;
 
         /** Default constructor for an unnamed writable object property. */
@@ -368,6 +369,26 @@ public class PropertyModel extends PropertyObservable<PropertyKey> {
     }
 
     /**
+     * Determines whether the value for the provided key is the same in this model and a different
+     * model.
+     * @param otherModel The other {@link PropertyModel} to check.
+     * @param key The {@link PropertyKey} to check.
+     * @return Whether this model and {@code otherModel} have the same value set for {@code key}.
+     */
+    public boolean compareValue(PropertyModel otherModel, PropertyKey key) {
+        validateKey(key);
+        otherModel.validateKey(key);
+        if (!mData.containsKey(key) || !otherModel.mData.containsKey(key)) return false;
+
+        if (key instanceof WritableObjectPropertyKey
+                && ((WritableObjectPropertyKey) key).mSkipEquality) {
+            return false;
+        }
+
+        return ObjectsCompat.equals(mData.get(key), otherModel.mData.get(key));
+    }
+
+    /**
      * Allows constructing a new {@link PropertyModel} with read-only properties.
      */
     public static class Builder {
@@ -481,6 +502,12 @@ public class PropertyModel extends PropertyObservable<PropertyKey> {
         public String toString() {
             return value + " in " + super.toString();
         }
+
+        @Override
+        public boolean equals(Object other) {
+            return other != null && other instanceof FloatContainer
+                    && ((FloatContainer) other).value == value;
+        }
     }
 
     private static class IntContainer extends ValueContainer {
@@ -489,6 +516,12 @@ public class PropertyModel extends PropertyObservable<PropertyKey> {
         @Override
         public String toString() {
             return value + " in " + super.toString();
+        }
+
+        @Override
+        public boolean equals(Object other) {
+            return other != null && other instanceof IntContainer
+                    && ((IntContainer) other).value == value;
         }
     }
 
@@ -499,6 +532,12 @@ public class PropertyModel extends PropertyObservable<PropertyKey> {
         public String toString() {
             return value + " in " + super.toString();
         }
+
+        @Override
+        public boolean equals(Object other) {
+            return other != null && other instanceof BooleanContainer
+                    && ((BooleanContainer) other).value == value;
+        }
     }
 
     private static class ObjectContainer<T> extends ValueContainer {
@@ -507,6 +546,12 @@ public class PropertyModel extends PropertyObservable<PropertyKey> {
         @Override
         public String toString() {
             return value + " in " + super.toString();
+        }
+
+        @Override
+        public boolean equals(Object other) {
+            return other != null && other instanceof ObjectContainer
+                    && ObjectsCompat.equals(((ObjectContainer) other).value, value);
         }
     }
 }

@@ -4,22 +4,25 @@
 
 #import "ios/chrome/browser/ui/popup_menu/popup_menu_action_handler.h"
 
+#include "base/bind.h"
 #include "base/feature_list.h"
 #include "base/logging.h"
 #include "base/metrics/user_metrics.h"
 #include "base/metrics/user_metrics_action.h"
 #include "base/strings/sys_string_conversions.h"
-#include "components/feature_engagement/public/event_constants.h"
-#include "components/feature_engagement/public/tracker.h"
 #include "components/open_from_clipboard/clipboard_recent_content.h"
 #import "ios/chrome/browser/ui/commands/application_commands.h"
 #import "ios/chrome/browser/ui/commands/browser_commands.h"
+#import "ios/chrome/browser/ui/commands/find_in_page_commands.h"
 #import "ios/chrome/browser/ui/commands/load_query_commands.h"
 #import "ios/chrome/browser/ui/commands/open_new_tab_command.h"
+#import "ios/chrome/browser/ui/commands/text_zoom_commands.h"
+#import "ios/chrome/browser/ui/page_info/features.h"
 #import "ios/chrome/browser/ui/popup_menu/popup_menu_action_handler_commands.h"
 #import "ios/chrome/browser/ui/popup_menu/public/cells/popup_menu_item.h"
 #import "ios/chrome/browser/ui/popup_menu/public/popup_menu_table_view_controller.h"
 #import "ios/chrome/browser/ui/ui_feature_flags.h"
+#import "ios/chrome/browser/window_activities/window_activity_helpers.h"
 
 #if !defined(__has_feature) || !__has_feature(objc_arc)
 #error "This file requires ARC support."
@@ -70,17 +73,11 @@ using base::UserMetricsAction;
       break;
     case PopupMenuActionTranslate:
       base::RecordAction(UserMetricsAction("MobileMenuTranslate"));
-      // Send the "Triggered Translate Infobar" event to the
-      // feature_engagement::Tracker when the user selects the menu item.
-      if (self.engagementTracker) {
-        self.engagementTracker->NotifyEvent(
-            feature_engagement::events::kTriggeredTranslateInfobar);
-      }
       [self.dispatcher showTranslate];
       break;
     case PopupMenuActionFindInPage:
       RecordAction(UserMetricsAction("MobileMenuFindInPage"));
-      [self.dispatcher showFindInPage];
+      [self.dispatcher openFindInPage];
       break;
     case PopupMenuActionRequestDesktop:
       RecordAction(UserMetricsAction("MobileMenuRequestDesktopSite"));
@@ -92,8 +89,13 @@ using base::UserMetricsAction;
       break;
     case PopupMenuActionSiteInformation:
       RecordAction(UserMetricsAction("MobileMenuSiteInformation"));
-      [self.dispatcher
-          showPageInfoForOriginPoint:self.baseViewController.view.center];
+      if (base::FeatureList::IsEnabled(kPageInfoRefactoring)) {
+        [self.dispatcher showPageInfo];
+      } else {
+        [self.dispatcher
+            legacyShowPageInfoForOriginPoint:self.baseViewController.view
+                                                 .center];
+      }
       break;
     case PopupMenuActionReportIssue:
       RecordAction(UserMetricsAction("MobileMenuReportAnIssue"));
@@ -107,12 +109,23 @@ using base::UserMetricsAction;
       RecordAction(UserMetricsAction("MobileMenuHelp"));
       [self.dispatcher showHelpPage];
       break;
+    case PopupMenuActionOpenDownloads:
+      RecordAction(
+          UserMetricsAction("MobileDownloadFolderUIShownFromToolsMenu"));
+      [self.dispatcher showDownloadsFolder];
+      break;
+    case PopupMenuActionTextZoom:
+      RecordAction(UserMetricsAction("MobileMenuTextZoom"));
+      [self.dispatcher openTextZoom];
+      break;
 #if !defined(NDEBUG)
     case PopupMenuActionViewSource:
       [self.dispatcher viewSource];
       break;
 #endif  // !defined(NDEBUG)
-
+    case PopupMenuActionOpenNewWindow:
+      [self.dispatcher openNewWindowWithActivity:ActivityToOpenNewTab(false)];
+      break;
     case PopupMenuActionBookmarks:
       RecordAction(UserMetricsAction("MobileMenuAllBookmarks"));
       [self.dispatcher showBookmarksManager];
@@ -144,18 +157,14 @@ using base::UserMetricsAction;
     case PopupMenuActionPasteAndGo: {
       RecordAction(UserMetricsAction("MobileMenuPasteAndGo"));
       NSString* query;
-      if (base::FeatureList::IsEnabled(kCopiedContentBehavior)) {
-        ClipboardRecentContent* clipboardRecentContent =
-            ClipboardRecentContent::GetInstance();
-        if (base::Optional<GURL> optional_url =
-                clipboardRecentContent->GetRecentURLFromClipboard()) {
-          query = base::SysUTF8ToNSString(optional_url.value().spec());
-        } else if (base::Optional<base::string16> optional_text =
-                       clipboardRecentContent->GetRecentTextFromClipboard()) {
-          query = base::SysUTF16ToNSString(optional_text.value());
-        }
-      } else {
-        query = [UIPasteboard generalPasteboard].string;
+      ClipboardRecentContent* clipboardRecentContent =
+          ClipboardRecentContent::GetInstance();
+      if (base::Optional<GURL> optional_url =
+              clipboardRecentContent->GetRecentURLFromClipboard()) {
+        query = base::SysUTF8ToNSString(optional_url.value().spec());
+      } else if (base::Optional<base::string16> optional_text =
+                     clipboardRecentContent->GetRecentTextFromClipboard()) {
+        query = base::SysUTF16ToNSString(optional_text.value());
       }
       [self.dispatcher loadQuery:query immediately:YES];
       break;
@@ -164,19 +173,32 @@ using base::UserMetricsAction;
       RecordAction(UserMetricsAction("MobileMenuVoiceSearch"));
       [self.dispatcher startVoiceSearch];
       break;
+    case PopupMenuActionSearch: {
+      RecordAction(UserMetricsAction("MobileMenuSearch"));
+      OpenNewTabCommand* command = [OpenNewTabCommand commandWithIncognito:NO];
+      command.shouldFocusOmnibox = YES;
+      [self.dispatcher openURLInNewTab:command];
+      break;
+    }
+    case PopupMenuActionIncognitoSearch: {
+      RecordAction(UserMetricsAction("MobileMenuIncognitoSearch"));
+      OpenNewTabCommand* command = [OpenNewTabCommand commandWithIncognito:YES];
+      command.shouldFocusOmnibox = YES;
+      [self.dispatcher openURLInNewTab:command];
+      break;
+    }
     case PopupMenuActionQRCodeSearch:
       RecordAction(UserMetricsAction("MobileMenuScanQRCode"));
       [self.dispatcher showQRScanner];
       break;
     case PopupMenuActionSearchCopiedImage: {
-      DCHECK(base::FeatureList::IsEnabled(kCopiedContentBehavior));
       RecordAction(UserMetricsAction("MobileMenuSearchCopiedImage"));
       ClipboardRecentContent* clipboardRecentContent =
           ClipboardRecentContent::GetInstance();
-      if (base::Optional<gfx::Image> image =
-              clipboardRecentContent->GetRecentImageFromClipboard()) {
-        [self.dispatcher searchByImage:[image.value().ToUIImage() copy]];
-      }
+      clipboardRecentContent->GetRecentImageFromClipboard(
+          base::BindOnce(^(base::Optional<gfx::Image> image) {
+            [self.dispatcher searchByImage:[image.value().ToUIImage() copy]];
+          }));
       break;
     }
     default:

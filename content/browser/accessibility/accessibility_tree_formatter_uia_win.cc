@@ -26,6 +26,7 @@
 #include "base/values.h"
 #include "base/win/com_init_util.h"
 #include "base/win/scoped_bstr.h"
+#include "base/win/scoped_safearray.h"
 #include "base/win/scoped_variant.h"
 #include "base/win/windows_version.h"
 #include "content/browser/accessibility/accessibility_tree_formatter_utils_win.h"
@@ -40,6 +41,10 @@ base::string16 UiaIdentifierToCondensedString16(int32_t id) {
   if (id >= UIA_RuntimeIdPropertyId && id <= UIA_HeadingLevelPropertyId) {
     // remove leading 'UIA_' and trailing 'PropertyId'
     return identifier.substr(4, identifier.size() - 14);
+  }
+  if (id >= UIA_ButtonControlTypeId && id <= UIA_AppBarControlTypeId) {
+    // remove leading 'UIA_' and trailing 'ControlTypeId'
+    return identifier.substr(4, identifier.size() - 17);
   }
   return identifier;
 }
@@ -334,10 +339,92 @@ void AccessibilityTreeFormatterUia::SetUpCommandLineForTestPass(
 std::unique_ptr<base::DictionaryValue>
 AccessibilityTreeFormatterUia::BuildAccessibilityTree(
     BrowserAccessibility* start) {
-  // Find the root IUIAutomationElement for the content window.
+  // We use the UI Automation client API to produce the tree dump, but
+  // BrowserAccessibility has a pointer to a provider API implementation, and
+  // we can't directly relate the two -- the OS manages the relationship.
+  // To locate the client element we want, we'll construct a RuntimeId
+  // corresponding to our provider element, then search for that.
+
+  // Start by getting the root element for the HWND hosting the web content.
   HWND hwnd =
       start->manager()->GetRoot()->GetTargetForNativeAccessibilityEvent();
-  return BuildAccessibilityTreeForWindow(hwnd);
+  Microsoft::WRL::ComPtr<IUIAutomationElement> root;
+  uia_->ElementFromHandle(hwnd, &root);
+  CHECK(root.Get());
+
+  // Get the bounds of the root element, to pass into tree building later.
+  RECT root_bounds = {0};
+  root->get_CurrentBoundingRectangle(&root_bounds);
+
+  // The root element is provided by AXFragmentRootWin, whose RuntimeId is not
+  // in the same form as elements provided by BrowserAccessibility.
+  // Find the root element's first child, which should be provided by
+  // BrowserAccessibility. We'll use that element's RuntimeId as a template for
+  // the RuntimeId of the element we're looking for.
+  Microsoft::WRL::ComPtr<IUIAutomationTreeWalker> tree_walker;
+  uia_->get_RawViewWalker(&tree_walker);
+  Microsoft::WRL::ComPtr<IUIAutomationElement> first_child;
+  tree_walker->GetFirstChildElement(root.Get(), &first_child);
+  CHECK(first_child.Get());
+
+  // Get first_child's RuntimeId and swap out the last element in its SAFEARRAY
+  // for the UniqueId of the element we want to start from.
+  base::win::ScopedSafearray runtime_id;
+  first_child->GetRuntimeId(runtime_id.Receive());
+  CHECK(runtime_id.Get());
+  LONG lower_bound = 0;
+  HRESULT hr = ::SafeArrayGetLBound(runtime_id.Get(), 1, &lower_bound);
+  CHECK(SUCCEEDED(hr));
+  LONG upper_bound = 0;
+  hr = ::SafeArrayGetUBound(runtime_id.Get(), 1, &upper_bound);
+  CHECK(SUCCEEDED(hr));
+  {
+    int32_t* runtime_id_array = nullptr;
+    ::SafeArrayAccessData(runtime_id.Get(),
+                          reinterpret_cast<void**>(&runtime_id_array));
+    CHECK(runtime_id_array);
+    CHECK((upper_bound - lower_bound) >= 0);
+    runtime_id_array[upper_bound - lower_bound] = start->GetUniqueId().Get();
+    ::SafeArrayUnaccessData(runtime_id.Get());
+  }
+
+  // Find the element with the desired RuntimeId.
+  base::win::ScopedVariant runtime_id_variant(runtime_id.Release());
+  Microsoft::WRL::ComPtr<IUIAutomationCondition> condition;
+  uia_->CreatePropertyCondition(UIA_RuntimeIdPropertyId, runtime_id_variant,
+                                &condition);
+  CHECK(condition);
+  Microsoft::WRL::ComPtr<IUIAutomationElement> start_element;
+
+  root->FindFirst(TreeScope_Subtree, condition.Get(), &start_element);
+  std::unique_ptr<base::DictionaryValue> tree =
+      std::make_unique<base::DictionaryValue>();
+
+  if (start_element.Get()) {
+    // Build an accessibility tree starting from that element.
+    RecursiveBuildAccessibilityTree(start_element.Get(), root_bounds.left,
+                                    root_bounds.top, tree.get());
+  } else {
+    // If the search failed, start dumping with the first thing that isn't a
+    // Pane.
+    // TODO(http://crbug.com/1071188): Figure out why the original FindFirst
+    // fails and remove this fallback codepath.
+    Microsoft::WRL::ComPtr<IUIAutomationElement> non_pane_descendant;
+    Microsoft::WRL::ComPtr<IUIAutomationCondition> is_pane_condition;
+    base::win::ScopedVariant pane_control_type_variant(UIA_PaneControlTypeId);
+    uia_->CreatePropertyCondition(UIA_ControlTypePropertyId,
+                                  pane_control_type_variant,
+                                  &is_pane_condition);
+    Microsoft::WRL::ComPtr<IUIAutomationCondition> not_is_pane_condition;
+    uia_->CreateNotCondition(is_pane_condition.Get(), &not_is_pane_condition);
+    root->FindFirst(TreeScope_Subtree, not_is_pane_condition.Get(),
+                    &non_pane_descendant);
+
+    DCHECK(non_pane_descendant.Get());
+    RecursiveBuildAccessibilityTree(non_pane_descendant.Get(), root_bounds.left,
+                                    root_bounds.top, tree.get());
+  }
+  return tree;
 }
 
 std::unique_ptr<base::DictionaryValue>
@@ -358,9 +445,13 @@ AccessibilityTreeFormatterUia::BuildAccessibilityTreeForWindow(
   uia_->ElementFromHandle(hwnd, &root);
   CHECK(root.Get());
 
+  RECT root_bounds = {0};
+  root->get_CurrentBoundingRectangle(&root_bounds);
+
   std::unique_ptr<base::DictionaryValue> tree =
       std::make_unique<base::DictionaryValue>();
-  RecursiveBuildAccessibilityTree(root.Get(), tree.get());
+  RecursiveBuildAccessibilityTree(root.Get(), root_bounds.left, root_bounds.top,
+                                  tree.get());
   return tree;
 }
 
@@ -374,9 +465,11 @@ AccessibilityTreeFormatterUia::BuildAccessibilityTreeForPattern(
 
 void AccessibilityTreeFormatterUia::RecursiveBuildAccessibilityTree(
     IUIAutomationElement* uncached_node,
+    int root_x,
+    int root_y,
     base::DictionaryValue* dict) {
   // Process this node.
-  AddProperties(uncached_node, dict);
+  AddProperties(uncached_node, root_x, root_y, dict);
 
   // Update the cache to get children
   Microsoft::WRL::ComPtr<IUIAutomationElement> parent;
@@ -394,7 +487,8 @@ void AccessibilityTreeFormatterUia::RecursiveBuildAccessibilityTree(
     std::unique_ptr<base::DictionaryValue> child_dict =
         std::make_unique<base::DictionaryValue>();
     if (SUCCEEDED(children->GetElement(i, &child))) {
-      RecursiveBuildAccessibilityTree(child.Get(), child_dict.get());
+      RecursiveBuildAccessibilityTree(child.Get(), root_x, root_y,
+                                      child_dict.get());
     } else {
       child_dict->SetString("error", L"[Error retrieving child]");
     }
@@ -405,6 +499,8 @@ void AccessibilityTreeFormatterUia::RecursiveBuildAccessibilityTree(
 
 void AccessibilityTreeFormatterUia::AddProperties(
     IUIAutomationElement* uncached_node,
+    int root_x,
+    int root_y,
     base::DictionaryValue* dict) {
   // Update the cache for this node's information.
   Microsoft::WRL::ComPtr<IUIAutomationElement> node;
@@ -414,7 +510,7 @@ void AccessibilityTreeFormatterUia::AddProperties(
   for (long i : properties_) {
     base::win::ScopedVariant variant;
     if (SUCCEEDED(node->GetCachedPropertyValue(i, variant.Receive()))) {
-      WriteProperty(i, variant, dict);
+      WriteProperty(i, variant, root_x, root_y, dict);
     }
   }
   // Add control pattern specific properties
@@ -695,7 +791,7 @@ void AccessibilityTreeFormatterUia::AddValueProperties(
 
     base::win::ScopedBstr value;
     if (SUCCEEDED(value_pattern->get_CachedValue(value.Receive())))
-      dict->SetString("Value.Value", BstrToUTF8(value));
+      dict->SetString("Value.Value", BstrToUTF8(value.Get()));
   }
 }
 
@@ -715,6 +811,8 @@ void AccessibilityTreeFormatterUia::AddWindowProperties(
 void AccessibilityTreeFormatterUia::WriteProperty(
     long propertyId,
     const base::win::ScopedVariant& var,
+    int root_x,
+    int root_y,
     base::DictionaryValue* dict) {
   switch (var.type()) {
     case VT_EMPTY:
@@ -763,17 +861,14 @@ void AccessibilityTreeFormatterUia::WriteProperty(
     case VT_UNKNOWN:
       WriteUnknownProperty(propertyId, var.ptr()->punkVal, dict);
       break;
-    case VT_DISPATCH:
-    case VT_ERROR:
-    case VT_CY:
-    case VT_DATE:
-    case VT_VARIANT:
-    case VT_DECIMAL:
-    case VT_INT:
-    case VT_UINT:
-    case VT_ARRAY:
-    case VT_BYREF:
     default:
+      switch (propertyId) {
+        case UIA_BoundingRectanglePropertyId:
+          WriteRectangleProperty(propertyId, var, root_x, root_y, dict);
+          break;
+        default:
+          break;
+      }
       break;
   }
 }
@@ -828,6 +923,27 @@ void AccessibilityTreeFormatterUia::WriteUnknownProperty(
   }
 }
 
+void AccessibilityTreeFormatterUia::WriteRectangleProperty(
+    long propertyId,
+    const VARIANT& value,
+    int root_x,
+    int root_y,
+    base::DictionaryValue* dict) {
+  CHECK(value.vt == (VT_ARRAY | VT_R8));
+
+  double* data = nullptr;
+  SafeArrayAccessData(value.parray, reinterpret_cast<void**>(&data));
+
+  auto rectangle = std::make_unique<base::DictionaryValue>();
+  rectangle->SetInteger("left", data[0] - root_x);
+  rectangle->SetInteger("top", data[1] - root_y);
+  rectangle->SetInteger("width", data[2]);
+  rectangle->SetInteger("height", data[3]);
+  dict->Set(UiaIdentifierToCondensedString(propertyId), std::move(rectangle));
+
+  SafeArrayUnaccessData(value.parray);
+}
+
 void AccessibilityTreeFormatterUia::WriteElementArray(
     long propertyId,
     IUIAutomationElementArray* array,
@@ -841,10 +957,17 @@ void AccessibilityTreeFormatterUia::WriteElementArray(
       if (element_list != L"") {
         element_list += L", ";
       }
-      element_list += GetNodeName(element.Get());
+      auto name = GetNodeName(element.Get());
+      if (name.empty()) {
+        base::win::ScopedBstr role;
+        element->get_CurrentAriaRole(role.Receive());
+        name = L"{" + base::string16(role.Get()) + L"}";
+      }
+      element_list += name;
     }
   }
-  dict->SetString(UiaIdentifierToCondensedString(propertyId), element_list);
+  if (!element_list.empty())
+    dict->SetString(UiaIdentifierToCondensedString(propertyId), element_list);
 }
 
 base::string16 AccessibilityTreeFormatterUia::GetNodeName(
@@ -871,6 +994,12 @@ void AccessibilityTreeFormatterUia::BuildCacheRequests() {
   uia_->CreateCacheRequest(&children_cache_request_);
   CHECK(children_cache_request_.Get());
   children_cache_request_->put_TreeScope(TreeScope_Children);
+
+  // Set filter to include all nodes in the raw view.
+  Microsoft::WRL::ComPtr<IUIAutomationCondition> raw_view_condition;
+  uia_->get_RawViewCondition(&raw_view_condition);
+  CHECK(raw_view_condition.Get());
+  children_cache_request_->put_TreeFilter(raw_view_condition.Get());
 
   // Create cache request for requesting information about a node.
   uia_->CreateCacheRequest(&element_cache_request_);
@@ -901,14 +1030,15 @@ base::string16 AccessibilityTreeFormatterUia::ProcessTreeForOutput(
   std::unique_ptr<base::DictionaryValue> tree;
   base::string16 line;
 
-  // Always show role, and show it first.
-  base::string16 role_value;
-  dict.GetString(UiaIdentifierToCondensedString(UIA_AriaRolePropertyId),
-                 &role_value);
-  WriteAttribute(true, base::UTF16ToUTF8(role_value), &line);
+  // Always show control type, and show it first.
+  base::string16 control_type_value;
+  dict.GetString(UiaIdentifierToCondensedString(UIA_ControlTypePropertyId),
+                 &control_type_value);
+  WriteAttribute(true, control_type_value, &line);
   if (filtered_result) {
     filtered_result->SetString(
-        UiaIdentifierToStringUTF8(UIA_AriaRolePropertyId), role_value);
+        UiaIdentifierToStringUTF8(UIA_ControlTypePropertyId),
+        control_type_value);
   }
 
   // properties
@@ -1020,20 +1150,35 @@ void AccessibilityTreeFormatterUia::ProcessValueForOutput(
         filtered_result->SetDouble(name, double_value);
       break;
     }
+    case base::Value::Type::DICTIONARY: {
+      const base::DictionaryValue* dict_value = nullptr;
+      value->GetAsDictionary(&dict_value);
+      bool did_pass_filters = false;
+      if (name == "BoundingRectangle") {
+        did_pass_filters =
+            WriteAttribute(false,
+                           FormatRectangle(*dict_value, "BoundingRectangle",
+                                           "left", "top", "width", "height"),
+                           &line);
+      }
+      if (filtered_result && did_pass_filters)
+        filtered_result->SetKey(name, dict_value->Clone());
+      break;
+    }
     default:
       NOTREACHED();
       break;
   }
 }
 
-const base::FilePath::StringType
+base::FilePath::StringType
 AccessibilityTreeFormatterUia::GetExpectedFileSuffix() {
   return FILE_PATH_LITERAL("-expected-uia-win.txt");
 }
 
-const base::FilePath::StringType
+base::FilePath::StringType
 AccessibilityTreeFormatterUia::GetVersionSpecificExpectedFileSuffix() {
-  if (base::win::GetVersion() == base::win::Version::VERSION_WIN7) {
+  if (base::win::GetVersion() == base::win::Version::WIN7) {
     return FILE_PATH_LITERAL("-expected-uia-win7.txt");
   }
   return FILE_PATH_LITERAL("");

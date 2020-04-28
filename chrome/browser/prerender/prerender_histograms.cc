@@ -6,11 +6,12 @@
 
 #include <string>
 
+#include "base/check_op.h"
 #include "base/format_macros.h"
-#include "base/logging.h"
 #include "base/metrics/histogram.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/metrics/histogram_macros.h"
+#include "base/notreached.h"
 #include "base/strings/stringprintf.h"
 #include "chrome/browser/prerender/prerender_manager.h"
 #include "chrome/common/prerender_util.h"
@@ -52,6 +53,8 @@ std::string PrerenderHistograms::GetHistogramPrefix(Origin origin) {
       return "gws";
     case ORIGIN_EXTERNAL_REQUEST_FORCED_PRERENDER:
       return "externalrequestforced";
+    case ORIGIN_NAVIGATION_PREDICTOR:
+      return "navigationpredictor";
     default:
       NOTREACHED();
       break;

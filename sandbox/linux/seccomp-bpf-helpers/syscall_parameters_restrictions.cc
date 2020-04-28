@@ -19,8 +19,8 @@
 #include <time.h>
 #include <unistd.h>
 
-#include "base/logging.h"
 #include "base/macros.h"
+#include "base/notreached.h"
 #include "base/synchronization/synchronization_buildflags.h"
 #include "build/build_config.h"
 #include "sandbox/linux/bpf_dsl/bpf_dsl.h"
@@ -135,7 +135,8 @@ namespace sandbox {
 #if !defined(OS_NACL_NONSFI)
 // Allow Glibc's and Android pthread creation flags, crash on any other
 // thread creation attempts and EPERM attempts to use neither
-// CLONE_VM, nor CLONE_THREAD, which includes all fork() implementations.
+// CLONE_VM nor CLONE_THREAD (all fork implementations), unless CLONE_VFORK is
+// present (as in newer versions of posix_spawn).
 ResultExpr RestrictCloneToThreadsAndEPERMFork() {
   const Arg<unsigned long> flags(0);
 
@@ -154,8 +155,16 @@ ResultExpr RestrictCloneToThreadsAndEPERMFork() {
       AnyOf(flags == kAndroidCloneMask, flags == kObsoleteAndroidCloneMask,
             flags == kGlibcPthreadFlags);
 
+  // The following two flags are the two important flags in any vfork-emulating
+  // clone call. EPERM any clone call that contains both of them.
+  const uint64_t kImportantCloneVforkFlags = CLONE_VFORK | CLONE_VM;
+
+  const BoolExpr is_fork_or_clone_vfork =
+      AnyOf((flags & (CLONE_VM | CLONE_THREAD)) == 0,
+            (flags & kImportantCloneVforkFlags) == kImportantCloneVforkFlags);
+
   return If(IsAndroid() ? android_test : glibc_test, Allow())
-      .ElseIf((flags & (CLONE_VM | CLONE_THREAD)) == 0, Error(EPERM))
+      .ElseIf(is_fork_or_clone_vfork, Error(EPERM))
       .Else(CrashSIGSYSClone());
 }
 
@@ -363,11 +372,10 @@ ResultExpr RestrictClockID() {
   return
     If((clockid & kIsPidBit) == 0,
       Switch(clockid).CASES((
-#if defined(OS_ANDROID)
               CLOCK_BOOTTIME,
-#endif
               CLOCK_MONOTONIC,
               CLOCK_MONOTONIC_COARSE,
+              CLOCK_MONOTONIC_RAW,
               CLOCK_PROCESS_CPUTIME_ID,
               CLOCK_REALTIME,
               CLOCK_REALTIME_COARSE,
@@ -395,6 +403,15 @@ ResultExpr RestrictPrlimit(pid_t target_pid) {
   const Arg<pid_t> pid(0);
   // Only allow operations for the current process.
   return If(AnyOf(pid == 0, pid == target_pid), Allow()).Else(Error(EPERM));
+}
+
+ResultExpr RestrictPrlimitToGetrlimit(pid_t target_pid) {
+  const Arg<pid_t> pid(0);
+  const Arg<uintptr_t> new_limit(2);
+  // Only allow operations for the current process, and only with |new_limit|
+  // set to null.
+  return If(AllOf(new_limit == 0, AnyOf(pid == 0, pid == target_pid)), Allow())
+      .Else(Error(EPERM));
 }
 
 #if !defined(OS_NACL_NONSFI)

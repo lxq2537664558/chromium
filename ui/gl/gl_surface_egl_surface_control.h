@@ -9,6 +9,7 @@
 #include <memory>
 
 #include "base/android/scoped_hardware_buffer_handle.h"
+#include "base/cancelable_callback.h"
 #include "base/containers/flat_map.h"
 #include "base/memory/weak_ptr.h"
 #include "base/optional.h"
@@ -35,10 +36,11 @@ class GL_EXPORT GLSurfaceEGLSurfaceControl : public GLSurfaceEGL {
   // GLSurface implementation.
   int GetBufferCount() const override;
   bool Initialize(GLSurfaceFormat format) override;
+  void PrepareToDestroy(bool have_context) override;
   void Destroy() override;
   bool Resize(const gfx::Size& size,
               float scale_factor,
-              ColorSpace color_space,
+              const gfx::ColorSpace& color_space,
               bool has_alpha) override;
   bool IsOffscreen() override;
 
@@ -77,9 +79,10 @@ class GL_EXPORT GLSurfaceEGLSurfaceControl : public GLSurfaceEGL {
 
   bool SupportsAsyncSwap() override;
   bool SupportsPlaneGpuFences() const override;
-  bool SupportsPresentationCallback() override;
   bool SupportsPostSubBuffer() override;
   bool SupportsCommitOverlayPlanes() override;
+  void SetDisplayTransform(gfx::OverlayTransform transform) override;
+  gfx::SurfaceOrigin GetOrigin() const override;
 
  private:
   ~GLSurfaceEGLSurfaceControl() override;
@@ -121,6 +124,18 @@ class GL_EXPORT GLSurfaceEGLSurfaceControl : public GLSurfaceEGL {
   };
   using ResourceRefs = base::flat_map<ASurfaceControl*, ResourceRef>;
 
+  struct PendingPresentationCallback {
+    PendingPresentationCallback();
+    ~PendingPresentationCallback();
+
+    PendingPresentationCallback(PendingPresentationCallback&& other);
+    PendingPresentationCallback& operator=(PendingPresentationCallback&& other);
+
+    base::TimeTicks latch_time;
+    base::ScopedFD present_fence;
+    PresentationCallback callback;
+  };
+
   void CommitPendingTransaction(const gfx::Rect& damage_rect,
                                 SwapCompletionCallback completion_callback,
                                 PresentationCallback callback);
@@ -132,6 +147,12 @@ class GL_EXPORT GLSurfaceEGLSurfaceControl : public GLSurfaceEGL {
       PresentationCallback presentation_callback,
       ResourceRefs released_resources,
       SurfaceControl::TransactionStats transaction_stats);
+
+  void CheckPendingPresentationCallbacks();
+
+  gfx::Rect ApplyDisplayInverse(const gfx::Rect& input) const;
+  const gfx::ColorSpace& GetNearestSupportedImageColorSpace(
+      GLImage* image) const;
 
   const std::string root_surface_name_;
   const std::string child_surface_name_;
@@ -150,6 +171,10 @@ class GL_EXPORT GLSurfaceEGLSurfaceControl : public GLSurfaceEGL {
 
   // Transactions waiting to be applied once the previous transaction is acked.
   std::queue<SurfaceControl::Transaction> pending_transaction_queue_;
+
+  // PresentationCallbacks for transactions which have been acked but their
+  // present fence has not fired yet.
+  std::queue<PendingPresentationCallback> pending_presentation_callback_queue_;
 
   // The list of Surfaces and the corresponding state based on the most recent
   // updates.
@@ -170,8 +195,15 @@ class GL_EXPORT GLSurfaceEGLSurfaceControl : public GLSurfaceEGL {
   // Set if a transaction was applied and we are waiting for it to be acked.
   bool transaction_ack_pending_ = false;
 
+  gfx::OverlayTransform display_transform_ = gfx::OVERLAY_TRANSFORM_NONE;
+  EGLSurface offscreen_surface_ = nullptr;
+  base::CancelableOnceClosure check_pending_presentation_callback_queue_task_;
+
+  // Set if a swap failed and the surface is no longer usable.
+  bool surface_lost_ = false;
+
   scoped_refptr<base::SingleThreadTaskRunner> gpu_task_runner_;
-  base::WeakPtrFactory<GLSurfaceEGLSurfaceControl> weak_factory_;
+  base::WeakPtrFactory<GLSurfaceEGLSurfaceControl> weak_factory_{this};
 };
 
 }  // namespace gl

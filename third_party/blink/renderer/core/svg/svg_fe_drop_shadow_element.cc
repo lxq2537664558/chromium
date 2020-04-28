@@ -29,7 +29,7 @@
 
 namespace blink {
 
-inline SVGFEDropShadowElement::SVGFEDropShadowElement(Document& document)
+SVGFEDropShadowElement::SVGFEDropShadowElement(Document& document)
     : SVGFilterPrimitiveStandardAttributes(svg_names::kFEDropShadowTag,
                                            document),
       dx_(MakeGarbageCollected<SVGAnimatedNumber>(this, svg_names::kDxAttr, 2)),
@@ -45,15 +45,13 @@ inline SVGFEDropShadowElement::SVGFEDropShadowElement(Document& document)
   AddToPropertyMap(in1_);
 }
 
-void SVGFEDropShadowElement::Trace(blink::Visitor* visitor) {
+void SVGFEDropShadowElement::Trace(Visitor* visitor) {
   visitor->Trace(dx_);
   visitor->Trace(dy_);
   visitor->Trace(std_deviation_);
   visitor->Trace(in1_);
   SVGFilterPrimitiveStandardAttributes::Trace(visitor);
 }
-
-DEFINE_NODE_FACTORY(SVGFEDropShadowElement)
 
 void SVGFEDropShadowElement::setStdDeviation(float x, float y) {
   stdDeviationX()->BaseValue()->SetValue(x);

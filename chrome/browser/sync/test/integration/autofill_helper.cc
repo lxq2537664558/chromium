@@ -11,6 +11,7 @@
 
 #include "base/bind.h"
 #include "base/guid.h"
+#include "base/optional.h"
 #include "base/run_loop.h"
 #include "base/synchronization/waitable_event.h"
 #include "chrome/browser/autofill/personal_data_manager_factory.h"
@@ -19,9 +20,9 @@
 #include "chrome/browser/sync/test/integration/sync_datatype_helper.h"
 #include "chrome/browser/sync/test/integration/sync_test.h"
 #include "chrome/browser/web_data_service_factory.h"
-#include "components/autofill/core/browser/autofill_profile.h"
 #include "components/autofill/core/browser/autofill_test_utils.h"
 #include "components/autofill/core/browser/autofill_type.h"
+#include "components/autofill/core/browser/data_model/autofill_profile.h"
 #include "components/autofill/core/browser/personal_data_manager.h"
 #include "components/autofill/core/browser/webdata/autofill_entry.h"
 #include "components/autofill/core/browser/webdata/autofill_table.h"
@@ -115,10 +116,18 @@ std::vector<AutofillEntry> GetAllAutofillEntries(AutofillWebDataService* wds) {
 }
 
 bool ProfilesMatchImpl(
+    const base::Optional<unsigned int>& expected_count,
     int profile_a,
     const std::vector<AutofillProfile*>& autofill_profiles_a,
     int profile_b,
     const std::vector<AutofillProfile*>& autofill_profiles_b) {
+  if (expected_count.has_value() &&
+      autofill_profiles_a.size() != *expected_count) {
+    DVLOG(1) << "Profile " << profile_a
+             << " does not have expected count of entities " << *expected_count;
+    return false;
+  }
+
   std::map<std::string, AutofillProfile> autofill_profiles_a_map;
   for (AutofillProfile* p : autofill_profiles_a) {
     autofill_profiles_a_map[p->guid()] = *p;
@@ -211,13 +220,8 @@ AutofillProfile CreateUniqueAutofillProfile() {
 }
 
 PersonalDataManager* GetPersonalDataManager(int index) {
-  auto* pdm = autofill::PersonalDataManagerFactory::GetForProfile(
+  return autofill::PersonalDataManagerFactory::GetForProfile(
       test()->GetProfile(index));
-  // Hook the sync service up to the personal data manager.
-  // This is normally done by autofill_manager, which we don't
-  // have in our tests.
-  pdm->OnSyncServiceInitialized(test()->GetSyncService(index));
-  return pdm;
 }
 
 void AddKeys(int profile, const std::set<AutofillKey>& keys) {
@@ -287,6 +291,9 @@ void SetProfiles(int profile, std::vector<AutofillProfile>* autofill_profiles) {
       .WillRepeatedly(QuitMessageLoop(&run_loop));
   EXPECT_CALL(personal_data_observer, OnPersonalDataChanged())
       .Times(testing::AnyNumber());
+
+  // TODO(crbug.com/997629): Remove after investigation is over.
+  DLOG(WARNING) << "SetProfiles " << autofill_profiles->size();
 
   pdm->SetProfiles(autofill_profiles);
 
@@ -377,8 +384,8 @@ bool ProfilesMatch(int profile_a, int profile_b) {
       GetAllAutoFillProfiles(profile_a);
   const std::vector<AutofillProfile*>& autofill_profiles_b =
       GetAllAutoFillProfiles(profile_b);
-  return ProfilesMatchImpl(
-      profile_a, autofill_profiles_a, profile_b, autofill_profiles_b);
+  return ProfilesMatchImpl(base::nullopt, profile_a, autofill_profiles_a,
+                           profile_b, autofill_profiles_b);
 }
 
 }  // namespace autofill_helper
@@ -389,16 +396,18 @@ AutofillKeysChecker::AutofillKeysChecker(int profile_a, int profile_b)
       profile_a_(profile_a),
       profile_b_(profile_b) {}
 
-bool AutofillKeysChecker::IsExitConditionSatisfied() {
+bool AutofillKeysChecker::IsExitConditionSatisfied(std::ostream* os) {
+  *os << "Waiting for matching autofill keys";
   return autofill_helper::KeysMatch(profile_a_, profile_b_);
 }
 
-std::string AutofillKeysChecker::GetDebugMessage() const {
-  return "Waiting for matching autofill keys";
-}
-
-AutofillProfileChecker::AutofillProfileChecker(int profile_a, int profile_b)
-    : profile_a_(profile_a), profile_b_(profile_b) {
+AutofillProfileChecker::AutofillProfileChecker(
+    int profile_a,
+    int profile_b,
+    base::Optional<unsigned int> expected_count)
+    : profile_a_(profile_a),
+      profile_b_(profile_b),
+      expected_count_(expected_count) {
   autofill_helper::GetPersonalDataManager(profile_a_)->AddObserver(this);
   autofill_helper::GetPersonalDataManager(profile_b_)->AddObserver(this);
 }
@@ -444,17 +453,14 @@ bool AutofillProfileChecker::Wait() {
   return StatusChangeChecker::Wait();
 }
 
-bool AutofillProfileChecker::IsExitConditionSatisfied() {
+bool AutofillProfileChecker::IsExitConditionSatisfied(std::ostream* os) {
+  *os << "Waiting for matching autofill profiles";
   const std::vector<AutofillProfile*>& autofill_profiles_a =
       autofill_helper::GetPersonalDataManager(profile_a_)->GetProfiles();
   const std::vector<AutofillProfile*>& autofill_profiles_b =
       autofill_helper::GetPersonalDataManager(profile_b_)->GetProfiles();
-  return ProfilesMatchImpl(profile_a_, autofill_profiles_a, profile_b_,
-                           autofill_profiles_b);
-}
-
-std::string AutofillProfileChecker::GetDebugMessage() const {
-  return "Waiting for matching autofill profiles";
+  return ProfilesMatchImpl(expected_count_, profile_a_, autofill_profiles_a,
+                           profile_b_, autofill_profiles_b);
 }
 
 void AutofillProfileChecker::OnPersonalDataChanged() {

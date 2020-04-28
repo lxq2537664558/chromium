@@ -8,9 +8,12 @@
 #include "base/gtest_prod_util.h"
 #include "base/strings/string16.h"
 #include "build/build_config.h"
-#include "chrome/browser/ui/browser.h"
 #include "content/public/browser/page_navigator.h"
 #include "ui/gfx/image/image.h"
+
+#if !defined(OS_ANDROID)
+class Browser;
+#endif
 
 class DownloadUIModel;
 
@@ -27,9 +30,12 @@ class DownloadCommands {
     DISCARD,              // Discard the malicious download.
     KEEP,                 // Keep the malicious download.
     LEARN_MORE_SCANNING,  // Show information about download scanning.
-    LEARN_MORE_INTERRUPTED,  // Show information about interrupted downloads.
-    COPY_TO_CLIPBOARD,    // Copy the contents to the clipboard.
-    ANNOTATE,             // Open an app to annotate the image.
+    LEARN_MORE_INTERRUPTED,    // Show information about interrupted downloads.
+    LEARN_MORE_MIXED_CONTENT,  // Show info about mixed content downloads.
+    COPY_TO_CLIPBOARD,         // Copy the contents to the clipboard.
+    ANNOTATE,                  // Open an app to annotate the image.
+    DEEP_SCAN,                 // Send file to Safe Browsing for deep scanning.
+    BYPASS_DEEP_SCANNING,      // Bypass the prompt to deep scan.
   };
 
   // |model| must outlive DownloadCommands.
@@ -45,9 +51,9 @@ class DownloadCommands {
 #if defined(OS_WIN) || defined(OS_LINUX) || defined(OS_MACOSX)
   bool IsDownloadPdf() const;
   bool CanOpenPdfInSystemViewer() const;
+  Browser* GetBrowser() const;
 #endif
 
-  Browser* GetBrowser() const;
   GURL GetLearnMoreURLForInterruptedDownload() const;
   void CopyFileAsImageToClipboard();
   bool CanBeCopiedToClipboard() const;

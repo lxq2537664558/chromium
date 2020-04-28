@@ -8,11 +8,13 @@
 #include <utility>
 
 #include "base/bind.h"
+#include "base/bind_helpers.h"
 #include "base/files/file_path.h"
 #include "base/location.h"
 #include "base/strings/string_util.h"
 #include "base/task/post_task.h"
 #include "base/task/task_traits.h"
+#include "base/task/thread_pool.h"
 #include "build/build_config.h"
 
 #if defined(OS_CHROMEOS)
@@ -35,7 +37,7 @@ SerialIoHandler::SerialIoHandler(
 
 SerialIoHandler::~SerialIoHandler() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  Close();
+  Close(base::DoNothing());
 }
 
 void SerialIoHandler::Open(const mojom::SerialConnectionOptions& options,
@@ -64,7 +66,7 @@ void SerialIoHandler::Open(const mojom::SerialConnectionOptions& options,
                      base::BindRepeating(&SerialIoHandler::OnPathOpenError,
                                          this, task_runner)));
 #else
-  base::PostTaskWithTraits(
+  base::ThreadPool::PostTask(
       FROM_HERE,
       {base::MayBlock(), base::TaskShutdownBehavior::CONTINUE_ON_SHUTDOWN},
       base::BindOnce(&SerialIoHandler::StartOpen, this,
@@ -77,7 +79,7 @@ void SerialIoHandler::Open(const mojom::SerialConnectionOptions& options,
 void SerialIoHandler::OnPathOpened(
     scoped_refptr<base::SingleThreadTaskRunner> io_thread_task_runner,
     base::ScopedFD fd) {
-  base::File file(fd.release());
+  base::File file(std::move(fd));
   io_thread_task_runner->PostTask(
       FROM_HERE,
       base::BindOnce(&SerialIoHandler::FinishOpen, this, std::move(file)));
@@ -140,7 +142,6 @@ void SerialIoHandler::StartOpen(
 void SerialIoHandler::FinishOpen(base::File file) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   DCHECK(open_complete_);
-
   if (!file.IsValid()) {
     LOG(ERROR) << "Failed to open serial port: "
                << base::File::ErrorToString(file.error_details());
@@ -152,7 +153,7 @@ void SerialIoHandler::FinishOpen(base::File file) {
 
   bool success = PostOpen() && ConfigurePortImpl();
   if (!success)
-    Close();
+    Close(base::DoNothing());
 
   std::move(open_complete_).Run(success);
 }
@@ -161,12 +162,18 @@ bool SerialIoHandler::PostOpen() {
   return true;
 }
 
-void SerialIoHandler::Close() {
+void SerialIoHandler::PreClose() {}
+
+void SerialIoHandler::Close(base::OnceClosure callback) {
   if (file_.IsValid()) {
-    base::PostTaskWithTraits(
+    CancelRead(mojom::SerialReceiveError::DISCONNECTED);
+    CancelWrite(mojom::SerialSendError::DISCONNECTED);
+    PreClose();
+    base::ThreadPool::PostTaskAndReply(
         FROM_HERE,
         {base::MayBlock(), base::TaskShutdownBehavior::CONTINUE_ON_SHUTDOWN},
-        base::BindOnce(&SerialIoHandler::DoClose, std::move(file_)));
+        base::BindOnce(&SerialIoHandler::DoClose, std::move(file_)),
+        std::move(callback));
   }
 }
 

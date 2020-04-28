@@ -10,9 +10,8 @@
 #include <utility>
 
 #include "base/bind.h"
-#include "base/callback_helpers.h"
+#include "base/check_op.h"
 #include "base/location.h"
-#include "base/logging.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/single_thread_task_runner.h"
 #include "base/threading/thread_task_runner_handle.h"
@@ -119,8 +118,7 @@ SpdyHttpStream::SpdyHttpStream(const base::WeakPtr<SpdySession>& spdy_session,
       request_body_buf_size_(0),
       buffered_read_callback_pending_(false),
       more_read_data_pending_(false),
-      was_alpn_negotiated_(false),
-      weak_factory_(this) {
+      was_alpn_negotiated_(false) {
   DCHECK(spdy_session_.get());
 }
 
@@ -261,17 +259,29 @@ bool SpdyHttpStream::GetLoadTimingInfo(LoadTimingInfo* load_timing_info) const {
     if (!closed_stream_has_load_timing_info_)
       return false;
     *load_timing_info = closed_stream_load_timing_info_;
-    return true;
+  } else {
+    // If |stream_| has yet to be created, or does not yet have an ID, fail.
+    // The reused flag can only be correctly set once a stream has an ID.
+    // Streams get their IDs once the request has been successfully sent, so
+    // this does not behave that differently from other stream types.
+    if (!stream_ || stream_->stream_id() == 0)
+      return false;
+
+    if (!stream_->GetLoadTimingInfo(load_timing_info))
+      return false;
   }
 
-  // If |stream_| has yet to be created, or does not yet have an ID, fail.
-  // The reused flag can only be correctly set once a stream has an ID.  Streams
-  // get their IDs once the request has been successfully sent, so this does not
-  // behave that differently from other stream types.
-  if (!stream_ || stream_->stream_id() == 0)
-    return false;
+  // If the request waited for handshake confirmation, shift |ssl_end| to
+  // include that time.
+  if (!load_timing_info->connect_timing.ssl_end.is_null() &&
+      !stream_request_.confirm_handshake_end().is_null()) {
+    load_timing_info->connect_timing.ssl_end =
+        stream_request_.confirm_handshake_end();
+    load_timing_info->connect_timing.connect_end =
+        stream_request_.confirm_handshake_end();
+  }
 
-  return stream_->GetLoadTimingInfo(load_timing_info);
+  return true;
 }
 
 int SpdyHttpStream::SendRequest(const HttpRequestHeaders& request_headers,
@@ -338,11 +348,15 @@ int SpdyHttpStream::SendRequest(const HttpRequestHeaders& request_headers,
   CreateSpdyHeadersFromHttpRequest(*request_info_, request_headers, &headers);
   stream_->net_log().AddEvent(
       NetLogEventType::HTTP_TRANSACTION_HTTP2_SEND_REQUEST_HEADERS,
-      base::Bind(&SpdyHeaderBlockNetLogCallback, &headers));
+      [&](NetLogCaptureMode capture_mode) {
+        return SpdyHeaderBlockNetLogParams(&headers, capture_mode);
+      });
   DispatchRequestHeadersCallback(headers);
+
+  bool will_send_data = HasUploadData() | spdy_session_->GreasedFramesEnabled();
   result = stream_->SendRequestHeaders(
       std::move(headers),
-      HasUploadData() ? MORE_DATA_TO_SEND : NO_MORE_DATA_TO_SEND);
+      will_send_data ? MORE_DATA_TO_SEND : NO_MORE_DATA_TO_SEND);
 
   if (result == ERR_IO_PENDING) {
     CHECK(request_callback_.is_null());
@@ -363,6 +377,8 @@ void SpdyHttpStream::Cancel() {
 void SpdyHttpStream::OnHeadersSent() {
   if (HasUploadData()) {
     ReadAndSendRequestBodyData();
+  } else if (spdy_session_->GreasedFramesEnabled()) {
+    SendEmptyBody();
   } else {
     MaybePostRequestCallback(OK);
   }
@@ -389,7 +405,7 @@ void SpdyHttpStream::OnHeadersReceived(
                              response_headers, *response_info_)) {
     // Cancel will call OnClose, which might call callbacks and might destroy
     // |this|.
-    stream_->Cancel(ERR_SPDY_PUSHED_RESPONSE_DOES_NOT_MATCH);
+    stream_->Cancel(ERR_HTTP2_PUSHED_RESPONSE_DOES_NOT_MATCH);
 
     return;
   }
@@ -436,8 +452,12 @@ void SpdyHttpStream::OnDataReceived(std::unique_ptr<SpdyBuffer> buffer) {
 }
 
 void SpdyHttpStream::OnDataSent() {
-  request_body_buf_size_ = 0;
-  ReadAndSendRequestBodyData();
+  if (HasUploadData()) {
+    request_body_buf_size_ = 0;
+    ReadAndSendRequestBodyData();
+  } else {
+    CHECK(spdy_session_->GreasedFramesEnabled());
+  }
 }
 
 // TODO(xunjieli): Maybe do something with the trailers. crbug.com/422958.
@@ -478,6 +498,10 @@ void SpdyHttpStream::OnClose(int status) {
   if (!response_callback_.is_null()) {
     DoResponseCallback(status);
   }
+}
+
+bool SpdyHttpStream::CanGreaseFrameType() const {
+  return true;
 }
 
 NetLogSource SpdyHttpStream::source_dependency() const {
@@ -525,6 +549,14 @@ void SpdyHttpStream::ReadAndSendRequestBodyData() {
 
   if (rv != ERR_IO_PENDING)
     OnRequestBodyReadCompleted(rv);
+}
+
+void SpdyHttpStream::SendEmptyBody() {
+  CHECK(!HasUploadData());
+  CHECK(spdy_session_->GreasedFramesEnabled());
+
+  auto buffer = base::MakeRefCounted<IOBuffer>(/* buffer_size = */ 0);
+  stream_->SendData(buffer.get(), /* length = */ 0, NO_MORE_DATA_TO_SEND);
 }
 
 void SpdyHttpStream::InitializeStreamHelper() {
@@ -630,13 +662,13 @@ void SpdyHttpStream::DoRequestCallback(int rv) {
   CHECK(!request_callback_.is_null());
   // Since Run may result in being called back, reset request_callback_ in
   // advance.
-  base::ResetAndReturn(&request_callback_).Run(rv);
+  std::move(request_callback_).Run(rv);
 }
 
 void SpdyHttpStream::MaybeDoRequestCallback(int rv) {
   CHECK_NE(ERR_IO_PENDING, rv);
   if (request_callback_)
-    base::ResetAndReturn(&request_callback_).Run(rv);
+    std::move(request_callback_).Run(rv);
 }
 
 void SpdyHttpStream::MaybePostRequestCallback(int rv) {
@@ -653,7 +685,7 @@ void SpdyHttpStream::DoResponseCallback(int rv) {
 
   // Since Run may result in being called back, reset response_callback_ in
   // advance.
-  base::ResetAndReturn(&response_callback_).Run(rv);
+  std::move(response_callback_).Run(rv);
 }
 
 bool SpdyHttpStream::GetRemoteEndpoint(IPEndPoint* endpoint) {

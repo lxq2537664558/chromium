@@ -92,11 +92,7 @@ class CastToolbarButtonTest : public ChromeViewsTestBase {
                                                   std::move(context_menu));
 
     // Button needs to be in a widget to be able to access ThemeProvider.
-    widget_ = std::make_unique<views::Widget>();
-    views::Widget::InitParams params =
-        CreateParams(views::Widget::InitParams::TYPE_WINDOW_FRAMELESS);
-    params.ownership = views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET;
-    widget_->Init(params);
+    widget_ = CreateTestWidget();
     widget_->SetContentsView(button_.get());
 
     ui::NativeTheme* native_theme = button_->GetNativeTheme();
@@ -152,11 +148,11 @@ class CastToolbarButtonTest : public ChromeViewsTestBase {
 };
 
 TEST_F(CastToolbarButtonTest, ShowAndHideButton) {
-  ASSERT_FALSE(button_->visible());
+  ASSERT_FALSE(button_->GetVisible());
   button_->ShowIcon();
-  EXPECT_TRUE(button_->visible());
+  EXPECT_TRUE(button_->GetVisible());
   button_->HideIcon();
-  EXPECT_FALSE(button_->visible());
+  EXPECT_FALSE(button_->GetVisible());
 }
 
 TEST_F(CastToolbarButtonTest, UpdateIssues) {

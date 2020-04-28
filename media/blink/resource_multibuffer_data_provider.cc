@@ -23,6 +23,8 @@
 #include "net/http/http_byte_range.h"
 #include "net/http/http_request_headers.h"
 #include "services/network/public/cpp/cors/cors.h"
+#include "third_party/blink/public/mojom/fetch/fetch_api_request.mojom.h"
+#include "third_party/blink/public/platform/web_network_state_notifier.h"
 #include "third_party/blink/public/platform/web_url.h"
 #include "third_party/blink/public/platform/web_url_error.h"
 #include "third_party/blink/public/platform/web_url_response.h"
@@ -62,8 +64,7 @@ ResourceMultiBufferDataProvider::ResourceMultiBufferDataProvider(
       retries_(0),
       cors_mode_(url_data->cors_mode()),
       origin_(url_data->url().GetOrigin()),
-      is_client_audio_element_(is_client_audio_element),
-      weak_factory_(this) {
+      is_client_audio_element_(is_client_audio_element) {
   DCHECK(url_data_) << " pos = " << pos;
   DCHECK_GE(pos, 0);
 }
@@ -84,13 +85,18 @@ void ResourceMultiBufferDataProvider::Start() {
   request.SetRequestContext(is_client_audio_element_
                                 ? blink::mojom::RequestContextType::AUDIO
                                 : blink::mojom::RequestContextType::VIDEO);
+  request.SetRequestDestination(
+      is_client_audio_element_ ? network::mojom::RequestDestination::kAudio
+                               : network::mojom::RequestDestination::kVideo);
   request.SetHttpHeaderField(
       WebString::FromUTF8(net::HttpRequestHeaders::kRange),
       WebString::FromUTF8(
           net::HttpByteRange::RightUnbounded(byte_pos()).GetHeaderValue()));
 
   if (url_data_->length() == kPositionNotSpecified &&
-      url_data_->CachedSize() == 0 && url_data_->BytesReadFromCache() == 0) {
+      url_data_->CachedSize() == 0 && url_data_->BytesReadFromCache() == 0 &&
+      blink::WebNetworkStateNotifier::SaveDataEnabled() &&
+      url_data_->url().SchemeIs(url::kHttpScheme)) {
     // This lets the data reduction proxy know that we don't have anything
     // previously cached data for this resource. We can only send it if this is
     // the first request for this resource.
@@ -117,10 +123,9 @@ void ResourceMultiBufferDataProvider::Start() {
     options.preflight_policy =
         network::mojom::CorsPreflightPolicy::kPreventPreflight;
 
-    request.SetFetchRequestMode(network::mojom::FetchRequestMode::kCors);
+    request.SetMode(network::mojom::RequestMode::kCors);
     if (url_data_->cors_mode() != UrlData::CORS_USE_CREDENTIALS) {
-      request.SetFetchCredentialsMode(
-          network::mojom::FetchCredentialsMode::kSameOrigin);
+      request.SetCredentialsMode(network::mojom::CredentialsMode::kSameOrigin);
     }
   }
 
@@ -147,7 +152,7 @@ bool ResourceMultiBufferDataProvider::Available() const {
 
 int64_t ResourceMultiBufferDataProvider::AvailableBytes() const {
   int64_t bytes = 0;
-  for (const auto i : fifo_) {
+  for (const auto& i : fifo_) {
     if (i->end_of_stream())
       break;
     bytes += i->data_size();
@@ -249,23 +254,8 @@ void ResourceMultiBufferDataProvider::DidReceiveResponse(
   destination_url_data->set_valid_until(base::Time::Now() +
                                         GetCacheValidUntil(response));
 
-  uint32_t reasons = GetReasonsForUncacheability(response);
-  destination_url_data->set_cacheable(reasons == 0);
-  UMA_HISTOGRAM_BOOLEAN("Media.CacheUseful", reasons == 0);
-  int shift = 0;
-  int max_enum = base::bits::Log2Ceiling(kMaxReason);
-  while (reasons) {
-    DCHECK_LT(shift, max_enum);  // Sanity check.
-    if (reasons & 0x1) {
-      // Note: this uses an exact linear UMA to fake an enum UMA, as the actual
-      // enum is a bitmask.
-      UMA_HISTOGRAM_EXACT_LINEAR("Media.UncacheableReason", shift,
-                                 max_enum);  // PRESUBMIT_IGNORE_UMA_MAX
-    }
-
-    reasons >>= 1;
-    ++shift;
-  }
+  destination_url_data->set_cacheable(GetReasonsForUncacheability(response) ==
+                                      0);
 
   // Expected content length can be |kPositionNotSpecified|, in that case
   // |content_length_| is not specified and this is a streaming response.
@@ -399,8 +389,6 @@ void ResourceMultiBufferDataProvider::DidReceiveData(const char* data,
   DCHECK(!Available());
   DCHECK(active_loader_);
   DCHECK_GT(data_length, 0);
-
-  url_data_->AddBytesReadFromNetwork(data_length);
 
   if (bytes_to_discard_) {
     uint64_t tmp = std::min<uint64_t>(bytes_to_discard_, data_length);

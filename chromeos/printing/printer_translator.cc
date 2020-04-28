@@ -6,10 +6,13 @@
 
 #include <memory>
 #include <string>
+#include <utility>
 
+#include "base/logging.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
 #include "base/values.h"
+#include "chromeos/printing/cups_printer_status.h"
 #include "chromeos/printing/printer_configuration.h"
 #include "chromeos/printing/uri_components.h"
 
@@ -31,6 +34,7 @@ const char kModel[] = "model";
 const char kUri[] = "uri";
 const char kUUID[] = "uuid";
 const char kPpdResource[] = "ppd_resource";
+const char kAutoconf[] = "autoconf";
 const char kGuid[] = "guid";
 
 // Returns true if the uri was retrieved, is valid, and was set on |printer|.
@@ -102,7 +106,7 @@ std::unique_ptr<base::DictionaryValue> CreateEmptyPrinterInfo() {
   printer_info->SetString("ppdManufacturer", "");
   printer_info->SetString("ppdModel", "");
   printer_info->SetString("printerAddress", "");
-  printer_info->SetBoolean("printerAutoconf", false);
+  printer_info->SetBoolean("printerPpdReference.autoconf", false);
   printer_info->SetString("printerDescription", "");
   printer_info->SetString("printerId", "");
   printer_info->SetString("printerManufacturer", "");
@@ -148,13 +152,27 @@ std::unique_ptr<Printer> RecommendedPrinterToPrinter(
   printer->set_source(Printer::SRC_POLICY);
 
   const DictionaryValue* ppd;
-  std::string make_and_model;
-  if (pref.GetDictionary(kPpdResource, &ppd) &&
-      ppd->GetString(kEffectiveModel, &make_and_model)) {
-    printer->mutable_ppd_reference()->effective_make_and_model = make_and_model;
-  } else {
-    // Make and model is mandatory
-    LOG(WARNING) << "Missing model information for policy printer.";
+  if (pref.GetDictionary(kPpdResource, &ppd)) {
+    Printer::PpdReference* ppd_reference = printer->mutable_ppd_reference();
+    std::string make_and_model;
+    if (ppd->GetString(kEffectiveModel, &make_and_model))
+      ppd_reference->effective_make_and_model = make_and_model;
+    bool autoconf;
+    if (ppd->GetBoolean(kAutoconf, &autoconf))
+      ppd_reference->autoconf = autoconf;
+  }
+  if (!printer->ppd_reference().autoconf &&
+      printer->ppd_reference().effective_make_and_model.empty()) {
+    // Either autoconf flag or make and model is mandatory.
+    LOG(WARNING)
+        << "Missing autoconf flag and model information for policy printer.";
+    return nullptr;
+  }
+  if (printer->ppd_reference().autoconf &&
+      !printer->ppd_reference().effective_make_and_model.empty()) {
+    // PPD reference can't contain both autoconf and make and model.
+    LOG(WARNING) << "Autoconf flag is set together with model information for "
+                    "policy printer.";
     return nullptr;
   }
 
@@ -175,9 +193,11 @@ std::unique_ptr<base::DictionaryValue> GetCupsPrinterInfo(
   // NOTE: This assumes the the function IsIppEverywhere() simply returns
   // |printer.ppd_reference_.autoconf|. If the implementation of
   // IsIppEverywhere() changes this will need to be changed as well.
-  printer_info->SetBoolean("printerAutoconf", printer.IsIppEverywhere());
+  printer_info->SetBoolean("printerPpdReference.autoconf",
+                           printer.IsIppEverywhere());
   printer_info->SetString("printerPPDPath",
                           printer.ppd_reference().user_supplied_ppd_url);
+  printer_info->SetString("printServerUri", printer.print_server_uri());
 
   auto optional = printer.GetUriComponents();
   if (!optional.has_value()) {
@@ -199,6 +219,7 @@ std::unique_ptr<base::DictionaryValue> GetCupsPrinterInfo(
     // entire host/path/query block is the printer address for USB.
     printer_info->SetString("printerAddress",
                             printer.uri().substr(strlen("usb://")));
+    printer_info->SetString("ppdManufacturer", printer.manufacturer());
   } else {
     printer_info->SetString("printerAddress",
                             PrinterAddress(uri.host(), uri.port()));
@@ -211,4 +232,27 @@ std::unique_ptr<base::DictionaryValue> GetCupsPrinterInfo(
   return printer_info;
 }
 
+base::Value CreateCupsPrinterStatusDictionary(
+    const CupsPrinterStatus& cups_printer_status) {
+  base::Value printer_status(base::Value::Type::DICTIONARY);
+
+  printer_status.SetKey("printerId",
+                        base::Value(cups_printer_status.GetPrinterId()));
+  printer_status.SetKey(
+      "timestamp",
+      base::Value(cups_printer_status.GetTimestamp().ToJsTimeIgnoringNull()));
+
+  base::Value status_reasons(base::Value::Type::LIST);
+  for (auto reason : cups_printer_status.GetStatusReasons()) {
+    base::Value status_reason(base::Value::Type::DICTIONARY);
+    status_reason.SetKey("reason",
+                         base::Value(static_cast<int>(reason.GetReason())));
+    status_reason.SetKey("severity",
+                         base::Value(static_cast<int>(reason.GetSeverity())));
+    status_reasons.Append(std::move(status_reason));
+  }
+  printer_status.SetKey("status_reasons", std::move(status_reasons));
+
+  return printer_status;
+}
 }  // namespace chromeos

@@ -14,20 +14,19 @@
 
 #include "base/macros.h"
 #include "base/memory/weak_ptr.h"
+#include "base/optional.h"
 #include "base/time/clock.h"
 #include "base/time/time.h"
 #include "base/timer/timer.h"
-#include "chrome/browser/media/webrtc/media_capture_devices_dispatcher.h"
 #include "chrome/browser/prerender/prerender_config.h"
 #include "chrome/browser/prerender/prerender_contents.h"
 #include "chrome/browser/prerender/prerender_final_status.h"
 #include "chrome/browser/prerender/prerender_histograms.h"
 #include "chrome/browser/prerender/prerender_origin.h"
 #include "components/keyed_service/core/keyed_service.h"
-#include "content/public/browser/notification_observer.h"
-#include "content/public/browser/notification_registrar.h"
 #include "content/public/browser/render_process_host_observer.h"
 #include "url/gurl.h"
+#include "url/origin.h"
 
 class Profile;
 
@@ -73,10 +72,8 @@ class PrerenderManagerObserver {
 // PrerenderManager is responsible for initiating and keeping prerendered
 // views of web pages. All methods must be called on the UI thread unless
 // indicated otherwise.
-class PrerenderManager : public content::NotificationObserver,
-                         public content::RenderProcessHostObserver,
-                         public KeyedService,
-                         public MediaCaptureDevicesDispatcher::Observer {
+class PrerenderManager : public content::RenderProcessHostObserver,
+                         public KeyedService {
  public:
   enum PrerenderManagerMode {
     // Deprecated: Enables all types of prerendering for any origin.
@@ -99,6 +96,22 @@ class PrerenderManager : public content::NotificationObserver,
     CLEAR_MAX = 0x1 << 2
   };
 
+  // If |url| matches a valid prerendered page in one of the contents,
+  // try to swap it and merge browsing histories.
+  //
+  // Returns true if a prerendered page is swapped in. When this happens, the
+  // PrerenderManager has already swapped out |contents_being_navigated| with
+  // |replaced_contents| in the WebContents container [e.g. TabStripModel on
+  // desktop]. |loaded| is set to true if the page finished loading.
+  //
+  // Returns false if nothing is swapped.
+  //
+  // |loaded| cannot be null.
+  static bool MaybeUsePrerenderedPage(Profile* profile,
+                                      content::WebContents* web_contents,
+                                      const GURL& url,
+                                      bool* loaded);
+
   // Owned by a Profile object for the lifetime of the profile.
   explicit PrerenderManager(Profile* profile);
   ~PrerenderManager() override;
@@ -119,6 +132,7 @@ class PrerenderManager : public content::NotificationObserver,
       const GURL& url,
       uint32_t rel_types,
       const content::Referrer& referrer,
+      const url::Origin& initiator_origin,
       const gfx::Size& size);
 
   // Adds a prerender for |url| if valid. As the prerender request is coming
@@ -129,6 +143,15 @@ class PrerenderManager : public content::NotificationObserver,
   // PrerenderHandle or NULL. If the prerender fails, the prerender manager may
   // fallback and initiate a preconnect to |url|.
   std::unique_ptr<PrerenderHandle> AddPrerenderFromOmnibox(
+      const GURL& url,
+      content::SessionStorageNamespace* session_storage_namespace,
+      const gfx::Size& size);
+
+  // Adds a prerender for the prefetch url from NavigationPredictor on
+  // page load, if NoStatePrefetch and prefetch_after_preconnect are true.
+  // Uses the NavigationPredictor's browser context and the default
+  // SessionStorageNamespace. Returns a PrerenderHandle or NULL.
+  std::unique_ptr<PrerenderHandle> AddPrerenderFromNavigationPredictor(
       const GURL& url,
       content::SessionStorageNamespace* session_storage_namespace,
       const gfx::Size& size);
@@ -244,6 +267,10 @@ class PrerenderManager : public content::NotificationObserver,
   // Returns a list of all WebContents being prerendered.
   std::vector<content::WebContents*> GetAllPrerenderingContents() const;
 
+  // Returns a list of all WebContents being NoStatePrefetched.
+  std::vector<content::WebContents*>
+  GetAllNoStatePrefetchingContentsForTesting() const;
+
   // Checks whether |url| has been recently navigated to.
   bool HasRecentlyBeenNavigatedTo(Origin origin, const GURL& url);
 
@@ -266,15 +293,6 @@ class PrerenderManager : public content::NotificationObserver,
 
   // Record a final status of a prerendered page in a histogram.
   void RecordFinalStatus(Origin origin, FinalStatus final_status) const;
-
-  // content::NotificationObserver
-  void Observe(int type,
-               const content::NotificationSource& source,
-               const content::NotificationDetails& details) override;
-
-  // MediaCaptureDevicesDispatcher::Observer
-  void OnCreatingAudioStream(int render_process_id,
-                             int render_frame_id) override;
 
   const Config& config() const { return config_; }
   Config& mutable_config() { return config_; }
@@ -389,7 +407,7 @@ class PrerenderManager : public content::NotificationObserver,
     // counting the ones that have called PrerenderData::OnHandleCanceled(). For
     // pending prerenders, this will always be 1, since the PrerenderManager
     // only merges handles of running prerenders.
-    int handle_count_;
+    int handle_count_ = 0;
 
     // The time when OnHandleNavigatedAway was called.
     base::TimeTicks abandon_time_;
@@ -444,6 +462,7 @@ class PrerenderManager : public content::NotificationObserver,
       Origin origin,
       const GURL& url,
       const content::Referrer& referrer,
+      const base::Optional<url::Origin>& initiator_origin,
       const gfx::Rect& bounds,
       content::SessionStorageNamespace* session_storage_namespace);
 
@@ -474,6 +493,7 @@ class PrerenderManager : public content::NotificationObserver,
   virtual std::unique_ptr<PrerenderContents> CreatePrerenderContents(
       const GURL& url,
       const content::Referrer& referrer,
+      const base::Optional<url::Origin>& initiator_origin,
       Origin origin);
 
   // Insures the |active_prerenders_| are sorted by increasing expiry time. Call
@@ -485,7 +505,7 @@ class PrerenderManager : public content::NotificationObserver,
   // |url| and |session_storage_namespace|.
   PrerenderData* FindPrerenderData(
       const GURL& url,
-      const content::SessionStorageNamespace* session_storage_namespace);
+      content::SessionStorageNamespace* session_storage_namespace);
 
   // Given the |prerender_contents|, find the iterator in |active_prerenders_|
   // correponding to the given prerender.
@@ -581,18 +601,16 @@ class PrerenderManager : public content::NotificationObserver,
   std::vector<std::unique_ptr<OnCloseWebContentsDeleter>>
       on_close_web_contents_deleters_;
 
-  std::unique_ptr<PrerenderHistory> prerender_history_;
+  const std::unique_ptr<PrerenderHistory> prerender_history_;
 
-  std::unique_ptr<PrerenderHistograms> histograms_;
-
-  content::NotificationRegistrar notification_registrar_;
+  const std::unique_ptr<PrerenderHistograms> histograms_;
 
   // The number of bytes transferred over the network for the profile this
   // PrerenderManager is attached to.
-  int64_t profile_network_bytes_;
+  int64_t profile_network_bytes_ = 0;
 
   // The value of profile_network_bytes_ that was last recorded.
-  int64_t last_recorded_profile_network_bytes_;
+  int64_t last_recorded_profile_network_bytes_ = 0;
 
   // Set of process hosts being prerendered.
   using PrerenderProcessSet = std::set<content::RenderProcessHost*>;
@@ -600,11 +618,11 @@ class PrerenderManager : public content::NotificationObserver,
 
   const base::TickClock* tick_clock_;
 
-  bool page_load_metric_observer_disabled_;
+  bool page_load_metric_observer_disabled_ = false;
 
   std::vector<std::unique_ptr<PrerenderManagerObserver>> observers_;
 
-  base::WeakPtrFactory<PrerenderManager> weak_factory_;
+  base::WeakPtrFactory<PrerenderManager> weak_factory_{this};
 
   DISALLOW_COPY_AND_ASSIGN(PrerenderManager);
 };

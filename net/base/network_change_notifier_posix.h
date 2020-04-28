@@ -18,11 +18,6 @@
 #include "net/base/net_export.h"
 #include "net/base/network_change_notifier.h"
 
-namespace base {
-class SequencedTaskRunner;
-struct OnTaskRunnerDeleter;
-}  // namespace base
-
 namespace net {
 
 // A NetworkChangeNotifier that needs to be told about network changes by some
@@ -57,13 +52,13 @@ class NET_EXPORT NetworkChangeNotifierPosix : public NetworkChangeNotifier {
  private:
   friend class NetworkChangeNotifierPosixTest;
 
-  class DnsConfigService;
-
-  // |dns_config_service_| will live on this runner.
-  scoped_refptr<base::SequencedTaskRunner> dns_config_service_runner_;
-  // DnsConfigService that lives on |dns_config_service_runner_|.
-  std::unique_ptr<DnsConfigService, base::OnTaskRunnerDeleter>
-      dns_config_service_;
+  // For testing purposes, allows specifying a SystemDnsConfigChangeNotifier.
+  // If |system_dns_config_notifier| is nullptr, NetworkChangeNotifier create a
+  // global one.
+  NetworkChangeNotifierPosix(
+      NetworkChangeNotifier::ConnectionType initial_connection_type,
+      NetworkChangeNotifier::ConnectionSubtype initial_connection_subtype,
+      SystemDnsConfigChangeNotifier* system_dns_config_notifier);
 
   // Calculates parameters used for network change notifier online/offline
   // signals.

@@ -7,12 +7,16 @@
 
 #include "base/memory/scoped_refptr.h"
 #include "third_party/blink/renderer/core/css/rule_set.h"
-#include "third_party/blink/renderer/platform/wtf/allocator.h"
+#include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
 
 namespace blink {
 
 class Document;
 class CSSStyleSheet;
+class CSSVariableData;
+class CSSValue;
+class CSSProperty;
+class PropertyRegistration;
 
 namespace css_test_helpers {
 
@@ -31,7 +35,7 @@ class TestStyleSheet {
 
   const Document& GetDocument() { return *document_; }
 
-  void AddCSSRules(const char* rule_text, bool is_empty_sheet = false);
+  void AddCSSRules(const String& rule_text, bool is_empty_sheet = false);
   RuleSet& GetRuleSet();
   CSSRuleList* CssRules();
 
@@ -40,11 +44,24 @@ class TestStyleSheet {
   Persistent<CSSStyleSheet> style_sheet_;
 };
 
+// Create a PropertyRegistration for the given name. The syntax, initial value,
+// and inherited status are all undefined.
+PropertyRegistration* CreatePropertyRegistration(const String& name);
+
 void RegisterProperty(Document& document,
                       const String& name,
                       const String& syntax,
                       const String& initial_value,
                       bool is_inherited);
+
+scoped_refptr<CSSVariableData> CreateVariableData(String);
+const CSSValue* CreateCustomIdent(AtomicString);
+const CSSValue* ParseLonghand(Document& document,
+                              const CSSProperty&,
+                              const String& value);
+const CSSPropertyValueSet* ParseDeclarationBlock(
+    const String& block_text,
+    CSSParserMode mode = kHTMLStandardMode);
 
 }  // namespace css_test_helpers
 }  // namespace blink

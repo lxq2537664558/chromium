@@ -3,15 +3,16 @@
 // found in the LICENSE file.
 
 #include "content/browser/accessibility/accessibility_browsertest.h"
+#include "base/bind_helpers.h"
 #include "base/macros.h"
 #include "content/browser/accessibility/browser_accessibility.h"
 #include "content/browser/renderer_host/render_widget_host_view_aura.h"
 #include "content/browser/web_contents/web_contents_impl.h"
+#include "content/public/test/accessibility_notification_waiter.h"
 #include "content/public/test/browser_test_utils.h"
 #include "content/public/test/content_browser_test.h"
 #include "content/public/test/content_browser_test_utils.h"
 #include "content/shell/browser/shell.h"
-#include "content/test/accessibility_browser_test_utils.h"
 #include "content/test/content_browser_test_utils_internal.h"
 #include "net/base/escape.h"
 
@@ -42,7 +43,7 @@ void AccessibilityBrowserTest::LoadInitialAccessibilityTreeFromHtml(
                                          ax::mojom::Event::kLoadComplete);
   GURL html_data_url("data:text/html," +
                      net::EscapeQueryParamValue(html, false));
-  NavigateToURL(shell(), html_data_url);
+  EXPECT_TRUE(NavigateToURL(shell(), html_data_url));
   waiter.WaitForNotification();
 }
 
@@ -111,6 +112,25 @@ void AccessibilityBrowserTest::LoadSampleParagraphInScrollableEditable() {
       "selection.removeAllRanges();"
       "selection.addRange(range);"));
   selection_waiter.WaitForNotification();
+}
+
+// Loads a page with a paragraph of sample text which is below the
+// bottom of the screen.
+void AccessibilityBrowserTest::LoadSampleParagraphInScrollableDocument(
+    ui::AXMode accessibility_mode) {
+  LoadInitialAccessibilityTreeFromHtml(
+      R"HTML(<!DOCTYPE html>
+      <html>
+      <body>
+        <p style="margin-top:50vh; margin-bottom:200vh">
+            <b>Game theory</b> is "the study of
+            <a href="" title="Mathematical model">mathematical models</a>
+            of conflict and<br>cooperation between intelligent rational
+            decision-makers."
+        </p>
+      </body>
+      </html>)HTML",
+      accessibility_mode);
 }
 
 // static

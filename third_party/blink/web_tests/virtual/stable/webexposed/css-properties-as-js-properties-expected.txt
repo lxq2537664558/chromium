@@ -15,6 +15,8 @@ animationIterationCount
 animationName
 animationPlayState
 animationTimingFunction
+appearance
+backdropFilter
 backfaceVisibility
 background
 backgroundAttachment
@@ -98,6 +100,7 @@ color
 colorInterpolation
 colorInterpolationFilters
 colorRendering
+colorScheme
 columnCount
 columnFill
 columnGap
@@ -109,6 +112,7 @@ columnSpan
 columnWidth
 columns
 contain
+containIntrinsicSize
 content
 counterIncrement
 counterReset
@@ -141,6 +145,7 @@ fontDisplay
 fontFamily
 fontFeatureSettings
 fontKerning
+fontOpticalSizing
 fontSize
 fontStretch
 fontStyle
@@ -174,6 +179,7 @@ gridTemplateColumns
 gridTemplateRows
 height
 hyphens
+imageOrientation
 imageRendering
 inlineSize
 isolation
@@ -238,6 +244,8 @@ overflowWrap
 overflowX
 overflowY
 overscrollBehavior
+overscrollBehaviorBlock
+overscrollBehaviorInline
 overscrollBehaviorX
 overscrollBehaviorY
 padding
@@ -249,7 +257,6 @@ paddingInlineStart
 paddingLeft
 paddingRight
 paddingTop
-page
 pageBreakAfter
 pageBreakBefore
 pageBreakInside
@@ -268,6 +275,7 @@ removeProperty
 resize
 right
 rowGap
+rubyPosition
 rx
 ry
 scrollBehavior
@@ -436,14 +444,9 @@ webkitLocale
 webkitLogicalHeight
 webkitLogicalWidth
 webkitMarginAfter
-webkitMarginAfterCollapse
 webkitMarginBefore
-webkitMarginBeforeCollapse
-webkitMarginBottomCollapse
-webkitMarginCollapse
 webkitMarginEnd
 webkitMarginStart
-webkitMarginTopCollapse
 webkitMask
 webkitMaskBoxImage
 webkitMaskBoxImageOutset

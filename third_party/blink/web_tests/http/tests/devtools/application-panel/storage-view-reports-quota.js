@@ -28,7 +28,7 @@
 
   async function dumpWhenMatches(view, predicate) {
     await new Promise(resolve => {
-      function sniffer(usage, quota) {
+      function sniffer(usage, quota, breakdown) {
         if (usage !== null && (!predicate || predicate(usage, quota)))
           resolve();
         else
@@ -39,26 +39,28 @@
     // Quota will vary between setups, rather strip it altogether
     var clean = view._quotaRow.innerHTML.replace(/\&nbsp;/g, ' ');
     // Clean usage value because it's platform-dependent.
-    var quotaStripped = clean.replace(/[\d.]+ (K?B used out of) \d+ .?B([^\d]*)/, '-- $1 --$2');
+    var quotaStripped = clean.replace(/[\d.]+ (k?B used out of) \d+ .?B([^\d]*)/, '-- $1 --$2');
     TestRunner.addResult(quotaStripped);
 
     TestRunner.addResult('Usage breakdown:');
-    for (var i = 0; i < view._pieChartLegend.children.length; i++) {
+    const legendElement = view._pieChart.element.shadowRoot.querySelector('.pie-chart-legend');
+
+    for (var i = 0; i < legendElement.children.length; i++) {
       var typeUsage = ': ';
-      var children = view._pieChartLegend.children[i].children;
+      var children = legendElement.children[i].children;
       for (var j = 0; j < children.length; j++) {
-        if (children[j].classList.contains('usage-breakdown-legend-title'))
+        if (children[j].classList.contains('pie-chart-name'))
           typeUsage = children[j].textContent + typeUsage;
-        if (children[j].classList.contains('usage-breakdown-legend-value')) {
+        if (children[j].classList.contains('pie-chart-size')) {
           // Clean usage value because it's platform-dependent.
-          var cleanedValue = children[j].textContent.replace(/\d+.\d\sKB/, '--.- KB');
+          var cleanedValue = children[j].textContent.replace(/\d+.\d\skB/, '--.- kB');
           typeUsage = typeUsage + cleanedValue;
         }
       }
       TestRunner.addResult(typeUsage);
     }
   }
-  UI.viewManager.showView('resources');
+  await UI.viewManager.showView('resources');
 
   var parent = UI.panels.resources._sidebar._applicationTreeElement;
   var clearStorageElement = parent.children().find(child => child.title === 'Clear storage');

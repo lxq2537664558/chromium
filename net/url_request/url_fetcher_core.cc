@@ -9,7 +9,8 @@
 
 #include "base/bind.h"
 #include "base/bind_helpers.h"
-#include "base/logging.h"
+#include "base/check_op.h"
+#include "base/notreached.h"
 #include "base/sequenced_task_runner.h"
 #include "base/single_thread_task_runner.h"
 #include "base/stl_util.h"
@@ -47,12 +48,12 @@ URLFetcherCore::Registry::Registry() = default;
 URLFetcherCore::Registry::~Registry() = default;
 
 void URLFetcherCore::Registry::AddURLFetcherCore(URLFetcherCore* core) {
-  DCHECK(!base::ContainsKey(fetchers_, core));
+  DCHECK(!base::Contains(fetchers_, core));
   fetchers_.insert(core);
 }
 
 void URLFetcherCore::Registry::RemoveURLFetcherCore(URLFetcherCore* core) {
-  DCHECK(base::ContainsKey(fetchers_, core));
+  DCHECK(base::Contains(fetchers_, core));
   fetchers_.erase(core);
 }
 
@@ -406,6 +407,7 @@ void URLFetcherCore::OnReceivedRedirect(URLRequest* request,
     stopped_on_redirect_ = true;
     url_ = redirect_info.new_url;
     response_code_ = request_->GetResponseCode();
+    response_headers_ = request_->response_headers();
     proxy_server_ = request_->proxy_server();
     was_cached_ = request_->was_cached();
     total_received_bytes_ += request_->GetTotalReceivedBytes();
@@ -483,7 +485,7 @@ void URLFetcherCore::OnReadCompleted(URLRequest* request,
     // No more data to write.
     const int result = response_writer_->Finish(
         bytes_read > 0 ? OK : bytes_read,
-        base::Bind(&URLFetcherCore::DidFinishWriting, this));
+        base::BindOnce(&URLFetcherCore::DidFinishWriting, this));
     if (result != ERR_IO_PENDING)
       DidFinishWriting(result);
   }
@@ -527,7 +529,7 @@ void URLFetcherCore::StartOnIOThread() {
     response_writer_.reset(new URLFetcherStringWriter);
 
   const int result = response_writer_->Initialize(
-      base::Bind(&URLFetcherCore::DidInitializeWriter, this));
+      base::BindOnce(&URLFetcherCore::DidInitializeWriter, this));
   if (result != ERR_IO_PENDING)
     DidInitializeWriter(result);
 }
@@ -567,10 +569,10 @@ void URLFetcherCore::StartURLRequest() {
   }
   request_->SetReferrer(referrer_);
   request_->set_referrer_policy(referrer_policy_);
-  request_->set_site_for_cookies(initiator_.has_value() &&
-                                         !initiator_.value().opaque()
-                                     ? initiator_.value().GetURL()
-                                     : original_url_);
+  request_->set_site_for_cookies(SiteForCookies::FromUrl(
+      initiator_.has_value() && !initiator_.value().opaque()
+          ? initiator_.value().GetURL()
+          : original_url_));
   request_->set_initiator(initiator_);
   if (url_request_data_key_ && !url_request_create_data_callback_.is_null()) {
     request_->SetUserData(url_request_data_key_,
@@ -856,9 +858,8 @@ void URLFetcherCore::CompleteAddingUploadDataChunk(
 int URLFetcherCore::WriteBuffer(scoped_refptr<DrainableIOBuffer> data) {
   while (data->BytesRemaining() > 0) {
     const int result = response_writer_->Write(
-        data.get(),
-        data->BytesRemaining(),
-        base::Bind(&URLFetcherCore::DidWriteBuffer, this, data));
+        data.get(), data->BytesRemaining(),
+        base::BindOnce(&URLFetcherCore::DidWriteBuffer, this, data));
     if (result < 0) {
       if (result != ERR_IO_PENDING)
         DidWriteBuffer(data, result);

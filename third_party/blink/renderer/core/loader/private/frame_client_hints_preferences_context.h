@@ -8,7 +8,7 @@
 #include "third_party/blink/renderer/core/frame/local_frame.h"
 #include "third_party/blink/renderer/platform/heap/persistent.h"
 #include "third_party/blink/renderer/platform/loader/fetch/client_hints_preferences.h"
-#include "third_party/blink/renderer/platform/wtf/allocator.h"
+#include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
 
 namespace blink {
 
@@ -19,11 +19,11 @@ class FrameClientHintsPreferencesContext final
  public:
   explicit FrameClientHintsPreferencesContext(LocalFrame*);
 
-  void CountClientHints(mojom::WebClientHintsType) override;
+  void CountClientHints(network::mojom::WebClientHintsType) override;
   void CountPersistentClientHintHeaders() override;
 
  private:
-  Member<LocalFrame> frame_;
+  LocalFrame* frame_;
 };
 
 }  // namespace blink

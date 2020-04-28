@@ -19,7 +19,6 @@
 #include "extensions/browser/event_router.h"
 #include "extensions/browser/guest_view/app_view/app_view_guest.h"
 #include "extensions/browser/guest_view/extension_options/extension_options_guest.h"
-#include "extensions/browser/guest_view/extension_view/extension_view_guest.h"
 #include "extensions/browser/guest_view/guest_view_events.h"
 #include "extensions/browser/guest_view/mime_handler_view/mime_handler_view_guest.h"
 #include "extensions/browser/guest_view/web_view/web_view_guest.h"
@@ -77,7 +76,7 @@ void ExtensionsGuestViewManagerDelegate::DispatchEvent(
       owner->GetRenderViewHost(), guest->browser_context(), guest->owner_host(),
       histogram_value, event_name, content::ChildProcessHost::kInvalidUniqueID,
       extensions::kMainThreadId, blink::mojom::kInvalidServiceWorkerVersionId,
-      std::move(event_args), EventRouter::USER_GESTURE_UNKNOWN, info);
+      std::move(event_args), info);
 }
 
 bool ExtensionsGuestViewManagerDelegate::IsGuestAvailableToContext(
@@ -93,13 +92,15 @@ bool ExtensionsGuestViewManagerDelegate::IsGuestAvailableToContext(
   const Extension* owner_extension = ProcessManager::Get(context_)->
       GetExtensionForWebContents(guest->owner_web_contents());
 
+  const GURL& owner_site_url = guest->GetOwnerSiteURL();
   // Ok for |owner_extension| to be nullptr, the embedder might be WebUI.
   Feature::Availability availability = feature->IsAvailableToContext(
       owner_extension,
       process_map->GetMostLikelyContextType(
           owner_extension,
-          guest->owner_web_contents()->GetMainFrame()->GetProcess()->GetID()),
-      guest->GetOwnerSiteURL());
+          guest->owner_web_contents()->GetMainFrame()->GetProcess()->GetID(),
+          &owner_site_url),
+      owner_site_url);
 
   return availability.is_available();
 }
@@ -114,7 +115,6 @@ void ExtensionsGuestViewManagerDelegate::RegisterAdditionalGuestViewTypes() {
   GuestViewManager* manager = GuestViewManager::FromBrowserContext(context_);
   manager->RegisterGuestViewType<AppViewGuest>();
   manager->RegisterGuestViewType<ExtensionOptionsGuest>();
-  manager->RegisterGuestViewType<ExtensionViewGuest>();
   manager->RegisterGuestViewType<MimeHandlerViewGuest>();
   manager->RegisterGuestViewType<WebViewGuest>();
 }

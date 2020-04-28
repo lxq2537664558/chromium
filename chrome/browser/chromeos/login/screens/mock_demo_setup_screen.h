@@ -7,7 +7,7 @@
 
 #include "chrome/browser/chromeos/login/demo_mode/demo_setup_controller.h"
 #include "chrome/browser/chromeos/login/screens/demo_setup_screen.h"
-#include "chrome/browser/chromeos/login/screens/demo_setup_screen_view.h"
+#include "chrome/browser/ui/webui/chromeos/login/demo_setup_screen_handler.h"
 #include "testing/gmock/include/gmock/gmock.h"
 
 namespace chromeos {
@@ -18,8 +18,8 @@ class MockDemoSetupScreen : public DemoSetupScreen {
                       const ScreenExitCallback& exit_callback);
   ~MockDemoSetupScreen() override;
 
-  MOCK_METHOD0(Show, void());
-  MOCK_METHOD0(Hide, void());
+  MOCK_METHOD0(ShowImpl, void());
+  MOCK_METHOD0(HideImpl, void());
 
   void ExitScreen(Result result);
 };
@@ -35,6 +35,8 @@ class MockDemoSetupScreenView : public DemoSetupScreenView {
   MOCK_METHOD0(OnSetupSucceeded, void());
   MOCK_METHOD1(OnSetupFailed,
                void(const DemoSetupController::DemoSetupError& error));
+  MOCK_METHOD1(SetCurrentSetupStep,
+               void(const DemoSetupController::DemoSetupStep current_step));
 
   void Bind(DemoSetupScreen* screen) override;
 

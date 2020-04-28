@@ -16,13 +16,14 @@
 #include "base/lazy_instance.h"
 #include "base/logging.h"
 #include "base/strings/stringize_macros.h"
+#include "build/branding_buildflags.h"
 #include "google_apis/gaia/gaia_switches.h"
 
 #if defined(OS_MACOSX)
 #include "google_apis/google_api_keys_mac.h"
 #endif
 
-#if defined(GOOGLE_CHROME_BUILD) || defined(USE_OFFICIAL_GOOGLE_API_KEYS)
+#if defined(USE_OFFICIAL_GOOGLE_API_KEYS)
 #include "google_apis/internal/google_chrome_api_keys.h"
 #include "google_apis/internal/metrics_signing_key.h"
 #endif
@@ -78,8 +79,13 @@
 #define GOOGLE_API_KEY_PHYSICAL_WEB_TEST DUMMY_API_TOKEN
 #endif
 
-#if !defined(GOOGLE_API_KEY_REMOTING_FTL)
-#define GOOGLE_API_KEY_REMOTING_FTL DUMMY_API_TOKEN
+#if !defined(GOOGLE_API_KEY_REMOTING)
+#define GOOGLE_API_KEY_REMOTING DUMMY_API_TOKEN
+#endif
+
+// API key for SharingService.
+#if !defined(GOOGLE_API_KEY_SHARING)
+#define GOOGLE_API_KEY_SHARING DUMMY_API_TOKEN
 #endif
 
 // These are used as shortcuts for developers and users providing
@@ -120,10 +126,14 @@ class APIKeyCache {
     api_key_non_stable_ = api_key_;
 #endif
 
-    api_key_remoting_ftl_ = CalculateKeyValue(
-        GOOGLE_API_KEY_REMOTING_FTL,
-        STRINGIZE_NO_EXPANSION(GOOGLE_API_KEY_REMOTING_FTL), nullptr,
-        std::string(), environment.get(), command_line);
+    api_key_remoting_ = CalculateKeyValue(
+        GOOGLE_API_KEY_REMOTING,
+        STRINGIZE_NO_EXPANSION(GOOGLE_API_KEY_REMOTING), nullptr, std::string(),
+        environment.get(), command_line);
+
+    api_key_sharing_ = CalculateKeyValue(
+        GOOGLE_API_KEY_SHARING, STRINGIZE_NO_EXPANSION(GOOGLE_API_KEY_SHARING),
+        nullptr, std::string(), environment.get(), command_line);
 
     metrics_key_ = CalculateKeyValue(
         GOOGLE_METRICS_SIGNING_KEY,
@@ -193,7 +203,8 @@ class APIKeyCache {
   void set_api_key(const std::string& api_key) { api_key_ = api_key; }
 #endif
   std::string api_key_non_stable() const { return api_key_non_stable_; }
-  std::string api_key_remoting_ftl() const { return api_key_remoting_ftl_; }
+  std::string api_key_remoting() const { return api_key_remoting_; }
+  std::string api_key_sharing() const { return api_key_sharing_; }
 
   std::string metrics_key() const { return metrics_key_; }
 
@@ -252,7 +263,7 @@ class APIKeyCache {
     }
 #endif
 
-#if !defined(GOOGLE_CHROME_BUILD)
+#if !BUILDFLAG(GOOGLE_CHROME_BRANDING)
     // Don't allow using the environment to override API keys for official
     // Google Chrome builds. There have been reports of mangled environments
     // affecting users (crbug.com/710575).
@@ -270,7 +281,7 @@ class APIKeyCache {
     }
 
     if (key_value == DUMMY_API_TOKEN) {
-#if defined(GOOGLE_CHROME_BUILD)
+#if BUILDFLAG(GOOGLE_CHROME_BRANDING)
       // No key should be unset in an official build except the
       // GOOGLE_DEFAULT_* keys.  The default keys don't trigger this
       // check as their "unset" value is not DUMMY_API_TOKEN.
@@ -291,7 +302,8 @@ class APIKeyCache {
 
   std::string api_key_;
   std::string api_key_non_stable_;
-  std::string api_key_remoting_ftl_;
+  std::string api_key_remoting_;
+  std::string api_key_sharing_;
   std::string metrics_key_;
   std::string client_ids_[CLIENT_NUM_ITEMS];
   std::string client_secrets_[CLIENT_NUM_ITEMS];
@@ -312,8 +324,12 @@ std::string GetNonStableAPIKey() {
   return g_api_key_cache.Get().api_key_non_stable();
 }
 
-std::string GetRemotingFtlAPIKey() {
-  return g_api_key_cache.Get().api_key_remoting_ftl();
+std::string GetRemotingAPIKey() {
+  return g_api_key_cache.Get().api_key_remoting();
+}
+
+std::string GetSharingAPIKey() {
+  return g_api_key_cache.Get().api_key_sharing();
 }
 
 #if defined(OS_IOS)
@@ -362,7 +378,7 @@ std::string GetSpdyProxyAuthValue() {
 }
 
 bool IsGoogleChromeAPIKeyUsed() {
-#if defined(GOOGLE_CHROME_BUILD) || defined(USE_OFFICIAL_GOOGLE_API_KEYS)
+#if defined(USE_OFFICIAL_GOOGLE_API_KEYS)
   return true;
 #else
   return false;

@@ -15,13 +15,18 @@ class UnpackPakTest(unittest.TestCase):
     self.assertTrue(unpack_pak.ParseLine('  {"path.js", IDR_PATH, false}'))
     self.assertTrue(unpack_pak.ParseLine('  {"path.js", IDR_PATH, true}'))
 
-  def testUngzipString(self):
-    self.assertEqual(
-      unpack_pak.UngzipString(
-        '\x1f\x8b\x08\x00\x00\x00\x00\x00\x02\xff\xcbH\xcd\xc9\xc9W' +
-        '(\xcf/\xcaI\x01\x00\x85\x11J\r\x0b\x00\x00\x00'),
-      'hello world')
+  def testGetFileAndDirName(self):
+    (f, d) = unpack_pak.GetFileAndDirName(
+        'out/build/gen/foo/foo.unpak', 'out/build/gen/foo', 'a/b.js')
+    self.assertEquals('b.js', f)
+    self.assertEquals('out/build/gen/foo/foo.unpak/a', d)
 
+  def testGetFileAndDirNameForGeneratedResource(self):
+    (f, d) = unpack_pak.GetFileAndDirName(
+        'out/build/gen/foo/foo.unpak', 'out/build/gen/foo',
+        '@out_folder@/out/build/gen/foo/a/b.js')
+    self.assertEquals('b.js', f)
+    self.assertEquals('out/build/gen/foo/foo.unpak/a', d)
 
 if __name__ == '__main__':
   unittest.main()

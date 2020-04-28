@@ -5,8 +5,8 @@
 #include "remoting/protocol/fake_session.h"
 
 #include "base/bind.h"
+#include "base/check.h"
 #include "base/location.h"
-#include "base/logging.h"
 #include "base/threading/thread_task_runner_handle.h"
 #include "remoting/protocol/fake_authenticator.h"
 #include "remoting/protocol/session_plugin.h"
@@ -19,7 +19,7 @@ const char kTestJid[] = "host1@gmail.com/chromoting123";
 const char kTestAuthKey[] = "test_auth_key";
 
 FakeSession::FakeSession()
-    : config_(SessionConfig::ForTest()), jid_(kTestJid), weak_factory_(this) {}
+    : config_(SessionConfig::ForTest()), jid_(kTestJid) {}
 FakeSession::~FakeSession() = default;
 
 void FakeSession::SimulateConnection(FakeSession* peer) {

@@ -5,8 +5,8 @@
 #include "chrome/browser/chromeos/login/screens/demo_setup_screen.h"
 
 #include "base/bind.h"
-#include "chrome/browser/chromeos/login/screens/demo_setup_screen_view.h"
 #include "chrome/browser/chromeos/login/wizard_controller.h"
+#include "chrome/browser/ui/webui/chromeos/login/demo_setup_screen_handler.h"
 #include "chromeos/dbus/session_manager/session_manager_client.h"
 
 namespace {
@@ -19,12 +19,21 @@ constexpr char kUserActionPowerwash[] = "powerwash";
 
 namespace chromeos {
 
+// static
+std::string DemoSetupScreen::GetResultString(Result result) {
+  switch (result) {
+    case Result::COMPLETED:
+      return "Completed";
+    case Result::CANCELED:
+      return "Canceled";
+  }
+}
+
 DemoSetupScreen::DemoSetupScreen(DemoSetupScreenView* view,
                                  const ScreenExitCallback& exit_callback)
-    : BaseScreen(OobeScreen::SCREEN_OOBE_DEMO_SETUP),
+    : BaseScreen(DemoSetupScreenView::kScreenId, OobeScreenPriority::DEFAULT),
       view_(view),
-      exit_callback_(exit_callback),
-      weak_ptr_factory_(this) {
+      exit_callback_(exit_callback) {
   DCHECK(view_);
   view_->Bind(this);
 }
@@ -34,12 +43,12 @@ DemoSetupScreen::~DemoSetupScreen() {
     view_->Bind(nullptr);
 }
 
-void DemoSetupScreen::Show() {
+void DemoSetupScreen::ShowImpl() {
   if (view_)
     view_->Show();
 }
 
-void DemoSetupScreen::Hide() {
+void DemoSetupScreen::HideImpl() {
   if (view_)
     view_->Hide();
 }
@@ -62,10 +71,23 @@ void DemoSetupScreen::StartEnrollment() {
   DCHECK(DemoSetupController::IsOobeDemoSetupFlowInProgress());
   DemoSetupController* demo_controller =
       WizardController::default_controller()->demo_setup_controller();
-  demo_controller->Enroll(base::BindOnce(&DemoSetupScreen::OnSetupSuccess,
-                                         weak_ptr_factory_.GetWeakPtr()),
-                          base::BindOnce(&DemoSetupScreen::OnSetupError,
-                                         weak_ptr_factory_.GetWeakPtr()));
+  demo_controller->Enroll(
+      base::BindOnce(&DemoSetupScreen::OnSetupSuccess,
+                     weak_ptr_factory_.GetWeakPtr()),
+      base::BindOnce(&DemoSetupScreen::OnSetupError,
+                     weak_ptr_factory_.GetWeakPtr()),
+      base::BindRepeating(&DemoSetupScreen::SetCurrentSetupStep,
+                          weak_ptr_factory_.GetWeakPtr()));
+}
+
+void DemoSetupScreen::SetCurrentSetupStep(
+    const DemoSetupController::DemoSetupStep current_step) {
+  view_->SetCurrentSetupStep(current_step);
+}
+
+void DemoSetupScreen::SetCurrentSetupStepForTest(
+    const DemoSetupController::DemoSetupStep current_step) {
+  SetCurrentSetupStep(current_step);
 }
 
 void DemoSetupScreen::OnSetupError(

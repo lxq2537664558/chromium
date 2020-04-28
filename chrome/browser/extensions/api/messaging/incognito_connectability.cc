@@ -5,8 +5,8 @@
 #include "chrome/browser/extensions/api/messaging/incognito_connectability.h"
 
 #include "base/bind.h"
+#include "base/check_op.h"
 #include "base/lazy_instance.h"
-#include "base/logging.h"
 #include "base/strings/string16.h"
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/extensions/api/messaging/incognito_connectability_infobar_delegate.h"
@@ -47,8 +47,7 @@ int IncognitoConnectability::ScopedAlertTracker::GetAndResetAlertCount() {
 }
 
 IncognitoConnectability::IncognitoConnectability(
-    content::BrowserContext* context)
-    : weak_factory_(this) {
+    content::BrowserContext* context) {
   CHECK(context->IsOffTheRecord());
 }
 
@@ -150,10 +149,10 @@ void IncognitoConnectability::OnInteractiveResponse(
       break;
   }
 
-  DCHECK(base::ContainsKey(pending_origins_, make_pair(extension_id, origin)));
+  DCHECK(base::Contains(pending_origins_, make_pair(extension_id, origin)));
   PendingOrigin& pending_origin =
       pending_origins_[make_pair(extension_id, origin)];
-  DCHECK(base::ContainsKey(pending_origin, infobar_service));
+  DCHECK(base::Contains(pending_origin, infobar_service));
 
   std::vector<base::Callback<void(bool)>> callbacks;
   if (response == ScopedAlertTracker::INTERACTIVE) {

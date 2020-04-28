@@ -52,16 +52,18 @@
 // Legacy support for NT1(https://www.w3.org/TR/navigation-timing/).
 namespace blink {
 
-static uint64_t ToIntegerMilliseconds(TimeDelta duration) {
+static uint64_t ToIntegerMilliseconds(base::TimeDelta duration) {
   // TODO(npm): add histograms to understand when/why |duration| is sometimes
   // negative.
+  // TODO(crbug.com/1063989): stop clamping when it is not needed (i.e. for
+  // methods which do not expose the timestamp to a web perf API).
   double clamped_seconds =
       Performance::ClampTimeResolution(duration.InSecondsF());
   return static_cast<uint64_t>(clamped_seconds * 1000.0);
 }
 
 PerformanceTiming::PerformanceTiming(LocalFrame* frame)
-    : DOMWindowClient(frame) {}
+    : ExecutionContextClient(frame) {}
 
 uint64_t PerformanceTiming::navigationStart() const {
   DocumentLoadTiming* timing = GetDocumentLoadTiming();
@@ -141,7 +143,7 @@ uint64_t PerformanceTiming::domainLookupStart() const {
   // This will be zero when a DNS request is not performed.  Rather than
   // exposing a special value that indicates no DNS, we "backfill" with
   // fetchStart.
-  TimeTicks dns_start = timing->DnsStart();
+  base::TimeTicks dns_start = timing->DnsStart();
   if (dns_start.is_null())
     return fetchStart();
 
@@ -156,7 +158,7 @@ uint64_t PerformanceTiming::domainLookupEnd() const {
   // This will be zero when a DNS request is not performed.  Rather than
   // exposing a special value that indicates no DNS, we "backfill" with
   // domainLookupStart.
-  TimeTicks dns_end = timing->DnsEnd();
+  base::TimeTicks dns_end = timing->DnsEnd();
   if (dns_end.is_null())
     return domainLookupStart();
 
@@ -175,7 +177,7 @@ uint64_t PerformanceTiming::connectStart() const {
   // connectStart will be zero when a network request is not made.  Rather than
   // exposing a special value that indicates no new connection, we "backfill"
   // with domainLookupEnd.
-  TimeTicks connect_start = timing->ConnectStart();
+  base::TimeTicks connect_start = timing->ConnectStart();
   if (connect_start.is_null() || loader->GetResponse().ConnectionReused())
     return domainLookupEnd();
 
@@ -200,7 +202,7 @@ uint64_t PerformanceTiming::connectEnd() const {
   // connectEnd will be zero when a network request is not made.  Rather than
   // exposing a special value that indicates no new connection, we "backfill"
   // with connectStart.
-  TimeTicks connect_end = timing->ConnectEnd();
+  base::TimeTicks connect_end = timing->ConnectEnd();
   if (connect_end.is_null() || loader->GetResponse().ConnectionReused())
     return connectStart();
 
@@ -216,7 +218,7 @@ uint64_t PerformanceTiming::secureConnectionStart() const {
   if (!timing)
     return 0;
 
-  TimeTicks ssl_start = timing->SslStart();
+  base::TimeTicks ssl_start = timing->SslStart();
   if (ssl_start.is_null())
     return 0;
 
@@ -237,7 +239,7 @@ uint64_t PerformanceTiming::responseStart() const {
   if (!timing)
     return requestStart();
 
-  TimeTicks response_start = timing->ReceiveHeadersStart();
+  base::TimeTicks response_start = timing->ReceiveHeadersStart();
   if (response_start.is_null())
     response_start = timing->ReceiveHeadersEnd();
   if (response_start.is_null())
@@ -311,12 +313,12 @@ uint64_t PerformanceTiming::loadEventEnd() const {
   return MonotonicTimeToIntegerMilliseconds(timing->LoadEventEnd());
 }
 
-uint64_t PerformanceTiming::FirstLayout() const {
-  const DocumentTiming* timing = GetDocumentTiming();
+base::TimeTicks PerformanceTiming::NavigationStartAsMonotonicTime() const {
+  DocumentLoadTiming* timing = GetDocumentLoadTiming();
   if (!timing)
-    return 0;
+    return base::TimeTicks();
 
-  return MonotonicTimeToIntegerMilliseconds(timing->FirstLayout());
+  return timing->NavigationStart();
 }
 
 uint64_t PerformanceTiming::FirstPaint() const {
@@ -343,6 +345,14 @@ uint64_t PerformanceTiming::FirstContentfulPaint() const {
   return MonotonicTimeToIntegerMilliseconds(timing->FirstContentfulPaint());
 }
 
+base::TimeTicks PerformanceTiming::FirstContentfulPaintAsMonotonicTime() const {
+  const PaintTiming* timing = GetPaintTiming();
+  if (!timing)
+    return base::TimeTicks();
+
+  return timing->FirstContentfulPaint();
+}
+
 uint64_t PerformanceTiming::FirstMeaningfulPaint() const {
   const PaintTiming* timing = GetPaintTiming();
   if (!timing)
@@ -366,7 +376,7 @@ uint64_t PerformanceTiming::LargestImagePaint() const {
     return 0;
 
   return MonotonicTimeToIntegerMilliseconds(
-      paint_timing_detector->GetImagePaintTimingDetector().LargestImagePaint());
+      paint_timing_detector->LargestImagePaint());
 }
 
 uint64_t PerformanceTiming::LargestImagePaintSize() const {
@@ -374,8 +384,7 @@ uint64_t PerformanceTiming::LargestImagePaintSize() const {
   if (!paint_timing_detector)
     return 0;
 
-  return paint_timing_detector->GetImagePaintTimingDetector()
-      .LargestImagePaintSize();
+  return paint_timing_detector->LargestImagePaintSize();
 }
 
 uint64_t PerformanceTiming::LargestTextPaint() const {
@@ -384,7 +393,7 @@ uint64_t PerformanceTiming::LargestTextPaint() const {
     return 0;
 
   return MonotonicTimeToIntegerMilliseconds(
-      paint_timing_detector->GetTextPaintTimingDetector().LargestTextPaint());
+      paint_timing_detector->LargestTextPaint());
 }
 
 uint64_t PerformanceTiming::LargestTextPaintSize() const {
@@ -392,68 +401,50 @@ uint64_t PerformanceTiming::LargestTextPaintSize() const {
   if (!paint_timing_detector)
     return 0;
 
-  return paint_timing_detector->GetTextPaintTimingDetector()
-      .LargestTextPaintSize();
+  return paint_timing_detector->LargestTextPaintSize();
 }
 
-uint64_t PerformanceTiming::PageInteractive() const {
-  InteractiveDetector* interactive_detector = GetInteractiveDetector();
-  if (!interactive_detector)
+uint64_t PerformanceTiming::FirstInputOrScrollNotifiedTimestamp() const {
+  PaintTimingDetector* paint_timing_detector = GetPaintTimingDetector();
+  if (!paint_timing_detector)
     return 0;
 
   return MonotonicTimeToIntegerMilliseconds(
-      interactive_detector->GetInteractiveTime());
+      paint_timing_detector->FirstInputOrScrollNotifiedTimestamp());
 }
 
-uint64_t PerformanceTiming::PageInteractiveDetection() const {
-  InteractiveDetector* interactive_detector = GetInteractiveDetector();
-  if (!interactive_detector)
-    return 0;
-
-  return MonotonicTimeToIntegerMilliseconds(
-      interactive_detector->GetInteractiveDetectionTime());
-}
-
-uint64_t PerformanceTiming::FirstInputInvalidatingInteractive() const {
-  InteractiveDetector* interactive_detector = GetInteractiveDetector();
-  if (!interactive_detector)
-    return 0;
-
-  return MonotonicTimeToIntegerMilliseconds(
-      interactive_detector->GetFirstInvalidatingInputTime());
-}
-
-uint64_t PerformanceTiming::FirstInputDelay() const {
+base::Optional<base::TimeDelta> PerformanceTiming::FirstInputDelay() const {
   const InteractiveDetector* interactive_detector = GetInteractiveDetector();
   if (!interactive_detector)
-    return 0;
+    return base::nullopt;
 
-  return ToIntegerMilliseconds(interactive_detector->GetFirstInputDelay());
+  return interactive_detector->GetFirstInputDelay();
 }
 
-uint64_t PerformanceTiming::FirstInputTimestamp() const {
+base::Optional<base::TimeDelta> PerformanceTiming::FirstInputTimestamp() const {
   const InteractiveDetector* interactive_detector = GetInteractiveDetector();
   if (!interactive_detector)
-    return 0;
+    return base::nullopt;
 
-  return MonotonicTimeToIntegerMilliseconds(
+  return MonotonicTimeToPseudoWallTime(
       interactive_detector->GetFirstInputTimestamp());
 }
 
-uint64_t PerformanceTiming::LongestInputDelay() const {
+base::Optional<base::TimeDelta> PerformanceTiming::LongestInputDelay() const {
   const InteractiveDetector* interactive_detector = GetInteractiveDetector();
   if (!interactive_detector)
-    return 0;
+    return base::nullopt;
 
-  return ToIntegerMilliseconds(interactive_detector->GetLongestInputDelay());
+  return interactive_detector->GetLongestInputDelay();
 }
 
-uint64_t PerformanceTiming::LongestInputTimestamp() const {
+base::Optional<base::TimeDelta> PerformanceTiming::LongestInputTimestamp()
+    const {
   const InteractiveDetector* interactive_detector = GetInteractiveDetector();
   if (!interactive_detector)
-    return 0;
+    return base::nullopt;
 
-  return MonotonicTimeToIntegerMilliseconds(
+  return MonotonicTimeToPseudoWallTime(
       interactive_detector->GetLongestInputTimestamp());
 }
 
@@ -589,6 +580,19 @@ PaintTimingDetector* PerformanceTiming::GetPaintTimingDetector() const {
   return &view->GetPaintTimingDetector();
 }
 
+base::Optional<base::TimeDelta>
+PerformanceTiming::MonotonicTimeToPseudoWallTime(
+    const base::Optional<base::TimeTicks>& time) const {
+  if (!time.has_value())
+    return base::nullopt;
+
+  const DocumentLoadTiming* timing = GetDocumentLoadTiming();
+  if (!timing)
+    return base::nullopt;
+
+  return timing->MonotonicTimeToPseudoWallTime(*time);
+}
+
 std::unique_ptr<TracedValue> PerformanceTiming::GetNavigationTracingData() {
   auto data = std::make_unique<TracedValue>();
   data->SetString("navigationId",
@@ -596,35 +600,52 @@ std::unique_ptr<TracedValue> PerformanceTiming::GetNavigationTracingData() {
   return data;
 }
 
+// static
+const PerformanceTiming::NameToAttributeMap&
+PerformanceTiming::GetAttributeMapping() {
+  DEFINE_THREAD_SAFE_STATIC_LOCAL(ThreadSpecific<NameToAttributeMap>, map, ());
+  if (!map.IsSet()) {
+    *map = {
+        {"navigationStart", &PerformanceTiming::navigationStart},
+        {"unloadEventStart", &PerformanceTiming::unloadEventStart},
+        {"unloadEventEnd", &PerformanceTiming::unloadEventEnd},
+        {"redirectStart", &PerformanceTiming::redirectStart},
+        {"redirectEnd", &PerformanceTiming::redirectEnd},
+        {"fetchStart", &PerformanceTiming::fetchStart},
+        {"domainLookupStart", &PerformanceTiming::domainLookupStart},
+        {"domainLookupEnd", &PerformanceTiming::domainLookupEnd},
+        {"connectStart", &PerformanceTiming::connectStart},
+        {"connectEnd", &PerformanceTiming::connectEnd},
+        {"secureConnectionStart", &PerformanceTiming::secureConnectionStart},
+        {"requestStart", &PerformanceTiming::requestStart},
+        {"responseStart", &PerformanceTiming::responseStart},
+        {"responseEnd", &PerformanceTiming::responseEnd},
+        {"domLoading", &PerformanceTiming::domLoading},
+        {"domInteractive", &PerformanceTiming::domInteractive},
+        {"domContentLoadedEventStart",
+         &PerformanceTiming::domContentLoadedEventStart},
+        {"domContentLoadedEventEnd",
+         &PerformanceTiming::domContentLoadedEventEnd},
+        {"domComplete", &PerformanceTiming::domComplete},
+        {"loadEventStart", &PerformanceTiming::loadEventStart},
+        {"loadEventEnd", &PerformanceTiming::loadEventEnd},
+    };
+  }
+  return *map;
+}
+
 ScriptValue PerformanceTiming::toJSONForBinding(
     ScriptState* script_state) const {
   V8ObjectBuilder result(script_state);
-  result.AddNumber("navigationStart", navigationStart());
-  result.AddNumber("unloadEventStart", unloadEventStart());
-  result.AddNumber("unloadEventEnd", unloadEventEnd());
-  result.AddNumber("redirectStart", redirectStart());
-  result.AddNumber("redirectEnd", redirectEnd());
-  result.AddNumber("fetchStart", fetchStart());
-  result.AddNumber("domainLookupStart", domainLookupStart());
-  result.AddNumber("domainLookupEnd", domainLookupEnd());
-  result.AddNumber("connectStart", connectStart());
-  result.AddNumber("connectEnd", connectEnd());
-  result.AddNumber("secureConnectionStart", secureConnectionStart());
-  result.AddNumber("requestStart", requestStart());
-  result.AddNumber("responseStart", responseStart());
-  result.AddNumber("responseEnd", responseEnd());
-  result.AddNumber("domLoading", domLoading());
-  result.AddNumber("domInteractive", domInteractive());
-  result.AddNumber("domContentLoadedEventStart", domContentLoadedEventStart());
-  result.AddNumber("domContentLoadedEventEnd", domContentLoadedEventEnd());
-  result.AddNumber("domComplete", domComplete());
-  result.AddNumber("loadEventStart", loadEventStart());
-  result.AddNumber("loadEventEnd", loadEventEnd());
+  for (const auto& name_attribute_pair : GetAttributeMapping()) {
+    result.AddNumber(name_attribute_pair.key,
+                     (this->*(name_attribute_pair.value))());
+  }
   return result.GetScriptValue();
 }
 
 uint64_t PerformanceTiming::MonotonicTimeToIntegerMilliseconds(
-    TimeTicks time) const {
+    base::TimeTicks time) const {
   const DocumentLoadTiming* timing = GetDocumentLoadTiming();
   if (!timing)
     return 0;
@@ -632,9 +653,9 @@ uint64_t PerformanceTiming::MonotonicTimeToIntegerMilliseconds(
   return ToIntegerMilliseconds(timing->MonotonicTimeToPseudoWallTime(time));
 }
 
-void PerformanceTiming::Trace(blink::Visitor* visitor) {
+void PerformanceTiming::Trace(Visitor* visitor) {
   ScriptWrappable::Trace(visitor);
-  DOMWindowClient::Trace(visitor);
+  ExecutionContextClient::Trace(visitor);
 }
 
 }  // namespace blink

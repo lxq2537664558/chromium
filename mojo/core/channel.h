@@ -11,7 +11,7 @@
 #include "base/macros.h"
 #include "base/memory/ref_counted.h"
 #include "base/process/process_handle.h"
-#include "base/task_runner.h"
+#include "base/single_thread_task_runner.h"
 #include "build/build_config.h"
 #include "mojo/core/connection_params.h"
 #include "mojo/core/platform_handle_in_transit.h"
@@ -66,7 +66,7 @@ class MOJO_SYSTEM_IMPL_EXPORT Channel
       // TODO(https://crbug.com/695645): remove legacy support when Arc++ has
       // updated to Mojo with normal versioned messages.
       NORMAL_LEGACY = 0,
-#if defined(OS_MACOSX)
+#if defined(OS_IOS)
       // A control message containing handles to echo back.
       HANDLES_SENT,
       // A control message containing handles that can now be closed.
@@ -111,27 +111,12 @@ class MOJO_SYSTEM_IMPL_EXPORT Channel
     };
 
 #if defined(OS_MACOSX) && !defined(OS_IOS)
-    union MachPortsEntry {
-      // Used with ChannelPosix.
-      struct {
-        // Index of Mach port in the original vector of
-        // PlatformHandleInTransits.
-        uint16_t index;
-
-        // Mach port name.
-        uint32_t mach_port;
-      } posix_entry;
-
-      // Used with ChannelMac.
-      struct {
-        // The PlatformHandle::Type.
-        uint8_t type;
-      } mach_entry;
-      static_assert(sizeof(mach_port_t) <= sizeof(uint32_t),
-                    "mach_port_t must be no larger than uint32_t");
+    struct MachPortsEntry {
+      // The PlatformHandle::Type.
+      uint8_t type;
     };
-    static_assert(sizeof(MachPortsEntry) == 6,
-                  "sizeof(MachPortsEntry) must be 6 bytes");
+    static_assert(sizeof(MachPortsEntry) == 1,
+                  "sizeof(MachPortsEntry) must be 1 byte");
 
     // Structure of the extra header field when present on OSX.
     struct MachPortsExtraHeader {
@@ -205,9 +190,6 @@ class MOJO_SYSTEM_IMPL_EXPORT Channel
 
     size_t num_handles() const;
     bool has_handles() const;
-#if defined(OS_MACOSX) && !defined(OS_IOS)
-    bool has_mach_ports() const;
-#endif
 
     bool is_legacy_message() const;
     LegacyHeader* legacy_header() const;
@@ -218,11 +200,6 @@ class MOJO_SYSTEM_IMPL_EXPORT Channel
     void SetHandles(std::vector<PlatformHandle> new_handles);
     void SetHandles(std::vector<PlatformHandleInTransit> new_handles);
     std::vector<PlatformHandleInTransit> TakeHandles();
-    // Version of TakeHandles that returns a vector of platform handles suitable
-    // for transfer over an underlying OS mechanism. i.e. file descriptors over
-    // a unix domain socket. Any handle that cannot be transferred this way,
-    // such as Mach ports, will be removed.
-    std::vector<PlatformHandleInTransit> TakeHandlesForTransport();
 
     void SetVersionForTest(uint16_t version_number);
 
@@ -296,7 +273,7 @@ class MOJO_SYSTEM_IMPL_EXPORT Channel
       Delegate* delegate,
       ConnectionParams connection_params,
       HandlePolicy handle_policy,
-      scoped_refptr<base::TaskRunner> io_task_runner);
+      scoped_refptr<base::SingleThreadTaskRunner> io_task_runner);
 
   // Allows the caller to change the Channel's HandlePolicy after construction.
   void set_handle_policy(HandlePolicy policy) { handle_policy_ = policy; }

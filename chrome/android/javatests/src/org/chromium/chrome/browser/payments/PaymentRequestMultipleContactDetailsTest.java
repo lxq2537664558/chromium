@@ -4,9 +4,6 @@
 
 package org.chromium.chrome.browser.payments;
 
-import static org.chromium.chrome.browser.payments.PaymentRequestTestRule.HAVE_INSTRUMENTS;
-import static org.chromium.chrome.browser.payments.PaymentRequestTestRule.IMMEDIATE_RESPONSE;
-
 import android.support.test.filters.MediumTest;
 
 import org.junit.Assert;
@@ -15,18 +12,20 @@ import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 
+import org.chromium.base.metrics.RecordHistogram;
 import org.chromium.base.test.util.CommandLineFlags;
 import org.chromium.base.test.util.Feature;
 import org.chromium.chrome.R;
-import org.chromium.chrome.browser.ChromeSwitches;
 import org.chromium.chrome.browser.autofill.AutofillTestHelper;
 import org.chromium.chrome.browser.autofill.PersonalDataManager.AutofillProfile;
+import org.chromium.chrome.browser.flags.ChromeSwitches;
+import org.chromium.chrome.browser.payments.PaymentRequestTestRule.AppPresence;
+import org.chromium.chrome.browser.payments.PaymentRequestTestRule.FactorySpeed;
 import org.chromium.chrome.browser.payments.PaymentRequestTestRule.MainActivityStartCallback;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
-import org.chromium.chrome.test.ui.DisableAnimationsTestRule;
+import org.chromium.ui.test.util.DisableAnimationsTestRule;
 
 import java.util.ArrayList;
-import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeoutException;
 
 /**
@@ -115,8 +114,7 @@ public class PaymentRequestMultipleContactDetailsTest implements MainActivitySta
     private int[] mDatesToSet;
 
     @Override
-    public void onMainActivityStarted()
-            throws InterruptedException, ExecutionException, TimeoutException {
+    public void onMainActivityStarted() throws TimeoutException {
         AutofillTestHelper helper = new AutofillTestHelper();
 
         // Add the profiles.
@@ -130,7 +128,8 @@ public class PaymentRequestMultipleContactDetailsTest implements MainActivitySta
             helper.setProfileUseStatsForTesting(guids.get(i), mCountsToSet[i], mDatesToSet[i]);
         }
 
-        mPaymentRequestTestRule.installPaymentApp(HAVE_INSTRUMENTS, IMMEDIATE_RESPONSE);
+        mPaymentRequestTestRule.addPaymentAppFactory(
+                AppPresence.HAVE_APPS, FactorySpeed.FAST_FACTORY);
     }
 
     /**
@@ -141,8 +140,7 @@ public class PaymentRequestMultipleContactDetailsTest implements MainActivitySta
     @Test
     @MediumTest
     @Feature({"Payments"})
-    public void testContactDetailsSuggestionOrdering()
-            throws InterruptedException, ExecutionException, TimeoutException {
+    public void testContactDetailsSuggestionOrdering() throws TimeoutException {
         // Set the use stats so that profile[0] has the highest frecency score, profile[1] the
         // second highest, profile[2] the third lowest, profile[3] the second lowest and profile[4]
         // the lowest.
@@ -163,6 +161,12 @@ public class PaymentRequestMultipleContactDetailsTest implements MainActivitySta
                 mPaymentRequestTestRule.getContactDetailsSuggestionLabel(2));
         Assert.assertEquals("Homer Simpson\n555 123-4567\nEmail required",
                 mPaymentRequestTestRule.getContactDetailsSuggestionLabel(3));
+
+        // Verify that no record is logged since there is at least one complete suggested contact
+        // details.
+        Assert.assertEquals(0,
+                RecordHistogram.getHistogramTotalCountForTesting(
+                        "PaymentRequest.MissingContactFields"));
     }
 
     /**
@@ -172,8 +176,7 @@ public class PaymentRequestMultipleContactDetailsTest implements MainActivitySta
     @Test
     @MediumTest
     @Feature({"Payments"})
-    public void testContactDetailsEditRequiredMessage()
-            throws InterruptedException, ExecutionException, TimeoutException {
+    public void testContactDetailsEditRequiredMessage() throws TimeoutException {
         mProfilesToAdd = new AutofillProfile[] {AUTOFILL_PROFILES[0], AUTOFILL_PROFILES[1],
                 AUTOFILL_PROFILES[4], AUTOFILL_PROFILES[5]};
         mCountsToSet = new int[] {15, 10, 5, 1};
@@ -191,6 +194,11 @@ public class PaymentRequestMultipleContactDetailsTest implements MainActivitySta
                 mPaymentRequestTestRule.getContactDetailsSuggestionLabel(2));
         Assert.assertEquals("Marge Simpson\nMore information required",
                 mPaymentRequestTestRule.getContactDetailsSuggestionLabel(3));
+
+        // Verify that the missing fields of the most complete suggestion has been recorded.
+        Assert.assertEquals(1,
+                RecordHistogram.getHistogramValueCountForTesting(
+                        "PaymentRequest.MissingContactFields", ContactEditor.INVALID_PHONE_NUMBER));
     }
 
     /**
@@ -199,14 +207,16 @@ public class PaymentRequestMultipleContactDetailsTest implements MainActivitySta
     @Test
     @MediumTest
     @Feature({"Payments"})
-    public void testContactDetailsDedupe_EmptyFields()
-            throws InterruptedException, ExecutionException, TimeoutException {
+    public void testContactDetailsDedupe_EmptyFields() throws TimeoutException {
         // Add the original profile and a bunch of similar profiles with missing fields.
         // Make sure the original profile is suggested last, to test that the suggestions are
         // sorted by completeness.
         mProfilesToAdd = new AutofillProfile[] {
-                AUTOFILL_PROFILES[2], AUTOFILL_PROFILES[6], AUTOFILL_PROFILES[7],
-                AUTOFILL_PROFILES[8], AUTOFILL_PROFILES[9],
+                AUTOFILL_PROFILES[2],
+                AUTOFILL_PROFILES[6],
+                AUTOFILL_PROFILES[7],
+                AUTOFILL_PROFILES[8],
+                AUTOFILL_PROFILES[9],
         };
         mCountsToSet = new int[] {1, 20, 15, 10, 5};
         mDatesToSet = new int[] {1000, 4000, 3000, 2000, 1000};
@@ -228,8 +238,7 @@ public class PaymentRequestMultipleContactDetailsTest implements MainActivitySta
     @Test
     @MediumTest
     @Feature({"Payments"})
-    public void testContactDetailsDedupe_Capitalization()
-            throws InterruptedException, ExecutionException, TimeoutException {
+    public void testContactDetailsDedupe_Capitalization() throws TimeoutException {
         // Add the original profile and the one where the the name is not capitalized.
         // Make sure the original profile is suggested first (no particular reason).
         mProfilesToAdd = new AutofillProfile[] {AUTOFILL_PROFILES[2], AUTOFILL_PROFILES[11]};
@@ -251,8 +260,7 @@ public class PaymentRequestMultipleContactDetailsTest implements MainActivitySta
     @Test
     @MediumTest
     @Feature({"Payments"})
-    public void testContactDetailsDontDedupe_FieldSubset()
-            throws InterruptedException, ExecutionException, TimeoutException {
+    public void testContactDetailsDontDedupe_FieldSubset() throws TimeoutException {
         // Add the original profile and the one where the email is a superset of the original.
         // Make sure the one with the superset is suggested first, because to test the subset one
         // needs to be added after.
@@ -268,5 +276,28 @@ public class PaymentRequestMultipleContactDetailsTest implements MainActivitySta
                 mPaymentRequestTestRule.getContactDetailsSuggestionLabel(0));
         Assert.assertEquals("Lisa Simpson\n555 123-4567\nlisa@simpson.com",
                 mPaymentRequestTestRule.getContactDetailsSuggestionLabel(1));
+    }
+
+    /**
+     * Make sure all fields are recorded when no profile exists.
+     */
+    @Test
+    @MediumTest
+    @Feature({"Payments"})
+    public void testContactDetailsAllMissingFieldsRecorded() throws TimeoutException {
+        // Don't add any profiles.
+        mProfilesToAdd = new AutofillProfile[] {};
+        mCountsToSet = new int[] {};
+        mDatesToSet = new int[] {};
+
+        mPaymentRequestTestRule.triggerUIAndWait(mPaymentRequestTestRule.getReadyForInput());
+        Assert.assertEquals(0, mPaymentRequestTestRule.getNumberOfContactDetailSuggestions());
+
+        // Verify that all contact fields are recorded as missing when no suggestion exists.
+        Assert.assertEquals(1,
+                RecordHistogram.getHistogramValueCountForTesting(
+                        "PaymentRequest.MissingContactFields",
+                        ContactEditor.INVALID_NAME | ContactEditor.INVALID_PHONE_NUMBER
+                                | ContactEditor.INVALID_EMAIL));
     }
 }

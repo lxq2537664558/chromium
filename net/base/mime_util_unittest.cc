@@ -33,10 +33,13 @@ TEST(MimeUtilTest, ExtensionTest) {
     {FILE_PATH_LITERAL("js"), "text/javascript", true},
     {FILE_PATH_LITERAL("webm"), "video/webm", true},
     {FILE_PATH_LITERAL("weba"), "audio/webm", true},
+    {FILE_PATH_LITERAL("avif"), "image/avif", true},
 #if defined(OS_CHROMEOS)
     // These are test cases for testing platform mime types on Chrome OS.
     {FILE_PATH_LITERAL("epub"), "application/epub+zip", true},
     {FILE_PATH_LITERAL("apk"), "application/vnd.android.package-archive", true},
+    {FILE_PATH_LITERAL("cer"), "application/x-x509-ca-cert", true},
+    {FILE_PATH_LITERAL("crt"), "application/x-x509-ca-cert", true},
     {FILE_PATH_LITERAL("zip"), "application/zip", true},
     {FILE_PATH_LITERAL("ics"), "text/calendar", true},
 #endif
@@ -307,6 +310,7 @@ TEST(MimeUtilTest, TestGetExtensionsForMimeType) {
       {"message/*", 1, "eml"},
       {"MeSsAge/*", 1, "eml"},
       {"message/", 0, nullptr, true},
+      {"image/avif", 1, "avif"},
       {"image/bmp", 1, "bmp"},
       {"video/*", 6, "mp4"},
       {"video/*", 6, "mpeg"},
@@ -328,7 +332,7 @@ TEST(MimeUtilTest, TestGetExtensionsForMimeType) {
           test.contained_result,
           test.contained_result + strlen(test.contained_result));
 
-      bool found = base::ContainsValue(extensions, contained_result);
+      bool found = base::Contains(extensions, contained_result);
 
       ASSERT_TRUE(found) << "Must find at least the contained result within "
                          << test.mime_type;

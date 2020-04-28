@@ -4,13 +4,12 @@
 
 #include "components/viz/test/viz_test_suite.h"
 
-#include "base/message_loop/message_loop.h"
 #include "base/threading/thread_id_name_manager.h"
 #include "components/viz/test/paths.h"
+#include "ui/events/platform/platform_event_source.h"
 #include "ui/gl/test/gl_surface_test_support.h"
 
 namespace viz {
-
 VizTestSuite::VizTestSuite(int argc, char** argv)
     : base::TestSuite(argc, argv) {}
 
@@ -18,10 +17,14 @@ VizTestSuite::~VizTestSuite() = default;
 
 void VizTestSuite::Initialize() {
   base::TestSuite::Initialize();
+
+  // Must be initialized after time outs are initialized in by the TestSuite.
+  task_environment_ = std::make_unique<base::test::TaskEnvironment>(
+      base::test::TaskEnvironment::MainThreadType::UI);
+  platform_event_source_ = ui::PlatformEventSource::CreateDefault();
+
   gl::GLSurfaceTestSupport::InitializeOneOff();
   Paths::RegisterPathProvider();
-
-  message_loop_ = std::make_unique<base::MessageLoop>();
 
   base::ThreadIdNameManager::GetInstance()->SetName("Main");
 
@@ -29,8 +32,8 @@ void VizTestSuite::Initialize() {
 }
 
 void VizTestSuite::Shutdown() {
-  message_loop_ = nullptr;
-
+  platform_event_source_.reset();
+  task_environment_.reset();
   base::TestSuite::Shutdown();
 }
 

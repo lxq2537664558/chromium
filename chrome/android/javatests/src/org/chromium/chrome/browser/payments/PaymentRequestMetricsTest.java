@@ -4,11 +4,6 @@
 
 package org.chromium.chrome.browser.payments;
 
-import static org.chromium.chrome.browser.payments.PaymentRequestTestRule.DELAYED_RESPONSE;
-import static org.chromium.chrome.browser.payments.PaymentRequestTestRule.HAVE_INSTRUMENTS;
-import static org.chromium.chrome.browser.payments.PaymentRequestTestRule.IMMEDIATE_RESPONSE;
-import static org.chromium.chrome.browser.payments.PaymentRequestTestRule.NO_INSTRUMENTS;
-
 import android.support.test.InstrumentationRegistry;
 import android.support.test.filters.MediumTest;
 
@@ -24,20 +19,20 @@ import org.chromium.base.test.util.DisabledTest;
 import org.chromium.base.test.util.Feature;
 import org.chromium.base.test.util.RetryOnFailure;
 import org.chromium.chrome.R;
-import org.chromium.chrome.browser.ChromeFeatureList;
-import org.chromium.chrome.browser.ChromeSwitches;
 import org.chromium.chrome.browser.autofill.AutofillTestHelper;
-import org.chromium.chrome.browser.autofill.CardType;
 import org.chromium.chrome.browser.autofill.PersonalDataManager.AutofillProfile;
 import org.chromium.chrome.browser.autofill.PersonalDataManager.CreditCard;
+import org.chromium.chrome.browser.flags.ChromeFeatureList;
+import org.chromium.chrome.browser.flags.ChromeSwitches;
+import org.chromium.chrome.browser.payments.PaymentRequestTestRule.AppPresence;
+import org.chromium.chrome.browser.payments.PaymentRequestTestRule.FactorySpeed;
 import org.chromium.chrome.browser.payments.PaymentRequestTestRule.MainActivityStartCallback;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
-import org.chromium.chrome.test.ui.DisableAnimationsTestRule;
 import org.chromium.chrome.test.util.ChromeTabUtils;
 import org.chromium.content_public.browser.test.util.TestThreadUtils;
 import org.chromium.ui.modaldialog.ModalDialogProperties;
+import org.chromium.ui.test.util.DisableAnimationsTestRule;
 
-import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeoutException;
 
 /**
@@ -55,8 +50,7 @@ public class PaymentRequestMetricsTest implements MainActivityStartCallback {
             new PaymentRequestTestRule("payment_request_metrics_test.html", this);
 
     @Override
-    public void onMainActivityStarted()
-            throws InterruptedException, ExecutionException, TimeoutException {
+    public void onMainActivityStarted() throws TimeoutException {
         AutofillTestHelper mHelper = new AutofillTestHelper();
         // The user has a shipping address and a credit card associated with that address on disk.
         String mBillingAddressId = mHelper.setProfile(new AutofillProfile("", "https://example.com",
@@ -64,8 +58,11 @@ public class PaymentRequestMetricsTest implements MainActivityStartCallback {
                 "US", "650-253-0000", "", "en-US"));
         mHelper.setCreditCard(new CreditCard("", "https://example.com", true, true, "Jon Doe",
                 "4111111111111111", "1111", "12", "2050", "visa", R.drawable.visa_card,
-                CardType.UNKNOWN, mBillingAddressId, "" /* serverId */));
+                mBillingAddressId, "" /* serverId */));
     }
+
+    // Transaction amount from metrics.js is 5$ which falls into the regular transaction category.
+    private static final int sRegularTransaction = 2;
 
     /**
      * Expect that the successful checkout funnel metrics are logged during a succesful checkout.
@@ -74,10 +71,13 @@ public class PaymentRequestMetricsTest implements MainActivityStartCallback {
     @MediumTest
     @Feature({"Payments"})
     @RetryOnFailure
-    public void testSuccessCheckoutFunnel()
-            throws InterruptedException, ExecutionException, TimeoutException {
+    public void testSuccessCheckoutFunnel() throws TimeoutException {
         // Initiate a payment request.
         mPaymentRequestTestRule.triggerUIAndWait("ccBuy", mPaymentRequestTestRule.getReadyToPay());
+
+        Assert.assertEquals(1,
+                RecordHistogram.getHistogramValueCountForTesting(
+                        "PaymentRequest.TransactionAmount.Triggered", sRegularTransaction));
 
         // Click the pay button.
         mPaymentRequestTestRule.clickAndWait(
@@ -89,11 +89,16 @@ public class PaymentRequestMetricsTest implements MainActivityStartCallback {
         mPaymentRequestTestRule.clickCardUnmaskButtonAndWait(
                 ModalDialogProperties.ButtonType.POSITIVE, mPaymentRequestTestRule.getDismissed());
 
+        Assert.assertEquals(1,
+                RecordHistogram.getHistogramValueCountForTesting(
+                        "PaymentRequest.TransactionAmount.Completed", sRegularTransaction));
+
         // Make sure the events were logged correctly.
         int expectedSample = Event.SHOWN | Event.PAY_CLICKED | Event.RECEIVED_INSTRUMENT_DETAILS
                 | Event.COMPLETED | Event.HAD_INITIAL_FORM_OF_PAYMENT
                 | Event.HAD_NECESSARY_COMPLETE_SUGGESTIONS | Event.REQUEST_SHIPPING
-                | Event.REQUEST_METHOD_BASIC_CARD | Event.SELECTED_CREDIT_CARD;
+                | Event.REQUEST_METHOD_BASIC_CARD | Event.SELECTED_CREDIT_CARD
+                | Event.AVAILABLE_METHOD_BASIC_CARD;
         Assert.assertEquals(1,
                 RecordHistogram.getHistogramValueCountForTesting(
                         "PaymentRequest.Events", expectedSample));
@@ -107,28 +112,39 @@ public class PaymentRequestMetricsTest implements MainActivityStartCallback {
     @MediumTest
     @Feature({"Payments"})
     @RetryOnFailure
-    public void testAbortMetrics_AbortedByUser_CancelButton()
-            throws InterruptedException, ExecutionException, TimeoutException {
+    public void testAbortMetrics_AbortedByUser_CancelButton() throws TimeoutException {
         mPaymentRequestTestRule.triggerUIAndWait("ccBuy", mPaymentRequestTestRule.getReadyToPay());
         mPaymentRequestTestRule.clickInShippingAddressAndWait(
                 R.id.payments_section, mPaymentRequestTestRule.getReadyForInput());
 
+        Assert.assertEquals(1,
+                RecordHistogram.getHistogramValueCountForTesting(
+                        "PaymentRequest.TransactionAmount.Triggered", sRegularTransaction));
+
         // Cancel the Payment Request.
         int callCount = mPaymentRequestTestRule.getDismissed().getCallCount();
         TestThreadUtils.runOnUiThreadBlocking(
-                (Runnable) () -> mPaymentRequestTestRule.getPaymentRequestUI()
+                (Runnable) ()
+                        -> mPaymentRequestTestRule.getPaymentRequestUI()
                                    .getDialogForTest()
                                    .findViewById(R.id.button_secondary)
                                    .performClick());
         mPaymentRequestTestRule.getDismissed().waitForCallback(callCount);
-        mPaymentRequestTestRule.expectResultContains(new String[] {"Request cancelled"});
+        mPaymentRequestTestRule.expectResultContains(
+                new String[] {"User closed the Payment Request UI."});
 
         mPaymentRequestTestRule.assertOnlySpecificAbortMetricLogged(AbortReason.ABORTED_BY_USER);
+
+        // Make sure no PaymentRequest.TransactionAmount.Completed is logged since transaction
+        // got aborted.
+        Assert.assertEquals(0,
+                RecordHistogram.getHistogramTotalCountForTesting(
+                        "PaymentRequest.TransactionAmount.Completed"));
 
         // Make sure the events were logged correctly.
         int expectedSample = Event.SHOWN | Event.USER_ABORTED | Event.HAD_INITIAL_FORM_OF_PAYMENT
                 | Event.HAD_NECESSARY_COMPLETE_SUGGESTIONS | Event.REQUEST_SHIPPING
-                | Event.REQUEST_METHOD_BASIC_CARD;
+                | Event.REQUEST_METHOD_BASIC_CARD | Event.AVAILABLE_METHOD_BASIC_CARD;
         Assert.assertEquals(1,
                 RecordHistogram.getHistogramValueCountForTesting(
                         "PaymentRequest.Events", expectedSample));
@@ -142,23 +158,33 @@ public class PaymentRequestMetricsTest implements MainActivityStartCallback {
     @MediumTest
     @Feature({"Payments"})
     @RetryOnFailure
-    public void testAbortMetrics_AbortedByUser_XButton()
-            throws InterruptedException, ExecutionException, TimeoutException {
+    public void testAbortMetrics_AbortedByUser_XButton() throws TimeoutException {
         mPaymentRequestTestRule.triggerUIAndWait("ccBuy", mPaymentRequestTestRule.getReadyToPay());
         mPaymentRequestTestRule.clickInShippingAddressAndWait(
                 R.id.payments_section, mPaymentRequestTestRule.getReadyForInput());
 
+        Assert.assertEquals(1,
+                RecordHistogram.getHistogramValueCountForTesting(
+                        "PaymentRequest.TransactionAmount.Triggered", sRegularTransaction));
+
         // Press the [X] button.
         mPaymentRequestTestRule.clickAndWait(
                 R.id.close_button, mPaymentRequestTestRule.getDismissed());
-        mPaymentRequestTestRule.expectResultContains(new String[] {"Request cancelled"});
+        mPaymentRequestTestRule.expectResultContains(
+                new String[] {"User closed the Payment Request UI."});
 
         mPaymentRequestTestRule.assertOnlySpecificAbortMetricLogged(AbortReason.ABORTED_BY_USER);
+
+        // Make sure no PaymentRequest.TransactionAmount.Completed is logged since transaction
+        // got aborted.
+        Assert.assertEquals(0,
+                RecordHistogram.getHistogramTotalCountForTesting(
+                        "PaymentRequest.TransactionAmount.Completed"));
 
         // Make sure the events were logged correctly.
         int expectedSample = Event.SHOWN | Event.USER_ABORTED | Event.HAD_INITIAL_FORM_OF_PAYMENT
                 | Event.HAD_NECESSARY_COMPLETE_SUGGESTIONS | Event.REQUEST_SHIPPING
-                | Event.REQUEST_METHOD_BASIC_CARD;
+                | Event.REQUEST_METHOD_BASIC_CARD | Event.AVAILABLE_METHOD_BASIC_CARD;
         Assert.assertEquals(1,
                 RecordHistogram.getHistogramValueCountForTesting(
                         "PaymentRequest.Events", expectedSample));
@@ -172,27 +198,38 @@ public class PaymentRequestMetricsTest implements MainActivityStartCallback {
     @MediumTest
     @Feature({"Payments"})
     @RetryOnFailure
-    public void testAbortMetrics_AbortedByUser_BackButton()
-            throws InterruptedException, ExecutionException, TimeoutException {
+    public void testAbortMetrics_AbortedByUser_BackButton() throws TimeoutException {
         mPaymentRequestTestRule.triggerUIAndWait("ccBuy", mPaymentRequestTestRule.getReadyToPay());
         mPaymentRequestTestRule.clickInShippingAddressAndWait(
                 R.id.payments_section, mPaymentRequestTestRule.getReadyForInput());
 
+        Assert.assertEquals(1,
+                RecordHistogram.getHistogramValueCountForTesting(
+                        "PaymentRequest.TransactionAmount.Triggered", sRegularTransaction));
+
         // Press the back button.
         int callCount = mPaymentRequestTestRule.getDismissed().getCallCount();
         TestThreadUtils.runOnUiThreadBlocking(
-                () -> mPaymentRequestTestRule.getPaymentRequestUI()
+                ()
+                        -> mPaymentRequestTestRule.getPaymentRequestUI()
                                    .getDialogForTest()
                                    .onBackPressed());
         mPaymentRequestTestRule.getDismissed().waitForCallback(callCount);
-        mPaymentRequestTestRule.expectResultContains(new String[] {"Request cancelled"});
+        mPaymentRequestTestRule.expectResultContains(
+                new String[] {"User closed the Payment Request UI."});
 
         mPaymentRequestTestRule.assertOnlySpecificAbortMetricLogged(AbortReason.ABORTED_BY_USER);
+
+        // Make sure no PaymentRequest.TransactionAmount.Completed is logged since transaction
+        // got aborted.
+        Assert.assertEquals(0,
+                RecordHistogram.getHistogramTotalCountForTesting(
+                        "PaymentRequest.TransactionAmount.Completed"));
 
         // Make sure the events were logged correctly.
         int expectedSample = Event.SHOWN | Event.USER_ABORTED | Event.HAD_INITIAL_FORM_OF_PAYMENT
                 | Event.HAD_NECESSARY_COMPLETE_SUGGESTIONS | Event.REQUEST_SHIPPING
-                | Event.REQUEST_METHOD_BASIC_CARD;
+                | Event.REQUEST_METHOD_BASIC_CARD | Event.AVAILABLE_METHOD_BASIC_CARD;
         Assert.assertEquals(1,
                 RecordHistogram.getHistogramValueCountForTesting(
                         "PaymentRequest.Events", expectedSample));
@@ -206,11 +243,15 @@ public class PaymentRequestMetricsTest implements MainActivityStartCallback {
     @MediumTest
     @Feature({"Payments"})
     @RetryOnFailure
-    public void testAbortMetrics_OtherAborted_TabClosed()
-            throws InterruptedException, ExecutionException, TimeoutException {
+    @DisabledTest(message = "Test is flaky, see crbug.com/968797")
+    public void testAbortMetrics_OtherAborted_TabClosed() throws TimeoutException {
         mPaymentRequestTestRule.triggerUIAndWait("ccBuy", mPaymentRequestTestRule.getReadyToPay());
         mPaymentRequestTestRule.clickInShippingAddressAndWait(
                 R.id.payments_section, mPaymentRequestTestRule.getReadyForInput());
+
+        Assert.assertEquals(1,
+                RecordHistogram.getHistogramValueCountForTesting(
+                        "PaymentRequest.TransactionAmount.Triggered", sRegularTransaction));
 
         // Press the back button.
         ChromeTabUtils.closeCurrentTab(InstrumentationRegistry.getInstrumentation(),
@@ -218,6 +259,12 @@ public class PaymentRequestMetricsTest implements MainActivityStartCallback {
 
         mPaymentRequestTestRule.assertOnlySpecificAbortMetricLogged(
                 AbortReason.MOJO_RENDERER_CLOSING);
+
+        // Make sure no PaymentRequest.TransactionAmount.Completed is logged since transaction
+        // got aborted.
+        Assert.assertEquals(0,
+                RecordHistogram.getHistogramTotalCountForTesting(
+                        "PaymentRequest.TransactionAmount.Completed"));
 
         // Make sure the events were logged correctly.
         int expectedSample = Event.SHOWN | Event.OTHER_ABORTED | Event.HAD_INITIAL_FORM_OF_PAYMENT
@@ -236,9 +283,12 @@ public class PaymentRequestMetricsTest implements MainActivityStartCallback {
     @MediumTest
     @Feature({"Payments"})
     @RetryOnFailure
-    public void testAbortMetrics_AbortedByMerchant()
-            throws InterruptedException, ExecutionException, TimeoutException {
+    public void testAbortMetrics_AbortedByMerchant() throws TimeoutException {
         mPaymentRequestTestRule.triggerUIAndWait("ccBuy", mPaymentRequestTestRule.getReadyToPay());
+
+        Assert.assertEquals(1,
+                RecordHistogram.getHistogramValueCountForTesting(
+                        "PaymentRequest.TransactionAmount.Triggered", sRegularTransaction));
 
         // Simulate an abort by the merchant.
         mPaymentRequestTestRule.clickNodeAndWait("abort", mPaymentRequestTestRule.getDismissed());
@@ -247,10 +297,16 @@ public class PaymentRequestMetricsTest implements MainActivityStartCallback {
         mPaymentRequestTestRule.assertOnlySpecificAbortMetricLogged(
                 AbortReason.ABORTED_BY_MERCHANT);
 
+        // Make sure no PaymentRequest.TransactionAmount.Completed is logged since transaction
+        // got aborted.
+        Assert.assertEquals(0,
+                RecordHistogram.getHistogramTotalCountForTesting(
+                        "PaymentRequest.TransactionAmount.Completed"));
+
         // Make sure the events were logged correctly.
         int expectedSample = Event.SHOWN | Event.OTHER_ABORTED | Event.HAD_INITIAL_FORM_OF_PAYMENT
                 | Event.HAD_NECESSARY_COMPLETE_SUGGESTIONS | Event.REQUEST_SHIPPING
-                | Event.REQUEST_METHOD_BASIC_CARD;
+                | Event.REQUEST_METHOD_BASIC_CARD | Event.AVAILABLE_METHOD_BASIC_CARD;
         Assert.assertEquals(1,
                 RecordHistogram.getHistogramValueCountForTesting(
                         "PaymentRequest.Events", expectedSample));
@@ -267,11 +323,10 @@ public class PaymentRequestMetricsTest implements MainActivityStartCallback {
     @MediumTest
     @Feature({"Payments"})
     @RetryOnFailure
-    public void testMetrics_NoMatchingPaymentMethod()
-            throws InterruptedException, ExecutionException, TimeoutException {
-        // Android Pay is supported but no instruments are present.
-        mPaymentRequestTestRule.installPaymentApp(
-                "https://android.com/pay", NO_INSTRUMENTS, DELAYED_RESPONSE);
+    public void testMetrics_NoMatchingPaymentMethod() throws TimeoutException {
+        // Android Pay has a factory, but it returns no apps.
+        mPaymentRequestTestRule.addPaymentAppFactory(
+                "https://android.com/pay", AppPresence.NO_APPS, FactorySpeed.SLOW_FACTORY);
         mPaymentRequestTestRule.openPageAndClickNodeAndWait(
                 "androidPayBuy", mPaymentRequestTestRule.getShowFailed());
         mPaymentRequestTestRule.expectResultContains(
@@ -285,9 +340,21 @@ public class PaymentRequestMetricsTest implements MainActivityStartCallback {
                         "PaymentRequest.CheckoutFunnel.NoShow",
                         NotShownReason.NO_MATCHING_PAYMENT_METHOD));
 
-        // Make sure no events were logged.
-        Assert.assertEquals(
-                0, RecordHistogram.getHistogramTotalCountForTesting("PaymentRequest.Events"));
+        // Make sure no PaymentRequest.TransactionAmount.[Completed|Triggered] is logged since
+        // we could not trigger the payment sheet.
+        Assert.assertEquals(0,
+                RecordHistogram.getHistogramTotalCountForTesting(
+                        "PaymentRequest.TransactionAmount.Triggered"));
+        Assert.assertEquals(0,
+                RecordHistogram.getHistogramTotalCountForTesting(
+                        "PaymentRequest.TransactionAmount.Completed"));
+
+        // Make sure the events were logged correctly.
+        int expectedSample =
+                Event.REQUEST_SHIPPING | Event.REQUEST_METHOD_GOOGLE | Event.COULD_NOT_SHOW;
+        Assert.assertEquals(1,
+                RecordHistogram.getHistogramValueCountForTesting(
+                        "PaymentRequest.Events", expectedSample));
     }
 
     /**
@@ -300,8 +367,7 @@ public class PaymentRequestMetricsTest implements MainActivityStartCallback {
     @MediumTest
     @Feature({"Payments"})
     @RetryOnFailure
-    public void testMetrics_NoSupportedPaymentMethod()
-            throws InterruptedException, ExecutionException, TimeoutException {
+    public void testMetrics_NoSupportedPaymentMethod() throws TimeoutException {
         mPaymentRequestTestRule.openPageAndClickNodeAndWait(
                 "noSupported", mPaymentRequestTestRule.getShowFailed());
         mPaymentRequestTestRule.expectResultContains(
@@ -315,9 +381,21 @@ public class PaymentRequestMetricsTest implements MainActivityStartCallback {
                         "PaymentRequest.CheckoutFunnel.NoShow",
                         NotShownReason.NO_SUPPORTED_PAYMENT_METHOD));
 
-        // Make sure no events were logged.
-        Assert.assertEquals(
-                0, RecordHistogram.getHistogramTotalCountForTesting("PaymentRequest.Events"));
+        // Make sure no PaymentRequest.TransactionAmount.[Completed|Triggered] is logged since
+        // we could not trigger the payment sheet.
+        Assert.assertEquals(0,
+                RecordHistogram.getHistogramTotalCountForTesting(
+                        "PaymentRequest.TransactionAmount.Triggered"));
+        Assert.assertEquals(0,
+                RecordHistogram.getHistogramTotalCountForTesting(
+                        "PaymentRequest.TransactionAmount.Completed"));
+
+        // Make sure the events were logged correctly.
+        int expectedSample =
+                Event.REQUEST_SHIPPING | Event.REQUEST_METHOD_OTHER | Event.COULD_NOT_SHOW;
+        Assert.assertEquals(1,
+                RecordHistogram.getHistogramValueCountForTesting(
+                        "PaymentRequest.Events", expectedSample));
     }
 
     /**
@@ -328,8 +406,7 @@ public class PaymentRequestMetricsTest implements MainActivityStartCallback {
     @MediumTest
     @Feature({"Payments"})
     @RetryOnFailure
-    public void testSelectedPaymentMethod_CreditCard()
-            throws InterruptedException, ExecutionException, TimeoutException {
+    public void testSelectedPaymentMethod_CreditCard() throws TimeoutException {
         // Complete a Payment Request with a credit card.
         mPaymentRequestTestRule.triggerUIAndWait("ccBuy", mPaymentRequestTestRule.getReadyToPay());
         mPaymentRequestTestRule.clickAndWait(
@@ -343,7 +420,8 @@ public class PaymentRequestMetricsTest implements MainActivityStartCallback {
         int expectedSample = Event.SHOWN | Event.PAY_CLICKED | Event.RECEIVED_INSTRUMENT_DETAILS
                 | Event.COMPLETED | Event.HAD_INITIAL_FORM_OF_PAYMENT
                 | Event.HAD_NECESSARY_COMPLETE_SUGGESTIONS | Event.REQUEST_SHIPPING
-                | Event.REQUEST_METHOD_BASIC_CARD | Event.SELECTED_CREDIT_CARD;
+                | Event.REQUEST_METHOD_BASIC_CARD | Event.SELECTED_CREDIT_CARD
+                | Event.AVAILABLE_METHOD_BASIC_CARD;
         Assert.assertEquals(1,
                 RecordHistogram.getHistogramValueCountForTesting(
                         "PaymentRequest.Events", expectedSample));
@@ -357,11 +435,10 @@ public class PaymentRequestMetricsTest implements MainActivityStartCallback {
     @MediumTest
     @Feature({"Payments"})
     @RetryOnFailure
-    public void testSelectedPaymentMethod_AndroidPay()
-            throws InterruptedException, ExecutionException, TimeoutException {
+    public void testSelectedPaymentMethod_AndroidPay() throws TimeoutException {
         // Complete a Payment Request with Android Pay.
-        mPaymentRequestTestRule.installPaymentApp(
-                "https://android.com/pay", HAVE_INSTRUMENTS, IMMEDIATE_RESPONSE);
+        mPaymentRequestTestRule.addPaymentAppFactory(
+                "https://android.com/pay", AppPresence.HAVE_APPS, FactorySpeed.FAST_FACTORY);
         mPaymentRequestTestRule.triggerUIAndWait(
                 "androidPayBuy", mPaymentRequestTestRule.getReadyToPay());
         mPaymentRequestTestRule.clickAndWait(
@@ -371,7 +448,7 @@ public class PaymentRequestMetricsTest implements MainActivityStartCallback {
         int expectedSample = Event.SHOWN | Event.PAY_CLICKED | Event.RECEIVED_INSTRUMENT_DETAILS
                 | Event.COMPLETED | Event.HAD_INITIAL_FORM_OF_PAYMENT
                 | Event.HAD_NECESSARY_COMPLETE_SUGGESTIONS | Event.REQUEST_METHOD_GOOGLE
-                | Event.SELECTED_GOOGLE | Event.REQUEST_SHIPPING;
+                | Event.SELECTED_GOOGLE | Event.REQUEST_SHIPPING | Event.AVAILABLE_METHOD_GOOGLE;
         Assert.assertEquals(1,
                 RecordHistogram.getHistogramValueCountForTesting(
                         "PaymentRequest.Events", expectedSample));
@@ -385,11 +462,10 @@ public class PaymentRequestMetricsTest implements MainActivityStartCallback {
     @MediumTest
     @Feature({"Payments"})
     @RetryOnFailure
-    public void testMetrics_SkippedShow()
-            throws InterruptedException, ExecutionException, TimeoutException {
+    public void testMetrics_SkippedShow() throws TimeoutException {
         // Complete a Payment Request with Android Pay.
-        mPaymentRequestTestRule.installPaymentApp(
-                "https://android.com/pay", HAVE_INSTRUMENTS, IMMEDIATE_RESPONSE);
+        mPaymentRequestTestRule.addPaymentAppFactory(
+                "https://android.com/pay", AppPresence.HAVE_APPS, FactorySpeed.FAST_FACTORY);
         mPaymentRequestTestRule.triggerUIAndWait(
                 "androidPaySkipUiBuy", mPaymentRequestTestRule.getResultReady());
 
@@ -397,10 +473,20 @@ public class PaymentRequestMetricsTest implements MainActivityStartCallback {
         int expectedSample = Event.SKIPPED_SHOW | Event.PAY_CLICKED
                 | Event.RECEIVED_INSTRUMENT_DETAILS | Event.COMPLETED
                 | Event.HAD_INITIAL_FORM_OF_PAYMENT | Event.HAD_NECESSARY_COMPLETE_SUGGESTIONS
-                | Event.REQUEST_METHOD_GOOGLE | Event.SELECTED_GOOGLE;
+                | Event.REQUEST_METHOD_GOOGLE | Event.SELECTED_GOOGLE
+                | Event.AVAILABLE_METHOD_GOOGLE;
         Assert.assertEquals(1,
                 RecordHistogram.getHistogramValueCountForTesting(
                         "PaymentRequest.Events", expectedSample));
+        Assert.assertEquals(1,
+                RecordHistogram.getHistogramTotalCountForTesting(
+                        "PaymentRequest.TimeToCheckout.Completed"));
+        Assert.assertEquals(1,
+                RecordHistogram.getHistogramTotalCountForTesting(
+                        "PaymentRequest.TimeToCheckout.Completed.SkippedShow"));
+        Assert.assertEquals(1,
+                RecordHistogram.getHistogramTotalCountForTesting(
+                        "PaymentRequest.TimeToCheckout.Completed.SkippedShow.Google"));
     }
 
     /**
@@ -412,22 +498,23 @@ public class PaymentRequestMetricsTest implements MainActivityStartCallback {
     @Feature({"Payments"})
     @RetryOnFailure
     @CommandLineFlags.Add({"disable-features=" + ChromeFeatureList.WEB_PAYMENTS_SINGLE_APP_UI_SKIP})
-    public void testMetrics_SkippedShow_Disabled()
-            throws InterruptedException, ExecutionException, TimeoutException {
+    public void testMetrics_SkippedShow_Disabled() throws TimeoutException {
         // Complete a Payment Request with Android Pay.
-        mPaymentRequestTestRule.installPaymentApp(
-                "https://android.com/pay", HAVE_INSTRUMENTS, IMMEDIATE_RESPONSE);
+        mPaymentRequestTestRule.addPaymentAppFactory(
+                "https://android.com/pay", AppPresence.HAVE_APPS, FactorySpeed.FAST_FACTORY);
         mPaymentRequestTestRule.triggerUIAndWait(
                 "androidPaySkipUiBuy", mPaymentRequestTestRule.getReadyToPay());
 
         // Close the payment Request.
         mPaymentRequestTestRule.clickAndWait(
                 R.id.close_button, mPaymentRequestTestRule.getDismissed());
-        mPaymentRequestTestRule.expectResultContains(new String[] {"Request cancelled"});
+        mPaymentRequestTestRule.expectResultContains(
+                new String[] {"User closed the Payment Request UI."});
 
         // Make sure the events were logged correctly.
         int expectedSample = Event.SHOWN | Event.USER_ABORTED | Event.HAD_INITIAL_FORM_OF_PAYMENT
-                | Event.HAD_NECESSARY_COMPLETE_SUGGESTIONS | Event.REQUEST_METHOD_GOOGLE;
+                | Event.HAD_NECESSARY_COMPLETE_SUGGESTIONS | Event.REQUEST_METHOD_GOOGLE
+                | Event.AVAILABLE_METHOD_GOOGLE;
         Assert.assertEquals(1,
                 RecordHistogram.getHistogramValueCountForTesting(
                         "PaymentRequest.Events", expectedSample));
@@ -440,8 +527,7 @@ public class PaymentRequestMetricsTest implements MainActivityStartCallback {
     @MediumTest
     @Feature({"Payments"})
     @DisabledTest(message = "Flaky. See crbug.com/727558")
-    public void testShownLoggedOnlyOnce()
-            throws InterruptedException, ExecutionException, TimeoutException {
+    public void testShownLoggedOnlyOnce() throws TimeoutException {
         // Initiate a payment request.
         mPaymentRequestTestRule.triggerUIAndWait("ccBuy", mPaymentRequestTestRule.getReadyToPay());
 
@@ -460,7 +546,8 @@ public class PaymentRequestMetricsTest implements MainActivityStartCallback {
         // Close the payment Request.
         mPaymentRequestTestRule.clickAndWait(
                 R.id.close_button, mPaymentRequestTestRule.getDismissed());
-        mPaymentRequestTestRule.expectResultContains(new String[] {"Request cancelled"});
+        mPaymentRequestTestRule.expectResultContains(
+                new String[] {"User closed the Payment Request UI."});
 
         // Make sure the events were logged correctly.
         int expectedSample = Event.SHOWN | Event.USER_ABORTED | Event.HAD_INITIAL_FORM_OF_PAYMENT

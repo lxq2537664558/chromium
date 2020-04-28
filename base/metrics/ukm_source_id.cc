@@ -5,7 +5,7 @@
 #include "base/metrics/ukm_source_id.h"
 
 #include "base/atomic_sequence_num.h"
-#include "base/logging.h"
+#include "base/check_op.h"
 #include "base/rand_util.h"
 
 namespace base {
@@ -13,7 +13,7 @@ namespace base {
 namespace {
 
 const int64_t kLowBitsMask = (INT64_C(1) << 32) - 1;
-const int64_t kNumTypeBits = 2;
+const int64_t kNumTypeBits = static_cast<int64_t>(UkmSourceId::Type::kMaxValue);
 const int64_t kTypeMask = (INT64_C(1) << kNumTypeBits) - 1;
 
 }  // namespace

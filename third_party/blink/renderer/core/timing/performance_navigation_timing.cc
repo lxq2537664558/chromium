@@ -7,29 +7,61 @@
 #include "third_party/blink/renderer/bindings/core/v8/v8_object_builder.h"
 #include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/dom/document_timing.h"
+#include "third_party/blink/renderer/core/frame/local_dom_window.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
 #include "third_party/blink/renderer/core/loader/document_load_timing.h"
 #include "third_party/blink/renderer/core/loader/document_loader.h"
 #include "third_party/blink/renderer/core/performance_entry_names.h"
 #include "third_party/blink/renderer/core/timing/performance.h"
 #include "third_party/blink/renderer/platform/loader/fetch/resource_timing_info.h"
+#include "third_party/blink/renderer/platform/weborigin/kurl.h"
 
 namespace blink {
+
+namespace {
+
+bool PassesSameOriginCheck(const ResourceResponse& response,
+                           const SecurityOrigin& initiator_security_origin) {
+  const KURL& response_url = response.ResponseUrl();
+  scoped_refptr<const SecurityOrigin> resource_origin =
+      SecurityOrigin::Create(response_url);
+  return resource_origin->IsSameOriginWith(&initiator_security_origin);
+}
+
+bool AllowNavigationTimingRedirect(
+    const Vector<ResourceResponse>& redirect_chain,
+    const ResourceResponse& final_response,
+    const SecurityOrigin& initiator_security_origin) {
+  if (!PassesSameOriginCheck(final_response, initiator_security_origin)) {
+    return false;
+  }
+
+  for (const ResourceResponse& response : redirect_chain) {
+    if (!PassesSameOriginCheck(response, initiator_security_origin))
+      return false;
+  }
+
+  return true;
+}
+
+}  // namespace
 
 PerformanceNavigationTiming::PerformanceNavigationTiming(
     LocalFrame* frame,
     ResourceTimingInfo* info,
-    TimeTicks time_origin,
-    const WebVector<WebServerTimingInfo>& server_timing)
+    base::TimeTicks time_origin,
+    HeapVector<Member<PerformanceServerTiming>> server_timing)
     : PerformanceResourceTiming(
           info ? AtomicString(
                      info->FinalResponse().CurrentRequestUrl().GetString())
                : g_empty_atom,
           time_origin,
-          server_timing),
-      ContextClient(frame),
+          SecurityOrigin::IsSecure(frame->GetDocument()->Url()),
+          std::move(server_timing)),
+      ExecutionContextClient(frame),
       resource_timing_info_(info) {
   DCHECK(frame);
+  DCHECK(frame->GetDocument());
   DCHECK(info);
 }
 
@@ -43,8 +75,8 @@ PerformanceEntryType PerformanceNavigationTiming::EntryTypeEnum() const {
   return PerformanceEntry::EntryType::kNavigation;
 }
 
-void PerformanceNavigationTiming::Trace(blink::Visitor* visitor) {
-  ContextClient::Trace(visitor);
+void PerformanceNavigationTiming::Trace(Visitor* visitor) {
+  ExecutionContextClient::Trace(visitor);
   PerformanceResourceTiming::Trace(visitor);
 }
 
@@ -119,17 +151,18 @@ AtomicString PerformanceNavigationTiming::initiatorType() const {
 }
 
 bool PerformanceNavigationTiming::GetAllowRedirectDetails() const {
-  ExecutionContext* context = GetFrame() ? GetFrame()->GetDocument() : nullptr;
-  const SecurityOrigin* security_origin = nullptr;
+  blink::ExecutionContext* context =
+      GetFrame() ? GetFrame()->DomWindow() : nullptr;
+  const blink::SecurityOrigin* security_origin = nullptr;
   if (context)
     security_origin = context->GetSecurityOrigin();
   if (!security_origin)
     return false;
   // TODO(sunjian): Think about how to make this flag deterministic.
   // crbug/693183.
-  return Performance::AllowsTimingRedirect(
-      resource_timing_info_->RedirectChain(),
-      resource_timing_info_->FinalResponse(), *security_origin, context);
+  return AllowNavigationTimingRedirect(resource_timing_info_->RedirectChain(),
+                                       resource_timing_info_->FinalResponse(),
+                                       *security_origin);
 }
 
 AtomicString PerformanceNavigationTiming::AlpnNegotiatedProtocol() const {

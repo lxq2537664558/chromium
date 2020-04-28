@@ -85,8 +85,20 @@ void DisableMenuClosureAnimations() {
 
 void WaitForMenuClosureAnimation() {
 #if defined(OS_MACOSX)
+  // TODO(https://crbug.com/982815): Replace this with Quit+Run.
   base::RunLoop().RunUntilIdle();
 #endif
+}
+
+// ReleaseRefTestViewsDelegate ------------------------------------------------
+
+ReleaseRefTestViewsDelegate::ReleaseRefTestViewsDelegate() = default;
+
+ReleaseRefTestViewsDelegate::~ReleaseRefTestViewsDelegate() = default;
+
+void ReleaseRefTestViewsDelegate::ReleaseRef() {
+  if (!release_ref_callback_.is_null())
+    release_ref_callback_.Run();
 }
 
 }  // namespace test

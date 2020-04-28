@@ -34,6 +34,9 @@ mojom::DocumentPtr MakeDocument(const FakeFileSystemInstance::Document& doc) {
   document->mime_type = doc.mime_type;
   document->size = doc.size;
   document->last_modified = doc.last_modified;
+  document->supports_delete = doc.supports_delete;
+  document->supports_rename = doc.supports_rename;
+  document->dir_supports_create = doc.dir_supports_create;
   return document;
 }
 
@@ -59,6 +62,8 @@ constexpr size_t kMaxBytesToReadFromPipe = 8 * 1024;  // 8KB;
 
 }  // namespace
 
+constexpr base::FilePath::CharType FakeFileSystemInstance::kFakeAndroidPath[];
+
 FakeFileSystemInstance::File::File(const std::string& url,
                                    const std::string& content,
                                    const std::string& mime_type,
@@ -77,13 +82,38 @@ FakeFileSystemInstance::Document::Document(
     const std::string& mime_type,
     int64_t size,
     uint64_t last_modified)
+    : Document(authority,
+               document_id,
+               parent_document_id,
+               display_name,
+               mime_type,
+               size,
+               last_modified,
+               true,
+               true,
+               true) {}
+
+FakeFileSystemInstance::Document::Document(
+    const std::string& authority,
+    const std::string& document_id,
+    const std::string& parent_document_id,
+    const std::string& display_name,
+    const std::string& mime_type,
+    int64_t size,
+    uint64_t last_modified,
+    bool supports_delete,
+    bool supports_rename,
+    bool dir_supports_create)
     : authority(authority),
       document_id(document_id),
       parent_document_id(parent_document_id),
       display_name(display_name),
       mime_type(mime_type),
       size(size),
-      last_modified(last_modified) {}
+      last_modified(last_modified),
+      supports_delete(supports_delete),
+      supports_rename(supports_rename),
+      dir_supports_create(dir_supports_create) {}
 
 FakeFileSystemInstance::Document::Document(const Document& that) = default;
 
@@ -144,6 +174,23 @@ void FakeFileSystemInstance::AddRecentDocument(const std::string& root_id,
 void FakeFileSystemInstance::AddRoot(const Root& root) {
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
   roots_.push_back(root);
+}
+
+void FakeFileSystemInstance::SetGetLastChangeTimeCallback(
+    GetLastChangeTimeCallback ctime_callback) {
+  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
+  ctime_callback_ = ctime_callback;
+}
+
+void FakeFileSystemInstance::SetCrosDir(const base::FilePath& cros_dir) {
+  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
+  cros_dir_ = cros_dir;
+}
+
+void FakeFileSystemInstance::SetMediaStore(
+    const std::map<base::FilePath, base::Time>& media_store) {
+  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
+  media_store_ = media_store;
 }
 
 void FakeFileSystemInstance::TriggerWatchers(
@@ -401,11 +448,13 @@ void FakeFileSystemInstance::DeleteDocument(const std::string& authority,
                                             DeleteDocumentCallback callback) {
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
   DocumentKey key(authority, document_id);
-  if (!documents_.erase(key)) {
+  auto iter = documents_.find(key);
+  if (iter == documents_.end() || iter->second.supports_delete == false) {
     base::ThreadTaskRunnerHandle::Get()->PostTask(
         FROM_HERE, base::BindOnce(std::move(callback), false));
     return;
   }
+  documents_.erase(iter);
   size_t erased = child_documents_.erase(key);
   DCHECK_NE(0u, erased);
   base::ThreadTaskRunnerHandle::Get()->PostTask(
@@ -419,7 +468,11 @@ void FakeFileSystemInstance::RenameDocument(const std::string& authority,
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
   DocumentKey key(authority, document_id);
   auto iter = documents_.find(key);
-  DCHECK(iter != documents_.end());
+  if (iter == documents_.end() || iter->second.supports_rename == false) {
+    base::ThreadTaskRunnerHandle::Get()->PostTask(
+        FROM_HERE, base::BindOnce(std::move(callback), mojom::DocumentPtr()));
+    return;
+  }
   iter->second.display_name = display_name;
   base::ThreadTaskRunnerHandle::Get()->PostTask(
       FROM_HERE,
@@ -433,6 +486,14 @@ void FakeFileSystemInstance::CreateDocument(
     const std::string& display_name,
     CreateDocumentCallback callback) {
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
+  DocumentKey parent_key(authority, parent_document_id);
+  auto iter = documents_.find(parent_key);
+  DCHECK(iter != documents_.end());
+  if (iter->second.dir_supports_create == false) {
+    base::ThreadTaskRunnerHandle::Get()->PostTask(
+        FROM_HERE, base::BindOnce(std::move(callback), mojom::DocumentPtr()));
+    return;
+  }
   std::string document_id = GenerateDocumentId();
   Document document(authority, document_id, parent_document_id, display_name,
                     mime_type, 0, 0);
@@ -513,16 +574,72 @@ void FakeFileSystemInstance::RemoveWatcher(int64_t watcher_id,
       FROM_HERE, base::BindOnce(std::move(callback), true));
 }
 
+// TODO(risan): "Added" directory might not be handled. Please double check
+// this.
 void FakeFileSystemInstance::RequestMediaScan(
     const std::vector<std::string>& paths) {
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
-  // Do nothing and pretend we scaned them.
+  // TODO(risan): This is to prevent crashing other tests that expect nothing
+  // from RequestMediaScan, e.g., the following:
+  // FilesAppBrowserTest.Test/dirContextMenuDocumentsProvider_DocumentsProvider
+  if (cros_dir_.empty())
+    return;
+  for (const auto& path : paths) {
+    base::FilePath file_path = base::FilePath(path);
+    base::FilePath cros_path = GetCrosPath(file_path);
+    if (PathExists(cros_path)) {
+      // For each existing path, index itself and all parent directories of
+      // it.
+      base::Time ctime;
+      if (!DirectoryExists(cros_path))
+        ctime = ctime_callback_.Run(cros_path);
+      media_store_[file_path] = ctime;
+      file_path = file_path.DirName();
+      while (file_path != base::FilePath(kFakeAndroidPath).DirName()) {
+        media_store_[file_path] = base::Time();
+        file_path = file_path.DirName();
+      }
+    } else {
+      // When a file or directory does not exist, it means it has been
+      // deleted. So we need to erase its index entry in |media_store_|, and
+      // also the entries of all files/directories underneath it if it is a
+      // directory.
+      for (auto it = media_store_.begin(); it != media_store_.end();) {
+        if (it->first == file_path || file_path.IsParent(it->first))
+          media_store_.erase(it++);
+        else
+          ++it;
+      }
+    }
+  }
+}
+
+void FakeFileSystemInstance::RequestFileRemovalScan(
+    const std::vector<std::string>& directory_paths) {
+  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
+  ReindexDirectory(kFakeAndroidPath);
+}
+
+void FakeFileSystemInstance::ReindexDirectory(
+    const std::string& directory_path) {
+  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
+  std::vector<std::string> paths = {directory_path};
+  base::FilePath directory_file_path(directory_path);
+  for (const auto& entry : media_store_) {
+    base::FilePath entry_path = entry.first;
+    if (!directory_file_path.IsParent(entry_path)) {
+      continue;
+    }
+    paths.push_back(entry_path.value());
+  }
+  RequestMediaScan(paths);
 }
 
 void FakeFileSystemInstance::OpenUrlsWithPermission(
     mojom::OpenUrlsRequestPtr request,
     OpenUrlsWithPermissionCallback callback) {
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
+  handled_url_requests_.emplace_back(std::move(request));
 }
 
 std::string FakeFileSystemInstance::FindChildDocumentId(
@@ -592,6 +709,14 @@ base::ScopedFD FakeFileSystemInstance::CreateStreamFileDescriptorToWrite(
   base::ScopedFD fd_write(fds[1]);
   pipe_read_ends_.emplace(url, std::move(fd_read));
   return fd_write;
+}
+
+base::FilePath FakeFileSystemInstance::GetCrosPath(
+    const base::FilePath& android_path) const {
+  base::FilePath cros_path(cros_dir_);
+  base::FilePath android_dir(kFakeAndroidPath);
+  android_dir.AppendRelativePath(android_path, &cros_path);
+  return cros_path;
 }
 
 }  // namespace arc

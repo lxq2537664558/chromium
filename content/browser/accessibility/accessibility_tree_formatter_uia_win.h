@@ -3,37 +3,36 @@
 // found in the LICENSE file.
 #ifndef CONTENT_BROWSER_ACCESSIBILITY_ACCESSIBILITY_TREE_FORMATTER_UIA_WIN_H_
 #define CONTENT_BROWSER_ACCESSIBILITY_ACCESSIBILITY_TREE_FORMATTER_UIA_WIN_H_
-#include "content/browser/accessibility/accessibility_tree_formatter.h"
+
+#include "content/browser/accessibility/accessibility_tree_formatter_base.h"
 
 #include <ole2.h>
 #include <stdint.h>
 #include <uiautomation.h>
 #include <wrl/client.h>
+
 #include <memory>
 #include <string>
 #include <vector>
 
 #include "base/win/scoped_variant.h"
+
 namespace content {
 
-class AccessibilityTreeFormatterUia : public AccessibilityTreeFormatter {
+class AccessibilityTreeFormatterUia : public AccessibilityTreeFormatterBase {
  public:
   AccessibilityTreeFormatterUia();
-
   ~AccessibilityTreeFormatterUia() override;
 
   static std::unique_ptr<AccessibilityTreeFormatter> CreateUia();
 
-  void AddDefaultFilters(
-      std::vector<PropertyFilter>* property_filters) override;
-
   static void SetUpCommandLineForTestPass(base::CommandLine* command_line);
 
-  const base::FilePath::StringType GetExpectedFileSuffix() override;
-
-  const base::FilePath::StringType GetVersionSpecificExpectedFileSuffix()
-      override;
-
+  // AccessibilityTreeFormatterBase:
+  void AddDefaultFilters(
+      std::vector<PropertyFilter>* property_filters) override;
+  base::FilePath::StringType GetExpectedFileSuffix() override;
+  base::FilePath::StringType GetVersionSpecificExpectedFileSuffix() override;
   std::unique_ptr<base::DictionaryValue> BuildAccessibilityTree(
       BrowserAccessibility* start) override;
   std::unique_ptr<base::DictionaryValue> BuildAccessibilityTreeForProcess(
@@ -48,9 +47,14 @@ class AccessibilityTreeFormatterUia : public AccessibilityTreeFormatter {
   static const long patterns_[];
   static const long pattern_properties_[];
   void RecursiveBuildAccessibilityTree(IUIAutomationElement* node,
+                                       int root_x,
+                                       int root_y,
                                        base::DictionaryValue* dict);
   void BuildCacheRequests();
-  void AddProperties(IUIAutomationElement* node, base::DictionaryValue* dict);
+  void AddProperties(IUIAutomationElement* node,
+                     int root_x,
+                     int root_y,
+                     base::DictionaryValue* dict);
   void AddExpandCollapseProperties(IUIAutomationElement* node,
                                    base::DictionaryValue* dict);
   void AddGridProperties(IUIAutomationElement* node,
@@ -75,12 +79,19 @@ class AccessibilityTreeFormatterUia : public AccessibilityTreeFormatter {
                            base::DictionaryValue* dict);
   void WriteProperty(long propertyId,
                      const base::win::ScopedVariant& var,
+                     int root_x,
+                     int root_y,
                      base::DictionaryValue* dict);
   // UIA enums have type I4, print formatted string for these when possible
   void WriteI4Property(long propertyId, long lval, base::DictionaryValue* dict);
   void WriteUnknownProperty(long propertyId,
                             IUnknown* unk,
                             base::DictionaryValue* dict);
+  void WriteRectangleProperty(long propertyId,
+                              const VARIANT& value,
+                              int root_x,
+                              int root_y,
+                              base::DictionaryValue* dict);
   void WriteElementArray(long propertyId,
                          IUIAutomationElementArray* array,
                          base::DictionaryValue* dict);
@@ -104,5 +115,7 @@ class AccessibilityTreeFormatterUia : public AccessibilityTreeFormatter {
   Microsoft::WRL::ComPtr<IUIAutomationCacheRequest> element_cache_request_;
   Microsoft::WRL::ComPtr<IUIAutomationCacheRequest> children_cache_request_;
 };
+
 }  // namespace content
+
 #endif  // CONTENT_BROWSER_ACCESSIBILITY_ACCESSIBILITY_TREE_FORMATTER_UIA_WIN_H_

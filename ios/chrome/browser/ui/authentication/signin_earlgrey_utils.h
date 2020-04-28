@@ -6,28 +6,44 @@
 #define IOS_CHROME_BROWSER_UI_AUTHENTICATION_SIGNIN_EARLGREY_UTILS_H_
 
 #import <Foundation/Foundation.h>
-#include "base/compiler_specific.h"
 
-@class ChromeIdentity;
+#include "base/compiler_specific.h"
+#import "ios/testing/earl_grey/base_eg_test_helper_impl.h"
+
+@class FakeChromeIdentity;
+
+#define SigninEarlGreyUtils \
+  [SigninEarlGreyUtilsImpl invokedFromFile:@"" __FILE__ lineNumber:__LINE__]
 
 // Methods used for the EarlGrey tests.
-@interface SigninEarlGreyUtils : NSObject
+// TODO(crbug.com/974833): Consider moving these into ChromeEarlGrey.
+@interface SigninEarlGreyUtilsImpl : BaseEGTestHelperImpl
 
 // Returns a fake identity.
-+ (ChromeIdentity*)fakeIdentity1;
+- (FakeChromeIdentity*)fakeIdentity1;
 
 // Returns a second fake identity.
-+ (ChromeIdentity*)fakeIdentity2;
+- (FakeChromeIdentity*)fakeIdentity2;
 
 // Returns a fake managed identity.
-+ (ChromeIdentity*)fakeManagedIdentity;
+- (FakeChromeIdentity*)fakeManagedIdentity;
 
-// Checks that |identity| is actually signed in to the active profile.
-+ (NSError*)checkSignedInWithIdentity:(ChromeIdentity*)identity
-    WARN_UNUSED_RESULT;
+// Adds |fakeIdentity| to the fake identity service.
+- (void)addFakeIdentity:(FakeChromeIdentity*)fakeIdentity;
 
-// Checks that no identity is signed in.
-+ (NSError*)checkSignedOut WARN_UNUSED_RESULT;
+// Removes |fakeIdentity| from the fake chrome identity service, to simulate
+// identity removal from the device.
+- (void)forgetFakeIdentity:(FakeChromeIdentity*)fakeIdentity;
+
+// Induces a GREYAssert if |fakeIdentity| is not signed in to the active
+// profile.
+- (void)checkSignedInWithFakeIdentity:(FakeChromeIdentity*)fakeIdentity;
+
+// Induces a GREYAssert if an identity is signed in.
+- (void)checkSignedOut;
+
+// Removes |fakeIdentity| from the fake identity service.
+- (void)removeFakeIdentity:(FakeChromeIdentity*)fakeIdentity;
 
 @end
 

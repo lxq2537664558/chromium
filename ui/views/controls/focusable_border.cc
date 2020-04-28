@@ -49,10 +49,10 @@ void FocusableBorder::Paint(const View& view, gfx::Canvas* canvas) {
   rect.Inset(gfx::InsetsF(kStrokeWidthPx / 2.0f));
 
   SkPath path;
-    flags.setAntiAlias(true);
-    float corner_radius_px = kCornerRadiusDp * dsf;
-    path.addRoundRect(gfx::RectFToSkRect(rect), corner_radius_px,
-                      corner_radius_px);
+  flags.setAntiAlias(true);
+  float corner_radius_px = kCornerRadiusDp * dsf;
+  path.addRoundRect(gfx::RectFToSkRect(rect), corner_radius_px,
+                    corner_radius_px);
 
   canvas->DrawPath(path, flags);
 }
@@ -80,9 +80,9 @@ SkColor FocusableBorder::GetCurrentColor(const View& view) const {
     color_id = *override_color_id_;
 
   SkColor color = view.GetNativeTheme()->GetSystemColor(color_id);
-  return view.enabled() ? color
-                        : color_utils::BlendTowardMaxContrast(
-                              color, gfx::kDisabledControlAlpha);
+  return view.GetEnabled() ? color
+                           : color_utils::BlendTowardMaxContrast(
+                                 color, gfx::kDisabledControlAlpha);
 }
 
 }  // namespace views

@@ -23,10 +23,10 @@ namespace debug {
 // builds.
 #if defined(OFFICIAL_BUILD) || defined(OS_FUCHSIA)
 
-#if defined(OS_FUCHSIA)
-constexpr size_t kExpectedBuildIdStringLength = 16;  // 64-bit int in hex.
-#else
+#if defined(OFFICIAL_BUILD)
 constexpr size_t kExpectedBuildIdStringLength = 40;  // SHA1 hash in hex.
+#else
+constexpr size_t kExpectedBuildIdStringLength = 16;  // 64-bit int in hex.
 #endif
 
 TEST(ElfReaderTest, ReadElfBuildIdUppercase) {
@@ -59,7 +59,7 @@ TEST(ElfReaderTest, ReadElfBuildIdLowercase) {
 TEST(ElfReaderTest, ReadElfLibraryName) {
 #if defined(OS_ANDROID)
   // On Android the library loader memory maps the full so file.
-  const char kLibraryName[] = "lib_base_unittests__library";
+  const char kLibraryName[] = "libbase_unittests__library";
   const void* addr = &__executable_start;
 #else
   const char kLibraryName[] = MALLOC_WRAPPER_LIB;

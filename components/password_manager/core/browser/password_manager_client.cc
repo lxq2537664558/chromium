@@ -2,8 +2,14 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <utility>
+
 #include "base/macros.h"
+#include "components/password_manager/core/browser/http_auth_manager.h"
+#include "components/password_manager/core/browser/password_form_manager_for_ui.h"
 #include "components/password_manager/core/browser/password_manager_client.h"
+#include "components/signin/public/base/signin_metrics.h"
+#include "url/origin.h"
 
 namespace password_manager {
 
@@ -24,21 +30,43 @@ void PasswordManagerClient::PostHSTSQueryForHost(const GURL& origin,
   std::move(callback).Run(HSTSResult::kError);
 }
 
-bool PasswordManagerClient::OnCredentialManagerUsed() {
-  return true;
+void PasswordManagerClient::ShowTouchToFill(PasswordManagerDriver* driver) {}
+
+BiometricAuthenticator* PasswordManagerClient::GetBiometricAuthenticator() {
+  return nullptr;
 }
 
 void PasswordManagerClient::GeneratePassword() {}
 
-void PasswordManagerClient::PasswordWasAutofilled(
-    const std::map<base::string16, const autofill::PasswordForm*>& best_matches,
+void PasswordManagerClient::UpdateCredentialCache(
     const GURL& origin,
-    const std::vector<const autofill::PasswordForm*>* federated_matches) const {
-}
+    const std::vector<const autofill::PasswordForm*>& best_matches,
+    bool is_blacklisted) {}
+
+void PasswordManagerClient::UpdateCacheWithBlacklistedForOrigin(
+    const url::Origin& origin,
+    bool is_blacklisted) {}
+
+void PasswordManagerClient::PasswordWasAutofilled(
+    const std::vector<const autofill::PasswordForm*>& best_matches,
+    const GURL& origin,
+    const std::vector<const autofill::PasswordForm*>* federated_matches) {}
 
 void PasswordManagerClient::AutofillHttpAuth(
-    const std::map<base::string16, const autofill::PasswordForm*>& best_matches,
-    const autofill::PasswordForm& preferred_match) const {}
+    const autofill::PasswordForm& preferred_match,
+    const PasswordFormManagerForUI* form_manager) {}
+
+void PasswordManagerClient::NotifyUserCredentialsWereLeaked(
+    password_manager::CredentialLeakType leak_type,
+    const GURL& origin,
+    const base::string16& username) {}
+
+void PasswordManagerClient::TriggerReauthForPrimaryAccount(
+    base::OnceCallback<void(ReauthSucceeded)> reauth_callback) {
+  std::move(reauth_callback).Run(ReauthSucceeded(false));
+}
+
+void PasswordManagerClient::TriggerSignIn(signin_metrics::AccessPoint) {}
 
 SyncState PasswordManagerClient::GetPasswordSyncState() const {
   return NOT_SYNCING;
@@ -48,9 +76,15 @@ bool PasswordManagerClient::WasLastNavigationHTTPError() const {
   return false;
 }
 
+bool PasswordManagerClient::WasCredentialLeakDialogShown() const {
+  return false;
+}
+
 net::CertStatus PasswordManagerClient::GetMainFrameCertStatus() const {
   return 0;
 }
+
+void PasswordManagerClient::PromptUserToEnableAutosignin() {}
 
 bool PasswordManagerClient::IsIncognito() const {
   return false;
@@ -63,6 +97,21 @@ const PasswordManager* PasswordManagerClient::GetPasswordManager() const {
 PasswordManager* PasswordManagerClient::GetPasswordManager() {
   return const_cast<PasswordManager*>(
       static_cast<const PasswordManagerClient*>(this)->GetPasswordManager());
+}
+
+const PasswordFeatureManager* PasswordManagerClient::GetPasswordFeatureManager()
+    const {
+  return nullptr;
+}
+
+PasswordFeatureManager* PasswordManagerClient::GetPasswordFeatureManager() {
+  return const_cast<PasswordFeatureManager*>(
+      static_cast<const PasswordManagerClient*>(this)
+          ->GetPasswordFeatureManager());
+}
+
+HttpAuthManager* PasswordManagerClient::GetHttpAuthManager() {
+  return nullptr;
 }
 
 autofill::AutofillDownloadManager*
@@ -78,7 +127,7 @@ bool PasswordManagerClient::IsMainFrameSecure() const {
   return false;
 }
 
-const LogManager* PasswordManagerClient::GetLogManager() const {
+const autofill::LogManager* PasswordManagerClient::GetLogManager() const {
   return nullptr;
 }
 

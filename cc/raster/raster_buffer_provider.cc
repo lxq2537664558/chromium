@@ -41,11 +41,11 @@ bool IsSupportedPlaybackToMemoryFormat(viz::ResourceFormat format) {
     case viz::RG_88:
     case viz::RGBX_8888:
     case viz::BGRX_8888:
-    case viz::RGBX_1010102:
-    case viz::BGRX_1010102:
+    case viz::RGBA_1010102:
+    case viz::BGRA_1010102:
     case viz::YVU_420:
     case viz::YUV_420_BIPLANAR:
-    case viz::UYVY_422:
+    case viz::P010:
       return false;
   }
   NOTREACHED();
@@ -72,10 +72,13 @@ void RasterBufferProvider::PlaybackToMemory(
 
   DCHECK(IsSupportedPlaybackToMemoryFormat(format)) << format;
 
+  SkColorType color_type =
+      ResourceFormatToClosestSkColorType(gpu_compositing, format);
+
   // Uses kPremul_SkAlphaType since the result is not known to be opaque.
-  SkImageInfo info =
-      SkImageInfo::MakeN32(size.width(), size.height(), kPremul_SkAlphaType,
-                           target_color_space.ToSkColorSpace());
+  SkImageInfo info = SkImageInfo::Make(size.width(), size.height(), color_type,
+                                       kPremul_SkAlphaType,
+                                       target_color_space.ToSkColorSpace());
 
   // Use unknown pixel geometry to disable LCD text.
   SkSurfaceProps surface_props(0, kUnknown_SkPixelGeometry);
@@ -137,11 +140,11 @@ void RasterBufferProvider::PlaybackToMemory(
     case viz::RG_88:
     case viz::RGBX_8888:
     case viz::BGRX_8888:
-    case viz::RGBX_1010102:
-    case viz::BGRX_1010102:
+    case viz::RGBA_1010102:
+    case viz::BGRA_1010102:
     case viz::YVU_420:
     case viz::YUV_420_BIPLANAR:
-    case viz::UYVY_422:
+    case viz::P010:
       NOTREACHED();
       return;
   }

@@ -17,16 +17,19 @@
 #include "base/strings/utf_string_conversions.h"
 #include "base/synchronization/waitable_event.h"
 #include "base/test/scoped_feature_list.h"
-#include "base/test/scoped_task_environment.h"
+#include "base/test/task_environment.h"
 #include "base/threading/thread_task_runner_handle.h"
 #include "base/win/windows_version.h"
 #include "content/public/common/content_features.h"
-#include "content/public/test/test_browser_thread_bundle.h"
-#include "mojo/public/cpp/bindings/binding.h"
+#include "content/public/test/browser_task_environment.h"
+#include "mojo/public/cpp/bindings/receiver.h"
+#include "mojo/public/cpp/bindings/remote.h"
 #include "services/service_manager/public/cpp/bind_source_info.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/common/dwrite_rasterizer_support/dwrite_rasterizer_support.h"
 #include "third_party/blink/public/common/font_unique_name_lookup/font_table_matcher.h"
+#include "third_party/icu/source/common/unicode/umachine.h"
+#include "ui/gfx/test/font_fallback_test_data.h"
 
 namespace content {
 
@@ -42,33 +45,23 @@ constexpr FontExpectation kExpectedTestFonts[] = {{u8"CambriaMath", 1},
                                                   {u8"NSimSun", 1},
                                                   {u8"calibri-bolditalic", 0}};
 
+// DirectWrite on Windows supports IDWriteFontSet API which allows for querying
+// by PostScript name and full font name directly. In the implementation of
+// DWriteFontProxy we check whether this API is available by checking for
+// whether IDWriteFactory3 is available. In order to validate in a unit test
+// whether this check works, compare it against the dwrite.dll major version -
+// versions starting from 10 have the required functionality.
+constexpr int kDWriteMajorVersionSupportingSingleLookups = 10;
+
+// Base test class that sets up the Mojo connection to DWriteFontProxy so that
+// tests can call its Mojo methods.
 class DWriteFontProxyImplUnitTest : public testing::Test {
  public:
   DWriteFontProxyImplUnitTest()
-      : binding_(&impl_, mojo::MakeRequest(&dwrite_font_proxy_)) {}
+      : receiver_(&impl_, dwrite_font_proxy_.BindNewPipeAndPassReceiver()) {}
 
   blink::mojom::DWriteFontProxy& dwrite_font_proxy() {
     return *dwrite_font_proxy_;
-  }
-
-  base::test::ScopedTaskEnvironment scoped_task_environment_;
-  blink::mojom::DWriteFontProxyPtr dwrite_font_proxy_;
-  DWriteFontProxyImpl impl_;
-  mojo::Binding<blink::mojom::DWriteFontProxy> binding_;
-};
-
-class DWriteFontProxyUniqueNameMatchingTest
-    : public DWriteFontProxyImplUnitTest {
- public:
-  DWriteFontProxyUniqueNameMatchingTest() {
-    feature_list_.InitAndEnableFeature(features::kFontSrcLocalMatching);
-    DWriteFontLookupTableBuilder* table_builder_instance =
-        DWriteFontLookupTableBuilder::GetInstance();
-    DCHECK(scoped_temp_dir_.CreateUniqueTempDir());
-    table_builder_instance->SetCacheDirectoryForTesting(
-        scoped_temp_dir_.GetPath());
-    table_builder_instance->ResetLookupTableForTesting();
-    table_builder_instance->SchedulePrepareFontUniqueNameTable();
   }
 
   bool SupportsSingleLookups() {
@@ -77,8 +70,51 @@ class DWriteFontProxyUniqueNameMatchingTest
     return lookup_mode == blink::mojom::UniqueFontLookupMode::kSingleLookups;
   }
 
+  base::test::TaskEnvironment task_environment_;
+  mojo::Remote<blink::mojom::DWriteFontProxy> dwrite_font_proxy_;
+  DWriteFontProxyImpl impl_;
+  mojo::Receiver<blink::mojom::DWriteFontProxy> receiver_;
+};
+
+// Derived class for tests that exercise font unique local matching mojo methods
+// of DWriteFontProxy. Needs a ScopedFeatureList to activate the feature as it
+// is currently behind a flag.
+class DWriteFontProxyLocalMatchingTest : public DWriteFontProxyImplUnitTest {
+ public:
+  DWriteFontProxyLocalMatchingTest() {
+    feature_list_.InitAndEnableFeature(features::kFontSrcLocalMatching);
+  }
+
  private:
   base::test::ScopedFeatureList feature_list_;
+};
+
+// Derived class for tests that exercise the parts of the DWriteFontProxy Mojo
+// interface that deal with accessing the font lookup table created by
+// DWriteFontLookupTableBuilder. Initializes the DWriteFontLookupTableBuilder
+// and has a ScopedTempDir for testing persisting the lookup table to disk.
+class DWriteFontProxyTableMatchingTest
+    : public DWriteFontProxyLocalMatchingTest {
+ public:
+  void SetUp() override {
+    DWriteFontLookupTableBuilder* table_builder_instance =
+        DWriteFontLookupTableBuilder::GetInstance();
+    bool temp_dir_success = scoped_temp_dir_.CreateUniqueTempDir();
+    ASSERT_TRUE(temp_dir_success);
+    table_builder_instance->OverrideDWriteVersionChecksForTesting();
+    table_builder_instance->SetCacheDirectoryForTesting(
+        scoped_temp_dir_.GetPath());
+    table_builder_instance->ResetLookupTableForTesting();
+    table_builder_instance->SchedulePrepareFontUniqueNameTableIfNeeded();
+  }
+
+  void TearDown() override {
+    DWriteFontLookupTableBuilder* table_builder_instance =
+        DWriteFontLookupTableBuilder::GetInstance();
+    table_builder_instance->ResetStateForTesting();
+  }
+
+ private:
   base::ScopedTempDir scoped_temp_dir_;
 };
 
@@ -226,6 +262,41 @@ TEST_F(DWriteFontProxyImplUnitTest, TestCustomFontFiles) {
   }
 }
 
+TEST_F(DWriteFontProxyImplUnitTest, FallbackFamily) {
+  const bool on_win10 = base::win::GetVersion() >= base::win::Version::WIN10;
+
+  for (auto& fallback_request : gfx::kGetFontFallbackTests) {
+    if (fallback_request.is_win10 && !on_win10)
+      continue;
+
+    blink::mojom::FallbackFamilyAndStylePtr fallback_family_and_style;
+    UChar32 codepoint;
+    U16_GET(fallback_request.text.c_str(), 0, 0, fallback_request.text.size(),
+            codepoint);
+    dwrite_font_proxy().FallbackFamilyAndStyleForCodepoint(
+        "Times New Roman", fallback_request.language_tag, codepoint,
+        &fallback_family_and_style);
+
+    auto find_result_it =
+        std::find(fallback_request.fallback_fonts.begin(),
+                  fallback_request.fallback_fonts.end(),
+                  fallback_family_and_style->fallback_family_name);
+
+    EXPECT_TRUE(find_result_it != fallback_request.fallback_fonts.end())
+        << "Did not find expected fallback font for language: "
+        << fallback_request.language_tag << ", codepoint U+" << std::hex
+        << codepoint << " DWrite returned font name: \""
+        << fallback_family_and_style->fallback_family_name << "\""
+        << ", expected: "
+        << base::JoinString(fallback_request.fallback_fonts, ", ");
+    EXPECT_EQ(fallback_family_and_style->weight, 400u);
+    EXPECT_EQ(fallback_family_and_style->width,
+              5u);  // SkFontStyle::Width::kNormal_Width
+    EXPECT_EQ(fallback_family_and_style->slant,
+              0u);  // SkFontStyle::Slant::kUpright_Slant
+  }
+}
+
 namespace {
 void TestWhenLookupTableReady(
     bool* did_test_fonts,
@@ -247,15 +318,15 @@ void TestWhenLookupTableReady(
 }
 }  // namespace
 
-TEST_F(DWriteFontProxyUniqueNameMatchingTest, TestFindUniqueFont) {
+TEST_F(DWriteFontProxyTableMatchingTest, TestFindUniqueFont) {
   bool lookup_table_results_were_tested = false;
   dwrite_font_proxy().GetUniqueNameLookupTable(base::BindOnce(
       &TestWhenLookupTableReady, &lookup_table_results_were_tested));
-  scoped_task_environment_.RunUntilIdle();
+  task_environment_.RunUntilIdle();
   ASSERT_TRUE(lookup_table_results_were_tested);
 }
 
-TEST_F(DWriteFontProxyUniqueNameMatchingTest, TestSingleLookup) {
+TEST_F(DWriteFontProxyLocalMatchingTest, TestSingleLookup) {
   // Do not run this test on unsupported Windows versions.
   if (!SupportsSingleLookups())
     return;
@@ -274,7 +345,7 @@ TEST_F(DWriteFontProxyUniqueNameMatchingTest, TestSingleLookup) {
   }
 }
 
-TEST_F(DWriteFontProxyUniqueNameMatchingTest, TestSingleLookupUnavailable) {
+TEST_F(DWriteFontProxyLocalMatchingTest, TestSingleLookupUnavailable) {
   // Do not run this test on unsupported Windows versions.
   if (!SupportsSingleLookups())
     return;
@@ -288,7 +359,7 @@ TEST_F(DWriteFontProxyUniqueNameMatchingTest, TestSingleLookupUnavailable) {
   ASSERT_EQ(ttc_index, 0u);
 }
 
-TEST_F(DWriteFontProxyUniqueNameMatchingTest, TestLookupMode) {
+TEST_F(DWriteFontProxyLocalMatchingTest, TestLookupMode) {
   std::unique_ptr<FileVersionInfo> dwrite_version_info =
       FileVersionInfo::CreateFileVersionInfo(
           base::FilePath(FILE_PATH_LITERAL("DWrite.dll")));
@@ -300,7 +371,8 @@ TEST_F(DWriteFontProxyUniqueNameMatchingTest, TestLookupMode) {
       std::stoi(dwrite_version.substr(0, dwrite_version.find(".")));
 
   blink::mojom::UniqueFontLookupMode expected_lookup_mode;
-  if (dwrite_major_version_number >= 10) {
+  if (dwrite_major_version_number >=
+      kDWriteMajorVersionSupportingSingleLookups) {
     expected_lookup_mode = blink::mojom::UniqueFontLookupMode::kSingleLookups;
   } else {
     expected_lookup_mode = blink::mojom::UniqueFontLookupMode::kRetrieveTable;

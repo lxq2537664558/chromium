@@ -4,9 +4,6 @@
 # found in the LICENSE file.
 
 import argparse
-import collections
-import cStringIO
-import gzip
 import os
 import re
 import sys
@@ -23,17 +20,20 @@ _SRC_PATH = os.path.normpath(os.path.join(_HERE_PATH, '..', '..', '..'))
 sys.path.insert(1, os.path.join(_SRC_PATH, 'tools', 'grit'))
 from grit.format import data_pack
 
-ResourceFile = collections.namedtuple('ResourceFile',
-                                      ['path', 'gzipped'])
-
-def UngzipString(data):
-  # Ungzipping using Python's built in gzip.
-  with gzip.GzipFile(fileobj=cStringIO.StringIO(data)) as gzip_file:
-    return gzip_file.read()
 
 def ParseLine(line):
-  return re.match('  {"([^"]+)", ([^},]+)(?:, ([^},]+))?', line)
+  return re.match('  {"([^"]+)", ([^},]+)', line)
 
+def GetFileAndDirName(out_path, pak_dir, resource_path):
+  dirname = os.path.dirname(resource_path)
+  # When files are generated, |dirname| becomes
+  # @out_folder@/<gen_path>/path_to_resource. To make the structure look as if
+  # this file was not generated, remove @out_folder@ and <gen_path>.
+  if ('@out_folder@' in dirname):
+    dirname = os.path.relpath(dirname, os.path.join('@out_folder@', pak_dir))
+  filename = os.path.basename(resource_path)
+  dirname = os.path.join(out_path, dirname)
+  return (filename, dirname)
 
 def Unpack(pak_path, out_path):
   pak_dir = os.path.dirname(pak_path)
@@ -53,29 +53,23 @@ def Unpack(pak_path, out_path):
   assert resource_ids
 
   # Associate numerical string IDs to files.
-  resource_files = dict()
+  resource_filenames = dict()
   resources_map_path = os.path.join(pak_dir, 'grit', pak_id + '_map.cc')
   with open(resources_map_path) as resources_map:
     for line in resources_map:
       res = ParseLine(line)
       if res:
-        resource_files[res.group(2)] = ResourceFile(
-          path=res.group(1),
-          gzipped=res.group(3) == 'true')
-  assert resource_files
+        resource_filenames[res.group(2)] = res.group(1)
+  assert resource_filenames
 
   # Extract packed files, while preserving directory structure.
   for (resource_id, text) in data.resources.iteritems():
-    resource_file = resource_files[resource_ids[resource_id]]
-    file_path = resource_file.path
-    file_gzipped = resource_file.gzipped
-    file_dir = os.path.join(out_path, os.path.dirname(file_path))
-    if not os.path.exists(file_dir):
-      os.makedirs(file_dir)
-    if file_gzipped:
-      text = UngzipString(text)
-    with open(os.path.join(out_path, file_path), 'w') as f:
-      f.write(text)
+    (filename, dirname) = GetFileAndDirName(
+        out_path, pak_dir, resource_filenames[resource_ids[resource_id]])
+    if not os.path.exists(dirname):
+      os.makedirs(dirname)
+    with open(os.path.join(dirname, filename), 'w') as file:
+      file.write(text)
 
 
 def main():

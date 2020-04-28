@@ -5,6 +5,8 @@
 #ifndef ASH_WM_ASH_FOCUS_RULES_H_
 #define ASH_WM_ASH_FOCUS_RULES_H_
 
+#include <vector>
+
 #include "ash/ash_export.h"
 #include "base/macros.h"
 #include "ui/wm/core/base_focus_rules.h"

@@ -54,23 +54,21 @@ PublicKeyCredentialUserEntity::CreateFromCBORValue(const cbor::Value& cbor) {
   return user;
 }
 
-// static
-cbor::Value PublicKeyCredentialUserEntity::ConvertToCBOR(
-    const PublicKeyCredentialUserEntity& user) {
-  cbor::Value::MapValue user_map;
-  user_map.emplace(kEntityIdMapKey, user.id);
-  if (user.name)
-    user_map.emplace(kEntityNameMapKey, *user.name);
-  if (user.icon_url)
-    user_map.emplace(kIconUrlMapKey, user.icon_url->spec());
-  if (user.display_name)
-    user_map.emplace(kDisplayNameMapKey, *user.display_name);
-  return cbor::Value(std::move(user_map));
-}
+PublicKeyCredentialUserEntity::PublicKeyCredentialUserEntity() = default;
 
 PublicKeyCredentialUserEntity::PublicKeyCredentialUserEntity(
-    std::vector<uint8_t> in_id)
-    : id(std::move(in_id)) {}
+    std::vector<uint8_t> id_)
+    : id(std::move(id_)) {}
+
+PublicKeyCredentialUserEntity::PublicKeyCredentialUserEntity(
+    std::vector<uint8_t> id_,
+    base::Optional<std::string> name_,
+    base::Optional<std::string> display_name_,
+    base::Optional<GURL> icon_url_)
+    : id(std::move(id_)),
+      name(std::move(name_)),
+      display_name(std::move(display_name_)),
+      icon_url(std::move(icon_url_)) {}
 
 PublicKeyCredentialUserEntity::PublicKeyCredentialUserEntity(
     const PublicKeyCredentialUserEntity& other) = default;
@@ -86,6 +84,23 @@ PublicKeyCredentialUserEntity& PublicKeyCredentialUserEntity::operator=(
 
 PublicKeyCredentialUserEntity::~PublicKeyCredentialUserEntity() = default;
 
+bool PublicKeyCredentialUserEntity::operator==(
+    const PublicKeyCredentialUserEntity& other) const {
+  return id == other.id && name == other.name &&
+         display_name == other.display_name && icon_url == other.icon_url;
+}
 
+cbor::Value AsCBOR(const PublicKeyCredentialUserEntity& user) {
+  cbor::Value::MapValue user_map;
+  user_map.emplace(kEntityIdMapKey, user.id);
+  if (user.name)
+    user_map.emplace(kEntityNameMapKey, *user.name);
+  // Empty icon URLs result in CTAP1_ERR_INVALID_LENGTH on some security keys.
+  if (user.icon_url && !user.icon_url->is_empty())
+    user_map.emplace(kIconUrlMapKey, user.icon_url->spec());
+  if (user.display_name)
+    user_map.emplace(kDisplayNameMapKey, *user.display_name);
+  return cbor::Value(std::move(user_map));
+}
 
 }  // namespace device

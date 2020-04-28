@@ -42,9 +42,34 @@ TEST_F(ProtoEnumConversionsTest, GetPageTransitionQualifierString) {
                          sync_pb::SyncEnums::PageTransitionRedirectType_MAX);
 }
 
-TEST_F(ProtoEnumConversionsTest, GetWifiCredentialSecurityClassString) {
-  TestEnumStringFunction(sync_pb::WifiCredentialSpecifics::SecurityClass_MIN,
-                         sync_pb::WifiCredentialSpecifics::SecurityClass_MAX);
+TEST_F(ProtoEnumConversionsTest, GetWifiConfigurationSecurityTypeString) {
+  TestEnumStringFunction(sync_pb::WifiConfigurationSpecifics::SecurityType_MIN,
+                         sync_pb::WifiConfigurationSpecifics::SecurityType_MAX);
+}
+
+TEST_F(ProtoEnumConversionsTest,
+       GetWifiConfigurationAutomaticallyConnectOptionString) {
+  TestEnumStringFunction(
+      sync_pb::WifiConfigurationSpecifics::AutomaticallyConnectOption_MIN,
+      sync_pb::WifiConfigurationSpecifics::AutomaticallyConnectOption_MAX);
+}
+
+TEST_F(ProtoEnumConversionsTest, GetWifiConfigurationIsPreferredOptionString) {
+  TestEnumStringFunction(
+      sync_pb::WifiConfigurationSpecifics::IsPreferredOption_MIN,
+      sync_pb::WifiConfigurationSpecifics::IsPreferredOption_MAX);
+}
+
+TEST_F(ProtoEnumConversionsTest, GetWifiConfigurationMeteredOptionString) {
+  TestEnumStringFunction(
+      sync_pb::WifiConfigurationSpecifics::MeteredOption_MIN,
+      sync_pb::WifiConfigurationSpecifics::MeteredOption_MAX);
+}
+
+TEST_F(ProtoEnumConversionsTest, GetWifiConfigurationProxyOptionString) {
+  TestEnumStringFunction(
+      sync_pb::WifiConfigurationSpecifics::ProxyConfiguration::ProxyOption_MIN,
+      sync_pb::WifiConfigurationSpecifics::ProxyConfiguration::ProxyOption_MAX);
 }
 
 TEST_F(ProtoEnumConversionsTest, GetUpdatesSourceString) {
@@ -82,12 +107,6 @@ TEST_F(ProtoEnumConversionsTest, GetErrorTypeString) {
 TEST_F(ProtoEnumConversionsTest, GetActionString) {
   TestEnumStringFunction(sync_pb::SyncEnums::Action_MIN,
                          sync_pb::SyncEnums::Action_MAX);
-}
-
-TEST_F(ProtoEnumConversionsTest, GetUserEventSpecificsString) {
-  TestEnumStringFunction(
-      sync_pb::UserEventSpecifics::UserConsent::FEATURE_UNSPECIFIED,
-      sync_pb::UserEventSpecifics::UserConsent::CHROME_SYNC);
 }
 
 TEST_F(ProtoEnumConversionsTest, GetConsentStatusString) {

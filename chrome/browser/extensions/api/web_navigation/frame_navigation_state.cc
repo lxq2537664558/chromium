@@ -4,7 +4,8 @@
 
 #include "chrome/browser/extensions/api/web_navigation/frame_navigation_state.h"
 
-#include "base/logging.h"
+#include "base/check.h"
+#include "base/notreached.h"
 #include "base/stl_util.h"
 #include "chrome/common/url_constants.h"
 #include "content/public/browser/render_frame_host.h"
@@ -49,10 +50,8 @@ bool FrameNavigationState::IsValidUrl(const GURL& url) {
       return true;
   }
   // Allow about:blank and about:srcdoc.
-  if (url.spec() == url::kAboutBlankURL ||
-      url.spec() == content::kAboutSrcDocURL) {
+  if (url.IsAboutBlank() || url.IsAboutSrcdoc())
     return true;
-  }
   return allow_extension_scheme_ && url.scheme() == kExtensionScheme;
 }
 

@@ -15,14 +15,15 @@
 #include "base/macros.h"
 #include "base/observer_list.h"
 #include "base/values.h"
+#include "components/content_settings/core/browser/content_settings_observer.h"
 #include "components/keyed_service/core/keyed_service.h"
-#include "components/signin/core/browser/signin_client.h"
 #include "components/signin/core/browser/signin_error_controller.h"
 #include "components/signin/core/browser/signin_internals_util.h"
-#include "services/identity/public/cpp/identity_manager.h"
-#include "services/identity/public/cpp/scope_set.h"
+#include "components/signin/public/base/signin_client.h"
+#include "components/signin/public/identity_manager/identity_manager.h"
+#include "components/signin/public/identity_manager/scope_set.h"
 
-namespace identity {
+namespace signin {
 struct AccountsInCookieJarInfo;
 }
 
@@ -35,11 +36,11 @@ using TimedSigninStatusValue = std::pair<std::string, std::string>;
 
 // This class collects authentication, signin and token information
 // to propagate to about:signin-internals via SigninInternalsUI.
-class AboutSigninInternals
-    : public KeyedService,
-      SigninErrorController::Observer,
-      identity::IdentityManager::Observer,
-      identity::IdentityManager::DiagnosticsObserver {
+class AboutSigninInternals : public KeyedService,
+                             public content_settings::Observer,
+                             SigninErrorController::Observer,
+                             signin::IdentityManager::Observer,
+                             signin::IdentityManager::DiagnosticsObserver {
  public:
   class Observer {
    public:
@@ -51,7 +52,7 @@ class AboutSigninInternals
     virtual void OnCookieAccountsFetched(const base::DictionaryValue* info) = 0;
   };
 
-  AboutSigninInternals(identity::IdentityManager* identity_manager,
+  AboutSigninInternals(signin::IdentityManager* identity_manager,
                        SigninErrorController* signin_error_controller,
                        signin::AccountConsistencyMethod account_consistency);
   ~AboutSigninInternals() override;
@@ -91,15 +92,15 @@ class AboutSigninInternals
   //  }
   std::unique_ptr<base::DictionaryValue> GetSigninStatus();
 
-  // identity::IdentityManager::Observer implementations.
+  // signin::IdentityManager::Observer implementations.
   void OnAccountsInCookieUpdated(
-      const identity::AccountsInCookieJarInfo& accounts_in_cookie_jar_info,
+      const signin::AccountsInCookieJarInfo& accounts_in_cookie_jar_info,
       const GoogleServiceAuthError& error) override;
 
  private:
   // Encapsulates diagnostic information about tokens for different services.
   struct TokenInfo {
-    TokenInfo(const std::string& consumer_id, const identity::ScopeSet& scopes);
+    TokenInfo(const std::string& consumer_id, const signin::ScopeSet& scopes);
     ~TokenInfo();
     std::unique_ptr<base::DictionaryValue> ToValue() const;
 
@@ -110,7 +111,7 @@ class AboutSigninInternals
     void Invalidate();
 
     std::string consumer_id;    // service that requested the token.
-    identity::ScopeSet scopes;  // Scoped that are requested.
+    signin::ScopeSet scopes;    // Scoped that are requested.
     base::Time request_time;
     base::Time receive_time;
     base::Time expiration_time;
@@ -130,7 +131,7 @@ class AboutSigninInternals
     std::string GetTypeAsString() const;
 
     const base::Time timestamp;
-    std::string account_id;
+    CoreAccountId account_id;
     RefreshTokenEventType type;
     std::string source;
   };
@@ -142,7 +143,7 @@ class AboutSigninInternals
     std::vector<TimedSigninStatusValue> timed_signin_fields;
 
     // Map account id to tokens associated to the account.
-    std::map<std::string, std::vector<std::unique_ptr<TokenInfo>>>
+    std::map<CoreAccountId, std::vector<std::unique_ptr<TokenInfo>>>
         token_info_map;
 
     // All the events that affected the refresh tokens.
@@ -151,9 +152,9 @@ class AboutSigninInternals
     SigninStatus();
     ~SigninStatus();
 
-    TokenInfo* FindToken(const std::string& account_id,
+    TokenInfo* FindToken(const CoreAccountId& account_id,
                          const std::string& consumer_id,
-                         const identity::ScopeSet& scopes);
+                         const signin::ScopeSet& scopes);
 
     void AddRefreshTokenEvent(const RefreshTokenEvent& event);
 
@@ -175,29 +176,29 @@ class AboutSigninInternals
     //       }],
     //  }
     std::unique_ptr<base::DictionaryValue> ToValue(
-        identity::IdentityManager* identity_manager,
+        signin::IdentityManager* identity_manager,
         SigninErrorController* signin_error_controller,
         SigninClient* signin_client,
         signin::AccountConsistencyMethod account_consistency);
   };
 
   // IdentityManager::DiagnosticsObserver implementations.
-  void OnAccessTokenRequested(const std::string& account_id,
+  void OnAccessTokenRequested(const CoreAccountId& account_id,
                               const std::string& consumer_id,
-                              const identity::ScopeSet& scopes) override;
-  void OnAccessTokenRequestCompleted(const std::string& account_id,
+                              const signin::ScopeSet& scopes) override;
+  void OnAccessTokenRequestCompleted(const CoreAccountId& account_id,
                                      const std::string& consumer_id,
-                                     const identity::ScopeSet& scopes,
+                                     const signin::ScopeSet& scopes,
                                      GoogleServiceAuthError error,
                                      base::Time expiration_time) override;
-  void OnAccessTokenRemovedFromCache(const std::string& account_id,
-                                     const identity::ScopeSet& scopes) override;
+  void OnAccessTokenRemovedFromCache(const CoreAccountId& account_id,
+                                     const signin::ScopeSet& scopes) override;
   void OnRefreshTokenUpdatedForAccountFromSource(
-      const std::string& account_id,
+      const CoreAccountId& account_id,
       bool is_refresh_token_valid,
       const std::string& source) override;
   void OnRefreshTokenRemovedForAccountFromSource(
-      const std::string& account_id,
+      const CoreAccountId& account_id,
       const std::string& source) override;
 
   // IdentityManager::Observer implementations.
@@ -217,8 +218,14 @@ class AboutSigninInternals
   // SigninErrorController::Observer implementation
   void OnErrorChanged() override;
 
+  // content_settings::Observer implementation.
+  void OnContentSettingChanged(const ContentSettingsPattern& primary_pattern,
+                               const ContentSettingsPattern& secondary_pattern,
+                               ContentSettingsType content_type,
+                               const std::string& resource_identifier) override;
+
   // Weak pointer to the identity manager.
-  identity::IdentityManager* identity_manager_;
+  signin::IdentityManager* identity_manager_;
 
   // Weak pointer to the client.
   SigninClient* client_;

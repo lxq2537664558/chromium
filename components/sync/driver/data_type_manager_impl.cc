@@ -73,10 +73,27 @@ DataTypeManagerImpl::DataTypeManagerImpl(
       model_association_manager_(controllers, this),
       observer_(observer),
       encryption_handler_(encryption_handler),
-      download_started_(false),
-      weak_ptr_factory_(this) {
+      download_started_(false) {
   DCHECK(configurer_);
   DCHECK(observer_);
+
+  // Check if any of the controllers are already in a FAILED state, and if so,
+  // mark them accordingly in the status table.
+  DataTypeStatusTable::TypeErrorMap existing_errors;
+  for (const auto& kv : *controllers_) {
+    ModelType type = kv.first;
+    const DataTypeController* controller = kv.second.get();
+    DataTypeController::State state = controller->state();
+    DCHECK(state == DataTypeController::NOT_RUNNING ||
+           state == DataTypeController::STOPPING ||
+           state == DataTypeController::FAILED);
+    if (state == DataTypeController::FAILED) {
+      existing_errors[type] =
+          SyncError(FROM_HERE, SyncError::DATATYPE_ERROR,
+                    "Preexisting controller error on Sync startup", type);
+    }
+  }
+  data_type_status_table_.UpdateFailedDataTypes(existing_errors);
 }
 
 DataTypeManagerImpl::~DataTypeManagerImpl() {}
@@ -94,20 +111,34 @@ void DataTypeManagerImpl::Configure(ModelTypeSet desired_types,
   ConfigureImpl(Intersection(desired_types, allowed_types), context);
 }
 
-void DataTypeManagerImpl::ReadyForStartChanged(ModelType type) {
-  if (!UpdateUnreadyTypeError(type)) {
+void DataTypeManagerImpl::DataTypePreconditionChanged(ModelType type) {
+  if (!UpdatePreconditionError(type)) {
     // Nothing changed.
     return;
   }
 
-  if (data_type_status_table_.GetUnreadyErrorTypes().Has(type)) {
-    model_association_manager_.StopDatatype(
-        type, DISABLE_SYNC,
-        SyncError(FROM_HERE, syncer::SyncError::UNREADY_ERROR,
-                  "Data type is unready.", type));
-  } else if (last_requested_types_.Has(type)) {
-    // Only reconfigure if the type is both ready and desired.
-    ForceReconfiguration();
+  switch (controllers_->find(type)->second->GetPreconditionState()) {
+    case DataTypeController::PreconditionState::kPreconditionsMet:
+      if (last_requested_types_.Has(type)) {
+        // Only reconfigure if the type is both ready and desired. This will
+        // internally also update ready state of all other requested types.
+        ForceReconfiguration();
+      }
+      break;
+
+    case DataTypeController::PreconditionState::kMustStopAndClearData:
+      model_association_manager_.StopDatatype(
+          type, DISABLE_SYNC,
+          SyncError(FROM_HERE, syncer::SyncError::DATATYPE_POLICY_ERROR,
+                    "Datatype preconditions not met.", type));
+      break;
+
+    case DataTypeController::PreconditionState::kMustStopAndKeepData:
+      model_association_manager_.StopDatatype(
+          type, STOP_SYNC,
+          SyncError(FROM_HERE, syncer::SyncError::UNREADY_ERROR,
+                    "Data type is unready.", type));
+      break;
   }
 }
 
@@ -174,10 +205,19 @@ void DataTypeManagerImpl::RegisterTypesWithBackend() {
       // successfully. Such types shouldn't be in an error state at the same
       // time.
       DCHECK(!data_type_status_table_.GetFailedTypes().Has(dtc->type()));
-      dtc->RegisterWithBackend(
-          base::Bind(&DataTypeManagerImpl::SetTypeDownloaded,
-                     base::Unretained(this), dtc->type()),
-          configurer_);
+      switch (dtc->RegisterWithBackend(configurer_)) {
+        case DataTypeController::REGISTRATION_IGNORED:
+          break;
+        case DataTypeController::TYPE_ALREADY_DOWNLOADED:
+          downloaded_types_.Put(type);
+          break;
+        case DataTypeController::TYPE_NOT_YET_DOWNLOADED:
+          downloaded_types_.Remove(type);
+          break;
+      }
+      if (force_redownload_types_.Has(type)) {
+        downloaded_types_.Remove(type);
+      }
     }
   }
 }
@@ -257,13 +297,12 @@ void DataTypeManagerImpl::Restart() {
     for (ModelType type : last_requested_types_) {
       // TODO(wychen): enum uma should be strongly typed. crbug.com/661401
       UMA_HISTOGRAM_ENUMERATION("Sync.ConfigureDataTypes",
-                                ModelTypeToHistogramInt(type),
-                                static_cast<int>(ModelType::NUM_ENTRIES));
+                                ModelTypeHistogramValue(type));
     }
   }
 
   // Check for new or resolved data type crypto errors.
-  if (encryption_handler_->IsPassphraseRequired()) {
+  if (encryption_handler_->HasCryptoError()) {
     ModelTypeSet encrypted_types = encryption_handler_->GetEncryptedDataTypes();
     encrypted_types.RetainAll(last_requested_types_);
     encrypted_types.RemoveAll(data_type_status_table_.GetCryptoErrorTypes());
@@ -274,7 +313,7 @@ void DataTypeManagerImpl::Restart() {
     data_type_status_table_.ResetCryptoErrors();
   }
 
-  UpdateUnreadyTypeErrors(last_requested_types_);
+  UpdatePreconditionErrors(last_requested_types_);
 
   last_enabled_types_ = GetEnabledTypes();
   last_restart_time_ = base::Time::Now();
@@ -305,8 +344,6 @@ void DataTypeManagerImpl::Restart() {
 void DataTypeManagerImpl::OnAllDataTypesReadyForConfigure() {
   DCHECK(!download_started_);
   download_started_ = true;
-  UMA_HISTOGRAM_LONG_TIMES("Sync.USSLoadModelsTime",
-                           base::Time::Now() - last_restart_time_);
   // TODO(pavely): By now some of datatypes in |download_types_queue_| could
   // have failed loading and should be excluded from configuration. I need to
   // adjust |download_types_queue_| for such types.
@@ -342,37 +379,50 @@ TypeSetPriorityList DataTypeManagerImpl::PrioritizeTypes(
   return result;
 }
 
-void DataTypeManagerImpl::UpdateUnreadyTypeErrors(
+void DataTypeManagerImpl::UpdatePreconditionErrors(
     const ModelTypeSet& desired_types) {
   for (ModelType type : desired_types) {
-    UpdateUnreadyTypeError(type);
+    UpdatePreconditionError(type);
   }
 }
 
-bool DataTypeManagerImpl::UpdateUnreadyTypeError(ModelType type) {
+bool DataTypeManagerImpl::UpdatePreconditionError(ModelType type) {
   const auto& iter = controllers_->find(type);
   if (iter == controllers_->end())
     return false;
 
-  const DataTypeController* dtc = iter->second.get();
-  bool unready_status =
-      data_type_status_table_.GetUnreadyErrorTypes().Has(type);
-  if (dtc->ReadyForStart() == (unready_status == false))
-    return false;
+  switch (iter->second->GetPreconditionState()) {
+    case DataTypeController::PreconditionState::kPreconditionsMet: {
+      const bool data_type_policy_error_changed =
+          data_type_status_table_.ResetDataTypePolicyErrorFor(type);
+      const bool unready_status_changed =
+          data_type_status_table_.ResetUnreadyErrorFor(type);
+      if (!data_type_policy_error_changed && !unready_status_changed) {
+        // Nothing changed.
+        return false;
+      }
+      // If preconditions are newly met, the datatype should be immediately
+      // redownloaded as part of the datatype configuration (most relevant for
+      // the UNREADY_ERROR case which usually won't clear sync metadata).
+      force_redownload_types_.Put(type);
+      return true;
+    }
 
-  // Adjust data_type_status_table_ if unready state in it doesn't match
-  // DataTypeController::ReadyForStart().
-  if (dtc->ReadyForStart()) {
-    data_type_status_table_.ResetUnreadyErrorFor(type);
-  } else {
-    SyncError error(FROM_HERE, SyncError::UNREADY_ERROR,
-                    "Datatype not ready at config time.", type);
-    std::map<ModelType, SyncError> errors;
-    errors[type] = error;
-    data_type_status_table_.UpdateFailedDataTypes(errors);
+    case DataTypeController::PreconditionState::kMustStopAndClearData: {
+      return data_type_status_table_.UpdateFailedDataType(
+          type, SyncError(FROM_HERE, SyncError::DATATYPE_POLICY_ERROR,
+                          "Datatype preconditions not met.", type));
+    }
+
+    case DataTypeController::PreconditionState::kMustStopAndKeepData: {
+      return data_type_status_table_.UpdateFailedDataType(
+          type, SyncError(FROM_HERE, SyncError::UNREADY_ERROR,
+                          "Datatype not ready at config time.", type));
+    }
   }
 
-  return true;
+  NOTREACHED();
+  return false;
 }
 
 void DataTypeManagerImpl::ProcessReconfigure() {
@@ -545,6 +595,8 @@ ModelTypeSet DataTypeManagerImpl::PrepareConfigureParams(
   if (!types_to_download.Empty())
     types_to_download.Put(NIGORI);
 
+  force_redownload_types_.RemoveAll(types_to_download);
+
   // TODO(sync): crbug.com/137550.
   // It's dangerous to configure types that have progress markers. Types with
   // progress markers can trigger a MIGRATION_DONE response. We are not
@@ -568,11 +620,11 @@ ModelTypeSet DataTypeManagerImpl::PrepareConfigureParams(
   // response will be sent.
 
   ModelTypeSet types_to_purge;
-  // If we're using in-memory storage, don't clear any old data. The reason is
+  // If we're using transport-only mode, don't clear any old data. The reason is
   // that if a user temporarily disables Sync, we don't want to wipe (and later
   // redownload) all their data, just because Sync restarted in transport-only
   // mode.
-  if (last_requested_context_.storage_option == STORAGE_ON_DISK) {
+  if (last_requested_context_.sync_mode == SyncMode::kFull) {
     types_to_purge = Difference(ModelTypeSet::All(), downloaded_types_);
     // Include clean_types in types_to_purge, they are part of
     // |downloaded_types_|, but still need to be cleared.
@@ -604,11 +656,11 @@ ModelTypeSet DataTypeManagerImpl::PrepareConfigureParams(
   params->to_purge = types_to_purge;
   params->to_journal = types_to_journal;
   params->to_unapply = unapply_types;
-  params->ready_task =
-      base::Bind(&DataTypeManagerImpl::DownloadReady,
-                 weak_ptr_factory_.GetWeakPtr(), download_types_queue_.front());
+  params->ready_task = base::BindOnce(&DataTypeManagerImpl::DownloadReady,
+                                      weak_ptr_factory_.GetWeakPtr(),
+                                      download_types_queue_.front());
   params->is_sync_feature_enabled =
-      last_requested_context_.storage_option == STORAGE_ON_DISK;
+      last_requested_context_.sync_mode == SyncMode::kFull;
 
   DCHECK(Intersection(active_types, types_to_purge).Empty());
   DCHECK(Intersection(active_types, fatal_types).Empty());
@@ -665,9 +717,7 @@ void DataTypeManagerImpl::OnSingleDataTypeWillStop(ModelType type,
   c_it->second->DeactivateDataType(configurer_);
 
   if (error.IsSet()) {
-    DataTypeStatusTable::TypeErrorMap failed_types;
-    failed_types[type] = error;
-    data_type_status_table_.UpdateFailedDataTypes(failed_types);
+    data_type_status_table_.UpdateFailedDataType(type, error);
 
     // Unrecoverable errors will shut down the entire backend, so no need to
     // reconfigure.
@@ -870,14 +920,6 @@ DataTypeManager::State DataTypeManagerImpl::state() const {
 ModelTypeSet DataTypeManagerImpl::GetEnabledTypes() const {
   return Difference(last_requested_types_,
                     data_type_status_table_.GetFailedTypes());
-}
-
-void DataTypeManagerImpl::SetTypeDownloaded(ModelType type, bool downloaded) {
-  if (downloaded) {
-    downloaded_types_.Put(type);
-  } else {
-    downloaded_types_.Remove(type);
-  }
 }
 
 }  // namespace syncer

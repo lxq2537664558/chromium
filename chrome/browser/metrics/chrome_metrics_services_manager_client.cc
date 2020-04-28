@@ -8,11 +8,12 @@
 #include <string>
 
 #include "base/bind.h"
+#include "base/check_op.h"
 #include "base/command_line.h"
 #include "base/feature_list.h"
-#include "base/logging.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/task/post_task.h"
+#include "base/task/thread_pool.h"
 #include "build/build_config.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/metrics/chrome_metrics_service_accessor.h"
@@ -44,8 +45,8 @@
 #include "base/win/registry.h"
 #include "chrome/common/chrome_constants.h"
 #include "chrome/install_static/install_util.h"
-#include "components/crash/content/app/crash_export_thunks.h"
-#include "components/crash/content/app/crashpad.h"
+#include "components/crash/core/app/crash_export_thunks.h"
+#include "components/crash/core/app/crashpad.h"
 #endif  // OS_WIN
 
 #if defined(OS_CHROMEOS)
@@ -61,6 +62,12 @@ namespace internal {
 const base::Feature kMetricsReportingFeature{"MetricsReporting",
                                              base::FEATURE_ENABLED_BY_DEFAULT};
 
+// A feature controlling whether all clients in the OutOfReportingSample group
+// should discard their uploads, regardless of which user consent flow they
+// went through. When disabled, only opt-out users will discard uploads.
+const base::Feature kMetricsDownsampleConsistentlyFeature{
+    "MetricsDownsampleConsistently", base::FEATURE_DISABLED_BY_DEFAULT};
+
 }  // namespace internal
 }  // namespace metrics
 
@@ -72,7 +79,7 @@ const char kRateParamName[] = "sampling_rate_per_mille";
 // Posts |GoogleUpdateSettings::StoreMetricsClientInfo| on blocking pool thread
 // because it needs access to IO and cannot work from UI thread.
 void PostStoreMetricsClientInfo(const metrics::ClientInfo& client_info) {
-  base::PostTaskWithTraits(
+  base::ThreadPool::PostTask(
       FROM_HERE, {base::MayBlock(), base::TaskPriority::BEST_EFFORT},
       base::BindOnce(&GoogleUpdateSettings::StoreMetricsClientInfo,
                      client_info));
@@ -89,24 +96,26 @@ void AppendSamplingTrialGroup(const std::string& group_name,
   trial->AppendGroup(group_name, rate);
 }
 
-// Only clients that were given an opt-out metrics-reporting consent flow are
-// eligible for sampling.
+// Unless the DownsampleConsistently feature is enabled, only clients that were
+// given an opt-out metrics-reporting consent flow are eligible for sampling.
 bool IsClientEligibleForSampling(PrefService* local_state) {
-  return metrics::GetMetricsReportingDefaultState(local_state) ==
-         metrics::EnableMetricsDefault::OPT_OUT;
+  return base::FeatureList::IsEnabled(
+             metrics::internal::kMetricsDownsampleConsistentlyFeature) ||
+         metrics::GetMetricsReportingDefaultState(local_state) ==
+             metrics::EnableMetricsDefault::OPT_OUT;
 }
 
 // Implementation of IsClientInSample() that takes a PrefService param.
 bool IsClientInSampleImpl(PrefService* local_state) {
-  // Only some clients are eligible for sampling. Clients that aren't eligible
-  // will always be considered "in sample". In this case, we don't want the
-  // feature state queried, because we don't want the field trial that controls
-  // sampling to be reported as active.
-  if (!IsClientEligibleForSampling(local_state))
-    return true;
-
-  return base::FeatureList::IsEnabled(
-      metrics::internal::kMetricsReportingFeature);
+  // Test the MetricsReporting feature for all users to ensure that the trial
+  // is reported.
+  bool is_in_sample_group =
+      base::FeatureList::IsEnabled(metrics::internal::kMetricsReportingFeature);
+  // Until the DownsampleConsistently feature is rolled out, only some clients
+  // are eligible for downsampling. Clients that aren't eligible should always
+  // send reports when they have opted to do so, but should still report their
+  // group assignment to the trial controlling downsampling.
+  return is_in_sample_group || !IsClientEligibleForSampling(local_state);
 }
 
 #if defined(OS_CHROMEOS)
@@ -174,8 +183,8 @@ void ChromeMetricsServicesManagerClient::CreateFallbackSamplingTrial(
   static const char kTrialName[] = "MetricsAndCrashSampling";
   scoped_refptr<base::FieldTrial> trial(
       base::FieldTrialList::FactoryGetFieldTrial(
-          kTrialName, 1000, "Default", base::FieldTrialList::kNoExpirationYear,
-          1, 1, base::FieldTrial::ONE_TIME_RANDOMIZED, nullptr));
+          kTrialName, 1000, "Default", base::FieldTrial::ONE_TIME_RANDOMIZED,
+          nullptr));
 
   // On all channels except stable, we sample out at a minimal rate to ensure
   // the code paths are exercised in the wild before hitting stable.
@@ -188,16 +197,17 @@ void ChromeMetricsServicesManagerClient::CreateFallbackSamplingTrial(
 
   // Like the trial name, the order that these two groups are added to the trial
   // must be kept in sync with the order that they appear in the server config.
+  // For future sanity purposes, the desired order is:
+  // OutOfReportingSample, InReportingSample
 
-  // 100 per-mille sampling rate group.
-  static const char kInSampleGroup[] = "InReportingSample";
-  AppendSamplingTrialGroup(kInSampleGroup, sampled_in_rate, trial.get());
-
-  // 900 per-mille sampled out.
   static const char kSampledOutGroup[] = "OutOfReportingSample";
   AppendSamplingTrialGroup(kSampledOutGroup, sampled_out_rate, trial.get());
 
-  // Setup the feature.
+  static const char kInSampleGroup[] = "InReportingSample";
+  AppendSamplingTrialGroup(kInSampleGroup, sampled_in_rate, trial.get());
+
+  // Setup the feature. This must be done after all groups are added since
+  // GetGroupNameWithoutActivation() will finalize the group choice.
   const std::string& group_name = trial->GetGroupNameWithoutActivation();
   feature_list->RegisterFieldTrialOverride(
       metrics::internal::kMetricsReportingFeature.name,

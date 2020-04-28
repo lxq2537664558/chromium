@@ -24,8 +24,7 @@ class HidServiceLinux : public HidService {
   ~HidServiceLinux() override;
 
   // HidService:
-  void Connect(const std::string& device_id,
-               const ConnectCallback& callback) override;
+  void Connect(const std::string& device_id, ConnectCallback callback) override;
   base::WeakPtr<HidService> GetWeakPtr() override;
 
  private:
@@ -40,7 +39,7 @@ class HidServiceLinux : public HidService {
   static void OnPathOpenComplete(std::unique_ptr<ConnectParams> params,
                                  base::ScopedFD fd);
   static void OnPathOpenError(const std::string& device_path,
-                              const ConnectCallback& callback,
+                              ConnectCallback callback,
                               const std::string& error_name,
                               const std::string& error_message);
 #else
@@ -53,7 +52,7 @@ class HidServiceLinux : public HidService {
   // |helper_| lives on the sequence |blocking_task_runner_| posts to and holds
   // a weak reference back to the service that owns it.
   std::unique_ptr<BlockingTaskRunnerHelper, base::OnTaskRunnerDeleter> helper_;
-  base::WeakPtrFactory<HidServiceLinux> weak_factory_;
+  base::WeakPtrFactory<HidServiceLinux> weak_factory_{this};
 
   DISALLOW_COPY_AND_ASSIGN(HidServiceLinux);
 };

@@ -136,8 +136,7 @@ TEST_F(ScopedOverviewTransformWindowTest, TransformingLetteredRect) {
   const int scale = 3;
   std::unique_ptr<aura::Window> window = CreateTestWindow(original_bounds);
   ScopedOverviewTransformWindow transform_window(nullptr, window.get());
-  EXPECT_EQ(ScopedOverviewTransformWindow::GridWindowFillMode::kLetterBoxed,
-            transform_window.type());
+  EXPECT_EQ(OverviewGridWindowFillMode::kLetterBoxed, transform_window.type());
 
   // Without any headers, the width should match the target, and the height
   // should be such that the aspect ratio of |original_bounds| is maintained.
@@ -160,25 +159,17 @@ TEST_F(ScopedOverviewTransformWindowTest, TransformingLetteredRect) {
   EXPECT_NEAR((overview_bounds.height() - original_header) / scale,
               transformed_rect.height() - original_header / scale, 1);
   EXPECT_TRUE(overview_bounds.Contains(transformed_rect));
-
-  // Verify that for an extreme window, the transform window stores the
-  // original overview item bounds, minus the header.
-  gfx::RectF new_overview_bounds = overview_bounds;
-  new_overview_bounds.Inset(0, overview_header, 0, 0);
-  ASSERT_TRUE(transform_window.overview_bounds().has_value());
-  EXPECT_EQ(transform_window.overview_bounds().value(), new_overview_bounds);
 }
 
 // Verify that a window which will be displayed like a pillar box on the window
 // grid has the correct bounds.
 TEST_F(ScopedOverviewTransformWindowTest, TransformingPillaredRect) {
   // Create a window whose height is more than twice the width.
-  const gfx::Rect original_bounds(10, 10, 100, 300);
+  const gfx::Rect original_bounds(10, 10, 150, 450);
   const int scale = 3;
   std::unique_ptr<aura::Window> window = CreateTestWindow(original_bounds);
   ScopedOverviewTransformWindow transform_window(nullptr, window.get());
-  EXPECT_EQ(ScopedOverviewTransformWindow::GridWindowFillMode::kPillarBoxed,
-            transform_window.type());
+  EXPECT_EQ(OverviewGridWindowFillMode::kPillarBoxed, transform_window.type());
 
   // Without any headers, the height should match the target, and the width
   // should be such that the aspect ratio of |original_bounds| is maintained.
@@ -197,31 +188,24 @@ TEST_F(ScopedOverviewTransformWindowTest, TransformingPillaredRect) {
   transformed_rect = transform_window.ShrinkRectToFitPreservingAspectRatio(
       gfx::RectF(original_bounds), overview_bounds, original_header,
       overview_header);
-  EXPECT_NEAR(overview_bounds.height() - overview_header,
-              transformed_rect.height() - original_header / scale, 1);
+  const float overview_scale =
+      original_bounds.height() / overview_bounds.height();
+  const float expected_height = overview_bounds.height() - overview_header +
+                                original_header / overview_scale;
+  EXPECT_NEAR(expected_height, transformed_rect.height(), 1);
   EXPECT_TRUE(overview_bounds.Contains(transformed_rect));
-
-  // Verify that for an extreme window, the transform window stores the
-  // original overview item bounds, minus the header.
-  gfx::RectF new_overview_bounds = overview_bounds;
-  new_overview_bounds.Inset(0, overview_header, 0, 0);
-  ASSERT_TRUE(transform_window.overview_bounds().has_value());
-  EXPECT_EQ(transform_window.overview_bounds().value(), new_overview_bounds);
 }
 
 // Tests the cases when very wide or tall windows enter overview mode.
 TEST_F(ScopedOverviewTransformWindowTest, ExtremeWindowBounds) {
   // Add three windows which in overview mode will be considered wide, tall and
-  // normal. Window |wide|, with size (400, 160) will be resized to (200, 160)
-  // when the 400x200 is rotated to 200x400, and should be considered a normal
+  // normal. Window |wide|, with size (400, 160) will be resized to (300, 160)
+  // when the 400x300 is rotated to 300x400, and should be considered a normal
   // overview window after display change.
-  UpdateDisplay("400x200");
-  std::unique_ptr<aura::Window> wide =
-      CreateTestWindow(gfx::Rect(10, 10, 400, 160));
-  std::unique_ptr<aura::Window> tall =
-      CreateTestWindow(gfx::Rect(10, 10, 50, 200));
-  std::unique_ptr<aura::Window> normal =
-      CreateTestWindow(gfx::Rect(10, 10, 200, 200));
+  UpdateDisplay("400x300");
+  std::unique_ptr<aura::Window> wide = CreateTestWindow(gfx::Rect(400, 160));
+  std::unique_ptr<aura::Window> tall = CreateTestWindow(gfx::Rect(100, 300));
+  std::unique_ptr<aura::Window> normal = CreateTestWindow(gfx::Rect(300, 300));
 
   ScopedOverviewTransformWindow scoped_wide(nullptr, wide.get());
   ScopedOverviewTransformWindow scoped_tall(nullptr, tall.get());
@@ -229,10 +213,10 @@ TEST_F(ScopedOverviewTransformWindowTest, ExtremeWindowBounds) {
 
   // Verify the window dimension type is as expected after entering overview
   // mode.
-  using GridWindowFillMode = ScopedOverviewTransformWindow::GridWindowFillMode;
-  EXPECT_EQ(GridWindowFillMode::kLetterBoxed, scoped_wide.type());
-  EXPECT_EQ(GridWindowFillMode::kPillarBoxed, scoped_tall.type());
-  EXPECT_EQ(GridWindowFillMode::kNormal, scoped_normal.type());
+  using OverviewGridWindowFillMode = OverviewGridWindowFillMode;
+  EXPECT_EQ(OverviewGridWindowFillMode::kLetterBoxed, scoped_wide.type());
+  EXPECT_EQ(OverviewGridWindowFillMode::kPillarBoxed, scoped_tall.type());
+  EXPECT_EQ(OverviewGridWindowFillMode::kNormal, scoped_normal.type());
 
   display::Screen* screen = display::Screen::GetScreen();
   const display::Display& display = screen->GetPrimaryDisplay();
@@ -245,9 +229,9 @@ TEST_F(ScopedOverviewTransformWindowTest, ExtremeWindowBounds) {
 
   // Verify that |wide| has its window dimension type updated after the display
   // change.
-  EXPECT_EQ(GridWindowFillMode::kNormal, scoped_wide.type());
-  EXPECT_EQ(GridWindowFillMode::kPillarBoxed, scoped_tall.type());
-  EXPECT_EQ(GridWindowFillMode::kNormal, scoped_normal.type());
+  EXPECT_EQ(OverviewGridWindowFillMode::kNormal, scoped_wide.type());
+  EXPECT_EQ(OverviewGridWindowFillMode::kPillarBoxed, scoped_tall.type());
+  EXPECT_EQ(OverviewGridWindowFillMode::kNormal, scoped_normal.type());
 }
 
 // Tests that transients which should be invisible in overview do not have their
@@ -284,40 +268,60 @@ TEST_F(ScopedOverviewTransformWindowTest, InvisibleTransients) {
   EXPECT_TRUE(child2->transform().IsIdentity());
 }
 
-class ScopedOverviewTransformWindowWithMaskTest
-    : public ScopedOverviewTransformWindowTest {
- public:
-  ScopedOverviewTransformWindowWithMaskTest() = default;
-  ~ScopedOverviewTransformWindowWithMaskTest() override = default;
+// Tests that the event targeting policies of a given window and transient
+// descendants gets set as expected.
+TEST_F(ScopedOverviewTransformWindowTest, EventTargetingPolicy) {
+  using etp = aura::EventTargetingPolicy;
 
-  void SetUp() override {
-    ScopedOverviewTransformWindowTest::SetUp();
-    scoped_feature_list_.InitAndDisableFeature(
-        ash::features::kUseShaderRoundedCorner);
+  // Helper for creating popups that will be transients for testing.
+  auto create_popup = [this] {
+    std::unique_ptr<aura::Window> popup =
+        CreateTestWindow(gfx::Rect(10, 10), aura::client::WINDOW_TYPE_POPUP);
+    popup->SetEventTargetingPolicy(etp::kTargetAndDescendants);
+    return popup;
+  };
+
+  auto window = CreateTestWindow(gfx::Rect(200, 200));
+  window->SetEventTargetingPolicy(etp::kTargetAndDescendants);
+
+  auto transient = create_popup();
+  auto transient1 = create_popup();
+  auto transient2 = create_popup();
+  ::wm::AddTransientChild(window.get(), transient.get());
+
+  {
+    // Tests that after creating the scoped object, the window and its current
+    // transient child have |kNone| targeting policy.
+    ScopedOverviewTransformWindow scoped_window(nullptr, window.get());
+    EXPECT_EQ(etp::kNone, window->event_targeting_policy());
+    EXPECT_EQ(etp::kNone, transient->event_targeting_policy());
+
+    // Tests that after adding transient children, one to the window itself and
+    // one to the current transient child, they will both have |kNone| targeting
+    // policy.
+    ::wm::AddTransientChild(window.get(), transient1.get());
+    ::wm::AddTransientChild(transient.get(), transient2.get());
+    EXPECT_EQ(etp::kNone, transient1->event_targeting_policy());
+    EXPECT_EQ(etp::kNone, transient2->event_targeting_policy());
+
+    // Tests that adding a transient child which does not have |window| as its
+    // descendant does not have its targeting policy altered.
+    auto window2 = CreateTestWindow(gfx::Rect(200, 200));
+    auto transient3 = create_popup();
+    ::wm::AddTransientChild(window2.get(), transient3.get());
+    EXPECT_EQ(etp::kTargetAndDescendants, transient3->event_targeting_policy());
+
+    // Tests that removing a transient child from |window| will reset its
+    // targeting policy.
+    ::wm::RemoveTransientChild(window.get(), transient1.get());
+    EXPECT_EQ(etp::kTargetAndDescendants, transient1->event_targeting_policy());
   }
 
- private:
-  base::test::ScopedFeatureList scoped_feature_list_;
-
-  DISALLOW_COPY_AND_ASSIGN(ScopedOverviewTransformWindowWithMaskTest);
-};
-
-// Verify that if the window's bounds are changed while it's in overview mode,
-// the rounded edge mask's bounds are also changed accordingly.
-TEST_F(ScopedOverviewTransformWindowWithMaskTest, WindowBoundsChangeTest) {
-  UpdateDisplay("400x400");
-  const gfx::Rect bounds(10, 10, 200, 200);
-  std::unique_ptr<aura::Window> window = CreateTestWindow(bounds);
-  ScopedOverviewTransformWindow scoped_window(nullptr, window.get());
-  scoped_window.UpdateMask(true);
-
-  EXPECT_TRUE(scoped_window.mask_);
-  EXPECT_EQ(window->bounds(), scoped_window.GetMaskBoundsForTesting());
-  EXPECT_EQ(bounds, scoped_window.GetMaskBoundsForTesting());
-
-  wm::GetWindowState(window.get())->Maximize();
-  EXPECT_EQ(window->bounds(), scoped_window.GetMaskBoundsForTesting());
-  EXPECT_NE(bounds, scoped_window.GetMaskBoundsForTesting());
+  // Tests that when the scoped object is destroyed, the targeting policies all
+  // get reset.
+  EXPECT_EQ(etp::kTargetAndDescendants, window->event_targeting_policy());
+  EXPECT_EQ(etp::kTargetAndDescendants, transient->event_targeting_policy());
+  EXPECT_EQ(etp::kTargetAndDescendants, transient2->event_targeting_policy());
 }
 
 }  // namespace ash

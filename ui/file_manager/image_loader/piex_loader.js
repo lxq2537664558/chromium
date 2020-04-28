@@ -2,33 +2,88 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-/**
- * @typedef {{
- *   fulfill: function(PiexLoaderResponse):undefined,
- *   reject: function(string):undefined}
- * }}
- */
-var PiexRequestCallbacks;
+console.log('[PiexLoader] wasm mode loaded');
 
 /**
- * @param {{id:number, thumbnail:!ArrayBuffer, orientation:number,
- *          colorSpace: ColorSpace}}
- *     data Data directly returned from NaCl module.
+ * Declares the piex-wasm Module interface. The Module has many interfaces
+ * but only declare the parts required for PIEX work.
+ * @typedef {{
+ *  calledRun: boolean,
+ *  onAbort: function((!Error|string)):undefined,
+ *  HEAP8: !Uint8Array,
+ *  _malloc: function(number):number,
+ *  _free: function(number):undefined,
+ *  image: function(number, number):PiexWasmImageResult
+ * }}
+ */
+let PiexWasmModule;
+
+/**
+ * |window| var Module defined in page <script src='piex/piex.js.wasm'>.
+ * @type {PiexWasmModule}
+ */
+const PiexModule = window['Module'] || {};
+
+/**
+ * Set true only if the wasm Module.onAbort() handler is called.
+ * @type {boolean}
+ */
+let wasmFailed = false;
+
+/**
+ * Installs an (Emscripten) wasm Module.onAbort handler, that records that
+ * the Module has failed and re-throws the error.
+ * @throws {!Error|string}
+ */
+PiexModule.onAbort = (error) => {
+  wasmFailed = true;
+  throw error;
+};
+
+/**
+ * Module failure recovery: if wasmFailed is set via onAbort due to OOM in
+ * the C++ for example, or the Module failed to load or call run, then the
+ * wasm Module is in a broken, non-functional state.
+ *
+ * Re-loading the page is the only reliable way to attempt to recover from
+ * broken Module state.
+ */
+function wasmModuleFailed() {
+  if (wasmFailed || !PiexModule.calledRun) {
+    console.error('[PiexLoader] wasmModuleFailed');
+    setTimeout(chrome.runtime.reload, 0);
+    return true;
+  }
+}
+
+/**
+ * @typedef {{
+ *  thumbnail: !ArrayBuffer,
+ *  mimeType: (string|undefined),
+ *  orientation: number,
+ *  colorSpace: ColorSpace,
+ *  ifd: ?string
+ * }}
+ */
+let ImagePreviewResponseData;
+
+/**
+ * @param {!ImagePreviewResponseData} data The preview image data.
  * @constructor
  * @struct
  */
 function PiexLoaderResponse(data) {
   /**
-   * @public {number}
-   * @const
-   */
-  this.id = data.id;
-
-  /**
    * @public {!ArrayBuffer}
    * @const
    */
   this.thumbnail = data.thumbnail;
+
+  /**
+   * @public {string}
+   * @const
+   */
+  this.mimeType = data.mimeType || 'image/jpeg';
 
   /**
    * @public {!ImageOrientation}
@@ -42,274 +97,375 @@ function PiexLoaderResponse(data) {
    * @const
    */
   this.colorSpace = data.colorSpace;
+
+  /**
+   * JSON encoded RAW image photographic details.
+   * @public {?string}
+   * @const
+   */
+  this.ifd = data.ifd || null;
 }
 
 /**
- * Creates a PiexLoader for loading RAW files using a Piex NaCl module.
- *
- * All of the arguments are optional and used for tests only. If not passed,
- * then default implementations and values will be used.
- *
- * @param {function()=} opt_createModule Creates a NaCl module.
- * @param {function(!Element)=} opt_destroyModule Destroys a NaCl module.
- * @param {number=} opt_idleTimeout Idle timeout to destroy NaCl module.
+ * Creates a PiexLoader for reading RAW image file information.
  * @constructor
  * @struct
  */
-function PiexLoader(opt_createModule, opt_destroyModule, opt_idleTimeout) {
-  /**
-   * @private {function():!HTMLEmbedElement}
-   */
-  this.createModule_ = opt_createModule || this.defaultCreateModule_.bind(this);
-
-  /**
-   * @private {function():!Element}
-   */
-  this.destroyModule_ =
-      opt_destroyModule || this.defaultDestroyModule_.bind(this);
-
-  this.idleTimeoutMs_ = opt_idleTimeout !== undefined ?
-      opt_idleTimeout :
-      PiexLoader.DEFAULT_IDLE_TIMEOUT_MS;
-
-  /**
-   * @private {HTMLEmbedElement}
-   */
-  this.naclModule_ = null;
-
-  /**
-   * @private {Element}
-   */
-  this.containerElement_ = null;
-
-  /**
-   * @private {number}
-   */
-  this.unloadTimer_ = 0;
-
-  /**
-   * @private {Promise<boolean>}
-   */
-  this.naclPromise_ = null;
-
-  /**
-   * @private {?function(boolean)}
-   */
-  this.naclPromiseFulfill_ = null;
-
-  /**
-   * @private {?function(string=)}
-   */
-  this.naclPromiseReject_ = null;
-
-  /**
-   * @private {!Object<number, ?PiexRequestCallbacks>}
-   * @const
-   */
-  this.requests_ = {};
-
-  /**
-   * @private {number}
-   */
-  this.requestIdCount_ = 0;
-
-  // Bound function so the listeners can be unregistered.
-  this.onNaclLoadBound_ = this.onNaclLoad_.bind(this);
-  this.onNaclMessageBound_ = this.onNaclMessage_.bind(this);
-  this.onNaclErrorBound_ = this.onNaclError_.bind(this);
-  this.onNaclCrashBound_ = this.onNaclCrash_.bind(this);
+function PiexLoader() {
+  // TODO(crbug.com/1039141): make this an ES6 class.
 }
 
 /**
- * Idling time before the NaCl module is unloaded. This lets the image loader
- * extension close when inactive.
- *
- * @const {number}
+ * Resolves the file entry associated with DOM filesystem |url| and returns
+ * the file content in an ArrayBuffer.
+ * @param {string} url - DOM filesystem URL of the file.
+ * @returns {!Promise<!ArrayBuffer>}
  */
-PiexLoader.DEFAULT_IDLE_TIMEOUT_MS = 3000;  // 3 seconds.
+function readFromFileSystem(url) {
+  return new Promise((resolve, reject) => {
+    /**
+     * Reject the Promise on fileEntry URL resolve or file read failures.
+     */
+    function failure(error) {
+      reject(new Error('Reading file system: ' + error));
+    }
+
+    /**
+     * Returns true if the fileEntry file size is within sensible limits.
+     * @param {number} size - file size.
+     * @return {boolean}
+     */
+    function valid(size) {
+      return size > 0 && size < Math.pow(2, 30);
+    }
+
+    /**
+     * Reads the fileEntry's content into an ArrayBuffer: resolve Promise
+     * with the ArrayBuffer result or reject the Promise on failure.
+     * @param {!Entry} entry - file system entry of |url|.
+     */
+    function readEntry(entry) {
+      const fileEntry = /** @type {!FileEntry} */ (entry);
+      fileEntry.file((file) => {
+        if (valid(file.size)) {
+          const reader = new FileReader();
+          reader.onerror = failure;
+          reader.onload = (_) => resolve(reader.result);
+          reader.readAsArrayBuffer(file);
+        } else {
+          failure('invalid file size: ' + file.size);
+        }
+      }, failure);
+    }
+
+    window.webkitResolveLocalFileSystemURL(url, readEntry, failure);
+  });
+}
 
 /**
- * Creates a NaCl module element.
+ * Piex wasm extacts the preview image metadata from a raw image. The preview
+ * image |format| is either 0 (JPEG) or 1 (RGB), and has a |colorSpace| (sRGB
+ * or AdobeRGB1998) and a JEITA EXIF image |orientation|.
  *
- * Do not call directly. Use this.loadModule_ instead to support
- * tests.
+ * An RGB format preview image has both |width| and |height|, but JPEG format
+ * previews have neither (piex wasm C++ does not parse/decode JPEG).
  *
- * @return {!HTMLEmbedElement}
- * @private
+ * The |offset| to, and |length| of, the preview image relative to the source
+ * data is indicated by those fields. They are positive > 0. Note: the values
+ * are controlled by a third-party and are untrustworthy (Security).
+ *
+ * @typedef {{
+ *  format:number,
+ *  colorSpace:ColorSpace,
+ *  orientation:number,
+ *  width:?number,
+ *  height:?number,
+ *  offset:number,
+ *  length:number
+ * }}
  */
-PiexLoader.prototype.defaultCreateModule_ = function() {
-  var embed =
-      assertInstanceof(document.createElement('embed'), HTMLEmbedElement);
-  embed.setAttribute('type', 'application/x-pnacl');
-  // The extension nmf is not allowed to load. We uses .nmf.js instead.
-  embed.setAttribute('src', '/piex/piex.nmf.txt');
-  embed.width = '0';
-  embed.height = '0';
-  return embed;
-};
-
-PiexLoader.prototype.defaultDestroyModule_ = function(module) {
-  // The module is destroyed by removing it from DOM in loadNaclModule_().
-};
+let PiexWasmPreviewImageMetadata;
 
 /**
- * @return {!Promise<boolean>}
- * @private
+ * The piex wasm Module.image(<raw image source>,...) API returns |error|, or
+ * else the source |preview| and/or |thumbnail| image metadata along with the
+ * photographic |details| derived from the RAW image EXIF.
+ *
+ * The |preview| images are JPEG. The |thumbnail| images are smaller, lower-
+ * quality, JPEG or RGB format images.
+ *
+ * @typedef {{
+ *  error:?string,
+ *  preview:?PiexWasmPreviewImageMetadata,
+ *  thumbnail:?PiexWasmPreviewImageMetadata,
+ *  details:?Object
+ * }}
  */
-PiexLoader.prototype.loadNaclModule_ = function() {
-  if (this.naclPromise_) {
-    return this.naclPromise_;
+let PiexWasmImageResult;
+
+/**
+ * Piex wasm raw image preview image extractor.
+ */
+class ImageBuffer {
+  /**
+   * @param {!ArrayBuffer} buffer - raw image source data.
+   */
+  constructor(buffer) {
+    /**
+     * @type {!Uint8Array}
+     * @const
+     * @private
+     */
+    this.source = new Uint8Array(buffer);
+
+    /**
+     * @type {number}
+     * @const
+     * @private
+     */
+    this.length = buffer.byteLength;
+
+    /**
+     * @type {number}
+     * @private
+     */
+    this.memory = 0;
   }
 
-  this.naclPromise_ =
-      new Promise(function(fulfill) {
-        chrome.fileManagerPrivate.isPiexLoaderEnabled(fulfill);
-      })
-          .then(function(enabled) {
-            if (!enabled) {
-              return false;
-            }
-            return new Promise(function(fulfill, reject) {
-              this.naclPromiseFulfill_ = fulfill;
-              this.naclPromiseReject_ = reject;
-              this.naclModule_ = this.createModule_();
+  /**
+   * Calls Module.image() to process |this.source| and return the result.
+   *
+   * @return {!PiexWasmImageResult}
+   * @throws {!Error}
+   */
+  process() {
+    this.memory = PiexModule._malloc(this.length);
+    if (!this.memory) {
+      throw new Error('Image malloc failed: ' + this.length + ' bytes');
+    }
 
-              // The <EMBED> element is wrapped inside a <DIV>, which has both a
-              // 'load' and a 'message' event listener attached.  This wrapping
-              // method is used instead of attaching the event listeners
-              // directly to the <EMBED> element to ensure that the listeners
-              // are active before the NaCl module 'load' event fires.
-              var listenerContainer = assertInstanceof(
-                  document.createElement('div'), HTMLDivElement);
-              listenerContainer.appendChild(this.naclModule_);
-              listenerContainer.addEventListener(
-                  'load', this.onNaclLoadBound_, true);
-              listenerContainer.addEventListener(
-                  'message', this.onNaclMessageBound_, true);
-              listenerContainer.addEventListener(
-                  'error', this.onNaclErrorBound_, true);
-              listenerContainer.addEventListener(
-                  'crash', this.onNaclCrashBound_, true);
-              listenerContainer.style.height = '0px';
-              this.containerElement_ = listenerContainer;
-              document.body.appendChild(listenerContainer);
+    PiexModule.HEAP8.set(this.source, this.memory);
+    const result = PiexModule.image(this.memory, this.length);
+    if (result.error) {
+      throw new Error(result.error);
+    }
 
-              // Force a relayout. Workaround for load event not being called on
-              // <embed> for a NaCl module. crbug.com/699930
-              /** @suppress {suspiciousCode} */ this.naclModule_.offsetTop;
-            }.bind(this));
-          }.bind(this))
-          .catch(function(error) {
-            console.error(error);
-            return false;
-          });
-
-  return this.naclPromise_;
-};
-
-/**
- * @private
- */
-PiexLoader.prototype.unloadNaclModule_ = function() {
-  this.containerElement_.removeEventListener('load', this.onNaclLoadBound_);
-  this.containerElement_.removeEventListener(
-      'message', this.onNaclMessageBound_);
-  this.containerElement_.removeEventListener('error', this.onNaclErrorBound_);
-  this.containerElement_.removeEventListener('crash', this.onNaclCrashBound_);
-  this.containerElement_.parentNode.removeChild(this.containerElement_);
-  this.containerElement_ = null;
-
-  this.destroyModule_();
-  this.naclModule_ = null;
-  this.naclPromise_ = null;
-  this.naclPromiseFulfill_ = null;
-  this.naclPromiseReject_ = null;
-};
-
-/**
- * @param {Event} event
- * @private
- */
-PiexLoader.prototype.onNaclLoad_ = function(event) {
-  console.assert(this.naclPromiseFulfill_);
-  this.naclPromiseFulfill_(true);
-};
-
-/**
- * @param {Event} listener_event
- * @private
- */
-PiexLoader.prototype.onNaclMessage_ = function(listener_event) {
-  let event = /** @type{MessageEvent} */ (listener_event);
-  var id = event.data.id;
-  if (!event.data.error) {
-    var response = new PiexLoaderResponse(event.data);
-    console.assert(this.requests_[id]);
-    this.requests_[id].fulfill(response);
-  } else {
-    console.assert(this.requests_[id]);
-    this.requests_[id].reject(event.data.error);
+    return result;
   }
-  delete this.requests_[id];
-  if (Object.keys(this.requests_).length === 0) {
-    this.scheduleUnloadOnIdle_();
+
+  /**
+   * Returns the preview image data. If no preview image was found, returns
+   * the thumbnail image.
+   *
+   * @param {!PiexWasmImageResult} result
+   *
+   * @throws {!Error} Data access security error.
+   *
+   * @return {!ImagePreviewResponseData}
+   */
+  preview(result) {
+    const preview = result.preview;
+    if (!preview) {
+      return this.thumbnail_(result);
+    }
+
+    const offset = preview.offset;
+    const length = preview.length;
+    if (offset > this.length || (this.length - offset) < length) {
+      throw new Error('Preview image access failed');
+    }
+
+    const view = new Uint8Array(this.source.buffer, offset, length);
+    return {
+      thumbnail: new Uint8Array(view).buffer,
+      mimeType: 'image/jpeg',
+      ifd: this.details(result, preview.orientation),
+      orientation: preview.orientation,
+      colorSpace: preview.colorSpace,
+    };
   }
-};
 
-/**
- * @param {Event} event
- * @private
- */
-PiexLoader.prototype.onNaclError_ = function(event) {
-  console.assert(this.naclPromiseReject_);
-  this.naclPromiseReject_(this.naclModule_['lastError']);
-};
+  /**
+   * Returns the thumbnail image. If no thumbnail image was found, returns
+   * an empty thumbnail image.
+   *
+   * @param {!PiexWasmImageResult} result
+   *
+   * @throws {!Error} Data access security error.
+   *
+   * @return {!ImagePreviewResponseData}
+   */
+  thumbnail_(result) {
+    const thumbnail = result.thumbnail;
+    if (!thumbnail) {
+      return {
+        thumbnail: new ArrayBuffer(0),
+        colorSpace: ColorSpace.SRGB,
+        orientation: 1,
+        ifd: null,
+      };
+    }
 
-/**
- * @param {Event} event
- * @private
- */
-PiexLoader.prototype.onNaclCrash_ = function(event) {
-  console.assert(this.naclPromiseReject_);
-  this.naclPromiseReject_('PiexLoader crashed.');
-};
+    if (thumbnail.format) {
+      return this.rgb_(result);
+    }
 
-/**
- * Schedules unloading the NaCl module after IDLE_TIMEOUT_MS passes.
- * @private
- */
-PiexLoader.prototype.scheduleUnloadOnIdle_ = function() {
-  if (this.unloadTimer_) {
-    clearTimeout(this.unloadTimer_);
+    const offset = thumbnail.offset;
+    const length = thumbnail.length;
+    if (offset > this.length || (this.length - offset) < length) {
+      throw new Error('Thumbnail image access failed');
+    }
+
+    const view = new Uint8Array(this.source.buffer, offset, length);
+    return {
+      thumbnail: new Uint8Array(view).buffer,
+      mimeType: 'image/jpeg',
+      ifd: this.details(result, thumbnail.orientation),
+      orientation: thumbnail.orientation,
+      colorSpace: thumbnail.colorSpace,
+    };
   }
-  this.unloadTimer_ =
-      setTimeout(this.onIdleTimeout_.bind(this), this.idleTimeoutMs_);
-};
 
-/**
- * @private
- */
-PiexLoader.prototype.onIdleTimeout_ = function() {
-  this.unloadNaclModule_();
-};
+  /**
+   * Returns the RGB thumbnail. If no RGB thumbnail was found, returns
+   * an empty thumbnail image.
+   *
+   * @param {!PiexWasmImageResult} result
+   *
+   * @throws {!Error} Data access security error.
+   *
+   * @return {!ImagePreviewResponseData}
+   */
+  rgb_(result) {
+    const thumbnail = result.thumbnail;
+    if (!thumbnail || thumbnail.format !== 1) {
+      return {
+        thumbnail: new ArrayBuffer(0),
+        colorSpace: ColorSpace.SRGB,
+        orientation: 1,
+        ifd: null,
+      };
+    }
 
-/**
- * Simulates time passed required to fire the closure enqueued with setTimeout.
- *
- * Note, that if there is no active timer set with setTimeout earlier, then
- * nothing will happen.
- *
- * This method is used to avoid waiting for DEFAULT_IDLE_TIMEOUT_MS in tests.
- * Also, it allows to avoid flakyness by effectively removing any dependency
- * on execution speed of the test (tests set the timeout to a very large value
- * and only rely on this method to simulate passed time).
- */
-PiexLoader.prototype.simulateIdleTimeoutPassedForTests = function() {
-  if (this.unloadTimer_) {
-    clearTimeout(this.unloadTimer_);
-    this.onIdleTimeout_();
+    // Expect a width and height.
+    if (!thumbnail.width || !thumbnail.height) {
+      throw new Error('invalid image width or height');
+    }
+
+    const offset = thumbnail.offset;
+    const length = thumbnail.length;
+    if (offset > this.length || (this.length - offset) < length) {
+      throw new Error('Thumbnail image access failed');
+    }
+
+    const view = new Uint8Array(this.source.buffer, offset, length);
+
+    // Compute pixel row stride.
+    const rowPad = thumbnail.width & 3;
+    const rowStride = 3 * thumbnail.width + rowPad;
+
+    // Create bitmap image.
+    const pixelDataOffset = 14 + 40;
+    const fileSize = pixelDataOffset + rowStride * thumbnail.height;
+    const bitmap = new DataView(new ArrayBuffer(fileSize));
+
+    // BITMAPFILEHEADER 14 bytes.
+    bitmap.setUint8(0, 'B'.charCodeAt(0));
+    bitmap.setUint8(1, 'M'.charCodeAt(0));
+    bitmap.setUint32(2, fileSize /* bytes */, true);
+    bitmap.setUint32(6, /* Reserved */ 0, true);
+    bitmap.setUint32(10, pixelDataOffset, true);
+
+    // DIB BITMAPINFOHEADER 40 bytes.
+    bitmap.setUint32(14, /* HeaderSize */ 40, true);
+    bitmap.setInt32(18, thumbnail.width, true);
+    bitmap.setInt32(22, -thumbnail.height /* top-down DIB */, true);
+    bitmap.setInt16(26, /* ColorPlanes */ 1, true);
+    bitmap.setInt16(28, /* BitsPerPixel BI_RGB */ 24, true);
+    bitmap.setUint32(30, /* Compression: BI_RGB none */ 0, true);
+    bitmap.setUint32(34, /* ImageSize: 0 not compressed */ 0, true);
+    bitmap.setInt32(38, /* XPixelsPerMeter */ 0, true);
+    bitmap.setInt32(42, /* YPixelPerMeter */ 0, true);
+    bitmap.setUint32(46, /* TotalPalletColors */ 0, true);
+    bitmap.setUint32(50, /* ImportantColors */ 0, true);
+
+    // Write RGB row pixels in top-down DIB order.
+    let output = pixelDataOffset;
+    for (let i = 0, y = thumbnail.height; y > 0; --y) {
+      for (let x = thumbnail.width; x > 0; --x) {
+        const R = view[i++];
+        const G = view[i++];
+        const B = view[i++];
+        bitmap.setUint8(output++, B);  // B
+        bitmap.setUint8(output++, G);  // G
+        bitmap.setUint8(output++, R);  // R
+      }
+
+      switch (rowPad) {
+        case 3:
+          bitmap.setUint8(output++, 0);
+        case 2:
+          bitmap.setUint8(output++, 0);
+        case 1:
+          bitmap.setUint8(output++, 0);
+      }
+    }
+
+    return {
+      thumbnail: bitmap.buffer,
+      mimeType: 'image/bmp',
+      ifd: this.details(result, thumbnail.orientation),
+      orientation: thumbnail.orientation,
+      colorSpace: thumbnail.colorSpace,
+    };
   }
-};
+
+  /**
+   * Returns the RAW image photographic |details| in a JSON-encoded string.
+   * Only number and string values are retained, and they are formatted for
+   * presentation to the user.
+   *
+   * @private
+   * @param {!PiexWasmImageResult} result
+   * @param {number} orientation - image EXIF orientation
+   * @return {?string}
+   */
+  details(result, orientation) {
+    const details = result.details;
+    if (!details) {
+      return null;
+    }
+
+    const format = {};
+    for (const [key, value] of Object.entries(details)) {
+      if (typeof value === 'string') {
+        format[key] = value.replace(/\0+$/, '').trim();
+      } else if (typeof value === 'number') {
+        if (!Number.isInteger(value)) {
+          format[key] = Number(value.toFixed(3).replace(/0+$/, ''));
+        } else {
+          format[key] = value;
+        }
+      }
+    }
+
+    const usesWidthAsHeight = orientation >= 5;
+    if (usesWidthAsHeight) {
+      const width = format.width;
+      format.width = format.height;
+      format.height = width;
+    }
+
+    return JSON.stringify(format);
+  }
+
+  /**
+   * Release resources.
+   */
+  close() {
+    PiexModule._free(this.memory);
+  }
+}
 
 /**
  * Starts to load RAW image.
@@ -317,30 +473,26 @@ PiexLoader.prototype.simulateIdleTimeoutPassedForTests = function() {
  * @return {!Promise<!PiexLoaderResponse>}
  */
 PiexLoader.prototype.load = function(url) {
-  var requestId = this.requestIdCount_++;
+  let imageBuffer;
 
-  if (this.unloadTimer_) {
-    clearTimeout(this.unloadTimer_);
-    this.unloadTimer_ = 0;
-  }
-
-  // Prevents unloading the NaCl module during handling the promises below.
-  this.requests_[requestId] = null;
-
-  return this.loadNaclModule_().then(function(loaded) {
-    if (!loaded) {
-      return Promise.reject('Piex is not loaded');
-    }
-    var message = {id: requestId, name: 'loadThumbnail', url: url};
-    this.naclModule_.postMessage(message);
-    return new Promise(function(fulfill, reject) {
-             delete this.requests_[requestId];
-             this.requests_[message.id] = {fulfill: fulfill, reject: reject};
-           }.bind(this))
-        .catch(function(error) {
-          delete this.requests_[requestId];
-          console.error('PiexLoaderError: ', error);
-          return Promise.reject(error);
-        });
-  }.bind(this));
+  return readFromFileSystem(url)
+      .then((buffer) => {
+        if (wasmModuleFailed() === true) {
+          return Promise.reject('piex wasm module failed');
+        }
+        imageBuffer = new ImageBuffer(buffer);
+        return imageBuffer.process();
+      })
+      .then((result) => {
+        imageBuffer.close();
+        return new PiexLoaderResponse(imageBuffer.preview(result));
+      })
+      .catch((error) => {
+        if (wasmModuleFailed() === true) {
+          return Promise.reject('piex wasm module failed');
+        }
+        imageBuffer && imageBuffer.close();
+        console.error('[PiexLoader] ' + error);
+        return Promise.reject(error);
+      });
 };

@@ -6,9 +6,11 @@
 
 #include "ash/public/cpp/caption_buttons/caption_button_model.h"
 #include "ash/public/cpp/caption_buttons/frame_caption_button_container_view.h"
+#include "ash/public/cpp/frame_utils.h"
 #include "ash/public/cpp/vector_icons/vector_icons.h"
 #include "ash/public/cpp/window_properties.h"
 #include "base/logging.h"  // DCHECK
+#include "ui/base/class_property.h"
 #include "ui/gfx/canvas.h"
 #include "ui/gfx/color_utils.h"
 #include "ui/gfx/font_list.h"
@@ -21,11 +23,13 @@
 #include "ui/views/window/caption_button_layout_constants.h"
 #include "ui/views/window/vector_icons/vector_icons.h"
 
+DEFINE_UI_CLASS_PROPERTY_TYPE(ash::FrameHeader*)
+
 namespace ash {
 
 namespace {
-// Duration of crossfade animation for activating and deactivating frame.
-const int kActivationCrossfadeDurationMs = 200;
+
+DEFINE_UI_CLASS_PROPERTY_KEY(FrameHeader*, kFrameHeaderKey, nullptr)
 
 // Returns the available bounds for the header's title given the views to the
 // left and right of the title, and the font used. |left_view| should be null
@@ -42,8 +46,7 @@ gfx::Rect GetAvailableTitleBounds(const views::View* left_view,
 
   const int x = left_view ? left_view->bounds().right() + kTitleIconOffsetX
                           : kTitleNoIconOffsetX;
-  const int title_height =
-      views::NativeWidgetAura::GetWindowTitleFontList().GetHeight();
+  const int title_height = gfx::FontList().GetHeight();
   DCHECK_LE(right_view->height(), header_height);
   // We want to align the center points of the header and title vertically.
   // Note that we can't just do (header_height - title_height) / 2, since this
@@ -86,7 +89,16 @@ bool CanAnimateActivation(views::Widget* widget) {
 ///////////////////////////////////////////////////////////////////////////////
 // FrameHeader, public:
 
-FrameHeader::~FrameHeader() = default;
+// static
+FrameHeader* FrameHeader::Get(views::Widget* widget) {
+  return widget->GetNativeView()->GetProperty(kFrameHeaderKey);
+}
+
+FrameHeader::~FrameHeader() {
+  auto* target_window = target_widget_->GetNativeView();
+  if (target_window && target_window->GetProperty(kFrameHeaderKey) == this)
+    target_window->ClearProperty(kFrameHeaderKey);
+}
 
 int FrameHeader::GetMinimumHeaderWidth() const {
   // Ensure we have enough space for the window icon and buttons. We allow
@@ -103,7 +115,8 @@ void FrameHeader::PaintHeader(gfx::Canvas* canvas, Mode mode) {
     UpdateCaptionButtonColors();
 
     if (!initial_paint_ && CanAnimateActivation(target_widget_)) {
-      activation_animation_.SetSlideDuration(kActivationCrossfadeDurationMs);
+      activation_animation_.SetSlideDuration(
+          base::TimeDelta::FromMilliseconds(200));
       if (mode_ == MODE_ACTIVE)
         activation_animation_.Show();
       else
@@ -175,6 +188,10 @@ views::FrameCaptionButton* FrameHeader::GetBackButton() const {
   return back_button_;
 }
 
+const CaptionButtonModel* FrameHeader::GetCaptionButtonModel() const {
+  return caption_button_container_->model();
+}
+
 void FrameHeader::SetFrameTextOverride(
     const base::string16& frame_text_override) {
   frame_text_override_ = frame_text_override;
@@ -192,9 +209,16 @@ void FrameHeader::AnimationProgressed(const gfx::Animation* animation) {
 // FrameHeader, protected:
 
 FrameHeader::FrameHeader(views::Widget* target_widget, views::View* view)
-    : target_widget_(target_widget), view_(view) {
+    : views::AnimationDelegateViews(view),
+      target_widget_(target_widget),
+      view_(view) {
   DCHECK(target_widget);
   DCHECK(view);
+  UpdateFrameHeaderKey();
+}
+
+void FrameHeader::UpdateFrameHeaderKey() {
+  target_widget_->GetNativeView()->SetProperty(kFrameHeaderKey, this);
 }
 
 gfx::Rect FrameHeader::GetPaintedBounds() const {
@@ -218,10 +242,12 @@ void FrameHeader::PaintTitleBar(gfx::Canvas* canvas) {
   }
 
   if (!text.empty()) {
-    canvas->DrawStringRectWithFlags(
-        text, views::NativeWidgetAura::GetWindowTitleFontList(),
-        GetTitleColor(), view_->GetMirroredRect(GetTitleBounds()),
-        gfx::Canvas::NO_SUBPIXEL_RENDERING);
+    int flags = gfx::Canvas::NO_SUBPIXEL_RENDERING;
+    if (target_widget_delegate->ShouldCenterWindowTitleText())
+      flags |= gfx::Canvas::TEXT_ALIGN_CENTER;
+    canvas->DrawStringRectWithFlags(text, gfx::FontList(), GetTitleColor(),
+                                    view_->GetMirroredRect(GetTitleBounds()),
+                                    flags);
   }
 }
 
@@ -238,6 +264,9 @@ void FrameHeader::SetCaptionButtonContainer(
       views::CAPTION_BUTTON_ICON_LEFT_SNAPPED, kWindowControlLeftSnappedIcon);
   caption_button_container_->SetButtonImage(
       views::CAPTION_BUTTON_ICON_RIGHT_SNAPPED, kWindowControlRightSnappedIcon);
+
+  // Perform layout to ensure the container height is correct.
+  LayoutHeaderInternal();
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -252,9 +281,7 @@ void FrameHeader::LayoutHeaderInternal() {
       use_zoom_icons ? kWindowControlZoomIcon
                      : views::kWindowControlMaximizeIcon;
   const gfx::VectorIcon& icon =
-      target_widget_->IsMaximized() || target_widget_->IsFullscreen()
-          ? restore_icon
-          : maximize_icon;
+      ash::ShouldUseRestoreFrame(target_widget_) ? maximize_icon : restore_icon;
   caption_button_container()->SetButtonImage(
       views::CAPTION_BUTTON_ICON_MAXIMIZE_RESTORE, icon);
 

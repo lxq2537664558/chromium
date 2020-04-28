@@ -17,7 +17,6 @@
 #include "base/debug/alias.h"
 #include "base/files/memory_mapped_file.h"
 #include "base/logging.h"
-#include "base/memory/shared_memory.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/metrics/sparse_histogram.h"
 #include "base/numerics/safe_conversions.h"
@@ -350,11 +349,10 @@ PersistentMemoryAllocator::PersistentMemoryAllocator(Memory memory,
   // Ensure that memory segment is of acceptable size.
   CHECK(IsMemoryAcceptable(memory.base, size, page_size, readonly));
 
-  // These atomics operate inter-process and so must be lock-free. The local
-  // casts are to make sure it can be evaluated at compile time to a constant.
-  CHECK(((SharedMetadata*)nullptr)->freeptr.is_lock_free());
-  CHECK(((SharedMetadata*)nullptr)->flags.is_lock_free());
-  CHECK(((BlockHeader*)nullptr)->next.is_lock_free());
+  // These atomics operate inter-process and so must be lock-free.
+  DCHECK(SharedMetadata().freeptr.is_lock_free());
+  DCHECK(SharedMetadata().flags.is_lock_free());
+  DCHECK(BlockHeader().next.is_lock_free());
   CHECK(corrupt_.is_lock_free());
 
   if (shared_meta()->cookie != kGlobalCookie) {

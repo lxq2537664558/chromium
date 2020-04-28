@@ -15,6 +15,7 @@
 #include "chromecast/base/version.h"
 #include "chromecast/chromecast_buildflags.h"
 #include "content/public/common/user_agent.h"
+#include "mojo/public/cpp/bindings/binder_map.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/resource/resource_bundle.h"
 #include "url/url_util.h"
@@ -29,10 +30,8 @@
 
 #if !defined(OS_FUCHSIA)
 #include "base/no_destructor.h"
-#include "components/services/heap_profiling/public/cpp/client.h"  // nogncheck
-#include "content/public/common/service_manager_connection.h"
-#include "content/public/common/simple_connection_filter.h"
-#include "services/service_manager/public/cpp/binder_registry.h"
+#include "components/services/heap_profiling/public/cpp/profiling_client.h"  // nogncheck
+#include "mojo/public/cpp/bindings/pending_receiver.h"
 #endif
 
 namespace chromecast {
@@ -115,24 +114,26 @@ void CastContentClient::AddAdditionalSchemes(Schemes* schemes) {
 #endif
 }
 
-base::string16 CastContentClient::GetLocalizedString(int message_id) const {
+base::string16 CastContentClient::GetLocalizedString(int message_id) {
   return l10n_util::GetStringUTF16(message_id);
 }
 
 base::StringPiece CastContentClient::GetDataResource(
     int resource_id,
-    ui::ScaleFactor scale_factor) const {
+    ui::ScaleFactor scale_factor) {
   return ui::ResourceBundle::GetSharedInstance().GetRawDataResourceForScale(
       resource_id, scale_factor);
 }
 
 base::RefCountedMemory* CastContentClient::GetDataResourceBytes(
-    int resource_id) const {
+    int resource_id) {
+  // Chromecast loads localized resources for the home screen via this code
+  // path. See crbug.com/643886 for details.
   return ui::ResourceBundle::GetSharedInstance().LoadLocalizedResourceBytes(
       resource_id);
 }
 
-gfx::Image& CastContentClient::GetNativeImageNamed(int resource_id) const {
+gfx::Image& CastContentClient::GetNativeImageNamed(int resource_id) {
   return ui::ResourceBundle::GetSharedInstance().GetNativeImageNamed(
       resource_id);
 }
@@ -143,18 +144,19 @@ gfx::Image& CastContentClient::GetNativeImageNamed(int resource_id) const {
 }
 #endif  // OS_ANDROID
 
-void CastContentClient::OnServiceManagerConnected(
-    content::ServiceManagerConnection* connection) {
+void CastContentClient::ExposeInterfacesToBrowser(
+    scoped_refptr<base::SequencedTaskRunner> io_task_runner,
+    mojo::BinderMap* binders) {
 #if !defined(OS_FUCHSIA)
-  static base::NoDestructor<heap_profiling::Client> profiling_client;
-
-  std::unique_ptr<service_manager::BinderRegistry> registry(
-      std::make_unique<service_manager::BinderRegistry>());
-  registry->AddInterface(
-      base::BindRepeating(&heap_profiling::Client::BindToInterface,
-                          base::Unretained(profiling_client.get())));
-  connection->AddConnectionFilter(
-      std::make_unique<content::SimpleConnectionFilter>(std::move(registry)));
+  binders->Add(
+      base::BindRepeating(
+          [](mojo::PendingReceiver<heap_profiling::mojom::ProfilingClient>
+                 receiver) {
+            static base::NoDestructor<heap_profiling::ProfilingClient>
+                profiling_client;
+            profiling_client->BindToInterface(std::move(receiver));
+          }),
+      io_task_runner);
 #endif  // !defined(OS_FUCHSIA)
 }
 

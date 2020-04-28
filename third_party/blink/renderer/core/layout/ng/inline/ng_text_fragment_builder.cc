@@ -4,6 +4,7 @@
 
 #include "third_party/blink/renderer/core/layout/ng/inline/ng_text_fragment_builder.h"
 
+#include "third_party/blink/renderer/core/layout/layout_text_fragment.h"
 #include "third_party/blink/renderer/core/layout/ng/inline/ng_inline_item_result.h"
 #include "third_party/blink/renderer/core/layout/ng/inline/ng_inline_node.h"
 #include "third_party/blink/renderer/core/layout/ng/inline/ng_line_height_metrics.h"
@@ -12,26 +13,34 @@
 
 namespace blink {
 
-void NGTextFragmentBuilder::SetItem(
-    NGPhysicalTextFragment::NGTextType text_type,
-    const NGInlineItemsData& items_data,
-    NGInlineItemResult* item_result,
-    LayoutUnit line_height) {
-  DCHECK_NE(text_type, NGPhysicalTextFragment::kGeneratedText)
-      << "Please use SetText() instead.";
-  DCHECK(item_result);
-  DCHECK(item_result->item->Style());
+NGTextFragmentBuilder::NGTextFragmentBuilder(
+    const NGPhysicalTextFragment& fragment)
+    : NGFragmentBuilder(fragment),
+      text_(fragment.text_),
+      start_offset_(fragment.StartOffset()),
+      end_offset_(fragment.EndOffset()),
+      shape_result_(fragment.TextShapeResult()),
+      text_type_(fragment.TextType()) {}
 
-  text_type_ = text_type;
-  text_ = items_data.text_content;
-  item_index_ = item_result->item_index;
+void NGTextFragmentBuilder::SetItem(const String& text_content,
+                                    NGInlineItemResult* item_result,
+                                    LayoutUnit line_height) {
+  DCHECK(item_result);
+  const NGInlineItem* item = item_result->item;
+  DCHECK(item);
+  DCHECK_NE(item->TextType(), NGTextType::kLayoutGenerated)
+      << "Please use SetText() instead.";
+  DCHECK(item->Style());
+
+  text_type_ = item->TextType();
+  text_ = text_content;
   start_offset_ = item_result->start_offset;
   end_offset_ = item_result->end_offset;
-  SetStyle(item_result->item->Style(), item_result->item->StyleVariant());
+  resolved_direction_ = item->Direction();
+  SetStyle(item->Style(), item->StyleVariant());
   size_ = {item_result->inline_size, line_height};
-  end_effect_ = item_result->text_end_effect;
   shape_result_ = std::move(item_result->shape_result);
-  layout_object_ = item_result->item->GetLayoutObject();
+  layout_object_ = item->GetLayoutObject();
 }
 
 void NGTextFragmentBuilder::SetText(
@@ -44,18 +53,17 @@ void NGTextFragmentBuilder::SetText(
   DCHECK(style);
   DCHECK(shape_result);
 
-  text_type_ = NGPhysicalTextFragment::kGeneratedText;
+  text_type_ = NGTextType::kLayoutGenerated;
   text_ = text;
-  item_index_ = std::numeric_limits<unsigned>::max();
   start_offset_ = shape_result->StartIndex();
   end_offset_ = shape_result->EndIndex();
+  resolved_direction_ = shape_result->Direction();
   SetStyle(style, is_ellipsis_style ? NGStyleVariant::kEllipsis
                                     : NGStyleVariant::kStandard);
   size_ = {shape_result->SnappedWidth(),
            NGLineHeightMetrics(*style).LineHeight()};
   shape_result_ = std::move(shape_result);
   layout_object_ = layout_object;
-  end_effect_ = NGTextEndEffect::kNone;
 }
 
 scoped_refptr<const NGPhysicalTextFragment>

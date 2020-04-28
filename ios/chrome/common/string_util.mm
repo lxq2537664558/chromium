@@ -7,7 +7,6 @@
 #import <UIKit/UIKit.h>
 
 #include "base/logging.h"
-#include "base/mac/scoped_block.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/sys_string_conversions.h"
 
@@ -114,15 +113,15 @@ NSString* CleanNSStringForDisplay(NSString* dirty, BOOL removeGraphicChars) {
         componentsSeparatedByCharactersInSet:GraphicCharactersSet()]
         componentsJoinedByString:@" "];
   }
-  NSMutableArray* spaceSeparatedCompoments =
+  NSMutableArray* spaceSeparatedComponents =
       [[cleanString componentsSeparatedByCharactersInSet:wspace] mutableCopy];
   ArrayFilterProcedure filter = ^(id object, NSUInteger index, BOOL* stop) {
     return [object isEqualToString:@""];
   };
-  [spaceSeparatedCompoments
-      removeObjectsAtIndexes:[spaceSeparatedCompoments
+  [spaceSeparatedComponents
+      removeObjectsAtIndexes:[spaceSeparatedComponents
                                  indexesOfObjectsPassingTest:filter]];
-  cleanString = [spaceSeparatedCompoments componentsJoinedByString:@" "];
+  cleanString = [spaceSeparatedComponents componentsJoinedByString:@" "];
   return cleanString;
 }
 

@@ -8,9 +8,11 @@
 #include <string>
 
 #include "base/bind.h"
-#include "content/browser/appcache/appcache_response.h"
+#include "base/memory/ptr_util.h"
+#include "content/browser/appcache/appcache_response_info.h"
 #include "content/browser/service_worker/service_worker_disk_cache.h"
-#include "content/browser/service_worker/service_worker_storage.h"
+#include "content/common/service_worker/service_worker_utils.h"
+#include "services/network/public/mojom/url_loader_factory.mojom.h"
 
 namespace {
 
@@ -128,8 +130,7 @@ ServiceWorkerCacheWriter::ServiceWorkerCacheWriter(
       pause_when_not_identical_(pause_when_not_identical),
       compare_reader_(std::move(compare_reader)),
       copy_reader_(std::move(copy_reader)),
-      writer_(std::move(writer)),
-      weak_factory_(this) {}
+      writer_(std::move(writer)) {}
 
 ServiceWorkerCacheWriter::~ServiceWorkerCacheWriter() {}
 
@@ -170,12 +171,12 @@ ServiceWorkerCacheWriter::CreateForComparison(
 }
 
 net::Error ServiceWorkerCacheWriter::MaybeWriteHeaders(
-    HttpResponseInfoIOBuffer* headers,
+    network::mojom::URLResponseHeadPtr response_head,
     OnWriteCompleteCallback callback) {
   DCHECK(!io_pending_);
   DCHECK(!IsCopying());
 
-  headers_to_write_ = headers;
+  response_head_to_write_ = std::move(response_head);
   pending_callback_ = std::move(callback);
   DCHECK_EQ(STATE_START, state_);
   int result = DoLoop(net::OK);
@@ -323,7 +324,7 @@ int ServiceWorkerCacheWriter::DoStart(int result) {
 
 int ServiceWorkerCacheWriter::DoReadHeadersForCompare(int result) {
   DCHECK_GE(result, 0);
-  DCHECK(headers_to_write_);
+  DCHECK(response_head_to_write_);
 
   headers_to_read_ = new HttpResponseInfoIOBuffer;
   state_ = STATE_READ_HEADERS_FOR_COMPARE_DONE;
@@ -445,7 +446,12 @@ int ServiceWorkerCacheWriter::DoWriteHeadersForCopy(int result) {
   DCHECK_GE(result, 0);
   DCHECK(writer_);
   state_ = STATE_WRITE_HEADERS_FOR_COPY_DONE;
-  return WriteInfo(IsCopying() ? headers_to_read_ : headers_to_write_);
+  if (IsCopying()) {
+    return WriteInfo(headers_to_read_);
+  } else {
+    DCHECK(response_head_to_write_);
+    return WriteResponseHead(*response_head_to_write_);
+  }
 }
 
 int ServiceWorkerCacheWriter::DoWriteHeadersForCopyDone(int result) {
@@ -510,8 +516,9 @@ int ServiceWorkerCacheWriter::DoWriteDataForCopyDone(int result) {
 int ServiceWorkerCacheWriter::DoWriteHeadersForPassthrough(int result) {
   DCHECK_GE(result, 0);
   DCHECK(writer_);
+  DCHECK(response_head_to_write_);
   state_ = STATE_WRITE_HEADERS_FOR_PASSTHROUGH_DONE;
-  return WriteInfo(headers_to_write_);
+  return WriteResponseHead(*response_head_to_write_);
 }
 
 int ServiceWorkerCacheWriter::DoWriteHeadersForPassthroughDone(int result) {
@@ -580,15 +587,16 @@ int ServiceWorkerCacheWriter::ReadDataHelper(
   return adaptor->result();
 }
 
-int ServiceWorkerCacheWriter::WriteInfoToResponseWriter(
-    scoped_refptr<HttpResponseInfoIOBuffer> response_info) {
+int ServiceWorkerCacheWriter::WriteResponseHeadToResponseWriter(
+    const network::mojom::URLResponseHead& response_head,
+    int response_data_size) {
   did_replace_ = true;
   net::CompletionOnceCallback run_callback = base::BindOnce(
       &ServiceWorkerCacheWriter::AsyncDoLoop, weak_factory_.GetWeakPtr());
   scoped_refptr<AsyncOnlyCompletionCallbackAdaptor> adaptor(
       new AsyncOnlyCompletionCallbackAdaptor(std::move(run_callback)));
-  writer_->WriteInfo(
-      response_info.get(),
+  writer_->WriteResponseHead(
+      response_head, response_data_size,
       base::BindOnce(&AsyncOnlyCompletionCallbackAdaptor::WrappedCallback,
                      adaptor));
   adaptor->set_async(true);
@@ -597,10 +605,31 @@ int ServiceWorkerCacheWriter::WriteInfoToResponseWriter(
 
 int ServiceWorkerCacheWriter::WriteInfo(
     scoped_refptr<HttpResponseInfoIOBuffer> response_info) {
-  if (write_observer_)
-    write_observer_->WillWriteInfo(response_info);
+  DCHECK(response_info);
+  // Always set SSLInfo. An observer will drop it if the SSLInfo isn't needed.
+  auto response = ServiceWorkerUtils::CreateResourceResponseHeadAndMetadata(
+      response_info->http_info.get(),
+      /*options=*/network::mojom::kURLLoadOptionSendSSLInfoWithResponse,
+      /*request_start_time=*/base::TimeTicks(),
+      /*response_start_time=*/base::TimeTicks::Now(),
+      response_info->response_data_size);
+  // There should be no metadata when writing response headers.
+  DCHECK(!response.metadata);
+  return WriteResponseHead(*response.head);
+}
 
-  return WriteInfoToResponseWriter(std::move(response_info));
+int ServiceWorkerCacheWriter::WriteResponseHead(
+    const network::mojom::URLResponseHead& response_head) {
+  if (write_observer_) {
+    int result = write_observer_->WillWriteResponseHead(response_head);
+    if (result != net::OK) {
+      DCHECK_NE(result, net::ERR_IO_PENDING);
+      state_ = STATE_DONE;
+      return result;
+    }
+  }
+  return WriteResponseHeadToResponseWriter(response_head,
+                                           response_head.content_length);
 }
 
 int ServiceWorkerCacheWriter::WriteDataToResponseWriter(

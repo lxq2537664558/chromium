@@ -13,11 +13,11 @@
 #include "base/time/time.h"
 #include "components/prefs/pref_registry_simple.h"
 #include "components/prefs/pref_service.h"
-#include "components/signin/core/browser/signin_metrics.h"
-#include "components/signin/core/browser/signin_pref_names.h"
+#include "components/signin/public/base/signin_metrics.h"
+#include "components/signin/public/base/signin_pref_names.h"
+#include "components/signin/public/identity_manager/accounts_in_cookie_jar_info.h"
 #include "google_apis/gaia/gaia_auth_util.h"
 #include "google_apis/gaia/google_service_auth_error.h"
-#include "services/identity/public/cpp/accounts_in_cookie_jar_info.h"
 
 using base::Time;
 using base::TimeDelta;
@@ -43,7 +43,7 @@ const TimeDelta AccountInvestigator::kPeriodicReportingInterval =
 
 AccountInvestigator::AccountInvestigator(
     PrefService* pref_service,
-    identity::IdentityManager* identity_manager)
+    signin::IdentityManager* identity_manager)
     : pref_service_(pref_service), identity_manager_(identity_manager) {}
 
 AccountInvestigator::~AccountInvestigator() {}
@@ -74,7 +74,7 @@ void AccountInvestigator::Shutdown() {
 }
 
 void AccountInvestigator::OnAccountsInCookieUpdated(
-    const identity::AccountsInCookieJarInfo& accounts_in_cookie_jar_info,
+    const signin::AccountsInCookieJarInfo& accounts_in_cookie_jar_info,
     const GoogleServiceAuthError& error) {
   if (error != GoogleServiceAuthError::AuthErrorNone()) {
     // If we are pending periodic reporting, leave the flag set, and we will
@@ -132,16 +132,16 @@ std::string AccountInvestigator::HashAccounts(
     const std::vector<ListedAccount>& signed_in_accounts,
     const std::vector<ListedAccount>& signed_out_accounts) {
   std::vector<std::string> sorted_ids(signed_in_accounts.size());
-  std::transform(std::begin(signed_in_accounts), std::end(signed_in_accounts),
-                 std::back_inserter(sorted_ids),
-                 [](const ListedAccount& account) {
-                   return std::string(kSignedInHashPrefix) + account.id;
-                 });
-  std::transform(std::begin(signed_out_accounts), std::end(signed_out_accounts),
-                 std::back_inserter(sorted_ids),
-                 [](const ListedAccount& account) {
-                   return std::string(kSignedOutHashPrefix) + account.id;
-                 });
+  std::transform(
+      std::begin(signed_in_accounts), std::end(signed_in_accounts),
+      std::back_inserter(sorted_ids), [](const ListedAccount& account) {
+        return std::string(kSignedInHashPrefix) + account.id.ToString();
+      });
+  std::transform(
+      std::begin(signed_out_accounts), std::end(signed_out_accounts),
+      std::back_inserter(sorted_ids), [](const ListedAccount& account) {
+        return std::string(kSignedOutHashPrefix) + account.id.ToString();
+      });
   std::sort(sorted_ids.begin(), sorted_ids.end());
   std::ostringstream stream;
   std::copy(sorted_ids.begin(), sorted_ids.end(),

@@ -9,8 +9,11 @@
 
 #include "base/memory/scoped_refptr.h"
 #include "device/gamepad/public/mojom/gamepad.mojom-blink.h"
-#include "third_party/blink/public/platform/web_gamepad_listener.h"
+#include "third_party/blink/renderer/core/execution_context/execution_context.h"
 #include "third_party/blink/renderer/core/frame/platform_event_dispatcher.h"
+#include "third_party/blink/renderer/modules/gamepad/gamepad_listener.h"
+#include "third_party/blink/renderer/platform/mojo/heap_mojo_remote.h"
+#include "third_party/blink/renderer/platform/mojo/heap_mojo_wrapper_mode.h"
 
 namespace device {
 class Gamepad;
@@ -21,15 +24,13 @@ namespace blink {
 
 class GamepadSharedMemoryReader;
 
-class GamepadDispatcher final
-    : public GarbageCollectedFinalized<GamepadDispatcher>,
-      public PlatformEventDispatcher,
-      public WebGamepadListener {
+class GamepadDispatcher final : public GarbageCollected<GamepadDispatcher>,
+                                public PlatformEventDispatcher,
+                                public GamepadListener {
   USING_GARBAGE_COLLECTED_MIXIN(GamepadDispatcher);
 
  public:
-  explicit GamepadDispatcher(
-      scoped_refptr<base::SingleThreadTaskRunner> task_runner);
+  explicit GamepadDispatcher(ExecutionContext* context);
   ~GamepadDispatcher() override;
 
   void SampleGamepads(device::Gamepads&);
@@ -43,12 +44,12 @@ class GamepadDispatcher final
                               device::mojom::blink::GamepadHapticsManager::
                                   ResetVibrationActuatorCallback);
 
-  void Trace(blink::Visitor*) override;
+  void Trace(Visitor*) override;
 
  private:
   void InitializeHaptics();
 
-  // WebGamepadListener
+  // GamepadListener
   void DidConnectGamepad(uint32_t index, const device::Gamepad&) override;
   void DidDisconnectGamepad(uint32_t index, const device::Gamepad&) override;
   void ButtonOrAxisDidChange(uint32_t index, const device::Gamepad&) override;
@@ -62,10 +63,12 @@ class GamepadDispatcher final
                                              bool connected);
 
   scoped_refptr<base::SingleThreadTaskRunner> task_runner_;
-  std::unique_ptr<GamepadSharedMemoryReader> reader_;
-  device::mojom::blink::GamepadHapticsManagerPtr gamepad_haptics_manager_;
+  Member<GamepadSharedMemoryReader> reader_;
+  HeapMojoRemote<device::mojom::blink::GamepadHapticsManager,
+                 HeapMojoWrapperMode::kWithoutContextObserver>
+      gamepad_haptics_manager_remote_;
 };
 
 }  // namespace blink
 
-#endif
+#endif  // THIRD_PARTY_BLINK_RENDERER_MODULES_GAMEPAD_GAMEPAD_DISPATCHER_H_

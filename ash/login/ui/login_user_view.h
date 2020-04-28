@@ -9,7 +9,7 @@
 #include "ash/login/ui/login_base_bubble_view.h"
 #include "ash/login/ui/login_display_style.h"
 #include "ash/login/ui/login_user_menu_view.h"
-#include "ash/public/interfaces/login_user_info.mojom.h"
+#include "ash/public/cpp/login_types.h"
 #include "base/macros.h"
 #include "ui/views/controls/button/button.h"
 #include "ui/views/view.h"
@@ -40,6 +40,8 @@ class ASH_EXPORT LoginUserView : public views::View,
     LoginBaseBubbleView* menu() const;
     views::View* user_domain() const;
 
+    void OnTap() const;
+
     bool is_opaque() const;
 
    private:
@@ -64,7 +66,7 @@ class ASH_EXPORT LoginUserView : public views::View,
   ~LoginUserView() override;
 
   // Update the user view to display the given user information.
-  void UpdateForUser(const mojom::LoginUserInfoPtr& user, bool animate);
+  void UpdateForUser(const LoginUserInfo& user, bool animate);
 
   // Set if the view must be opaque.
   void SetForceOpaque(bool force_opaque);
@@ -72,7 +74,7 @@ class ASH_EXPORT LoginUserView : public views::View,
   // Enables or disables tapping the view.
   void SetTapEnabled(bool enabled);
 
-  const mojom::LoginUserInfoPtr& current_user() const { return current_user_; }
+  const LoginUserInfo& current_user() const { return current_user_; }
 
   // views::View:
   const char* GetClassName() const override;
@@ -84,7 +86,6 @@ class ASH_EXPORT LoginUserView : public views::View,
   void ButtonPressed(views::Button* sender, const ui::Event& event) override;
 
  private:
-  class UserDomainInfoView;
   class UserImage;
   class UserLabel;
   class TapButton;
@@ -109,7 +110,7 @@ class ASH_EXPORT LoginUserView : public views::View,
 
   // The user that is currently being displayed (or will be displayed when an
   // animation completes).
-  mojom::LoginUserInfoPtr current_user_;
+  LoginUserInfo current_user_;
 
   // Used to dispatch opacity update events.
   std::unique_ptr<HoverNotifier> hover_notifier_;
@@ -124,9 +125,6 @@ class ASH_EXPORT LoginUserView : public views::View,
   // level view, either LockContentsView or LockDebugView. This allows the menu
   // to be clicked outside the bounds of the user view.
   LoginUserMenuView* menu_ = nullptr;
-
-  // Show the domain information for public account user.
-  UserDomainInfoView* user_domain_ = nullptr;
 
   // True iff the view is currently opaque (ie, opacity = 1).
   bool is_opaque_ = false;

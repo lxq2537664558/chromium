@@ -40,15 +40,14 @@ void UpdateNotificationClickTimestamps(NotificationDatabaseData* data) {
 
 NotificationStorage::NotificationStorage(
     scoped_refptr<ServiceWorkerContextWrapper> service_worker_context)
-    : service_worker_context_(std::move(service_worker_context)),
-      weak_ptr_factory_(this) {}
+    : service_worker_context_(std::move(service_worker_context)) {}
 
 NotificationStorage::~NotificationStorage() = default;
 
 void NotificationStorage::WriteNotificationData(
     const NotificationDatabaseData& data,
     PlatformNotificationContext::WriteResultCallback callback) {
-  DCHECK_CURRENTLY_ON(BrowserThread::IO);
+  DCHECK_CURRENTLY_ON(ServiceWorkerContext::GetCoreThreadId());
   std::string serialized_data;
   if (!SerializeNotificationDatabaseData(data, &serialized_data)) {
     DLOG(ERROR) << "Unable to serialize data for a notification belonging "
@@ -82,7 +81,7 @@ void NotificationStorage::ReadNotificationDataAndRecordInteraction(
     const std::string& notification_id,
     PlatformNotificationContext::Interaction interaction,
     PlatformNotificationContext::ReadResultCallback callback) {
-  DCHECK_CURRENTLY_ON(BrowserThread::IO);
+  DCHECK_CURRENTLY_ON(ServiceWorkerContext::GetCoreThreadId());
   service_worker_context_->GetRegistrationUserData(
       service_worker_registration_id, {CreateDataKey(notification_id)},
       base::BindOnce(&NotificationStorage::OnReadCompleteUpdateInteraction,

@@ -6,7 +6,7 @@
 
 #include "ash/shell.h"
 #include "ash/shell/example_factory.h"
-#include "base/logging.h"
+#include "base/check_op.h"
 
 namespace ash {
 namespace shell {
@@ -18,8 +18,9 @@ ExampleSessionControllerClient* instance = nullptr;
 }  // namespace
 
 ExampleSessionControllerClient::ExampleSessionControllerClient(
-    SessionController* controller)
-    : TestSessionControllerClient(controller) {
+    SessionControllerImpl* controller,
+    TestPrefServiceProvider* prefs_provider)
+    : TestSessionControllerClient(controller, prefs_provider) {
   DCHECK_EQ(instance, nullptr);
   DCHECK(controller);
   instance = this;
@@ -37,7 +38,7 @@ ExampleSessionControllerClient* ExampleSessionControllerClient::Get() {
 
 void ExampleSessionControllerClient::Initialize() {
   // Initialize and bind with the session controller.
-  InitializeAndBind();
+  InitializeAndSetClient();
 
   // ash_shell has 2 users.
   CreatePredefinedUserSessions(2);
@@ -45,7 +46,7 @@ void ExampleSessionControllerClient::Initialize() {
 
 void ExampleSessionControllerClient::RequestLockScreen() {
   TestSessionControllerClient::RequestLockScreen();
-  shell::CreateLockScreen();
+  CreateLockScreen();
   Shell::Get()->UpdateShelfVisibility();
 }
 

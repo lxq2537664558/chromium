@@ -37,13 +37,14 @@ const char kTraceStartupDuration[]          = "trace-startup-duration";
 // all events since startup.
 const char kTraceStartupFile[]              = "trace-startup-file";
 
-// If supplied, sets the tracing record mode; otherwise, the default
+// If supplied, sets the tracing record mode and options; otherwise, the default
 // "record-until-full" mode will be used.
 const char kTraceStartupRecordMode[] = "trace-startup-record-mode";
 
 // Specifies the coordinator of the startup tracing session. If the legacy
 // tracing backend is used instead of perfetto, providing this flag is not
-// necessary. Valid values: 'controller', 'devtools'. Defaults to 'controller'.
+// necessary. Valid values: 'controller', 'devtools', or 'system'. Defaults to
+// 'controller'.
 //
 // If 'controller' is specified, the session is controlled and stopped via the
 // TracingController (e.g. to implement the timeout).
@@ -51,18 +52,23 @@ const char kTraceStartupRecordMode[] = "trace-startup-record-mode";
 // If 'devtools' is specified, the startup tracing session will be owned by
 // DevTools and thus can be controlled (i.e. stopped) via the DevTools Tracing
 // domain on the first session connected to the browser endpoint.
+//
+// If 'system' is specified, the system Perfetto service should already be
+// tracing on a supported platform (currently only Android). Session is stopped
+// through the normal methods for stopping system traces.
 const char kTraceStartupOwner[] = "trace-startup-owner";
 
-// Disables the perfetto tracing backend. We need a separate command line
-// argument from the kTracingPerfettoBackend feature, because feature flags are
-// parsed too late during startup for early startup tracing support.
-const char kDisablePerfetto[] = "disable-perfetto";
+// If the perfetto tracing backend is used, this enables privacy filtering in
+// the TraceEvent data sources for the startup tracing session.
+const char kTraceStartupEnablePrivacyFiltering[] =
+    "trace-startup-enable-privacy-filtering";
 
 // Repeat internable data for each TraceEvent in the perfetto proto format.
 const char kPerfettoDisableInterning[] = "perfetto-disable-interning";
 
 // If supplied, will enable Perfetto startup tracing and stream the
-// output to the given file.
+// output to the given file. On Android, if no file is provided, automatically
+// generate a file to write the output to.
 // TODO(oysteine): Remove once Perfetto starts early enough after
 // process startup to be able to replace the legacy startup tracing.
 const char kPerfettoOutputFile[] = "perfetto-output-file";

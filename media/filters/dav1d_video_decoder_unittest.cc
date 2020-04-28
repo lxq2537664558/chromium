@@ -9,8 +9,8 @@
 
 #include "base/bind.h"
 #include "base/bind_helpers.h"
-#include "base/message_loop/message_loop.h"
 #include "base/run_loop.h"
+#include "base/test/task_environment.h"
 #include "build/build_config.h"
 #include "media/base/decoder_buffer.h"
 #include "media/base/limits.h"
@@ -27,13 +27,13 @@ using ::testing::_;
 
 namespace media {
 
-// TODO(dalecurtis): There is some weird collision going on with this matcher
-// and the one defined in the AomVideoDecoder unittest. Somehow only one ends
-// up in the final binary so one test or the other will fail. To workaround this
-// give it a unique name for now...
-MATCHER(ContainsDav1dDecoderErrorLog, "") {
-  return CONTAINS_STRING(arg, "dav1d_get_picture() failed");
+namespace {
+
+MATCHER(ContainsDecoderErrorLog, "") {
+  return CONTAINS_STRING(arg, "dav1d_send_data() failed");
 }
+
+}  // namespace
 
 class Dav1dVideoDecoderTest : public testing::Test {
  public:
@@ -51,7 +51,12 @@ class Dav1dVideoDecoderTest : public testing::Test {
                                       bool success) {
     decoder_->Initialize(
         config, true,  // Use low delay so we get 1 frame out for each frame in.
-        nullptr, NewExpectedBoolCB(success),
+        nullptr,
+        base::BindOnce(
+            [](bool success, Status status) {
+              EXPECT_EQ(status.is_ok(), success);
+            },
+            success),
         base::BindRepeating(&Dav1dVideoDecoderTest::FrameReady,
                             base::Unretained(this)),
         base::NullCallback());
@@ -156,23 +161,23 @@ class Dav1dVideoDecoderTest : public testing::Test {
     EXPECT_CALL(*this, DecodeDone(_)).WillOnce(testing::SaveArg<0>(&status));
 
     decoder_->Decode(std::move(buffer),
-                     base::BindRepeating(&Dav1dVideoDecoderTest::DecodeDone,
-                                         base::Unretained(this)));
+                     base::BindOnce(&Dav1dVideoDecoderTest::DecodeDone,
+                                    base::Unretained(this)));
     base::RunLoop().RunUntilIdle();
 
     return status;
   }
 
-  void FrameReady(const scoped_refptr<VideoFrame>& frame) {
+  void FrameReady(scoped_refptr<VideoFrame> frame) {
     DCHECK(!frame->metadata()->IsTrue(VideoFrameMetadata::END_OF_STREAM));
-    output_frames_.push_back(frame);
+    output_frames_.push_back(std::move(frame));
   }
 
   MOCK_METHOD1(DecodeDone, void(DecodeStatus));
 
   testing::StrictMock<MockMediaLog> media_log_;
 
-  base::MessageLoop message_loop_;
+  base::test::SingleThreadTaskEnvironment task_environment_;
   std::unique_ptr<Dav1dVideoDecoder> decoder_;
 
   scoped_refptr<DecoderBuffer> i_frame_buffer_;
@@ -222,7 +227,7 @@ TEST_F(Dav1dVideoDecoderTest, DISABLED_DecodeFrame_LargerWidth) {
 // Decode a VP9 frame which should trigger a decoder error.
 TEST_F(Dav1dVideoDecoderTest, DecodeFrame_Error) {
   Initialize();
-  EXPECT_MEDIA_LOG(ContainsDav1dDecoderErrorLog());
+  EXPECT_MEDIA_LOG(ContainsDecoderErrorLog());
   DecodeSingleFrame(ReadTestDataFile("vp9-I-frame-320x240"));
 }
 

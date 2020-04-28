@@ -14,25 +14,44 @@
 
 namespace content_capture {
 
-ContentCaptureReceiver::ContentCaptureReceiver(content::RenderFrameHost* rfh)
-    : bindings_(this), rfh_(rfh), id_(GetIdFrom(rfh)) {}
+namespace {
 
-ContentCaptureReceiver::~ContentCaptureReceiver() = default;
+ContentCaptureReceiverManager* GetContentCaptureReceiverManager(
+    content::RenderFrameHost* rfh) {
+  if (auto* web_contents = content::WebContents::FromRenderFrameHost(rfh))
+    return ContentCaptureReceiverManager::FromWebContents(web_contents);
+  return nullptr;
+}
+
+}  // namespace
+
+ContentCaptureReceiver::ContentCaptureReceiver(content::RenderFrameHost* rfh)
+    : rfh_(rfh), id_(GetIdFrom(rfh)) {}
+
+ContentCaptureReceiver::~ContentCaptureReceiver() {
+  // TODO(crbug.com/995952): Find a way to notify of session being removed if
+  // rfh isn't available.
+  if (auto* manager = GetContentCaptureReceiverManager(rfh_)) {
+    manager->DidRemoveSession(this);
+  }
+}
 
 int64_t ContentCaptureReceiver::GetIdFrom(content::RenderFrameHost* rfh) {
   return static_cast<int64_t>(rfh->GetProcess()->GetID()) << 32 |
          (rfh->GetRoutingID() & 0xFFFFFFFF);
 }
 
-void ContentCaptureReceiver::BindRequest(
-    mojom::ContentCaptureReceiverAssociatedRequest request) {
-  bindings_.Bind(std::move(request));
+void ContentCaptureReceiver::BindPendingReceiver(
+    mojo::PendingAssociatedReceiver<mojom::ContentCaptureReceiver>
+        pending_receiver) {
+  receiver_.Bind(std::move(pending_receiver));
 }
 
 void ContentCaptureReceiver::DidCaptureContent(const ContentCaptureData& data,
                                                bool first_data) {
-  auto* manager = ContentCaptureReceiverManager::FromWebContents(
-      content::WebContents::FromRenderFrameHost(rfh_));
+  auto* manager = GetContentCaptureReceiverManager(rfh_);
+  if (!manager)
+    return;
 
   if (first_data) {
     // The session id of this frame isn't changed for new document navigation,
@@ -49,7 +68,7 @@ void ContentCaptureReceiver::DidCaptureContent(const ContentCaptureData& data,
     frame_content_capture_data_.value = data.value;
     frame_content_capture_data_.bounds = data.bounds;
   }
-  // We can't avoid copy the data here, because id need to be overriden.
+  // We can't avoid copy the data here, because id need to be overridden.
   ContentCaptureData content(data);
   content.id = id_;
   // Always have frame URL attached, since the ContentCaptureConsumer will
@@ -59,38 +78,51 @@ void ContentCaptureReceiver::DidCaptureContent(const ContentCaptureData& data,
   manager->DidCaptureContent(this, content);
 }
 
+void ContentCaptureReceiver::DidUpdateContent(const ContentCaptureData& data) {
+  auto* manager = GetContentCaptureReceiverManager(rfh_);
+  if (!manager)
+    return;
+
+  // We can't avoid copy the data here, because id need to be overridden.
+  ContentCaptureData content(data);
+  content.id = id_;
+  content.value = frame_content_capture_data_.value;
+  manager->DidUpdateContent(this, content);
+}
+
 void ContentCaptureReceiver::DidRemoveContent(
     const std::vector<int64_t>& data) {
-  auto* manager = ContentCaptureReceiverManager::FromWebContents(
-      content::WebContents::FromRenderFrameHost(rfh_));
+  auto* manager = GetContentCaptureReceiverManager(rfh_);
+  if (!manager)
+    return;
   manager->DidRemoveContent(this, data);
 }
 
 void ContentCaptureReceiver::StartCapture() {
-  if (content_capture_enabled)
+  if (content_capture_enabled_)
     return;
 
   if (auto& sender = GetContentCaptureSender()) {
     sender->StartCapture();
-    content_capture_enabled = true;
+    content_capture_enabled_ = true;
   }
 }
 
 void ContentCaptureReceiver::StopCapture() {
-  if (!content_capture_enabled)
+  if (!content_capture_enabled_)
     return;
 
   if (auto& sender = GetContentCaptureSender()) {
     sender->StopCapture();
-    content_capture_enabled = false;
+    content_capture_enabled_ = false;
   }
 }
 
-const mojom::ContentCaptureSenderAssociatedPtr&
+const mojo::AssociatedRemote<mojom::ContentCaptureSender>&
 ContentCaptureReceiver::GetContentCaptureSender() {
   if (!content_capture_sender_) {
     rfh_->GetRemoteAssociatedInterfaces()->GetInterface(
-        mojo::MakeRequest(&content_capture_sender_));
+        &content_capture_sender_);
   }
   return content_capture_sender_;
 }
@@ -100,20 +132,17 @@ const ContentCaptureData& ContentCaptureReceiver::GetFrameContentCaptureData() {
   if (url == frame_content_capture_data_.value)
     return frame_content_capture_data_;
 
-  bool should_remove_session = frame_content_capture_data_.id != 0;
+  if (frame_content_capture_data_.id != 0) {
+    auto* manager = GetContentCaptureReceiverManager(rfh_);
+    DCHECK(manager);
+    manager->DidRemoveSession(this);
+  }
+
   frame_content_capture_data_.id = id_;
   frame_content_capture_data_.value = url;
   const base::Optional<gfx::Size>& size = rfh_->GetFrameSize();
   if (size.has_value())
     frame_content_capture_data_.bounds = gfx::Rect(size.value());
-
-  // frame_content_capture_data_ must be set to new value before removing
-  // sesesion, otherwises, it causes infinite loop.
-  if (should_remove_session) {
-    auto* manager = ContentCaptureReceiverManager::FromWebContents(
-        content::WebContents::FromRenderFrameHost(rfh_));
-    manager->DidRemoveSession(this);
-  }
   return frame_content_capture_data_;
 }
 

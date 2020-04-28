@@ -4,9 +4,10 @@
 
 #include "third_party/blink/renderer/core/frame/local_frame_ukm_aggregator.h"
 
+#include "base/test/test_mock_time_task_runner.h"
+#include "cc/metrics/begin_main_frame_metrics.h"
 #include "components/ukm/test_ukm_recorder.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/blink/renderer/platform/testing/wtf/scoped_mock_clock.h"
 
 namespace blink {
 
@@ -16,14 +17,14 @@ class LocalFrameUkmAggregatorTest : public testing::Test {
   ~LocalFrameUkmAggregatorTest() override = default;
 
   void SetUp() override {
-    clock_.emplace();
+    test_task_runner_ = base::MakeRefCounted<base::TestMockTimeTaskRunner>();
     aggregator_ = base::MakeRefCounted<LocalFrameUkmAggregator>(
         ukm::UkmRecorder::GetNewSourceID(), &recorder_);
+    aggregator_->SetTickClockForTesting(test_task_runner_->GetMockTickClock());
   }
 
   void TearDown() override {
     aggregator_.reset();
-    clock_.reset();
   }
 
   LocalFrameUkmAggregator& aggregator() {
@@ -35,39 +36,71 @@ class LocalFrameUkmAggregatorTest : public testing::Test {
 
   void ResetAggregator() { aggregator_.reset(); }
 
-  WTF::ScopedMockClock& clock() { return *clock_; }
-
   std::string GetPrimaryMetricName() {
-    return std::string(
-        LocalFrameUkmAggregator::primary_metric_name().Utf8().data());
+    return LocalFrameUkmAggregator::primary_metric_name().Utf8();
   }
 
   std::string GetMetricName(int index) {
-    return std::string(
-        LocalFrameUkmAggregator::metrics_data()[index].name.Utf8().data());
+    return LocalFrameUkmAggregator::metrics_data()[index].name.Utf8();
   }
 
   std::string GetPercentageMetricName(int index) {
-    return std::string(LocalFrameUkmAggregator::metrics_data()[index]
-                           .name.Utf8()
-                           .data()) +
+    return LocalFrameUkmAggregator::metrics_data()[index].name.Utf8() +
            "Percentage";
   }
 
-  void NextSampleIntervalForTest(TimeDelta delta) {
-    aggregator().NextSampleIntervalForTest(delta);
+  void ChooseNextFrameForTest() { aggregator().ChooseNextFrameForTest(); }
+  void DoNotChooseNextFrameForTest() {
+    aggregator().DoNotChooseNextFrameForTest();
   }
 
-  base::TimeTicks Now() {
-    return base::TimeTicks() + base::TimeDelta::FromSecondsD(clock_->Now());
-  }
+  base::TimeTicks Now() { return test_task_runner_->NowTicks(); }
 
-  void VerifyEntries(unsigned expected_num_entries,
-                     unsigned expected_primary_metric,
-                     unsigned expected_sub_metric,
-                     unsigned expected_percentage) {
-    EXPECT_EQ(recorder().entries_count(), expected_num_entries);
+ protected:
+  scoped_refptr<base::TestMockTimeTaskRunner> test_task_runner_;
+
+  void VerifyUpdateEntry(unsigned index,
+                         unsigned expected_primary_metric,
+                         unsigned expected_sub_metric,
+                         unsigned expected_percentage,
+                         unsigned expected_reasons,
+                         bool expected_before_fcp) {
     auto entries = recorder().GetEntriesByName("Blink.UpdateTime");
+    EXPECT_GT(entries.size(), index);
+
+    auto* entry = entries[index];
+    EXPECT_TRUE(
+        ukm::TestUkmRecorder::EntryHasMetric(entry, GetPrimaryMetricName()));
+    const int64_t* primary_metric_value =
+        ukm::TestUkmRecorder::GetEntryMetric(entry, GetPrimaryMetricName());
+    EXPECT_NEAR(*primary_metric_value / 1e3, expected_primary_metric, 0.001);
+    for (int i = 0; i < LocalFrameUkmAggregator::kCount; ++i) {
+      EXPECT_TRUE(
+          ukm::TestUkmRecorder::EntryHasMetric(entry, GetMetricName(i)));
+      const int64_t* metric_value =
+          ukm::TestUkmRecorder::GetEntryMetric(entry, GetMetricName(i));
+      EXPECT_NEAR(*metric_value / 1e3, expected_sub_metric, 0.001);
+
+      EXPECT_TRUE(ukm::TestUkmRecorder::EntryHasMetric(
+          entry, GetPercentageMetricName(i)));
+      const int64_t* metric_percentage = ukm::TestUkmRecorder::GetEntryMetric(
+          entry, GetPercentageMetricName(i));
+      EXPECT_NEAR(*metric_percentage, expected_percentage, 0.001);
+    }
+    EXPECT_TRUE(
+        ukm::TestUkmRecorder::EntryHasMetric(entry, "MainFrameIsBeforeFCP"));
+    EXPECT_EQ(expected_before_fcp, *ukm::TestUkmRecorder::GetEntryMetric(
+                                       entry, "MainFrameIsBeforeFCP"));
+    EXPECT_TRUE(
+        ukm::TestUkmRecorder::EntryHasMetric(entry, "MainFrameReasons"));
+    EXPECT_EQ(expected_reasons,
+              *ukm::TestUkmRecorder::GetEntryMetric(entry, "MainFrameReasons"));
+  }
+
+  void VerifyAggregatedEntries(unsigned expected_num_entries,
+                               unsigned expected_primary_metric,
+                               unsigned expected_sub_metric) {
+    auto entries = recorder().GetEntriesByName("Blink.PageLoad");
     EXPECT_EQ(entries.size(), expected_num_entries);
 
     for (auto* entry : entries) {
@@ -82,18 +115,32 @@ class LocalFrameUkmAggregatorTest : public testing::Test {
         const int64_t* metric_value =
             ukm::TestUkmRecorder::GetEntryMetric(entry, GetMetricName(i));
         EXPECT_NEAR(*metric_value / 1e3, expected_sub_metric, 0.001);
-
-        EXPECT_TRUE(ukm::TestUkmRecorder::EntryHasMetric(
-            entry, GetPercentageMetricName(i)));
-        const int64_t* metric_percentage = ukm::TestUkmRecorder::GetEntryMetric(
-            entry, GetPercentageMetricName(i));
-        EXPECT_NEAR(*metric_percentage, expected_percentage, 0.001);
       }
     }
   }
 
+  void SimulateFrame(base::TimeTicks start_time,
+                     unsigned millisecond_per_step,
+                     cc::ActiveFrameSequenceTrackers trackers,
+                     bool mark_fcp = false) {
+    aggregator().BeginMainFrame();
+    for (int i = 0; i < LocalFrameUkmAggregator::kCount; ++i) {
+      auto timer = aggregator().GetScopedTimer(i);
+      if (mark_fcp && i == static_cast<int>(LocalFrameUkmAggregator::kPaint))
+        aggregator().DidReachFirstContentfulPaint(true);
+      test_task_runner_->FastForwardBy(
+          base::TimeDelta::FromMilliseconds(millisecond_per_step));
+    }
+    aggregator().RecordEndOfFrameMetrics(start_time, Now(), trackers);
+  }
+
+  bool SampleMatchesIteration(int64_t iteration_count) {
+    return aggregator()
+               .current_sample_.sub_metrics_durations[0]
+               .InMilliseconds() == iteration_count;
+  }
+
  private:
-  base::Optional<WTF::ScopedMockClock> clock_;
   scoped_refptr<LocalFrameUkmAggregator> aggregator_;
   ukm::TestUkmRecorder recorder_;
 };
@@ -106,7 +153,7 @@ TEST_F(LocalFrameUkmAggregatorTest, EmptyEventsNotRecorded) {
     return;
 
   // There is no BeginMainFrame, so no metrics get recorded.
-  clock().Advance(TimeDelta::FromSeconds(10));
+  test_task_runner_->FastForwardBy(base::TimeDelta::FromSeconds(10));
   ResetAggregator();
 
   EXPECT_EQ(recorder().sources_count(), 0u);
@@ -114,6 +161,8 @@ TEST_F(LocalFrameUkmAggregatorTest, EmptyEventsNotRecorded) {
 }
 
 TEST_F(LocalFrameUkmAggregatorTest, FirstFrameIsRecorded) {
+  // Verifies that we always get a sample when we report at least one frame.
+
   // Although the tests use a mock clock, the UKM aggregator checks if the
   // system has a high resolution clock before recording results. As a result,
   // the tests will fail if the system does not have a high resolution clock.
@@ -123,146 +172,168 @@ TEST_F(LocalFrameUkmAggregatorTest, FirstFrameIsRecorded) {
   // The initial interval is always zero, so we should see one set of metrics
   // for the initial frame, regardless of the initial interval.
   base::TimeTicks start_time = Now();
-  NextSampleIntervalForTest(TimeDelta::FromMilliseconds(100));
   unsigned millisecond_for_step = 1;
-  aggregator().BeginMainFrame();
-  for (int i = 0; i < LocalFrameUkmAggregator::kCount; ++i) {
-    auto timer =
-        aggregator().GetScopedTimer(i % LocalFrameUkmAggregator::kCount);
-    clock().Advance(TimeDelta::FromMilliseconds(millisecond_for_step));
-  }
-  aggregator().RecordEndOfFrameMetrics(start_time, Now());
+  SimulateFrame(start_time, millisecond_for_step, 12);
 
+  // Metrics are not reported until destruction.
+  EXPECT_EQ(recorder().entries_count(), 0u);
+
+  // Reset the aggregator. Should record one pre-FCP metric.
+  ResetAggregator();
   EXPECT_EQ(recorder().entries_count(), 1u);
 
   float expected_primary_metric =
       millisecond_for_step * LocalFrameUkmAggregator::kCount;
   float expected_sub_metric = millisecond_for_step;
   float expected_percentage =
-      floor(100.0 / (float)LocalFrameUkmAggregator::kCount);
+      floor(100.0 / static_cast<float>(LocalFrameUkmAggregator::kCount));
 
-  VerifyEntries(1u, expected_primary_metric, expected_sub_metric,
-                expected_percentage);
-
-  // Reset the aggregator. Should not record any more.
-  ResetAggregator();
-
-  VerifyEntries(1u, expected_primary_metric, expected_sub_metric,
-                expected_percentage);
+  VerifyUpdateEntry(0u, expected_primary_metric, expected_sub_metric,
+                    expected_percentage, 12, true);
 }
 
-TEST_F(LocalFrameUkmAggregatorTest, EventsRecordedAtIntervals) {
+TEST_F(LocalFrameUkmAggregatorTest, PreAndPostFCPAreRecorded) {
+  // Confirm that we get at least one frame pre-FCP and one post-FCP.
+
   // Although the tests use a mock clock, the UKM aggregator checks if the
   // system has a high resolution clock before recording results. As a result,
   // the tests will fail if the system does not have a high resolution clock.
   if (!base::TimeTicks::IsHighResolution())
     return;
 
-  // Keep track of our next sample points and current times.
-  TimeDelta elapsed_time;
-  unsigned next_event_time_ms = 0;
-
-  // The records should be recorded in the first frame after every interval,
-  // and no sooner.
-
-  // Set the first sample interval to 100.
-  NextSampleIntervalForTest(TimeDelta::FromMilliseconds(100));
-  unsigned millisecond_per_step = 50 / (LocalFrameUkmAggregator::kCount + 1);
-  unsigned millisecond_per_frame =
-      millisecond_per_step * (LocalFrameUkmAggregator::kCount + 1);
-
+  // The initial interval is always zero, so we should see one set of metrics
+  // for the initial frame, regardless of the initial interval.
   base::TimeTicks start_time = Now();
-  aggregator().BeginMainFrame();
-  for (int i = 0; i < LocalFrameUkmAggregator::kCount; ++i) {
-    auto timer = aggregator().GetScopedTimer(i);
-    clock().Advance(TimeDelta::FromMilliseconds(millisecond_per_step));
-  }
-  clock().Advance(TimeDelta::FromMilliseconds(millisecond_per_step));
-  aggregator().RecordEndOfFrameMetrics(start_time, Now());
+  unsigned millisecond_per_step = 50 / (LocalFrameUkmAggregator::kCount + 1);
+  SimulateFrame(start_time, millisecond_per_step, 4, true);
+
+  // We marked FCP when we simulated, so we should report something. There
+  // should be 2 entries because the aggregated pre-FCP metric also reported.
+  EXPECT_EQ(recorder().entries_count(), 2u);
+
+  float expected_primary_metric =
+      millisecond_per_step * LocalFrameUkmAggregator::kCount;
+  float expected_sub_metric = millisecond_per_step;
+  float expected_percentage =
+      floor(100.0 / static_cast<float>(LocalFrameUkmAggregator::kCount));
+
+  VerifyUpdateEntry(0u, expected_primary_metric, expected_sub_metric,
+                    expected_percentage, 4, true);
+
+  // Take another step. Should reset the frame count and report the first post-
+  // fcp frame. A failure here iundicates that we did not reset the frame,
+  // or that we are incorrectly tracking pre/post fcp.
+  unsigned millisecond_per_frame =
+      millisecond_per_step * LocalFrameUkmAggregator::kCount;
+
+  start_time = Now();
+  SimulateFrame(start_time, millisecond_per_step, 4);
+
+  // Need to destruct to report
+  ResetAggregator();
 
   // We should have a sample after the very first step, regardless of the
-  // interval. The FirstFrameIsRecorded test above also tests this.
-  float expected_percentage =
-      floor(millisecond_per_step * 100.0 / (float)millisecond_per_frame);
-  VerifyEntries(1u, millisecond_per_frame, millisecond_per_step,
-                expected_percentage);
+  // interval. The FirstFrameIsRecorded test above also tests this. There
+  // should be 3 entries because the aggregated pre-fcp event has also
+  // been recorded.
+  EXPECT_EQ(recorder().entries_count(), 3u);
 
-  elapsed_time += Now() - start_time;
-  next_event_time_ms = 100;
+  expected_percentage = floor(millisecond_per_step * 100.0 /
+                              static_cast<float>(millisecond_per_frame));
+  VerifyUpdateEntry(1u, millisecond_per_frame, millisecond_per_step,
+                    expected_percentage, 4, false);
+}
 
-  // Another step does not get us past the sample interval.
+TEST_F(LocalFrameUkmAggregatorTest, AggregatedPreFCPEventRecorded) {
+  // Although the tests use a mock clock, the UKM aggregator checks if the
+  // system has a high resolution clock before recording results. As a result,
+  // the tests will fail if the system does not have a high resolution clock.
+  if (!base::TimeTicks::IsHighResolution())
+    return;
+
+  // Be sure to not choose the next frame. We shouldn't need to record an
+  // UpdateTime metric in order to record an aggregated metric.
+  DoNotChooseNextFrameForTest();
+  unsigned millisecond_per_step = 50 / (LocalFrameUkmAggregator::kCount + 1);
+  unsigned millisecond_per_frame =
+      millisecond_per_step * (LocalFrameUkmAggregator::kCount);
+
+  base::TimeTicks start_time = Now();
+  SimulateFrame(start_time, millisecond_per_step, 3);
+
+  // We should not have an aggregated metric yet because we have not reached
+  // FCP. We shouldn't have any other kind of metric either.
+  EXPECT_EQ(recorder().entries_count(), 0u);
+
+  // Another step marking FCP this time.
+  ChooseNextFrameForTest();
   start_time = Now();
+  SimulateFrame(start_time, millisecond_per_step, 3, true);
+
+  // Now we should have an aggregated metric, plus the pre-FCP update metric
+  EXPECT_EQ(recorder().entries_count(), 2u);
+  VerifyAggregatedEntries(1u, 2 * millisecond_per_frame,
+                          2 * millisecond_per_step);
+  ResetAggregator();
+}
+
+TEST_F(LocalFrameUkmAggregatorTest, LatencyDataIsPopulated) {
+  // Although the tests use a mock clock, the UKM aggregator checks if the
+  // system has a high resolution clock before recording results. As a result,
+  // the tests will fail if the system does not have a high resolution clock.
+  if (!base::TimeTicks::IsHighResolution())
+    return;
+
+  // We always record the first frame. Din't use the SimulateFrame method
+  // because we need to populate before the end of the frame.
+  unsigned millisecond_for_step = 1;
   aggregator().BeginMainFrame();
   for (int i = 0; i < LocalFrameUkmAggregator::kCount; ++i) {
-    auto timer = aggregator().GetScopedTimer(i);
-    clock().Advance(TimeDelta::FromMilliseconds(millisecond_per_step));
-  }
-  clock().Advance(TimeDelta::FromMilliseconds(millisecond_per_step));
-  aggregator().RecordEndOfFrameMetrics(start_time, Now());
-
-  VerifyEntries(1u, millisecond_per_frame, millisecond_per_step,
-                expected_percentage);
-
-  elapsed_time += Now() - start_time;
-
-  // Another step should tick us past the sample interval.
-  // Note that the sample is a single frame, so even if we've taken
-  // multiple steps we should see just one frame's time.
-  start_time = Now();
-  aggregator().BeginMainFrame();
-  for (int i = 0; i < LocalFrameUkmAggregator::kCount; ++i) {
-    auto timer = aggregator().GetScopedTimer(i);
-    clock().Advance(TimeDelta::FromMilliseconds(millisecond_per_step));
-  }
-  clock().Advance(TimeDelta::FromMilliseconds(millisecond_per_step));
-  aggregator().RecordEndOfFrameMetrics(start_time, Now());
-
-  VerifyEntries(2u, millisecond_per_frame, millisecond_per_step,
-                expected_percentage);
-
-  elapsed_time += Now() - start_time;
-  next_event_time_ms += 100;
-
-  // Step some more frames until we are about to sample again
-  while (elapsed_time.InMilliseconds() + millisecond_per_frame <
-         next_event_time_ms) {
-    start_time = Now();
-    aggregator().BeginMainFrame();
-    for (int i = 0; i < LocalFrameUkmAggregator::kCount; ++i) {
-      auto timer = aggregator().GetScopedTimer(i);
-      clock().Advance(TimeDelta::FromMilliseconds(millisecond_per_step));
-    }
-    clock().Advance(TimeDelta::FromMilliseconds(millisecond_per_step));
-    aggregator().RecordEndOfFrameMetrics(start_time, Now());
-    elapsed_time += Now() - start_time;
+    auto timer =
+        aggregator().GetScopedTimer(i % LocalFrameUkmAggregator::kCount);
+    test_task_runner_->FastForwardBy(
+        base::TimeDelta::FromMilliseconds(millisecond_for_step));
   }
 
-  // Should be no more samples.
-  VerifyEntries(2u, millisecond_per_frame, millisecond_per_step,
-                expected_percentage);
+  std::unique_ptr<cc::BeginMainFrameMetrics> metrics_data =
+      aggregator().GetBeginMainFrameMetrics();
+  EXPECT_EQ(metrics_data->handle_input_events.InMillisecondsF(),
+            millisecond_for_step);
+  EXPECT_EQ(metrics_data->animate.InMillisecondsF(), millisecond_for_step);
+  EXPECT_EQ(metrics_data->style_update.InMillisecondsF(), millisecond_for_step);
+  EXPECT_EQ(metrics_data->layout_update.InMillisecondsF(),
+            millisecond_for_step);
+  EXPECT_EQ(metrics_data->prepaint.InMillisecondsF(), millisecond_for_step);
+  EXPECT_EQ(metrics_data->composite.InMillisecondsF(), millisecond_for_step);
+  EXPECT_EQ(metrics_data->paint.InMillisecondsF(), millisecond_for_step);
+  EXPECT_EQ(metrics_data->scrolling_coordinator.InMillisecondsF(),
+            millisecond_for_step);
+  EXPECT_EQ(metrics_data->composite_commit.InMillisecondsF(),
+            millisecond_for_step);
+  // Do not check the value in metrics_data.update_layers because it
+  // is not set by the aggregator.
+  ResetAggregator();
+}
 
-  // If we record, then the next interval is still shorter than the last frame,
-  // we should sample again. Set a short sample period to generate 2 events
-  // for the next update. The calculation below ensures we get 2 events for
-  // the next interval, and no more.
-  int64_t remaining_time = next_event_time_ms - elapsed_time.InMilliseconds();
-  int64_t next_interval = (millisecond_per_frame - 1 - remaining_time) / 2;
-  NextSampleIntervalForTest(TimeDelta::FromMilliseconds(next_interval));
+TEST_F(LocalFrameUkmAggregatorTest, SampleDoesChange) {
+  // To write a test that the sample eventually changes we need to let it very
+  // occasionally time out or fail. We'll go up to 100,000 tries for an update,
+  // so this should not hit on average once every 100,000 test runs. One flake
+  // in 100,000 seems acceptable.
 
-  start_time = Now();
-  aggregator().BeginMainFrame();
-  for (int i = 0; i < LocalFrameUkmAggregator::kCount; ++i) {
-    auto timer = aggregator().GetScopedTimer(i);
-    clock().Advance(TimeDelta::FromMilliseconds(millisecond_per_step));
+  // Generate the first frame. We will look for a change from this frame.
+  unsigned millisecond_for_step = 1;
+  SimulateFrame(base::TimeTicks(), millisecond_for_step, 0);
+
+  unsigned iteration_count = 2;
+  bool new_sample = false;
+  while (iteration_count < 100000u && !new_sample) {
+    millisecond_for_step = iteration_count;
+    SimulateFrame(base::TimeTicks(), millisecond_for_step, 0);
+    new_sample = SampleMatchesIteration(static_cast<int64_t>(iteration_count));
+    ++iteration_count;
   }
-  clock().Advance(TimeDelta::FromMilliseconds(millisecond_per_step));
-  aggregator().RecordEndOfFrameMetrics(start_time, Now());
-  elapsed_time += Now() - start_time;
-
-  // We should have 3 more events, once for the prior interval and 2 for the
-  // new interval.
-  VerifyEntries(5u, millisecond_per_frame, millisecond_per_step,
-                expected_percentage);
+  EXPECT_LT(iteration_count, 100000u);
 }
 
 }  // namespace blink

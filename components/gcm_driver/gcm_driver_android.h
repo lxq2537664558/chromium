@@ -47,33 +47,31 @@ class GCMDriverAndroid : public GCMDriver,
       const base::android::JavaParamRef<jobject>& obj,
       const base::android::JavaParamRef<jstring>& app_id,
       const base::android::JavaParamRef<jstring>& sender_id,
+      const base::android::JavaParamRef<jstring>& j_message_id,
       const base::android::JavaParamRef<jstring>& collapse_key,
       const base::android::JavaParamRef<jbyteArray>& raw_data,
       const base::android::JavaParamRef<jobjectArray>& data_keys_and_values);
 
   // GCMDriver implementation:
-  void ValidateRegistration(
-      const std::string& app_id,
-      const std::vector<std::string>& sender_ids,
-      const std::string& registration_id,
-      const ValidateRegistrationCallback& callback) override;
+  void ValidateRegistration(const std::string& app_id,
+                            const std::vector<std::string>& sender_ids,
+                            const std::string& registration_id,
+                            ValidateRegistrationCallback callback) override;
   void OnSignedIn() override;
   void OnSignedOut() override;
-  void Enable() override;
   void AddConnectionObserver(GCMConnectionObserver* observer) override;
   void RemoveConnectionObserver(GCMConnectionObserver* observer) override;
-  void Disable() override;
   GCMClient* GetGCMClientForTesting() const override;
   bool IsStarted() const override;
   bool IsConnected() const override;
-  void GetGCMStatistics(const GetGCMStatisticsCallback& callback,
+  void GetGCMStatistics(GetGCMStatisticsCallback callback,
                         ClearActivityLogs clear_logs) override;
-  void SetGCMRecording(const GetGCMStatisticsCallback& callback,
+  void SetGCMRecording(const GCMStatisticsRecordingCallback& callback,
                        bool recording) override;
   void SetAccountTokens(
       const std::vector<GCMClient::AccountTokenInfo>& account_tokens) override;
   void UpdateAccountMapping(const AccountMapping& account_mapping) override;
-  void RemoveAccountMapping(const std::string& account_id) override;
+  void RemoveAccountMapping(const CoreAccountId& account_id) override;
   base::Time GetLastTokenFetchTime() override;
   void SetLastTokenFetchTime(const base::Time& time) override;
   void WakeFromSuspendForHeartbeat(bool wake) override;
@@ -103,8 +101,8 @@ class GCMDriverAndroid : public GCMDriver,
  private:
   base::android::ScopedJavaGlobalRef<jobject> java_ref_;
 
-  // Callback for GetGCMStatistics.
-  GetGCMStatisticsCallback get_gcm_statistics_callback_;
+  // Callback for SetGCMRecording.
+  GCMStatisticsRecordingCallback gcm_statistics_recording_callback_;
 
   // Recorder that logs GCM activities.
   GCMStatsRecorderAndroid recorder_;

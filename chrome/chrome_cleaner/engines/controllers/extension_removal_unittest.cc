@@ -17,7 +17,7 @@
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/multiprocess_test.h"
 #include "base/test/scoped_path_override.h"
-#include "base/test/scoped_task_environment.h"
+#include "base/test/task_environment.h"
 #include "base/test/test_reg_util_win.h"
 #include "chrome/chrome_cleaner/engines/broker/engine_client.h"
 #include "chrome/chrome_cleaner/engines/broker/sandbox_setup.h"
@@ -25,13 +25,13 @@
 #include "chrome/chrome_cleaner/engines/controllers/main_controller.h"
 #include "chrome/chrome_cleaner/engines/target/sandbox_setup.h"
 #include "chrome/chrome_cleaner/engines/target/test_engine_delegate.h"
-#include "chrome/chrome_cleaner/interfaces/test_mojo_sandbox_hooks.mojom.h"
 #include "chrome/chrome_cleaner/ipc/mock_chrome_prompt_ipc.h"
 #include "chrome/chrome_cleaner/ipc/mojo_sandbox_hooks.h"
 #include "chrome/chrome_cleaner/ipc/mojo_task_runner.h"
 #include "chrome/chrome_cleaner/logging/logging_service_api.h"
 #include "chrome/chrome_cleaner/logging/mock_logging_service.h"
 #include "chrome/chrome_cleaner/logging/registry_logger.h"
+#include "chrome/chrome_cleaner/mojom/test_mojo_sandbox_hooks.mojom.h"
 #include "chrome/chrome_cleaner/os/early_exit.h"
 #include "chrome/chrome_cleaner/os/registry_util.h"
 #include "chrome/chrome_cleaner/os/system_util.h"
@@ -49,8 +49,7 @@
 #include "chrome/chrome_cleaner/test/test_pup_data.h"
 #include "chrome/chrome_cleaner/test/test_settings_util.h"
 #include "chrome/chrome_cleaner/ui/silent_main_dialog.h"
-#include "components/chrome_cleaner/public/interfaces/chrome_prompt.mojom-test-utils.h"
-#include "mojo/public/cpp/bindings/binding.h"
+#include "chrome/chrome_cleaner/zip_archiver/zip_archiver.h"
 #include "mojo/public/cpp/system/message_pipe.h"
 #include "sandbox/win/src/sandbox_factory.h"
 #include "testing/multiprocess_func_list.h"
@@ -72,7 +71,7 @@ class ExtensionTestSandboxHooks : public MojoSandboxSetupHooks {
     mojo::ScopedMessagePipeHandle pipe_handle =
         SetupSandboxMessagePipe(policy, command_line);
 
-    engine_client_->PostBindEngineCommandsPtr(std::move(pipe_handle));
+    engine_client_->PostBindEngineCommandsRemote(std::move(pipe_handle));
 
     return RESULT_CODE_SUCCESS;
   }
@@ -113,6 +112,13 @@ class TestMainController : public MainController {
   } test_rebooter_;
 };
 
+class NoopZipArchiver : public ZipArchiver {
+  void Archive(const base::FilePath& /*src_file_path*/,
+               ArchiveResultCallback callback) override {
+    std::move(callback).Run(mojom::ZipArchiverResultCode::kSuccess);
+  }
+};
+
 base::FilePath CreateStartupDirectory() {
   base::FilePath start_menu_folder;
   CHECK(base::PathService::Get(base::DIR_START_MENU, &start_menu_folder));
@@ -129,15 +135,12 @@ class ExtensionCleanupTest : public base::MultiProcessTest {
   ExtensionCleanupTest() : mojo_task_runner_(MojoTaskRunner::Create()) {}
   void SetUp() override {
     EXPECT_CALL(mock_chrome_prompt_ipc_, MockPostPromptUserTask(_, _, _, _))
-        .WillRepeatedly(
-            [](const std::vector<base::FilePath>& files_to_delete,
-               const std::vector<base::string16>& registry_keys,
-               const std::vector<base::string16>& extension_ids,
-               mojom::ChromePromptInterceptorForTesting::PromptUserCallback*
-                   callback) {
-              std::move(*callback).Run(
-                  mojom::PromptAcceptance::ACCEPTED_WITHOUT_LOGS);
-            });
+        .WillRepeatedly([](const std::vector<base::FilePath>& files_to_delete,
+                           const std::vector<base::string16>& registry_keys,
+                           const std::vector<base::string16>& extension_ids,
+                           ChromePromptIPC::PromptUserCallback* callback) {
+          std::move(*callback).Run(PromptUserResponse::ACCEPTED_WITHOUT_LOGS);
+        });
     EXPECT_CALL(mock_chrome_prompt_ipc_, Initialize(_));
     EXPECT_CALL(mock_chrome_prompt_ipc_, TryDeleteExtensions(_, _))
         .WillRepeatedly([](base::OnceClosure delete_allowed_callback,
@@ -246,10 +249,10 @@ class ExtensionCleanupTest : public base::MultiProcessTest {
     CHECK_EQ(RESULT_CODE_SUCCESS,
              StartSandboxTarget(MakeCmdLine("EngineSandboxMain"),
                                 &engine_setup_hooks, SandboxType::kTest));
-    json_parser_ptr_ = std::make_unique<chrome_cleaner::UniqueParserPtr>(
-        parser_setup_hooks.TakeParserPtr());
+    json_parser_ = std::make_unique<chrome_cleaner::RemoteParserPtr>(
+        parser_setup_hooks.TakeParserRemote());
     return std::make_unique<chrome_cleaner::SandboxedJsonParser>(
-        mojo_task_runner_.get(), json_parser_ptr_.get()->get());
+        mojo_task_runner_.get(), json_parser_.get()->get());
   }
 
  protected:
@@ -264,7 +267,7 @@ class ExtensionCleanupTest : public base::MultiProcessTest {
   testing::NiceMock<MockLoggingService> mock_logging_service_;
   base::FilePath fake_apps_dir_;
   base::FilePath chrome_dir_;
-  std::unique_ptr<chrome_cleaner::UniqueParserPtr> json_parser_ptr_;
+  std::unique_ptr<chrome_cleaner::RemoteParserPtr> json_parser_;
   scoped_refptr<chrome_cleaner::EngineClient> engine_client_;
   chrome_cleaner::TestPUPData test_pup_data_;
   std::unique_ptr<ScopedFile> uws_A_;
@@ -275,15 +278,17 @@ class ExtensionCleanupTest : public base::MultiProcessTest {
   base::ScopedPathOverride program_files_override_{base::DIR_PROGRAM_FILES};
   const std::vector<UwS::TraceLocation> trace_locations_{
       chrome_cleaner::UwS_TraceLocation_FOUND_IN_SHELL};
-  base::test::ScopedTaskEnvironment scoped_task_environment_;
+  base::test::TaskEnvironment task_environment_;
 
-  scoped_refptr<chrome_cleaner::EngineClient> SetupEngineClient() {
-    chrome_cleaner::SandboxConnectionErrorCallback connection_error_callback =
+  scoped_refptr<EngineClient> SetupEngineClient() {
+    SandboxConnectionErrorCallback connection_error_callback =
         base::BindRepeating(&ExtensionCleanupTest::SandboxErrorCallback,
                             base::Unretained(this));
-    return EngineClient::CreateEngineClient(
-        chrome_cleaner::Engine::TEST_ONLY, base::DoNothing::Repeatedly<int>(),
+    scoped_refptr<EngineClient> client = EngineClient::CreateEngineClient(
+        Engine::TEST_ONLY, base::DoNothing::Repeatedly<int>(),
         std::move(connection_error_callback), mojo_task_runner_.get());
+    client->archiver_for_testing_ = std::make_unique<NoopZipArchiver>();
+    return client;
   }
 
   void SandboxErrorCallback(SandboxType type) {

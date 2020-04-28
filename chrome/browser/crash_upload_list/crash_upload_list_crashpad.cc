@@ -11,7 +11,7 @@
 #include "base/time/time.h"
 #include "build/build_config.h"
 #include "chrome/common/chrome_constants.h"
-#include "components/crash/content/app/crashpad.h"
+#include "components/crash/core/app/crashpad.h"
 
 namespace {
 
@@ -40,11 +40,6 @@ UploadList::UploadInfo::State ReportUploadStateToUploadInfoState(
 CrashUploadListCrashpad::CrashUploadListCrashpad() = default;
 
 CrashUploadListCrashpad::~CrashUploadListCrashpad() = default;
-
-base::TaskTraits CrashUploadListCrashpad::LoadingTaskTraits() {
-  return {base::MayBlock(), base::TaskPriority::BEST_EFFORT,
-          base::TaskShutdownBehavior::CONTINUE_ON_SHUTDOWN};
-}
 
 std::vector<UploadList::UploadInfo> CrashUploadListCrashpad::LoadUploadList() {
   std::vector<crash_reporter::Report> reports;

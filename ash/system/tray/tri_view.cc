@@ -5,7 +5,8 @@
 #include "ash/system/tray/tri_view.h"
 
 #include "ash/system/tray/size_range_layout.h"
-#include "base/logging.h"
+#include "base/check.h"
+#include "base/notreached.h"
 #include "ui/gfx/geometry/insets.h"
 #include "ui/views/border.h"
 #include "ui/views/layout/box_layout.h"
@@ -19,13 +20,13 @@ namespace {
 views::BoxLayout::Orientation GetOrientation(TriView::Orientation orientation) {
   switch (orientation) {
     case TriView::Orientation::HORIZONTAL:
-      return views::BoxLayout::kHorizontal;
+      return views::BoxLayout::Orientation::kHorizontal;
     case TriView::Orientation::VERTICAL:
-      return views::BoxLayout::kVertical;
+      return views::BoxLayout::Orientation::kVertical;
   }
   // Required for some compilers.
   NOTREACHED();
-  return views::BoxLayout::kHorizontal;
+  return views::BoxLayout::Orientation::kHorizontal;
 }
 
 // A View that will perform a layout if a child view's preferred size changes.
@@ -67,7 +68,7 @@ TriView::TriView(Orientation orientation, int padding_between_containers) {
   auto layout = std::make_unique<views::BoxLayout>(
       GetOrientation(orientation), gfx::Insets(), padding_between_containers);
   layout->set_cross_axis_alignment(
-      views::BoxLayout::CROSS_AXIS_ALIGNMENT_START);
+      views::BoxLayout::CrossAxisAlignment::kStart);
   box_layout_ = SetLayoutManager(std::move(layout));
 
   enable_hierarchy_changed_dcheck_ = true;
@@ -123,7 +124,7 @@ void TriView::SetContainerBorder(Container container,
 }
 
 void TriView::SetContainerVisible(Container container, bool visible) {
-  if (GetContainer(container)->visible() == visible)
+  if (GetContainer(container)->GetVisible() == visible)
     return;
   GetContainer(container)->SetVisible(visible);
   Layout();
@@ -161,7 +162,7 @@ const char* TriView::GetClassName() const {
 }
 
 views::View* TriView::GetContainer(Container container) {
-  return child_at(static_cast<int>(container));
+  return children()[static_cast<size_t>(container)];
 }
 
 SizeRangeLayout* TriView::GetLayoutManager(Container container) {

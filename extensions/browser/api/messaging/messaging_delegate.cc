@@ -5,7 +5,7 @@
 #include "extensions/browser/api/messaging/messaging_delegate.h"
 
 #include "base/callback.h"
-#include "base/logging.h"
+#include "base/notreached.h"
 
 namespace extensions {
 
@@ -41,6 +41,7 @@ std::unique_ptr<MessagePort> MessagingDelegate::CreateReceiverForTab(
 }
 
 std::unique_ptr<MessagePort> MessagingDelegate::CreateReceiverForNativeApp(
+    content::BrowserContext* browser_context,
     base::WeakPtr<MessagePort::ChannelDelegate> channel_delegate,
     content::RenderFrameHost* source,
     const std::string& extension_id,

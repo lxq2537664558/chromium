@@ -8,14 +8,22 @@ namespace ash {
 
 const char kOemFolderId[] = "ddb1da55-d478-4243-8642-56d3041f0263";
 
+////////////////////////////////////////////////////////////////////////////////
+// AppListItemMetadata:
+
+AppListItemMetadata::AppListItemMetadata() = default;
+AppListItemMetadata::AppListItemMetadata(const AppListItemMetadata& rhs) =
+    default;
+AppListItemMetadata::~AppListItemMetadata() = default;
+
 OmniBoxZeroStateAction GetOmniBoxZeroStateAction(int button_index) {
   if (button_index < 0 ||
       button_index >=
-          static_cast<int>(ash::OmniBoxZeroStateAction::kZeroStateActionMax)) {
-    return ash::OmniBoxZeroStateAction::kZeroStateActionMax;
+          static_cast<int>(OmniBoxZeroStateAction::kZeroStateActionMax)) {
+    return OmniBoxZeroStateAction::kZeroStateActionMax;
   }
 
-  return static_cast<ash::OmniBoxZeroStateAction>(button_index);
+  return static_cast<OmniBoxZeroStateAction>(button_index);
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -42,5 +50,13 @@ SearchResultAction::SearchResultAction(const SearchResultAction& other) =
     default;
 
 SearchResultAction::~SearchResultAction() = default;
+
+////////////////////////////////////////////////////////////////////////////////
+// SearchResultMetadata:
+
+SearchResultMetadata::SearchResultMetadata() = default;
+SearchResultMetadata::SearchResultMetadata(const SearchResultMetadata& rhs) =
+    default;
+SearchResultMetadata::~SearchResultMetadata() = default;
 
 }  // namespace ash

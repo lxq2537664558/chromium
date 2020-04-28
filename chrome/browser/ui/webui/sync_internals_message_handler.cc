@@ -26,7 +26,7 @@
 #include "components/sync/engine/events/protocol_event.h"
 #include "components/sync/js/js_event_details.h"
 #include "components/sync/protocol/sync.pb.h"
-#include "components/sync/user_events/user_event_service.h"
+#include "components/sync_user_events/user_event_service.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/web_ui.h"
 
@@ -73,8 +73,7 @@ SyncInternalsMessageHandler::SyncInternalsMessageHandler()
 SyncInternalsMessageHandler::SyncInternalsMessageHandler(
     AboutSyncDataDelegate about_sync_data_delegate)
     : include_specifics_(GetIncludeSpecificsInitialState()),
-      about_sync_data_delegate_(std::move(about_sync_data_delegate)),
-      weak_ptr_factory_(this) {}
+      about_sync_data_delegate_(std::move(about_sync_data_delegate)) {}
 
 SyncInternalsMessageHandler::~SyncInternalsMessageHandler() {
   UnregisterModelNotifications();
@@ -252,9 +251,9 @@ void SyncInternalsMessageHandler::HandleGetAllNodes(const ListValue* args) {
     // asynchronously, and potentially at times we're not allowed to call into
     // the javascript side. We guard against this by invalidating this weak ptr
     // should javascript become disallowed.
-    service->GetAllNodes(
-        base::Bind(&SyncInternalsMessageHandler::OnReceivedAllNodes,
-                   weak_ptr_factory_.GetWeakPtr(), request_id));
+    service->GetAllNodesForDebugging(
+        base::BindOnce(&SyncInternalsMessageHandler::OnReceivedAllNodes,
+                       weak_ptr_factory_.GetWeakPtr(), request_id));
   }
 }
 
@@ -312,7 +311,8 @@ void SyncInternalsMessageHandler::HandleRequestStart(
   // If the service was previously stopped via StopAndClear(), then the
   // "first-setup-complete" bit was also cleared, and now the service wouldn't
   // fully start up. So set that too.
-  service->GetUserSettings()->SetFirstSetupComplete();
+  service->GetUserSettings()->SetFirstSetupComplete(
+      syncer::SyncFirstSetupCompleteSource::BASIC_FLOW);
 }
 
 void SyncInternalsMessageHandler::HandleRequestStopKeepData(

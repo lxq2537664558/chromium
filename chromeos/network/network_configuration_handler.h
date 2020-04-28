@@ -64,10 +64,9 @@ class COMPONENT_EXPORT(CHROMEOS_NETWORK) NetworkConfigurationHandler
 
   // Gets the properties of the network with id |service_path|. See note on
   // |callback| and |error_callback|, in class description above.
-  void GetShillProperties(
-      const std::string& service_path,
-      const network_handler::DictionaryResultCallback& callback,
-      const network_handler::ErrorCallback& error_callback);
+  void GetShillProperties(const std::string& service_path,
+                          network_handler::DictionaryResultCallback callback,
+                          const network_handler::ErrorCallback& error_callback);
 
   // Sets the properties of the network with id |service_path|. This means the
   // given properties will be merged with the existing settings, and it won't
@@ -91,6 +90,8 @@ class COMPONENT_EXPORT(CHROMEOS_NETWORK) NetworkConfigurationHandler
 
   // Creates a network with the given |properties| in the specified Shill
   // profile, and returns the new service_path to |callback| if successful.
+  // |callback| will only be called after the property update has been reflected
+  // in NetworkStateHandler.
   // kProfileProperty must be set in |properties|. This may also be used to
   // update an existing matching configuration, see Shill documentation for
   // Manager.ConfigureServiceForProfile. NOTE: Normally
@@ -150,6 +151,7 @@ class COMPONENT_EXPORT(CHROMEOS_NETWORK) NetworkConfigurationHandler
   // state (NetworkStateHandler) to update before triggering the callback.
   void ConfigurationCompleted(
       const std::string& profile_path,
+      const std::string& guid,
       std::unique_ptr<base::DictionaryValue> configure_properties,
       const network_handler::ServiceResultCallback& callback,
       const dbus::ObjectPath& service_path);
@@ -174,7 +176,7 @@ class COMPONENT_EXPORT(CHROMEOS_NETWORK) NetworkConfigurationHandler
 
   // Set the Name and GUID properties correctly and Invoke |callback|.
   void GetPropertiesCallback(
-      const network_handler::DictionaryResultCallback& callback,
+      network_handler::DictionaryResultCallback callback,
       const network_handler::ErrorCallback& error_callback,
       const std::string& service_path,
       DBusMethodCallStatus call_status,
@@ -205,9 +207,6 @@ class COMPONENT_EXPORT(CHROMEOS_NETWORK) NetworkConfigurationHandler
       const std::string& dbus_error_name,
       const std::string& dbus_error_message);
 
-  // Signals the device handler to request an IP config refresh.
-  void RequestRefreshIPConfigs(const std::string& service_path);
-
   // Removes network configuration for |service_path| from the profile specified
   // by |profile_path|. If |profile_path| is not set, the network is removed
   // from all the profiles that include it.
@@ -226,13 +225,14 @@ class COMPONENT_EXPORT(CHROMEOS_NETWORK) NetworkConfigurationHandler
       profile_entry_deleters_;
 
   // Map of configuration callbacks to run once the service becomes available
-  // in the NetworkStateHandler cache.
-  std::map<std::string, network_handler::ServiceResultCallback>
+  // in the NetworkStateHandler cache. This is a multimap because there can be
+  // multiple callbacks for the same network that have to be notified.
+  std::multimap<std::string, network_handler::ServiceResultCallback>
       configure_callbacks_;
 
   base::ObserverList<NetworkConfigurationObserver, true>::Unchecked observers_;
 
-  base::WeakPtrFactory<NetworkConfigurationHandler> weak_ptr_factory_;
+  base::WeakPtrFactory<NetworkConfigurationHandler> weak_ptr_factory_{this};
 
   DISALLOW_COPY_AND_ASSIGN(NetworkConfigurationHandler);
 };

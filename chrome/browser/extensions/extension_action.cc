@@ -8,15 +8,15 @@
 #include <utility>
 
 #include "base/base64.h"
-#include "base/logging.h"
+#include "base/check_op.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/values.h"
-#include "chrome/grit/theme_resources.h"
 #include "extensions/browser/extension_icon_image.h"
 #include "extensions/browser/extension_icon_placeholder.h"
 #include "extensions/common/constants.h"
 #include "extensions/common/extension_icon_set.h"
 #include "extensions/common/manifest_handlers/icons_handler.h"
+#include "extensions/grit/extensions_browser_resources.h"
 #include "ipc/ipc_message.h"
 #include "ipc/ipc_message_utils.h"
 #include "third_party/skia/include/core/SkBitmap.h"
@@ -85,15 +85,13 @@ gfx::Image ExtensionAction::FallbackIcon() {
 const int ExtensionAction::kDefaultTabId = -1;
 
 ExtensionAction::ExtensionAction(const extensions::Extension& extension,
-                                 extensions::ActionInfo::Type action_type,
                                  const extensions::ActionInfo& manifest_data)
     : extension_id_(extension.id()),
       extension_name_(extension.name()),
-      action_type_(action_type) {
-  // Page/script actions are hidden/disabled by default, and browser actions are
-  // visible/enabled by default.
+      action_type_(manifest_data.type),
+      default_state_(manifest_data.default_state) {
   SetIsVisible(kDefaultTabId,
-               action_type == extensions::ActionInfo::TYPE_BROWSER);
+               default_state_ == extensions::ActionInfo::STATE_ENABLED);
   Populate(extension, manifest_data);
 }
 
@@ -216,6 +214,7 @@ void ExtensionAction::ClearAllValuesForTab(int tab_id) {
   title_.erase(tab_id);
   icon_.erase(tab_id);
   badge_text_.erase(tab_id);
+  dnr_action_count_.erase(tab_id);
   badge_text_color_.erase(tab_id);
   badge_background_color_.erase(tab_id);
   is_visible_.erase(tab_id);
@@ -253,6 +252,19 @@ gfx::Image ExtensionAction::GetPlaceholderIconImage() const {
   return placeholder_icon_image_;
 }
 
+std::string ExtensionAction::GetDisplayBadgeText(int tab_id) const {
+  return UseDNRActionCountAsBadgeText(tab_id)
+             ? base::NumberToString(GetDNRActionCount(tab_id))
+             : GetExplicitlySetBadgeText(tab_id);
+}
+
+bool ExtensionAction::UseDNRActionCountAsBadgeText(int tab_id) const {
+  // Tab specific badge text set by an extension overrides the automatically set
+  // action count. Action count should only be shown if at least one action is
+  // matched.
+  return !HasBadgeText(tab_id) && GetDNRActionCount(tab_id) > 0;
+}
+
 bool ExtensionAction::HasPopupUrl(int tab_id) const {
   return HasValue(popup_url_, tab_id);
 }
@@ -279,6 +291,10 @@ bool ExtensionAction::HasIsVisible(int tab_id) const {
 
 bool ExtensionAction::HasIcon(int tab_id) const {
   return HasValue(icon_, tab_id);
+}
+
+bool ExtensionAction::HasDNRActionCount(int tab_id) const {
+  return HasValue(dnr_action_count_, tab_id);
 }
 
 void ExtensionAction::SetDefaultIconForTest(

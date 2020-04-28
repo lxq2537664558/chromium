@@ -12,10 +12,11 @@
 #include "third_party/blink/renderer/core/dom/node_computed_style.h"
 #include "third_party/blink/renderer/core/html/html_element.h"
 #include "third_party/blink/renderer/core/testing/page_test_base.h"
+#include "third_party/blink/renderer/platform/heap/heap.h"
 
 namespace blink {
 
-using namespace css_test_helpers;
+using css_test_helpers::RegisterProperty;
 using VariableMode = CSSParserLocalContext::VariableMode;
 
 namespace {
@@ -23,15 +24,15 @@ namespace {
 class CustomPropertyTest : public PageTestBase {
  public:
   void SetElementWithStyle(const String& value) {
-    GetDocument().body()->SetInnerHTMLFromString("<div id='target' style='" +
-                                                 value + "'></div>");
+    GetDocument().body()->setInnerHTML("<div id='target' style='" + value +
+                                       "'></div>");
     UpdateAllLifecyclePhasesForTest();
   }
 
   const CSSValue* GetComputedValue(const CustomProperty& property) {
     Element* node = GetDocument().getElementById("target");
     return property.CSSValueFromComputedStyle(node->ComputedStyleRef(),
-                                              nullptr /* layout_object */, node,
+                                              nullptr /* layout_object */,
                                               false /* allow_visited_style */);
   }
 
@@ -41,7 +42,7 @@ class CustomPropertyTest : public PageTestBase {
     CSSTokenizer tokenizer(value);
     const auto tokens = tokenizer.TokenizeToEOF();
     CSSParserTokenRange range(tokens);
-    CSSParserContext* context = CSSParserContext::Create(GetDocument());
+    auto* context = MakeGarbageCollected<CSSParserContext>(GetDocument());
     return property.ParseSingleValue(range, *context, local_context);
   }
 };

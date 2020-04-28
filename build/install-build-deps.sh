@@ -5,7 +5,7 @@
 # found in the LICENSE file.
 
 # Script to install everything needed to build chromium (well, ideally, anyway)
-# See https://chromium.googlesource.com/chromium/src/+/master/docs/linux_build_instructions.md
+# See https://chromium.googlesource.com/chromium/src/+/master/docs/linux/build_instructions.md
 
 usage() {
   echo "Usage: $0 [--options]"
@@ -29,14 +29,33 @@ usage() {
   exit 1
 }
 
+# Build list of apt packages in dpkg --get-selections format.
+build_apt_package_list() {
+  echo "Building apt package list." >&2
+  apt-cache dumpavail | \
+    python -c '\
+      from __future__ import print_function; \
+      import re,sys; \
+      o = sys.stdin.read(); \
+      p = {"i386": ":i386"}; \
+      f = re.M | re.S; \
+      r = re.compile(r"^Package: (.+?)$.+?^Architecture: (.+?)$", f); \
+      m = ["%s%s" % (x, p.get(y, "")) for x, y in re.findall(r, o)]; \
+      print("\n".join(m))'
+}
+
 # Checks whether a particular package is available in the repos.
+# Uses pre-formatted ${apt_package_list}.
 # USAGE: $ package_exists <package name>
 package_exists() {
+  if [ -z "${apt_package_list}" ]; then
+    echo "Call build_apt_package_list() prior to calling package_exists()" >&2
+    apt_package_list=$(build_apt_package_list)
+  fi
   # 'apt-cache search' takes a regex string, so eg. the +'s in packages like
   # "libstdc++" need to be escaped.
   local escaped="$(echo $1 | sed 's/[\~\+\.\:-]/\\&/g')"
-  [ ! -z "$(apt-cache search --names-only "${escaped}" | \
-            awk '$1 == "'$1'" { print $1; }')" ]
+  [ ! -z "$(grep "^${escaped}$" <<< "${apt_package_list}")" ]
 }
 
 # These default to on because (some) bots need them and it keeps things
@@ -83,16 +102,18 @@ fi
 
 distro_codename=$(lsb_release --codename --short)
 distro_id=$(lsb_release --id --short)
-supported_codenames="(trusty|xenial|artful|bionic)"
+supported_codenames="(trusty|xenial|bionic|disco|eoan|focal)"
 supported_ids="(Debian)"
 if [ 0 -eq "${do_unsupported-0}" ] && [ 0 -eq "${do_quick_check-0}" ] ; then
   if [[ ! $distro_codename =~ $supported_codenames &&
         ! $distro_id =~ $supported_ids ]]; then
     echo -e "ERROR: The only supported distros are\n" \
-      "\tUbuntu 14.04 LTS (trusty)\n" \
-      "\tUbuntu 16.04 LTS (xenial)\n" \
-      "\tUbuntu 17.10 (artful)\n" \
-      "\tUbuntu 18.04 LTS (bionic)\n" \
+      "\tUbuntu 14.04 LTS (trusty with EoL April 2022)\n" \
+      "\tUbuntu 16.04 LTS (xenial with EoL April 2024)\n" \
+      "\tUbuntu 18.04 LTS (bionic with EoL April 2028)\n" \
+      "\tUbuntu 20.04 LTS (focal with Eol April 2030)\n" \
+      "\tUbuntu 19.04 (disco)\n" \
+      "\tUbuntu 19.10 (eoan)\n" \
       "\tDebian 8 (jessie) or later" >&2
     exit 1
   fi
@@ -108,6 +129,14 @@ if [ "x$(id -u)" != x0 ] && [ 0 -eq "${do_quick_check-0}" ]; then
   echo "You might have to enter your password one or more times for 'sudo'."
   echo
 fi
+
+if [ "$do_inst_lib32" = "1" ] || [ "$do_inst_nacl" = "1" ]; then
+  sudo dpkg --add-architecture i386
+fi
+sudo apt-get update
+
+# Populate ${apt_package_list} for package_exists() parsing.
+apt_package_list=$(build_apt_package_list)
 
 # Packages needed for chromeos only
 chromeos_dev_list="libbluetooth-dev libxkbcommon-dev"
@@ -129,9 +158,7 @@ dev_list="\
   devscripts
   fakeroot
   flex
-  g++
   git-core
-  git-svn
   gperf
   libappindicator3-dev
   libasound2-dev
@@ -145,11 +172,11 @@ dev_list="\
   libcurl4-gnutls-dev
   libdrm-dev
   libelf-dev
+  libevdev-dev
   libffi-dev
   libgbm-dev
   libglib2.0-dev
   libglu1-mesa-dev
-  libgnome-keyring-dev
   libgtk-3-dev
   libkrb5-dev
   libnspr4-dev
@@ -174,11 +201,9 @@ dev_list="\
   perl
   pkg-config
   python
-  python-cherrypy3
   python-crypto
   python-dev
   python-numpy
-  python-opencv
   python-openssl
   python-psutil
   python-yaml
@@ -213,12 +238,13 @@ common_lib_list="\
   libcairo2
   libcap2
   libcups2
+  libdrm2
+  libevdev2
   libexpat1
-  libffi6
   libfontconfig1
   libfreetype6
+  libgbm1
   libglib2.0-0
-  libgnome-keyring0
   libgtk-3-0
   libpam0g
   libpango1.0-0
@@ -248,6 +274,12 @@ common_lib_list="\
   zlib1g
 "
 
+if package_exists libffi7; then
+  common_lib_list="${common_lib_list} libffi7"
+elif package_exists libffi6; then
+  common_lib_list="${common_lib_list} libffi6"
+fi
+
 # Full list of required run-time libraries
 lib_list="\
   $common_lib_list
@@ -270,15 +302,15 @@ backwards_compatible_list="\
   fonts-stix
   fonts-thai-tlwg
   fonts-tlwg-garuda
+  g++
+  git-svn
   language-pack-da
   language-pack-fr
   language-pack-he
   language-pack-zh-hant
   libappindicator-dev
   libappindicator1
-  libappindicator3-1:i386
   libdconf-dev
-  libdconf-dev:i386
   libdconf1
   libdconf1:i386
   libexif-dev
@@ -372,9 +404,19 @@ case $distro_codename in
     arm_list+=" g++-4.8-multilib-arm-linux-gnueabihf
                 gcc-4.8-multilib-arm-linux-gnueabihf"
     ;;
-  xenial|artful|bionic)
+  xenial|bionic)
     arm_list+=" g++-5-multilib-arm-linux-gnueabihf
                 gcc-5-multilib-arm-linux-gnueabihf
+                gcc-arm-linux-gnueabihf"
+    ;;
+  disco|eoan)
+    arm_list+=" g++-9-multilib-arm-linux-gnueabihf
+                gcc-9-multilib-arm-linux-gnueabihf
+                gcc-arm-linux-gnueabihf"
+    ;;
+  focal)
+    arm_list+=" g++-10-multilib-arm-linux-gnueabihf
+                gcc-10-multilib-arm-linux-gnueabihf
                 gcc-arm-linux-gnueabihf"
     ;;
 esac
@@ -411,6 +453,7 @@ nacl_list="\
   ${naclports_list}
 "
 
+# Some package names have changed over time
 if package_exists libssl1.1; then
   nacl_list="${nacl_list} libssl1.1:i386"
 elif package_exists libssl1.0.2; then
@@ -418,8 +461,6 @@ elif package_exists libssl1.0.2; then
 else
   nacl_list="${nacl_list} libssl1.0.0:i386"
 fi
-
-# Some package names have changed over time
 if package_exists libpng16-16; then
   lib_list="${lib_list} libpng16-16"
 else
@@ -442,7 +483,9 @@ else
   dev_list="${dev_list} libudev0"
   nacl_list="${nacl_list} libudev0:i386"
 fi
-if package_exists libbrlapi0.6; then
+if package_exists libbrlapi0.7; then
+  dev_list="${dev_list} libbrlapi0.7"
+elif package_exists libbrlapi0.6; then
   dev_list="${dev_list} libbrlapi0.6"
 else
   dev_list="${dev_list} libbrlapi0.5"
@@ -455,7 +498,11 @@ fi
 if package_exists libav-tools; then
   dev_list="${dev_list} libav-tools"
 fi
-if package_exists php7.2-cgi; then
+if package_exists php7.4-cgi; then
+  dev_list="${dev_list} php7.4-cgi libapache2-mod-php7.4"
+elif package_exists php7.3-cgi; then
+  dev_list="${dev_list} php7.3-cgi libapache2-mod-php7.3"
+elif package_exists php7.2-cgi; then
   dev_list="${dev_list} php7.2-cgi libapache2-mod-php7.2"
 elif package_exists php7.1-cgi; then
   dev_list="${dev_list} php7.1-cgi libapache2-mod-php7.1"
@@ -469,6 +516,27 @@ fi
 # installing them.
 if package_exists appmenu-gtk; then
   lib_list="$lib_list appmenu-gtk"
+fi
+if package_exists libgnome-keyring0; then
+  lib_list="${lib_list} libgnome-keyring0"
+fi
+if package_exists libgnome-keyring-dev; then
+  lib_list="${lib_list} libgnome-keyring-dev"
+fi
+if package_exists libvulkan-dev; then
+  dev_list="${dev_list} libvulkan-dev"
+fi
+if package_exists libvulkan1; then
+  lib_list="${lib_list} libvulkan1"
+fi
+if package_exists libinput10; then
+  lib_list="${lib_list} libinput10"
+fi
+if package_exists libinput-dev; then
+    dev_list="${dev_list} libinput-dev"
+fi
+if package_exists snapcraft; then
+    dev_list="${dev_list} snapcraft"
 fi
 
 # Cross-toolchain strip is needed for building the sysroots.
@@ -615,11 +683,6 @@ if [ 1 -eq "${do_quick_check-0}" ] ; then
   fi
   exit 0
 fi
-
-if [ "$do_inst_lib32" = "1" ] || [ "$do_inst_nacl" = "1" ]; then
-  sudo dpkg --add-architecture i386
-fi
-sudo apt-get update
 
 echo "Finding missing packages..."
 # Intentionally leaving $packages unquoted so it's more readable.

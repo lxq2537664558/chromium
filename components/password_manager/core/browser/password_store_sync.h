@@ -47,7 +47,49 @@ enum class FormRetrievalResult {
   kEncrytionServiceFailure,
 };
 
-// PasswordStore interface for PasswordSyncableService. It provides access to
+// Error values for adding a login to the store.
+// Used in metrics: "PasswordManager.MergeSyncData.AddLoginSyncError" and
+// "PasswordManager.ApplySyncChanges.AddLoginSyncError". These values are
+// persisted to logs. Entries should not be renumbered and numeric values should
+// never be reused.
+enum class AddLoginError {
+  // Success.
+  kNone = 0,
+  // Database not available.
+  kDbNotAvailable = 1,
+  // The form doesn't the satisfy the constraints.
+  kConstraintViolation = 2,
+  // A service-level failure (e.g., on a platform using a keyring, the keyring
+  // is temporarily unavailable).
+  kEncrytionServiceFailure = 3,
+  // Database error.
+  kDbError = 4,
+
+  kMaxValue = kDbError,
+};
+
+// Error values for updating a login in the store.
+// Used in metrics: "PasswordManager.MergeSyncData.UpdateLoginSyncError" and
+// "PasswordManager.ApplySyncChanges.UpdateLoginSyncError". These values are
+// persisted to logs. Entries should not be renumbered and numeric values should
+// never be reused.
+enum class UpdateLoginError {
+  // Success.
+  kNone = 0,
+  // Database not available.
+  kDbNotAvailable = 1,
+  // No records were updated.
+  kNoUpdatedRecords = 2,
+  // A service-level failure (e.g., on a platform using a keyring, the keyring
+  // is temporarily unavailable).
+  kEncrytionServiceFailure = 3,
+  // Database error.
+  kDbError = 4,
+
+  kMaxValue = kDbError,
+};
+
+// PasswordStore interface for PasswordSyncBridge. It provides access to
 // synchronous methods of PasswordStore which shouldn't be accessible to other
 // classes. These methods are to be called on the PasswordStore background
 // thread only.
@@ -88,11 +130,13 @@ class PasswordStoreSync {
 
   // Synchronous implementation to add the given login.
   virtual PasswordStoreChangeList AddLoginSync(
-      const autofill::PasswordForm& form) = 0;
+      const autofill::PasswordForm& form,
+      AddLoginError* error = nullptr) = 0;
 
   // Synchronous implementation to update the given login.
   virtual PasswordStoreChangeList UpdateLoginSync(
-      const autofill::PasswordForm& form) = 0;
+      const autofill::PasswordForm& form,
+      UpdateLoginError* error = nullptr) = 0;
 
   // Synchronous implementation to remove the given login.
   virtual PasswordStoreChangeList RemoveLoginSync(
@@ -104,6 +148,12 @@ class PasswordStoreSync {
 
   // Notifies observers that password store data may have been changed.
   virtual void NotifyLoginsChanged(const PasswordStoreChangeList& changes) = 0;
+
+  // Notifies the UI that some unsynced credentials will be deleted on sign-out
+  // in order to offer the user the option of saving them in the profile store.
+  // Should only be called for the account store.
+  virtual void NotifyUnsyncedCredentialsWillBeDeleted(
+      const std::vector<autofill::PasswordForm>& unsynced_credentials) = 0;
 
   // The methods below adds transaction support to the password store that's
   // required by sync to guarantee atomic writes of data and sync metadata.
@@ -118,6 +168,15 @@ class PasswordStoreSync {
   // Returns a SyncMetadataStore that sync machinery would use to persist the
   // sync metadata.
   virtual MetadataStore* GetMetadataStore() = 0;
+
+  // Returns whether this is the profile-scoped or the account-scoped storage:
+  // true:  Gaia-account-scoped store, which is used for signed-in but not
+  //        syncing users.
+  // false: Profile-scoped store, which is used for local storage and for
+  //        syncing users.
+  virtual bool IsAccountStore() const = 0;
+
+  virtual bool DeleteAndRecreateDatabaseFile() = 0;
 
  protected:
   virtual ~PasswordStoreSync();

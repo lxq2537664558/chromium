@@ -7,11 +7,11 @@
 #include <memory>
 #include <vector>
 
-#include "base/memory/shared_memory.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 #include "ui/gfx/skia_util.h"
 #include "ui/ozone/platform/wayland/common/wayland_util.h"
 #include "ui/ozone/platform/wayland/host/wayland_connection.h"
+#include "ui/ozone/platform/wayland/host/wayland_shm.h"
 
 namespace ui {
 
@@ -35,6 +35,8 @@ void WaylandCursor::Init(wl_pointer* pointer, WaylandConnection* connection) {
   shm_ = connection->shm();
   pointer_surface_.reset(
       wl_compositor_create_surface(connection->compositor()));
+
+  connection_ = connection;
 }
 
 void WaylandCursor::UpdateBitmap(const std::vector<SkBitmap>& cursor_image,
@@ -79,6 +81,11 @@ void WaylandCursor::UpdateBitmap(const std::vector<SkBitmap>& cursor_image,
 void WaylandCursor::HideCursor(uint32_t serial) {
   DCHECK(input_pointer_);
   wl_pointer_set_cursor(input_pointer_, serial, nullptr, 0, 0);
+
+  wl_surface_attach(pointer_surface_.get(), nullptr, 0, 0);
+  wl_surface_commit(pointer_surface_.get());
+
+  connection_->ScheduleFlush();
 }
 
 }  // namespace ui

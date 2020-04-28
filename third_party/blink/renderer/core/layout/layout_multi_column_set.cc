@@ -185,8 +185,6 @@ bool LayoutMultiColumnSet::NewFragmentainerGroupsAllowed() const {
 LayoutUnit LayoutMultiColumnSet::NextLogicalTopForUnbreakableContent(
     LayoutUnit flow_thread_offset,
     LayoutUnit content_logical_height) const {
-  DCHECK(flow_thread_offset.MightBeSaturated() ||
-         PageLogicalTopForOffset(flow_thread_offset) == flow_thread_offset);
   if (!MultiColumnFlowThread()->EnclosingFragmentationContext()) {
     // If there's no enclosing fragmentation context, there'll ever be only one
     // row, and all columns there will have the same height.
@@ -451,11 +449,8 @@ void LayoutMultiColumnSet::UpdateLayout() {
   }
 }
 
-void LayoutMultiColumnSet::ComputeIntrinsicLogicalWidths(
-    LayoutUnit& min_logical_width,
-    LayoutUnit& max_logical_width) const {
-  min_logical_width = flow_thread_->MinPreferredLogicalWidth();
-  max_logical_width = flow_thread_->MaxPreferredLogicalWidth();
+MinMaxSizes LayoutMultiColumnSet::ComputeIntrinsicLogicalWidths() const {
+  return MinMaxSizes();
 }
 
 void LayoutMultiColumnSet::ComputeLogicalHeight(
@@ -477,15 +472,17 @@ void LayoutMultiColumnSet::ComputeLogicalHeight(
 }
 
 PositionWithAffinity LayoutMultiColumnSet::PositionForPoint(
-    const LayoutPoint& point) const {
+    const PhysicalOffset& point) const {
+  LayoutPoint flipped_point = FlipForWritingMode(point);
   // Convert the visual point to a flow thread point.
   const MultiColumnFragmentainerGroup& row =
-      FragmentainerGroupAtVisualPoint(point);
+      FragmentainerGroupAtVisualPoint(flipped_point);
   LayoutPoint flow_thread_point = row.VisualPointToFlowThreadPoint(
-      point + row.OffsetFromColumnSet(),
+      flipped_point + row.OffsetFromColumnSet(),
       MultiColumnFragmentainerGroup::kSnapToColumn);
   // Then drill into the flow thread, where we'll find the actual content.
-  return FlowThread()->PositionForPoint(flow_thread_point);
+  return FlowThread()->PositionForPoint(
+      FlowThread()->FlipForWritingMode(flow_thread_point));
 }
 
 LayoutUnit LayoutMultiColumnSet::ColumnGap() const {
@@ -506,8 +503,9 @@ unsigned LayoutMultiColumnSet::ActualColumnCount() const {
   return FirstFragmentainerGroup().ActualColumnCount();
 }
 
-void LayoutMultiColumnSet::PaintObject(const PaintInfo& paint_info,
-                                       const LayoutPoint& paint_offset) const {
+void LayoutMultiColumnSet::PaintObject(
+    const PaintInfo& paint_info,
+    const PhysicalOffset& paint_offset) const {
   MultiColumnSetPainter(*this).PaintObject(paint_info, paint_offset);
 }
 
@@ -533,12 +531,16 @@ void LayoutMultiColumnSet::ComputeVisualOverflow(
     AddVisualOverflowFromFloats();
 
   if (VisualOverflowRect() != previous_visual_overflow_rect) {
+    InvalidateIntersectionObserverCachedRects();
     SetShouldCheckForPaintInvalidation();
     GetFrameView()->SetIntersectionObservationState(LocalFrameView::kDesired);
   }
 }
 
 void LayoutMultiColumnSet::AddVisualOverflowFromChildren() {
+  if (LayoutBlockedByDisplayLock(DisplayLockLifecycleTarget::kChildren))
+    return;
+
   // It's useless to calculate overflow if we haven't determined the page
   // logical height yet.
   if (!IsPageLogicalHeightKnown())
@@ -553,6 +555,9 @@ void LayoutMultiColumnSet::AddVisualOverflowFromChildren() {
 }
 
 void LayoutMultiColumnSet::AddLayoutOverflowFromChildren() {
+  if (LayoutBlockedByDisplayLock(DisplayLockLifecycleTarget::kChildren))
+    return;
+
   // It's useless to calculate overflow if we haven't determined the page
   // logical height yet.
   if (!IsPageLogicalHeightKnown())
@@ -663,16 +668,17 @@ bool LayoutMultiColumnSet::ComputeColumnRuleBounds(
   return true;
 }
 
-LayoutRect LayoutMultiColumnSet::LocalVisualRectIgnoringVisibility() const {
-  LayoutRect block_flow_bounds =
+PhysicalRect LayoutMultiColumnSet::LocalVisualRectIgnoringVisibility() const {
+  PhysicalRect block_flow_bounds =
       LayoutBlockFlow::LocalVisualRectIgnoringVisibility();
 
   // Now add in column rule bounds, if present.
   Vector<LayoutRect> column_rule_bounds;
   if (ComputeColumnRuleBounds(LayoutPoint(), column_rule_bounds)) {
-    for (auto& bound : column_rule_bounds)
-      block_flow_bounds.Unite(bound);
+    block_flow_bounds.Unite(
+        PhysicalRectToBeNoop(UnionRect(column_rule_bounds)));
   }
+
   return block_flow_bounds;
 }
 

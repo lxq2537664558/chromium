@@ -8,11 +8,11 @@
 
 #include "base/bind.h"
 #include "base/task/post_task.h"
+#include "base/task/thread_pool.h"
 #include "base/trace_event/trace_event.h"
 #include "ui/gfx/gpu_fence.h"
 #include "ui/ozone/common/egl_util.h"
-#include "ui/ozone/platform/wayland/gpu/wayland_connection_proxy.h"
-#include "ui/ozone/platform/wayland/gpu/wayland_surface_factory.h"
+#include "ui/ozone/platform/wayland/gpu/wayland_buffer_manager_gpu.h"
 
 namespace ui {
 
@@ -27,22 +27,21 @@ void WaitForFence(EGLDisplay display, EGLSyncKHR fence) {
 }  // namespace
 
 GbmSurfacelessWayland::GbmSurfacelessWayland(
-    WaylandSurfaceFactory* surface_factory,
-    WaylandConnectionProxy* connection,
+    WaylandBufferManagerGpu* buffer_manager,
     gfx::AcceleratedWidget widget)
     : SurfacelessEGL(gfx::Size()),
-      surface_factory_(surface_factory),
-      connection_(connection),
+      buffer_manager_(buffer_manager),
       widget_(widget),
       has_implicit_external_sync_(
           HasEGLExtension("EGL_ARM_implicit_external_sync")),
       weak_factory_(this) {
-  surface_factory_->RegisterSurface(widget_, this);
+  buffer_manager_->RegisterSurface(widget_, this);
   unsubmitted_frames_.push_back(std::make_unique<PendingFrame>());
 }
 
-void GbmSurfacelessWayland::QueueOverlayPlane(OverlayPlane plane) {
-  planes_.push_back(std::move(plane));
+void GbmSurfacelessWayland::QueueOverlayPlane(OverlayPlane plane,
+                                              uint32_t buffer_id) {
+  planes_.push_back({std::move(plane), buffer_id});
 }
 
 bool GbmSurfacelessWayland::ScheduleOverlayPlane(
@@ -61,10 +60,6 @@ bool GbmSurfacelessWayland::ScheduleOverlayPlane(
 
 bool GbmSurfacelessWayland::IsOffscreen() {
   return false;
-}
-
-bool GbmSurfacelessWayland::SupportsPresentationCallback() {
-  return true;
 }
 
 bool GbmSurfacelessWayland::SupportsAsyncSwap() {
@@ -100,7 +95,8 @@ void GbmSurfacelessWayland::SwapBuffersAsync(
 
   // TODO(dcastagna): remove glFlush since eglImageFlushExternalEXT called on
   // the image should be enough (https://crbug.com/720045).
-  glFlush();
+  if (!no_gl_flush_for_tests_)
+    glFlush();
   unsubmitted_frames_.back()->Flush();
 
   PendingFrame* frame = unsubmitted_frames_.back().get();
@@ -125,7 +121,7 @@ void GbmSurfacelessWayland::SwapBuffersAsync(
   base::OnceClosure fence_retired_callback = base::BindOnce(
       &GbmSurfacelessWayland::FenceRetired, weak_factory_.GetWeakPtr(), frame);
 
-  base::PostTaskWithTraitsAndReply(
+  base::ThreadPool::PostTaskAndReply(
       FROM_HERE,
       {base::MayBlock(), base::TaskShutdownBehavior::CONTINUE_ON_SHUTDOWN},
       std::move(fence_wait_task), std::move(fence_retired_callback));
@@ -171,8 +167,14 @@ void GbmSurfacelessWayland::SetRelyOnImplicitSync() {
   use_egl_fence_sync_ = false;
 }
 
+gfx::SurfaceOrigin GbmSurfacelessWayland::GetOrigin() const {
+  // GbmSurfacelessWayland's y-axis is flipped compare to GL - (0,0) is at top
+  // left corner.
+  return gfx::SurfaceOrigin::kTopLeft;
+}
+
 GbmSurfacelessWayland::~GbmSurfacelessWayland() {
-  surface_factory_->UnregisterSurface(widget_);
+  buffer_manager_->UnregisterSurface(widget_);
 }
 
 GbmSurfacelessWayland::PendingFrame::PendingFrame() {}
@@ -215,9 +217,9 @@ void GbmSurfacelessWayland::SubmitFrame() {
       return;
     }
 
-    submitted_frame_->buffer_id = planes_.back().pixmap->GetUniqueId();
-    connection_->ScheduleBufferSwap(widget_, submitted_frame_->buffer_id,
-                                    submitted_frame_->damage_region_);
+    submitted_frame_->buffer_id = planes_.back().buffer_id;
+    buffer_manager_->CommitBuffer(widget_, submitted_frame_->buffer_id,
+                                  submitted_frame_->damage_region_);
 
     planes_.clear();
   }
@@ -234,6 +236,10 @@ EGLSyncKHR GbmSurfacelessWayland::InsertFence(bool implicit) {
 void GbmSurfacelessWayland::FenceRetired(PendingFrame* frame) {
   frame->ready = true;
   SubmitFrame();
+}
+
+void GbmSurfacelessWayland::SetNoGLFlushForTests() {
+  no_gl_flush_for_tests_ = true;
 }
 
 void GbmSurfacelessWayland::OnSubmission(uint32_t buffer_id,
@@ -256,6 +262,7 @@ void GbmSurfacelessWayland::OnSubmission(uint32_t buffer_id,
 void GbmSurfacelessWayland::OnPresentation(
     uint32_t buffer_id,
     const gfx::PresentationFeedback& feedback) {
+  DCHECK(!pending_presentation_frames_.empty());
   auto* frame = pending_presentation_frames_.front().get();
   DCHECK_EQ(frame->buffer_id, buffer_id);
   std::move(frame->presentation_callback).Run(feedback);

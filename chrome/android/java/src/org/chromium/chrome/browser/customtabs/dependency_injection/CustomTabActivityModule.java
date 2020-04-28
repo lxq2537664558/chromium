@@ -4,8 +4,10 @@
 
 package org.chromium.chrome.browser.customtabs.dependency_injection;
 
+import org.chromium.chrome.browser.browserservices.BrowserServicesActivityTabController;
 import org.chromium.chrome.browser.browserservices.ClientAppDataRegister;
-import org.chromium.chrome.browser.customtabs.CustomTabIntentDataProvider;
+import org.chromium.chrome.browser.customtabs.content.CustomTabActivityTabController;
+import org.chromium.chrome.browser.init.StartupTabPreloader;
 
 import dagger.Module;
 import dagger.Provides;
@@ -15,19 +17,25 @@ import dagger.Provides;
  */
 @Module
 public class CustomTabActivityModule {
-    private final CustomTabIntentDataProvider mIntentDataProvider;
+    private final StartupTabPreloader mStartupTabPreloader;
 
-    public CustomTabActivityModule(CustomTabIntentDataProvider intentDataProvider) {
-        mIntentDataProvider = intentDataProvider;
+    public CustomTabActivityModule(StartupTabPreloader startupTabPreloader) {
+        mStartupTabPreloader = startupTabPreloader;
     }
 
     @Provides
-    public CustomTabIntentDataProvider provideIntentDataProvider() {
-        return mIntentDataProvider;
+    public BrowserServicesActivityTabController provideTabController(
+            CustomTabActivityTabController customTabActivityTabController) {
+        return customTabActivityTabController;
     }
 
     @Provides
     public ClientAppDataRegister provideClientAppDataRegister() {
         return new ClientAppDataRegister();
+    }
+
+    @Provides
+    public StartupTabPreloader provideStartupTabPreloader() {
+        return mStartupTabPreloader;
     }
 }

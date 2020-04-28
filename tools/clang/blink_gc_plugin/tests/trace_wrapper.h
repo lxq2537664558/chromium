@@ -16,30 +16,26 @@ namespace blink {
 class A : public GarbageCollected<A> {
  public:
   void Trace(Visitor*) {
-    // Missing visitor->Trace(a_);
     // Missing visitor->Trace(str_);
   }
 
  private:
-  TraceWrapperMember<A> a_;
   TraceWrapperV8Reference<v8::String> str_;
 };
 
-class B : public GarbageCollected<A> {
+class B : public GarbageCollected<B> {
  public:
   void Trace(Visitor* visitor);
-  void TraceAfterDispatch(Visitor*) {}
+  void TraceAfterDispatch(Visitor*) const {}
 };
 
 class C : public B {
  public:
-  void TraceAfterDispatch(Visitor*) {
-    // Missing visitor->Trace(a_);
+  void TraceAfterDispatch(Visitor*) const {
     // Missing visitor->Trace(str_);
   }
 
  private:
-  TraceWrapperMember<A> a_;
   TraceWrapperV8Reference<v8::String> str_;
 };
 

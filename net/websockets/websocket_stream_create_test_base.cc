@@ -34,7 +34,12 @@ class WebSocketStreamCreateTestBase::TestConnectDelegate
     owner_->url_request_ = request;
   }
 
-  void OnSuccess(std::unique_ptr<WebSocketStream> stream) override {
+  void OnSuccess(
+      std::unique_ptr<WebSocketStream> stream,
+      std::unique_ptr<WebSocketHandshakeResponseInfo> response) override {
+    if (owner_->response_info_)
+      ADD_FAILURE();
+    owner_->response_info_ = std::move(response);
     stream.swap(owner_->stream_);
     done_callback_.Run();
   }
@@ -52,16 +57,10 @@ class WebSocketStreamCreateTestBase::TestConnectDelegate
     owner_->request_info_ = std::move(request);
   }
 
-  void OnFinishOpeningHandshake(
-      std::unique_ptr<WebSocketHandshakeResponseInfo> response) override {
-    if (owner_->response_info_)
-      ADD_FAILURE();
-    owner_->response_info_ = std::move(response);
-  }
-
   void OnSSLCertificateError(
       std::unique_ptr<WebSocketEventInterface::SSLErrorCallbacks>
           ssl_error_callbacks,
+      int net_error,
       const SSLInfo& ssl_info,
       bool fatal) override {
     owner_->ssl_error_callbacks_ = std::move(ssl_error_callbacks);
@@ -96,14 +95,16 @@ void WebSocketStreamCreateTestBase::CreateAndConnectStream(
     const GURL& socket_url,
     const std::vector<std::string>& sub_protocols,
     const url::Origin& origin,
-    const GURL& site_for_cookies,
+    const SiteForCookies& site_for_cookies,
+    const net::NetworkIsolationKey& network_isolation_key,
     const HttpRequestHeaders& additional_headers,
     std::unique_ptr<base::OneShotTimer> timer) {
   auto connect_delegate = std::make_unique<TestConnectDelegate>(
       this, connect_run_loop_.QuitClosure());
   auto api_delegate = std::make_unique<TestWebSocketStreamRequestAPI>();
   stream_request_ = WebSocketStream::CreateAndConnectStreamForTesting(
-      socket_url, sub_protocols, origin, site_for_cookies, additional_headers,
+      socket_url, sub_protocols, origin, site_for_cookies,
+      network_isolation_key, additional_headers,
       url_request_context_host_.GetURLRequestContext(), NetLogWithSource(),
       std::move(connect_delegate),
       timer ? std::move(timer) : std::make_unique<base::OneShotTimer>(),

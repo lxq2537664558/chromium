@@ -7,6 +7,7 @@ import("//build/config/ui.gni")
 
 source_set("text_input_types") {
   sources = [
+    "text_input_action.h",
     "text_input_flags.h",
     "text_input_mode.h",
     "text_input_type.h",
@@ -56,6 +57,7 @@ jumbo_component("ime") {
   sources = [
     "constants.cc",
     "constants.h",
+    "ime_assistive_window_handler_interface.h",
     "ime_bridge.cc",
     "ime_bridge.h",
     "ime_candidate_window_handler_interface.h",
@@ -64,7 +66,6 @@ jumbo_component("ime") {
     "input_method.h",
     "input_method_base.cc",
     "input_method_base.h",
-    "input_method_delegate.cc",
     "input_method_delegate.h",
     "input_method_keyboard_controller.h",
     "input_method_keyboard_controller_observer.h",
@@ -91,7 +92,7 @@ jumbo_component("ime") {
     "//base:i18n",
     "//skia",
     "//third_party/icu",
-    "//ui/base/ime/mojo",
+    "//ui/base/ime/mojom",
     "//ui/events",
     "//ui/events:dom_keycode_converter",
     "//ui/events:events",

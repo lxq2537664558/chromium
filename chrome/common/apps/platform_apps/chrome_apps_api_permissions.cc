@@ -22,13 +22,19 @@ std::unique_ptr<extensions::APIPermission> CreateAPIPermission(
 // ChromePermissionMessageProvider::GetPermissionMessages as well.
 constexpr extensions::APIPermissionInfo::InitInfo permissions_to_register[] = {
     {extensions::APIPermission::kArcAppsPrivate, "arcAppsPrivate"},
-    {extensions::APIPermission::kBrowser, "browser"},
+    {extensions::APIPermission::kBrowser, "browser",
+     extensions::APIPermissionInfo::
+         kFlagDoesNotRequireManagedSessionFullLoginWarning},
+    {extensions::APIPermission::kFirstRunPrivate, "firstRunPrivate",
+     extensions::APIPermissionInfo::kFlagCannotBeOptional},
     {extensions::APIPermission::kMusicManagerPrivate, "musicManagerPrivate",
      extensions::APIPermissionInfo::kFlagCannotBeOptional},
     {extensions::APIPermission::kMediaGalleries, "mediaGalleries",
      extensions::APIPermissionInfo::kFlagNone,
      &CreateAPIPermission<chrome_apps::MediaGalleriesPermission>},
-    {extensions::APIPermission::kPointerLock, "pointerLock"},
+    {extensions::APIPermission::kPointerLock, "pointerLock",
+     extensions::APIPermissionInfo::
+         kFlagDoesNotRequireManagedSessionFullLoginWarning},
     {extensions::APIPermission::kSyncFileSystem, "syncFileSystem"},
     {extensions::APIPermission::kWebstoreWidgetPrivate, "webstoreWidgetPrivate",
      extensions::APIPermissionInfo::kFlagCannotBeOptional},

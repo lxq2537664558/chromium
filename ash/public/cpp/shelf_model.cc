@@ -5,22 +5,22 @@
 #include "ash/public/cpp/shelf_model.h"
 
 #include <algorithm>
+#include <utility>
 
 #include "ash/public/cpp/shelf_item_delegate.h"
 #include "ash/public/cpp/shelf_model_observer.h"
+#include "ash/public/cpp/shelf_types.h"
 
 namespace ash {
 
 namespace {
 
+static ShelfModel* g_shelf_model = nullptr;
+
 int ShelfItemTypeToWeight(ShelfItemType type) {
   switch (type) {
-    case TYPE_APP_LIST:
-    case TYPE_BACK_BUTTON:
-      // TODO(skuhne): If the app list and back button items become movable,
-      // this needs to be a fallthrough.
-      return 0;
     case TYPE_BROWSER_SHORTCUT:
+    case TYPE_LACROS_BROWSER:
     case TYPE_PINNED_APP:
       return 1;
     case TYPE_APP:
@@ -42,26 +42,16 @@ bool CompareByWeight(const ShelfItem& a, const ShelfItem& b) {
 
 }  // namespace
 
-// TODO(michaelpg): Rename App List item to Home Button.
-const char kAppListId[] = "jlfapfmkapbjlfbpjedlinehodkccjee";
-const char kBackButtonId[] = "icmmkgojeloilfifneofeejijgdhjknf";
-
-ShelfModel::ShelfModel() {
-  // Add the back button and app list item; its title and delegate are set in
-  // ShelfController. This avoids an ash/public dep on ash/strings, and a
-  // Chrome-side delegate.
-  ShelfItem back_button_item;
-  back_button_item.type = TYPE_BACK_BUTTON;
-  back_button_item.id = ShelfID(kBackButtonId);
-  const int back_button_index = Add(back_button_item);
-  DCHECK_EQ(0, back_button_index);
-
-  ShelfItem app_list_item;
-  app_list_item.type = TYPE_APP_LIST;
-  app_list_item.id = ShelfID(kAppListId);
-  const int app_list_index = Add(app_list_item);
-  DCHECK_EQ(1, app_list_index);
+ShelfModel* ShelfModel::Get() {
+  DCHECK(g_shelf_model);
+  return g_shelf_model;
 }
+
+void ShelfModel::SetInstance(ShelfModel* shelf_model) {
+  g_shelf_model = shelf_model;
+}
+
+ShelfModel::ShelfModel() = default;
 
 ShelfModel::~ShelfModel() = default;
 
@@ -90,8 +80,9 @@ void ShelfModel::PinAppWithID(const std::string& app_id) {
 
 bool ShelfModel::IsAppPinned(const std::string& app_id) {
   const int index = ItemIndexByID(ShelfID(app_id));
-  return index >= 0 && (items_[index].type == TYPE_PINNED_APP ||
-                        items_[index].type == TYPE_BROWSER_SHORTCUT);
+  if (index < 0)
+    return false;
+  return IsPinnedShelfItemType(items_[index].type);
 }
 
 void ShelfModel::UnpinAppWithID(const std::string& app_id) {
@@ -142,6 +133,44 @@ void ShelfModel::RemoveItemAt(int index) {
   id_to_item_delegate_map_.erase(old_item.id);
   for (auto& observer : observers_)
     observer.ShelfItemRemoved(index, old_item);
+}
+
+std::unique_ptr<ShelfItemDelegate>
+ShelfModel::RemoveItemAndTakeShelfItemDelegate(const ShelfID& shelf_id) {
+  const int index = ItemIndexByID(shelf_id);
+  if (index < 0)
+    return nullptr;
+
+  auto it = id_to_item_delegate_map_.find(shelf_id);
+  std::unique_ptr<ShelfItemDelegate> item = std::move(it->second);
+  RemoveItemAt(index);
+  return item;
+}
+
+bool ShelfModel::CanSwap(int index, bool with_next) const {
+  const int target_index = with_next ? index + 1 : index - 1;
+
+  // Out of bounds issues, or trying to swap the first item with the previous
+  // one, or the last item with the next one.
+  if (index < 0 || target_index >= item_count() || target_index < 0)
+    return false;
+
+  const ShelfItem source_item = items()[index];
+  const ShelfItem target_item = items()[target_index];
+  // Trying to swap two items of different pin states.
+  if (!SamePinState(source_item.type, target_item.type))
+    return false;
+
+  return true;
+}
+
+bool ShelfModel::Swap(int index, bool with_next) {
+  if (!CanSwap(index, with_next))
+    return false;
+
+  const int target_index = with_next ? index + 1 : index - 1;
+  Move(index, target_index);
+  return true;
 }
 
 void ShelfModel::Move(int index, int target_index) {
@@ -202,6 +231,16 @@ void ShelfModel::SetActiveShelfID(const ShelfID& shelf_id) {
 void ShelfModel::OnItemStatusChanged(const ShelfID& id) {
   for (auto& observer : observers_)
     observer.ShelfItemStatusChanged(id);
+}
+
+void ShelfModel::OnItemRippedOff() {
+  for (auto& observer : observers_)
+    observer.ShelfItemRippedOff();
+}
+
+void ShelfModel::OnItemReturnedFromRipOff(int index) {
+  for (auto& observer : observers_)
+    observer.ShelfItemReturnedFromRipOff(index);
 }
 
 void ShelfModel::RemoveNotificationRecord(const std::string& notification_id) {

@@ -22,7 +22,7 @@ NonMainThreadSchedulerImpl::~NonMainThreadSchedulerImpl() = default;
 
 // static
 std::unique_ptr<NonMainThreadSchedulerImpl> NonMainThreadSchedulerImpl::Create(
-    WebThreadType thread_type,
+    ThreadType thread_type,
     base::sequence_manager::SequenceManager* sequence_manager,
     WorkerSchedulerProxy* proxy) {
   return std::make_unique<WorkerThreadScheduler>(thread_type, sequence_manager,
@@ -59,6 +59,16 @@ void NonMainThreadSchedulerImpl::PostNonNestableIdleTask(
   IdleTaskRunner()->PostNonNestableIdleTask(
       location, base::BindOnce(&NonMainThreadSchedulerImpl::RunIdleTask,
                                std::move(task)));
+}
+
+void NonMainThreadSchedulerImpl::PostDelayedIdleTask(
+    const base::Location& location,
+    base::TimeDelta delay,
+    Thread::IdleTask task) {
+  IdleTaskRunner()->PostDelayedIdleTask(
+      location, delay,
+      base::BindOnce(&NonMainThreadSchedulerImpl::RunIdleTask,
+                     std::move(task)));
 }
 
 std::unique_ptr<blink::PageScheduler>

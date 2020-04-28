@@ -11,8 +11,8 @@
 #include "base/macros.h"
 #include "base/sequenced_task_runner.h"
 #include "build/build_config.h"
-#include "chrome/browser/profiles/off_the_record_profile_io_data.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/profiles/profile_io_data_handle.h"
 #include "chrome/browser/ui/browser_list.h"
 #include "components/domain_reliability/clear_mode.h"
 #include "content/public/browser/content_browser_client.h"
@@ -37,16 +37,23 @@ class PrefServiceSyncable;
 ////////////////////////////////////////////////////////////////////////////////
 class OffTheRecordProfileImpl : public Profile {
  public:
-  explicit OffTheRecordProfileImpl(Profile* real_profile);
+  OffTheRecordProfileImpl(Profile* real_profile,
+                          const OTRProfileID& otr_profile_id);
   ~OffTheRecordProfileImpl() override;
   void Init();
 
   // Profile implementation.
   std::string GetProfileUserName() const override;
   ProfileType GetProfileType() const override;
-  Profile* GetOffTheRecordProfile() override;
-  void DestroyOffTheRecordProfile() override;
-  bool HasOffTheRecordProfile() override;
+  // TODO(https://crbug.com/1033903): Remove the default value.
+  Profile* GetOffTheRecordProfile(
+      const OTRProfileID& otr_profile_id = OTRProfileID::PrimaryID()) override;
+  std::vector<Profile*> GetAllOffTheRecordProfiles() override;
+  void DestroyOffTheRecordProfile(Profile* otr_profile) override;
+  // TODO(https://crbug.com/1033903): Remove the default value.
+  bool HasOffTheRecordProfile(
+      const OTRProfileID& otr_profile_id = OTRProfileID::PrimaryID()) override;
+  bool HasAnyOffTheRecordProfile() override;
   Profile* GetOriginalProfile() override;
   const Profile* GetOriginalProfile() const override;
   bool IsSupervised() const override;
@@ -57,28 +64,22 @@ class OffTheRecordProfileImpl : public Profile {
   PrefService* GetPrefs() override;
   const PrefService* GetPrefs() const override;
   PrefService* GetOffTheRecordPrefs() override;
-  net::URLRequestContextGetter* GetRequestContext() override;
-  base::OnceCallback<net::CookieStore*()> GetExtensionsCookieStoreGetter()
+  policy::SchemaRegistryService* GetPolicySchemaRegistryService() override;
+#if defined(OS_CHROMEOS)
+  policy::UserCloudPolicyManagerChromeOS* GetUserCloudPolicyManagerChromeOS()
       override;
+  policy::ActiveDirectoryPolicyManager* GetActiveDirectoryPolicyManager()
+      override;
+#else
+  policy::UserCloudPolicyManager* GetUserCloudPolicyManager() override;
+#endif  // defined(OS_CHROMEOS)
   scoped_refptr<network::SharedURLLoaderFactory> GetURLLoaderFactory() override;
-  net::URLRequestContextGetter* CreateRequestContext(
-      content::ProtocolHandlerMap* protocol_handlers,
-      content::URLRequestInterceptorScopedVector request_interceptors) override;
-  net::URLRequestContextGetter* CreateRequestContextForStoragePartition(
-      const base::FilePath& partition_path,
-      bool in_memory,
-      content::ProtocolHandlerMap* protocol_handlers,
-      content::URLRequestInterceptorScopedVector request_interceptors) override;
-  net::URLRequestContextGetter* CreateMediaRequestContext() override;
-  net::URLRequestContextGetter* CreateMediaRequestContextForStoragePartition(
-      const base::FilePath& partition_path,
-      bool in_memory) override;
-  std::unique_ptr<service_manager::Service> HandleServiceRequest(
-      const std::string& service_name,
-      service_manager::mojom::ServiceRequest request) override;
   bool IsSameProfile(Profile* profile) override;
   base::Time GetStartTime() const override;
   ProfileKey* GetProfileKey() const override;
+  policy::ProfilePolicyConnector* GetProfilePolicyConnector() override;
+  const policy::ProfilePolicyConnector* GetProfilePolicyConnector()
+      const override;
   base::FilePath last_selected_directory() override;
   void set_last_selected_directory(const base::FilePath& path) override;
   bool WasCreatedByVersionOrLater(const std::string& version) override;
@@ -92,20 +93,26 @@ class OffTheRecordProfileImpl : public Profile {
 #endif  // defined(OS_CHROMEOS)
 
   GURL GetHomePage() override;
+  void SetCreationTimeForTesting(base::Time creation_time) override;
 
   // content::BrowserContext implementation:
+  base::FilePath GetPath() override;
   base::FilePath GetPath() const override;
+  base::Time GetCreationTime() const override;
 #if !defined(OS_ANDROID)
   std::unique_ptr<content::ZoomLevelDelegate> CreateZoomLevelDelegate(
       const base::FilePath& partition_path) override;
 #endif  // !defined(OS_ANDROID)
   scoped_refptr<base::SequencedTaskRunner> GetIOTaskRunner() override;
+  bool IsOffTheRecord() override;
   bool IsOffTheRecord() const override;
+  const OTRProfileID& GetOTRProfileID() const override;
   content::DownloadManagerDelegate* GetDownloadManagerDelegate() override;
   content::ResourceContext* GetResourceContext() override;
   content::BrowserPluginGuestManager* GetGuestManager() override;
   storage::SpecialStoragePolicy* GetSpecialStoragePolicy() override;
   content::PushMessagingService* GetPushMessagingService() override;
+  content::StorageNotificationService* GetStorageNotificationService() override;
   content::SSLHostStateDelegate* GetSSLHostStateDelegate() override;
   content::PermissionControllerDelegate* GetPermissionControllerDelegate()
       override;
@@ -121,12 +128,12 @@ class OffTheRecordProfileImpl : public Profile {
       std::vector<network::mojom::CorsOriginPatternPtr> allow_patterns,
       std::vector<network::mojom::CorsOriginPatternPtr> block_patterns,
       base::OnceClosure closure) override;
-  const content::SharedCorsOriginAccessList* GetSharedCorsOriginAccessList()
-      const override;
+  content::SharedCorsOriginAccessList* GetSharedCorsOriginAccessList() override;
+  bool ShouldEnableOutOfBlinkCors() override;
+  content::NativeFileSystemPermissionContext*
+  GetNativeFileSystemPermissionContext() override;
 
  private:
-  void InitIoData();
-
 #if !defined(OS_ANDROID)
   // Allows a profile to track changes in zoom levels in its parent profile.
   void TrackZoomLevelsFromParent();
@@ -142,6 +149,8 @@ class OffTheRecordProfileImpl : public Profile {
   // The real underlying profile.
   Profile* profile_;
 
+  const OTRProfileID otr_profile_id_;
+
   std::unique_ptr<sync_preferences::PrefServiceSyncable> prefs_;
 
 #if !defined(OS_ANDROID)
@@ -149,7 +158,7 @@ class OffTheRecordProfileImpl : public Profile {
   std::unique_ptr<ChromeZoomLevelPrefs::DefaultZoomLevelSubscription>
       parent_default_zoom_level_subscription_;
 #endif  // !defined(OS_ANDROID)
-  std::unique_ptr<OffTheRecordProfileIOData::Handle> io_data_;
+  ProfileIODataHandle io_data_;
 
   // Time we were started.
   base::Time start_time_;

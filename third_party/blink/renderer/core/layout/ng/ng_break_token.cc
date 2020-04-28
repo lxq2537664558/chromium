@@ -22,7 +22,7 @@ static_assert(sizeof(NGBreakToken) == sizeof(SameSizeAsNGBreakToken),
 
 }  // namespace
 
-#ifndef NDEBUG
+#if DCHECK_IS_ON()
 
 namespace {
 
@@ -60,8 +60,8 @@ void NGBreakToken::ShowBreakTokenTree() const {
   StringBuilder string_builder;
   string_builder.Append(".:: LayoutNG Break Token Tree ::.\n");
   AppendBreakTokenToString(this, &string_builder);
-  fprintf(stderr, "%s\n", string_builder.ToString().Utf8().data());
+  fprintf(stderr, "%s\n", string_builder.ToString().Utf8().c_str());
 }
-#endif  // NDEBUG
+#endif  // DCHECK_IS_ON()
 
 }  // namespace blink

@@ -29,10 +29,11 @@
 #include "net/cert/crl_set.h"
 #include "net/cert/x509_certificate.h"
 #include "net/cert/x509_util_nss.h"
+#include "net/log/net_log_with_source.h"
 #include "net/test/cert_test_util.h"
 #include "net/test/gtest_util.h"
 #include "net/test/test_data_directory.h"
-#include "net/test/test_with_scoped_task_environment.h"
+#include "net/test/test_with_task_environment.h"
 #include "net/third_party/mozilla_security_manager/nsNSSCertificateDB.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -60,7 +61,7 @@ std::string GetSubjectCN(CERTCertificate* cert) {
 
 }  // namespace
 
-class CertDatabaseNSSTest : public TestWithScopedTaskEnvironment {
+class CertDatabaseNSSTest : public TestWithTaskEnvironment {
  public:
   void SetUp() override {
     ASSERT_TRUE(test_nssdb_.is_open());
@@ -133,15 +134,6 @@ class CertDatabaseNSSTest : public TestWithScopedTaskEnvironment {
   crypto::ScopedPK11Slot public_slot_;
   scoped_refptr<CRLSet> crl_set_;
 };
-
-TEST_F(CertDatabaseNSSTest, ListCertsSync) {
-  // This test isn't terribly useful, though it might help with memory
-  // leak tests.
-  ScopedCERTCertificateList certs = cert_db_->ListCertsSync();
-  // The test DB is empty, but let's assume there will always be something in
-  // the other slots.
-  EXPECT_LT(0U, certs.size());
-}
 
 TEST_F(CertDatabaseNSSTest, ListCerts) {
   // This test isn't terribly useful, though it might help with memory
@@ -573,9 +565,10 @@ TEST_F(CertDatabaseNSSTest, ImportServerCert) {
   scoped_refptr<CertVerifyProc> verify_proc(new CertVerifyProcNSS());
   int flags = 0;
   CertVerifyResult verify_result;
-  int error = verify_proc->Verify(x509_found_server_cert.get(), "127.0.0.1",
-                                  std::string(), flags, crl_set_.get(),
-                                  empty_cert_list_, &verify_result);
+  int error = verify_proc->Verify(
+      x509_found_server_cert.get(), "127.0.0.1",
+      /*ocsp_response=*/std::string(), /*sct_list=*/std::string(), flags,
+      crl_set_.get(), empty_cert_list_, &verify_result, NetLogWithSource());
   EXPECT_THAT(error, IsError(ERR_CERT_AUTHORITY_INVALID));
   EXPECT_EQ(CERT_STATUS_AUTHORITY_INVALID, verify_result.cert_status);
 }
@@ -604,9 +597,10 @@ TEST_F(CertDatabaseNSSTest, ImportServerCert_SelfSigned) {
   scoped_refptr<CertVerifyProc> verify_proc(new CertVerifyProcNSS());
   int flags = 0;
   CertVerifyResult verify_result;
-  int error = verify_proc->Verify(x509_puny_cert.get(), "xn--wgv71a119e.com",
-                                  std::string(), flags, crl_set_.get(),
-                                  empty_cert_list_, &verify_result);
+  int error = verify_proc->Verify(
+      x509_puny_cert.get(), "xn--wgv71a119e.com",
+      /*ocsp_response=*/std::string(), /*sct_list=*/std::string(), flags,
+      crl_set_.get(), empty_cert_list_, &verify_result, NetLogWithSource());
   EXPECT_THAT(error, IsError(ERR_CERT_AUTHORITY_INVALID));
   EXPECT_EQ(CERT_STATUS_AUTHORITY_INVALID, verify_result.cert_status);
 }
@@ -636,9 +630,10 @@ TEST_F(CertDatabaseNSSTest, ImportServerCert_SelfSigned_Trusted) {
   scoped_refptr<CertVerifyProc> verify_proc(new CertVerifyProcNSS());
   int flags = 0;
   CertVerifyResult verify_result;
-  int error = verify_proc->Verify(x509_puny_cert.get(), "xn--wgv71a119e.com",
-                                  std::string(), flags, crl_set_.get(),
-                                  empty_cert_list_, &verify_result);
+  int error = verify_proc->Verify(
+      x509_puny_cert.get(), "xn--wgv71a119e.com",
+      /*ocsp_response=*/std::string(), /*sct_list=*/std::string(), flags,
+      crl_set_.get(), empty_cert_list_, &verify_result, NetLogWithSource());
   EXPECT_THAT(error, IsOk());
   EXPECT_EQ(0U, verify_result.cert_status);
 }
@@ -671,9 +666,10 @@ TEST_F(CertDatabaseNSSTest, ImportCaAndServerCert) {
   scoped_refptr<CertVerifyProc> verify_proc(new CertVerifyProcNSS());
   int flags = 0;
   CertVerifyResult verify_result;
-  int error = verify_proc->Verify(x509_server_cert.get(), "127.0.0.1",
-                                  std::string(), flags, crl_set_.get(),
-                                  empty_cert_list_, &verify_result);
+  int error = verify_proc->Verify(
+      x509_server_cert.get(), "127.0.0.1",
+      /*ocsp_response=*/std::string(), /*sct_list=*/std::string(), flags,
+      crl_set_.get(), empty_cert_list_, &verify_result, NetLogWithSource());
   EXPECT_THAT(error, IsOk());
   EXPECT_EQ(0U, verify_result.cert_status);
 }
@@ -711,9 +707,10 @@ TEST_F(CertDatabaseNSSTest, ImportCaAndServerCert_DistrustServer) {
   scoped_refptr<CertVerifyProc> verify_proc(new CertVerifyProcNSS());
   int flags = 0;
   CertVerifyResult verify_result;
-  int error = verify_proc->Verify(x509_server_cert.get(), "127.0.0.1",
-                                  std::string(), flags, crl_set_.get(),
-                                  empty_cert_list_, &verify_result);
+  int error = verify_proc->Verify(
+      x509_server_cert.get(), "127.0.0.1",
+      /*ocsp_response=*/std::string(), /*sct_list=*/std::string(), flags,
+      crl_set_.get(), empty_cert_list_, &verify_result, NetLogWithSource());
   EXPECT_THAT(error, IsError(ERR_CERT_REVOKED));
   EXPECT_EQ(CERT_STATUS_REVOKED, verify_result.cert_status);
 }
@@ -760,9 +757,10 @@ TEST_F(CertDatabaseNSSTest, TrustIntermediateCa) {
   scoped_refptr<CertVerifyProc> verify_proc(new CertVerifyProcNSS());
   int flags = 0;
   CertVerifyResult verify_result;
-  int error = verify_proc->Verify(x509_server_cert.get(), "127.0.0.1",
-                                  std::string(), flags, crl_set_.get(),
-                                  empty_cert_list_, &verify_result);
+  int error = verify_proc->Verify(
+      x509_server_cert.get(), "127.0.0.1",
+      /*ocsp_response=*/std::string(), /*sct_list=*/std::string(), flags,
+      crl_set_.get(), empty_cert_list_, &verify_result, NetLogWithSource());
   EXPECT_THAT(error, IsOk());
   EXPECT_EQ(0U, verify_result.cert_status);
 
@@ -786,8 +784,10 @@ TEST_F(CertDatabaseNSSTest, TrustIntermediateCa) {
   // Server cert should fail to verify.
   CertVerifyResult verify_result2;
   error = verify_proc->Verify(x509_server_cert.get(), "127.0.0.1",
-                              std::string(), flags, crl_set_.get(),
-                              empty_cert_list_, &verify_result2);
+                              /*ocsp_response=*/std::string(),
+                              /*sct_list=*/std::string(), flags, crl_set_.get(),
+                              empty_cert_list_, &verify_result2,
+                              NetLogWithSource());
   EXPECT_THAT(error, IsError(ERR_CERT_REVOKED));
   EXPECT_EQ(CERT_STATUS_REVOKED, verify_result2.cert_status);
 }
@@ -825,9 +825,10 @@ TEST_F(CertDatabaseNSSTest, TrustIntermediateCa2) {
   scoped_refptr<CertVerifyProc> verify_proc(new CertVerifyProcNSS());
   int flags = 0;
   CertVerifyResult verify_result;
-  int error = verify_proc->Verify(x509_server_cert.get(), "127.0.0.1",
-                                  std::string(), flags, crl_set_.get(),
-                                  empty_cert_list_, &verify_result);
+  int error = verify_proc->Verify(
+      x509_server_cert.get(), "127.0.0.1",
+      /*ocsp_response=*/std::string(), /*sct_list=*/std::string(), flags,
+      crl_set_.get(), empty_cert_list_, &verify_result, NetLogWithSource());
   EXPECT_THAT(error, IsOk());
   EXPECT_EQ(0U, verify_result.cert_status);
 
@@ -838,8 +839,10 @@ TEST_F(CertDatabaseNSSTest, TrustIntermediateCa2) {
   // Server cert should fail to verify.
   CertVerifyResult verify_result2;
   error = verify_proc->Verify(x509_server_cert.get(), "127.0.0.1",
-                              std::string(), flags, crl_set_.get(),
-                              empty_cert_list_, &verify_result2);
+                              /*ocsp_response=*/std::string(),
+                              /*sct_list=*/std::string(), flags, crl_set_.get(),
+                              empty_cert_list_, &verify_result2,
+                              NetLogWithSource());
   EXPECT_THAT(error, IsError(ERR_CERT_AUTHORITY_INVALID));
   EXPECT_EQ(CERT_STATUS_AUTHORITY_INVALID, verify_result2.cert_status);
 }
@@ -887,9 +890,10 @@ TEST_F(CertDatabaseNSSTest, TrustIntermediateCa3) {
   scoped_refptr<CertVerifyProc> verify_proc(new CertVerifyProcNSS());
   int flags = 0;
   CertVerifyResult verify_result;
-  int error = verify_proc->Verify(x509_server_cert.get(), "127.0.0.1",
-                                  std::string(), flags, crl_set_.get(),
-                                  empty_cert_list_, &verify_result);
+  int error = verify_proc->Verify(
+      x509_server_cert.get(), "127.0.0.1",
+      /*ocsp_response=*/std::string(), /*sct_list=*/std::string(), flags,
+      crl_set_.get(), empty_cert_list_, &verify_result, NetLogWithSource());
   EXPECT_THAT(error, IsOk());
   EXPECT_EQ(0U, verify_result.cert_status);
 
@@ -900,8 +904,10 @@ TEST_F(CertDatabaseNSSTest, TrustIntermediateCa3) {
   // Server cert should fail to verify.
   CertVerifyResult verify_result2;
   error = verify_proc->Verify(x509_server_cert.get(), "127.0.0.1",
-                              std::string(), flags, crl_set_.get(),
-                              empty_cert_list_, &verify_result2);
+                              /*ocsp_response=*/std::string(),
+                              /*sct_list=*/std::string(), flags, crl_set_.get(),
+                              empty_cert_list_, &verify_result2,
+                              NetLogWithSource());
   EXPECT_THAT(error, IsError(ERR_CERT_AUTHORITY_INVALID));
   EXPECT_EQ(CERT_STATUS_AUTHORITY_INVALID, verify_result2.cert_status);
 }
@@ -949,9 +955,10 @@ TEST_F(CertDatabaseNSSTest, TrustIntermediateCa4) {
   scoped_refptr<CertVerifyProc> verify_proc(new CertVerifyProcNSS());
   int flags = 0;
   CertVerifyResult verify_result;
-  int error = verify_proc->Verify(x509_server_cert.get(), "127.0.0.1",
-                                  std::string(), flags, crl_set_.get(),
-                                  empty_cert_list_, &verify_result);
+  int error = verify_proc->Verify(
+      x509_server_cert.get(), "127.0.0.1",
+      /*ocsp_response=*/std::string(), /*sct_list=*/std::string(), flags,
+      crl_set_.get(), empty_cert_list_, &verify_result, NetLogWithSource());
   EXPECT_THAT(error, IsError(ERR_CERT_REVOKED));
   EXPECT_EQ(CERT_STATUS_REVOKED, verify_result.cert_status);
 
@@ -962,8 +969,10 @@ TEST_F(CertDatabaseNSSTest, TrustIntermediateCa4) {
   // Server cert should verify.
   CertVerifyResult verify_result2;
   error = verify_proc->Verify(x509_server_cert.get(), "127.0.0.1",
-                              std::string(), flags, crl_set_.get(),
-                              empty_cert_list_, &verify_result2);
+                              /*ocsp_response=*/std::string(),
+                              /*sct_list=*/std::string(), flags, crl_set_.get(),
+                              empty_cert_list_, &verify_result2,
+                              NetLogWithSource());
   EXPECT_THAT(error, IsOk());
   EXPECT_EQ(0U, verify_result2.cert_status);
 }

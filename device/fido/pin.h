@@ -19,6 +19,7 @@
 #include "base/containers/span.h"
 #include "base/optional.h"
 #include "components/cbor/values.h"
+#include "device/fido/fido_constants.h"
 
 namespace device {
 namespace pin {
@@ -40,16 +41,21 @@ constexpr size_t kMinBytes = 4;
 // accept.
 constexpr size_t kMaxBytes = 63;
 
-// RetriesRequest asks an authenticator for the number of remaining PIN attempts
-// before the device is locked.
-struct RetriesRequest {
-  std::pair<CtapRequestCommand, base::Optional<cbor::Value>> EncodeAsCBOR()
-      const;
-};
+// PinRetriesRequest asks an authenticator for the number of remaining PIN
+// attempts before the device is locked.
+struct PinRetriesRequest {};
 
-// RetriesResponse reflects an authenticator's response to a |RetriesRequest|.
+// UVRetriesRequest asks an authenticator for the number of internal user
+// verification attempts before the feature is locked.
+struct UvRetriesRequest {};
+
+// RetriesResponse reflects an authenticator's response to a |PinRetriesRequest|
+// or a |UvRetriesRequest|.
 struct RetriesResponse {
-  static base::Optional<RetriesResponse> Parse(
+  static base::Optional<RetriesResponse> ParsePinRetries(
+      const base::Optional<cbor::Value>& cbor);
+
+  static base::Optional<RetriesResponse> ParseUvRetries(
       const base::Optional<cbor::Value>& cbor);
 
   // retries is the number of PIN attempts remaining before the authenticator
@@ -57,15 +63,16 @@ struct RetriesResponse {
   int retries;
 
  private:
+  static base::Optional<RetriesResponse> Parse(
+      const base::Optional<cbor::Value>& cbor,
+      const int retries_key);
+
   RetriesResponse();
 };
 
 // KeyAgreementRequest asks an authenticator for an ephemeral ECDH key for
 // encrypting PIN material in future requests.
-struct KeyAgreementRequest {
-  std::pair<CtapRequestCommand, base::Optional<cbor::Value>> EncodeAsCBOR()
-      const;
-};
+struct KeyAgreementRequest {};
 
 // KeyAgreementResponse reflects an authenticator's response to a
 // |KeyAgreementRequest| and is also used as representation of the
@@ -91,8 +98,8 @@ class SetRequest {
   // IsValid(pin) must be true.
   SetRequest(const std::string& pin, const KeyAgreementResponse& peer_key);
 
-  std::pair<CtapRequestCommand, base::Optional<cbor::Value>> EncodeAsCBOR()
-      const;
+  friend std::pair<CtapRequestCommand, base::Optional<cbor::Value>>
+  AsCTAPRequestValuePair(const SetRequest&);
 
  private:
   const KeyAgreementResponse peer_key_;
@@ -113,8 +120,8 @@ class ChangeRequest {
                 const std::string& new_pin,
                 const KeyAgreementResponse& peer_key);
 
-  std::pair<CtapRequestCommand, base::Optional<cbor::Value>> EncodeAsCBOR()
-      const;
+  friend std::pair<CtapRequestCommand, base::Optional<cbor::Value>>
+  AsCTAPRequestValuePair(const ChangeRequest&);
 
  private:
   const KeyAgreementResponse peer_key_;
@@ -126,10 +133,7 @@ class ChangeRequest {
 // credentials and clear any configured PIN. This is not strictly a
 // PIN-related command, but is generally used to reset a PIN and so is
 // included here.
-struct ResetRequest {
-  std::pair<CtapRequestCommand, base::Optional<cbor::Value>> EncodeAsCBOR()
-      const;
-};
+struct ResetRequest {};
 
 using ResetResponse = EmptyResponse;
 
@@ -138,22 +142,43 @@ using ResetResponse = EmptyResponse;
 // assertion.
 class TokenRequest {
  public:
-  TokenRequest(const std::string& pin, const KeyAgreementResponse& peer_key);
-  ~TokenRequest();
-  TokenRequest(TokenRequest&&);
   TokenRequest(const TokenRequest&) = delete;
 
   // shared_key returns the shared ECDH key that was used to encrypt the PIN.
   // This is needed to decrypt the response.
   const std::array<uint8_t, 32>& shared_key() const;
 
-  std::pair<CtapRequestCommand, base::Optional<cbor::Value>> EncodeAsCBOR()
-      const;
-
- private:
+ protected:
+  TokenRequest(TokenRequest&&);
+  explicit TokenRequest(const KeyAgreementResponse& peer_key);
+  ~TokenRequest();
   std::array<uint8_t, 32> shared_key_;
   cbor::Value::MapValue cose_key_;
+};
+
+class PinTokenRequest : public TokenRequest {
+ public:
+  PinTokenRequest(const std::string& pin, const KeyAgreementResponse& peer_key);
+  PinTokenRequest(PinTokenRequest&&);
+  PinTokenRequest(const PinTokenRequest&) = delete;
+  virtual ~PinTokenRequest();
+
+  friend std::pair<CtapRequestCommand, base::Optional<cbor::Value>>
+  AsCTAPRequestValuePair(const PinTokenRequest&);
+
+ private:
   uint8_t pin_hash_[16];
+};
+
+class UvTokenRequest : public TokenRequest {
+ public:
+  explicit UvTokenRequest(const KeyAgreementResponse& peer_key);
+  UvTokenRequest(UvTokenRequest&&);
+  UvTokenRequest(const UvTokenRequest&) = delete;
+  virtual ~UvTokenRequest();
+
+  friend std::pair<CtapRequestCommand, base::Optional<cbor::Value>>
+  AsCTAPRequestValuePair(const UvTokenRequest&);
 };
 
 // TokenResponse represents the response to a pin-token request. In order to
@@ -171,7 +196,10 @@ class TokenResponse {
 
   // PinAuth returns a pinAuth parameter for a request that will use the given
   // client-data hash.
-  std::vector<uint8_t> PinAuth(const std::array<uint8_t, 32> client_data_hash);
+  std::vector<uint8_t> PinAuth(
+      base::span<const uint8_t> client_data_hash) const;
+
+  const std::vector<uint8_t>& token() const { return token_; }
 
  private:
   TokenResponse();
@@ -179,7 +207,29 @@ class TokenResponse {
   std::vector<uint8_t> token_;
 };
 
+std::pair<CtapRequestCommand, base::Optional<cbor::Value>>
+AsCTAPRequestValuePair(const PinRetriesRequest&);
+
+std::pair<CtapRequestCommand, base::Optional<cbor::Value>>
+AsCTAPRequestValuePair(const UvRetriesRequest&);
+
+std::pair<CtapRequestCommand, base::Optional<cbor::Value>>
+AsCTAPRequestValuePair(const KeyAgreementRequest&);
+
+std::pair<CtapRequestCommand, base::Optional<cbor::Value>>
+AsCTAPRequestValuePair(const SetRequest&);
+
+std::pair<CtapRequestCommand, base::Optional<cbor::Value>>
+AsCTAPRequestValuePair(const ChangeRequest&);
+
+std::pair<CtapRequestCommand, base::Optional<cbor::Value>>
+AsCTAPRequestValuePair(const ResetRequest&);
+
+std::pair<CtapRequestCommand, base::Optional<cbor::Value>>
+AsCTAPRequestValuePair(const TokenRequest&);
+
 }  // namespace pin
+
 }  // namespace device
 
 #endif  // DEVICE_FIDO_PIN_H_

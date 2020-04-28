@@ -2,7 +2,6 @@
 # Copyright 2017 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
-
 """Utilities for checking for disallowed usage of non-Blink declarations.
 
 The scanner assumes that usage of non-Blink code is always namespace qualified.
@@ -32,11 +31,17 @@ _CONFIG = [
             # //base constructs that are allowed everywhere
             'base::AdoptRef',
             'base::AutoReset',
-            'base::CreateSequencedTaskRunnerWithTraits',
+            'base::Contains',
+            'base::CreateSequencedTaskRunner',
+            'base::DefaultTickClock',
             'base::ElapsedTimer',
+            'base::JobDelegate',
+            'base::JobHandle',
+            'base::PostJob',
             'base::File',
             'base::FilePath',
             'base::GetUniqueIdForProcess',
+            "base::i18n::TextDirection",
             'base::Location',
             'base::MakeRefCounted',
             'base::Optional',
@@ -47,12 +52,15 @@ _CONFIG = [
             'base::RunLoop',
             'base::ReadOnlySharedMemoryMapping',
             'base::ReadOnlySharedMemoryRegion',
+            'base::RepeatingTimer',
             'base::SequencedTaskRunner',
             'base::SingleThreadTaskRunner',
             'base::ScopedFD',
+            'base::ScopedClosureRunner',
             'base::SupportsWeakPtr',
             'base::SysInfo',
             'base::ThreadChecker',
+            'base::TickClock',
             'base::Time',
             'base::TimeDelta',
             'base::TimeTicks',
@@ -68,6 +76,7 @@ _CONFIG = [
             'base::WeakPtr',
             'base::WeakPtrFactory',
             'base::WritableSharedMemoryMapping',
+            'base::as_bytes',
             'base::in_place',
             'base::make_optional',
             'base::make_span',
@@ -76,6 +85,7 @@ _CONFIG = [
             'base::size',
             'base::span',
             'logging::GetVlogLevel',
+            'util::PassKey',
 
             # //base/observer_list.h.
             'base::ObserverList',
@@ -87,6 +97,7 @@ _CONFIG = [
             # //base/callback.h is allowed, but you need to use WTF::Bind or
             # WTF::BindRepeating to create callbacks in Blink.
             'base::BarrierClosure',
+            'base::NullCallback',
             'base::OnceCallback',
             'base::OnceClosure',
             'base::RepeatingCallback',
@@ -104,8 +115,15 @@ _CONFIG = [
             # //base/allocator/partition_allocator/oom_callback.h.
             'base::SetPartitionAllocOomCallback',
 
+            # //base/containers/adapters.h
+            'base::Reversed',
+
             # //base/metrics/histogram_functions.h
             'base::UmaHistogram.+',
+
+            # //base/metrics/histogram.h
+            'base::HistogramBase',
+            'base::LinearHistogram',
 
             # //base/metrics/field_trial_params.h.
             'base::GetFieldTrialParamValueByFeature',
@@ -156,6 +174,15 @@ _CONFIG = [
             'base::ClampSub',
             'base::MakeClampedNum',
 
+            # //base/numerics/ranges.h.
+            "base::ClampToRange",
+
+            # //base/strings/strcat.h.
+            'base::StrCat',
+
+            # //base/template_util.h.
+            'base::void_t',
+
             # Debugging helpers from //base/debug are allowed everywhere.
             'base::debug::.+',
 
@@ -169,6 +196,8 @@ _CONFIG = [
             'base::TaskPriority',
             'base::TaskShutdownBehavior',
             'base::WithBaseSyncPrimitives',
+            'base::ThreadPolicy',
+            'base::ThreadPool',
 
             # Byte order
             'base::ByteSwap',
@@ -181,6 +210,7 @@ _CONFIG = [
             'base::RandGenerator',
             'base::RandDouble',
             'base::RandBytes',
+            'base::RandBytesAsString',
 
             # Feature list checking.
             'base::Feature.*',
@@ -190,22 +220,37 @@ _CONFIG = [
 
             # PartitionAlloc
             'base::PartitionFree',
+            'base::PartitionAllocZeroFill',
+            'base::PartitionAllocReturnNull',
 
-            # For MessageLoop::TaskObserver.
+            # For TaskObserver.
             'base::PendingTask',
+
+            # Time
+            'base::Clock',
+            'base::DefaultClock',
+            'base::DefaultTickClock',
+            'base::TestMockTimeTaskRunner',
+            'base::TickClock',
 
             # cc painting types.
             'cc::PaintCanvas',
             'cc::PaintFlags',
-            'cc::NodeHolder',
-            'cc::TextHolder',
+            'cc::PaintImage',
+            'cc::PaintImageBuilder',
+            'cc::PaintShader',
+            'cc::PaintWorkletInput',
+            'cc::NodeId',
 
             # Chromium geometry types.
             'gfx::Point',
+            'gfx::PointF',
             'gfx::Point3F',
+            'gfx::Quaternion',
             'gfx::Rect',
             'gfx::RectF',
             'gfx::RRectF',
+            'gfx::ScaleVector2d',
             'gfx::Size',
             'gfx::SizeF',
             'gfx::Transform',
@@ -225,24 +270,30 @@ _CONFIG = [
 
             # cc::Layers.
             'cc::Layer',
+            'cc::LayerClient',
+            'cc::LayerTreeDebugState',
+            'cc::LayerTreeHost',
             'cc::PictureLayer',
+            'cc::SurfaceLayer',
 
             # cc::Layer helper data structs.
+            'cc::BrowserControlsParams',
             'cc::ElementId',
             'cc::LayerPositionConstraint',
-            'cc::LayerStickyPositionConstraint',
             'cc::OverscrollBehavior',
             'cc::Scrollbar',
-            'cc::ScrollbarLayerInterface',
+            'cc::ScrollbarLayerBase',
             'cc::ScrollbarOrientation',
             'cc::ScrollbarPart',
+            'cc::StickyPositionConstraint',
+            'cc::StickyPositionNodeData',
             'cc::ViewportLayers',
 
             # cc::Layer helper enums.
             'cc::HORIZONTAL',
             'cc::VERTICAL',
             'cc::THUMB',
-            'cc::TICKMARKS',
+            'cc::TRACK_BUTTONS_TICKMARKS',
             'cc::BrowserControlsState',
             'cc::EventListenerClass',
             'cc::EventListenerProperties',
@@ -250,8 +301,16 @@ _CONFIG = [
             # Animation
             'cc::AnimationHost',
 
+            # UMA Enums
+            'cc::PaintHoldingCommitTrigger',
+
             # Scrolling
+            'cc::kManipulationInfoHasPinchZoomed',
+            'cc::kManipulationInfoHasScrolledByPrecisionTouchPad',
+            'cc::kManipulationInfoHasScrolledByTouch',
+            'cc::kManipulationInfoHasScrolledByWheel',
             'cc::MainThreadScrollingReason',
+            'cc::ManipulationInfo',
             'cc::ScrollSnapAlign',
             'cc::ScrollSnapType',
             'cc::ScrollOffsetAnimationCurve',
@@ -264,14 +323,20 @@ _CONFIG = [
             'cc::SnapFlingController',
             'cc::SnapSelectionStrategy',
             'cc::SnapStrictness',
+            'cc::TargetSnapAreaElementIds',
             'gfx::RectToSkRect',
             'gfx::ScrollOffset',
+            'ui::ScrollGranularity',
+
+            # base/util/type_safety/strong_alias.h
+            'util::StrongAlias',
 
             # Standalone utility libraries that only depend on //base
             'skia::.+',
             'url::.+',
 
             # Nested namespaces under the blink namespace
+            'bindings::.+',
             'canvas_heuristic_parameters::.+',
             'compositor_target_property::.+',
             'cors::.+',
@@ -282,13 +347,17 @@ _CONFIG = [
             'event_handling_util::.+',
             'event_util::.+',
             'file_error::.+',
+            'geometry_util::.+',
             'inspector_\\w+_event::.+',
             'inspector_async_task::.+',
             'inspector_set_layer_tree_id::.+',
             'inspector_tracing_started_in_frame::.+',
+            'keywords::.+',
+            'layered_api::.+',
             'layout_invalidation_reason::.+',
             'media_constraints_impl::.+',
             'media_element_parser_helpers::.+',
+            'native_file_system_error::.+',
             'network_utils::.+',
             'origin_trials::.+',
             'paint_filter_builder::.+',
@@ -314,6 +383,7 @@ _CONFIG = [
             'testing::.+',  # googlemock / googletest
             'v8::.+',
             'v8_inspector::.+',
+            'inspector_protocol_encoding::.+',
 
             # Inspector instrumentation and protocol
             'probe::.+',
@@ -326,13 +396,26 @@ _CONFIG = [
             # nested in the blink namespace.
             'internal::.+',
 
+            # HTTP structured headers
+            'net::structured_headers::.+',
+
+            # HTTP status codes
+            'net::HTTP_.+',
+
             # Network service.
             'network::.+',
+
+            # Used in network service types.
+            'net::SiteForCookies',
 
             # Some test helpers live in the blink::test namespace.
             'test::.+',
 
-            # Blink uses Mojo, so it needs mojo::Binding, mojo::InterfacePtr, et
+            # Some test helpers that live in the blink::frame_test_helpers
+            # namespace.
+            'frame_test_helpers::.+',
+
+            # Blink uses Mojo, so it needs mojo::Receiver, mojo::Remote, et
             # cetera, as well as generated Mojo bindings.
             # Note that the Mojo callback helpers are explicitly forbidden:
             # Blink already has a signal for contexts being destroyed, and
@@ -340,22 +423,29 @@ _CONFIG = [
             'mojo::(?!WrapCallback).+',
             'mojo_base::BigBuffer.*',
             '(?:.+::)?mojom::.+',
-            "service_manager::BinderRegistry",
-            # TODO(dcheng): Remove this once Connector isn't needed in Blink
-            # anymore.
-            'service_manager::Connector',
             'service_manager::InterfaceProvider',
-            'service_manager::ServiceFilter',
 
             # STL containers such as std::string and std::vector are discouraged
             # but still needed for interop with WebKit/common. Note that other
             # STL types such as std::unique_ptr are encouraged.
             'std::.+',
 
+            # UI Cursor
+            'ui::Cursor',
+
             # UI Keyconverter
             'ui::DomCode',
             'ui::DomKey',
             'ui::KeycodeConverter',
+
+            # Accessibility base types and the non-Blink enums they
+            # depend on.
+            'ui::AXEvent',
+            'ui::AXEventIntent',
+            'ui::AXNodeData',
+            'ax::mojom::BoolAttribute',
+            'ax::mojom::HasPopup',
+            'ax::mojom::State',
 
             # Blink uses UKM for logging e.g. always-on leak detection (crbug/757374)
             'ukm::.+',
@@ -363,11 +453,24 @@ _CONFIG = [
             # Permit using crash keys inside Blink without jumping through
             # hoops.
             'crash_reporter::.*CrashKey.*',
+
+            # Useful for platform-specific code.
+            'base::mac::(CFToNSCast|NSToCFCast)',
+            'base::mac::Is(AtMost|AtLeast)?OS.+',
+            'base::(scoped_nsobject|ScopedCFTypeRef)',
         ],
         'disallowed': [
-            '.+',
             ('base::Bind(|Once|Repeating)',
              'Use WTF::Bind or WTF::BindRepeating.'),
+            ('std::(deque|map|multimap|set|vector|unordered_set|unordered_map)',
+             'Use WTF containers like WTF::Deque, WTF::HashMap, WTF::HashSet or WTF::Vector instead of the banned std containers. '
+             'However, it is fine to use std containers at the boundary layer between Blink and Chromium. '
+             'If you are in this case, you can use --bypass-hooks option to avoid the presubmit check when uploading your CL.'
+             ),
+            # network::mojom::Foo is allowed to use as non-blink mojom type.
+            ('(|::)(?!network::)(\w+::)?mojom::(?!blink).+',
+             'Using non-blink mojom types, consider using "::mojom::blink::Foo" instead of "::mojom::Foo" unless you have clear reasons not to do so',
+             'Warning'),
         ],
     },
     {
@@ -375,7 +478,8 @@ _CONFIG = [
         'allowed': ['gin::.+'],
     },
     {
-        'paths': ['third_party/blink/renderer/bindings/core/v8/script_streamer.cc'],
+        'paths':
+        ['third_party/blink/renderer/bindings/core/v8/script_streamer.cc'],
         'allowed': [
             # For the script streaming to be able to block when reading from a
             # mojo datapipe.
@@ -385,20 +489,25 @@ _CONFIG = [
         ],
     },
     {
-        'paths': ['third_party/blink/renderer/bindings/core/v8/v8_gc_for_context_dispose.cc'],
+        'paths': [
+            'third_party/blink/renderer/bindings/core/v8/v8_gc_for_context_dispose.cc'
+        ],
         'allowed': [
             # For memory reduction histogram.
             'base::ProcessMetrics',
         ],
     },
     {
-        'paths': ['third_party/blink/renderer/controller/oom_intervention_impl.cc'],
+        'paths':
+        ['third_party/blink/renderer/controller/oom_intervention_impl.cc'],
         'allowed': [
             'base::BindOnce',
         ],
     },
     {
-        'paths': ['third_party/blink/renderer/controller/user_level_memory_pressure_signal_generator.cc'],
+        'paths': [
+            'third_party/blink/renderer/controller/user_level_memory_pressure_signal_generator.cc'
+        ],
         'allowed': [
             'base::MemoryPressureListener',
         ],
@@ -410,8 +519,30 @@ _CONFIG = [
         ],
     },
     {
+        'paths': [
+            'third_party/blink/renderer/core/animation_frame',
+            'third_party/blink/renderer/core/offscreencanvas',
+            'third_party/blink/renderer/core/html/canvas'
+        ],
+        'allowed': [
+            'viz::BeginFrameArgs',
+        ],
+    },
+    {
+        'paths': [
+            'third_party/blink/renderer/core/exported',
+            'third_party/blink/renderer/core/frame',
+        ],
+        'allowed': [
+            'cc::ActiveFrameSequenceTrackers',
+            'cc::ApplyViewportChangesArgs',
+            'cc::LayerTreeSettings',
+            'cc::TaskGraphRunner',
+        ],
+    },
+    {
         'paths': ['third_party/blink/renderer/core/clipboard'],
-        'allowed': ['gfx::PNGCodec', 'net::EscapeForHTML'],
+        'allowed': ['net::EscapeForHTML'],
     },
     {
         'paths': ['third_party/blink/renderer/core/css'],
@@ -428,20 +559,48 @@ _CONFIG = [
         ],
     },
     {
-        'paths': ['third_party/blink/renderer/core/editing/web_substring_util.mm'],
-        'allowed': ['base::mac::CFToNSCast'],
+        'paths': ['third_party/blink/renderer/core/editing/ime'],
+        'allowed': [
+            'ui::TextInputAction',
+        ],
     },
     {
-        'paths': ['third_party/blink/renderer/core/fetch/data_consumer_handle_test_util.cc'],
+        'paths': [
+            'third_party/blink/renderer/core/fetch/data_consumer_handle_test_util.cc'
+        ],
         'allowed': [
             # The existing code already contains gin::IsolateHolder.
             'gin::IsolateHolder',
         ],
     },
     {
-        'paths': ['third_party/blink/renderer/core/fileapi/file_reader_loader.cc'],
+        'paths': ['third_party/blink/renderer/core/frame/visual_viewport.cc'],
+        'allowed': [
+            'cc::SolidColorScrollbarLayer',
+        ],
+    },
+    {
+        'paths':
+        ['third_party/blink/renderer/core/frame/web_frame_widget_base.cc'],
+        'allowed': [
+            'cc::SwapPromise',
+            'viz::CompositorFrameMetadata',
+        ],
+    },
+    {
+        'paths':
+        ['third_party/blink/renderer/core/fileapi/file_reader_loader.cc'],
         'allowed': [
             'net::ERR_FILE_NOT_FOUND',
+        ],
+    },
+    {
+        'paths': [
+            'third_party/blink/renderer/core/loader/alternate_signed_exchange_resource_info.cc'
+        ],
+        'allowed': [
+            # Used by WebPackageRequestMatcher in //third_party/blink/common.
+            'net::HttpRequestHeaders',
         ],
     },
     {
@@ -452,22 +611,21 @@ _CONFIG = [
             'cc::DisplayItemList',
             'cc::DrawRecordOp',
 
+            # blink paint tree debugging namespace
             'paint_property_tree_printer::UpdateDebugNames',
         ],
     },
     {
         'paths': ['third_party/blink/renderer/core/page/scrolling'],
         'allowed': [
-            # cc scrollbar layer types.
-            'cc::PaintedOverlayScrollbarLayer',
-            'cc::PaintedScrollbarLayer',
-            'cc::SolidColorScrollbarLayer',
+            'cc::ScrollbarLayerBase',
         ],
     },
     {
         'paths': ['third_party/blink/renderer/core/page'],
         'allowed': [
             'touch_adjustment::.+',
+            'viz::FrameSinkId',
         ],
     },
     {
@@ -477,7 +635,9 @@ _CONFIG = [
         ],
     },
     {
-        'paths': ['third_party/blink/renderer/core/inspector/inspector_memory_agent.cc'],
+        'paths': [
+            'third_party/blink/renderer/core/inspector/inspector_memory_agent.cc'
+        ],
         'allowed': [
             'base::ModuleCache',
             'base::PoissonAllocationSampler',
@@ -485,7 +645,9 @@ _CONFIG = [
         ],
     },
     {
-        'paths': ['third_party/blink/renderer/core/inspector/inspector_overlay_agent.cc'],
+        'paths': [
+            'third_party/blink/renderer/core/inspector/inspector_overlay_agent.cc'
+        ],
         'allowed': [
             # cc painting types.
             'cc::ContentLayerClient',
@@ -494,9 +656,48 @@ _CONFIG = [
         ],
     },
     {
-        'paths': ['third_party/blink/renderer/core/inspector/inspector_performance_agent.cc'],
+        'paths':
+        ['third_party/blink/renderer/core/inspector/locale_controller.cc'],
+        'allowed': [
+            'base::i18n::SetICUDefaultLocale',
+        ],
+    },
+    {
+        'paths': ['third_party/blink/renderer/core/inspector'],
+        'allowed': [
+            # Devtools binary protocol uses std::vector<uint8_t> for serialized
+            # objects.
+            'std::vector',
+            # [C]h[R]ome [D]ev[T]ools [P]rotocol implementation support library
+            # (see third_party/inspector_protocol/crdtp).
+            'crdtp::.+',
+        ],
+    },
+    {
+        'paths': [
+            'third_party/blink/renderer/core/inspector/inspector_performance_agent.cc'
+        ],
         'allowed': [
             'base::subtle::TimeTicksNowIgnoringOverride',
+        ],
+    },
+    {
+        'paths':
+        ['third_party/blink/renderer/core/scroll/scrollbar_theme_mac.mm'],
+        'allowed': [
+            'gfx::CocoaScrollbarPainter',
+        ],
+    },
+    {
+        'paths': ['third_party/blink/renderer/core/workers/worker_thread.cc'],
+        'allowed': [
+            'base::ScopedAllowBaseSyncPrimitives',
+        ],
+    },
+    {
+        'paths': ['third_party/blink/renderer/core/xml'],
+        'allowed': [
+            'xpathyy::.+',
         ],
     },
     {
@@ -504,6 +705,7 @@ _CONFIG = [
             'third_party/blink/renderer/modules/device_orientation/',
             'third_party/blink/renderer/modules/gamepad/',
             'third_party/blink/renderer/modules/sensor/',
+            'third_party/blink/renderer/modules/xr/',
         ],
         'allowed': [
             'base::subtle::Atomic32',
@@ -520,17 +722,87 @@ _CONFIG = [
         # The modules listed above need access to the following GL drawing and
         # display-related types.
         'allowed': [
+            'base::MRUCache',
+            'gl::GpuPreference',
             'gpu::gles2::GLES2Interface',
+            'gpu::raster::RasterInterface',
+            'gpu::Mailbox',
             'gpu::MailboxHolder',
             'display::Display',
         ],
     },
     {
         'paths': [
-            'third_party/blink/renderer/modules/media_capabilities/',
+            'third_party/blink/renderer/core/html/media/',
+        ],
+        # This module needs access to the following for media's base::Feature
+        # list.
+        'allowed': [
+            'media::.+',
+        ]
+    },
+    {
+        'paths': [
+            'third_party/blink/renderer/modules/webcodecs/',
         ],
         'allowed': [
             'media::.+',
+        ]
+    },
+    {
+        'paths': [
+            'third_party/blink/renderer/modules/encryptedmedia/',
+            'third_party/blink/renderer/modules/media/',
+            'third_party/blink/renderer/modules/media_capabilities/',
+            'third_party/blink/renderer/modules/video_rvfc/',
+        ],
+        'allowed': [
+            'media::.+',
+        ]
+    },
+    {
+        'paths': [
+            'third_party/blink/renderer/modules/imagecapture/',
+        ],
+        'allowed': [
+            'media::.+',
+            'libyuv::.+',
+        ]
+    },
+    {
+        'paths': [
+            'third_party/blink/renderer/modules/media_capabilities/media_capabilities_fuzzer.cc',
+        ],
+        'allowed': [
+            'mc_fuzzer::.+',
+            'google::protobuf::RepeatedField',
+        ]
+    },
+    {
+        'paths': [
+            'third_party/blink/renderer/modules/mediacapturefromelement/',
+        ],
+        'allowed': [
+            'gpu::MailboxHolder',
+            'media::.+',
+            'libyuv::.+',
+        ]
+    },
+    {
+        'paths': [
+            'third_party/blink/renderer/modules/mediarecorder/',
+        ],
+        'allowed': [
+            'base::data',
+            # TODO(crbug.com/960665): Remove base::queue once it is replaced with a WTF equivalent.
+            'base::queue',
+            'base::SharedMemory',
+            'base::StringPiece',
+            'base::ThreadTaskRunnerHandle',
+            'media::.+',
+            'libopus::.+',
+            'libyuv::.+',
+            'video_track_recorder::.+',
         ]
     },
     {
@@ -539,6 +811,43 @@ _CONFIG = [
         ],
         'allowed': [
             'media::.+',
+            'base::AutoLock',
+            'base::Hash',
+            'base::Lock',
+            'base::StringPrintf',
+            'base::TaskRunner',
+            # TODO(crbug.com/704136): Switch to using frame-based task runners.
+            'base::ThreadTaskRunnerHandle',
+            'base::subtle::Atomic32',
+            'base::subtle::Acquire_Load',
+            'base::subtle::NoBarrier_.+',
+            'base::subtle::Release_Store',
+            'cc::SkiaPaintCanvas',
+            'cc::UpdateSubmissionStateCB',
+            'cc::VideoFrameProvider',
+            'cc::VideoLayer',
+            'gpu::gles2::GLES2Interface',
+            'libyuv::.+',
+            'media_constraints::.+',
+            "rtc::RefCountedObject",
+            'rtc::TaskQueue',
+            'rtc::scoped_refptr',
+            'viz::.+',
+            'webrtc::Aec3ConfigFromJsonString',
+            'webrtc::AudioProcessingBuilder',
+            'webrtc::AudioProcessing',
+            'webrtc::AudioProcessorInterface',
+            'webrtc::AudioTrackInterface',
+            'webrtc::Config',
+            'webrtc::EchoCanceller3Config',
+            'webrtc::EchoCanceller3Factory',
+            'webrtc::ExperimentalAgc',
+            'webrtc::ExperimentalNs',
+            'webrtc::MediaStreamTrackInterface',
+            'webrtc::ObserverInterface',
+            'webrtc::StreamConfig',
+            'webrtc::TypingDetection',
+            'webrtc::VideoTrackInterface',
         ]
     },
     {
@@ -551,23 +860,62 @@ _CONFIG = [
     },
     {
         'paths': [
+            'third_party/blink/renderer/modules/remote_objects/',
+        ],
+        'allowed': [
+            'gin::.+',
+            # gin::NamedPropertyInterceptor uses std::vector.
+            'std::vector',
+        ],
+    },
+    {
+        'paths': [
+            'third_party/blink/renderer/modules/webcodecs/',
+        ],
+        'allowed': [
+            'media::.+',
+            'libyuv::.+',
+        ]
+    },
+    {
+        'paths': [
             'third_party/blink/renderer/modules/webgpu/',
         ],
         # The WebGPU Blink module needs access to the WebGPU control
         # command buffer interface.
         'allowed': [
+            'gpu::webgpu::PowerPreference',
             'gpu::webgpu::WebGPUInterface',
         ],
     },
     {
         'paths': [
+            'third_party/blink/renderer/modules/webrtc/',
+        ],
+        'allowed': [
+            'base::AutoLock',
+            'base::Erase',
+            'base::Lock',
+            'base::StringPrintf',
+            'media::.+',
+            'rtc::scoped_refptr',
+            'webrtc::AudioDeviceModule',
+            'webrtc::AudioSourceInterface',
+            'webrtc::AudioTransport',
+            'webrtc::kAdmMaxDeviceNameSize',
+            'webrtc::kAdmMaxGuidSize',
+        ]
+    },
+    {
+        'paths': [
             'third_party/blink/renderer/platform/',
         ],
-        # Suppress almost all checks on platform since code in this directory
-        # is meant to be a bridge between Blink and non-Blink code. However,
+        # Suppress almost all checks on platform since code in this directory is
+        # meant to be a bridge between Blink and non-Blink code. However,
         # base::RefCounted should still be explicitly blocked, since
-        # WTF::RefCounted should be used instead.
-        'allowed': ['(?!base::RefCounted).+'],
+        # WTF::RefCounted should be used instead. base::RefCountedThreadSafe is
+        # still needed for cross_thread_copier.h though.
+        'allowed': ['base::RefCountedThreadSafe', '(?!base::RefCounted).+'],
     },
     {
         'paths': [
@@ -596,6 +944,7 @@ _CONFIG = [
         ],
         'allowed': [
             'cc::AnimationOptions',
+            'cc::AnimationEffectTimings',
         ],
     },
     {
@@ -613,8 +962,10 @@ _CONFIG = [
     {
         'paths': [
             'third_party/blink/renderer/core/layout/layout_theme.cc',
+            'third_party/blink/renderer/core/layout/layout_theme_mac.mm',
             'third_party/blink/renderer/core/paint/fallback_theme.cc',
             'third_party/blink/renderer/core/paint/fallback_theme.h',
+            'third_party/blink/renderer/core/paint/object_painter_base.cc',
             'third_party/blink/renderer/core/paint/theme_painter.cc',
         ],
         'allowed': ['ui::NativeTheme.*'],
@@ -634,14 +985,56 @@ _CONFIG = [
     },
     {
         'paths': [
-            'third_party/blink/renderer/modules/peerconnection',
-            'third_party/blink/renderer/bindings/modules/v8/serialization',
+            'third_party/blink/renderer/modules/p2p',
         ],
         'allowed': [
+            # TODO(crbug.com/787254): Remove GURL usage.
+            'GURL',
             'cricket::.*',
+            'rtc::.+',
+        ]
+    },
+    {
+        'paths': [
+            # TODO(crbug.com/787254): Separate the two paths below and their own
+            # whitelist.
+            'third_party/blink/renderer/modules/peerconnection/',
+            'third_party/blink/renderer/bindings/modules/v8/serialization/',
+        ],
+        'allowed': [
+            'absl::.+',
+            'base::AutoLock',
+            'base::AutoUnlock',
+            'base::LazyInstance',
+            'base::Lock',
+            # TODO(crbug.com/787254): Remove base::BindOnce, base::Unretained,
+            # base::Passed, base::Closure, base::MessageLoopCurrent,
+            # base::RetainedRef, base::EndsWith and base::CompareCase.
+            'base::Bind.*',
+            'base::Closure',
+            'base::CompareCase',
+            'base::EndsWith',
+            'base::MD5.*',
+            'base::MessageLoopCurrent',
+            'base::Passed',
+            'base::RetainedRef',
+            'base::StringPrintf',
+            'base::Value',
+            'base::Unretained',
+            # TODO(crbug.com/787254): Replace base::Thread with the appropriate Blink class.
+            'base::Thread',
+            'base::WrapRefCounted',
+            'cricket::.*',
+            'jingle_glue::JingleThreadWrapper',
+            # TODO(crbug.com/787254): Remove GURL usage.
+            'GURL',
+            'media::.+',
+            'net::NetworkTrafficAnnotationTag',
+            'net::DefineNetworkTrafficAnnotation',
             'rtc::.+',
             'webrtc::.+',
             'quic::.+',
+            'quiche::.+',
         ]
     },
     {
@@ -654,27 +1047,39 @@ _CONFIG = [
         # AtomicString or HeapVector) are used cross thread. These Blink types
         # are converted to the STL/WebRTC counterparts in the parent directory.
         'allowed': [
-            'absl::.+',
             'base::OnTaskRunnerDeleter',
             'sigslot::.+',
-        ],
-    },
-    # TODO(https://crbug.com/704441) : Added temporarily.
-    {
-        'paths': ['third_party/blink/renderer/modules/exported/web_manifest_parser.cc'],
-        'allowed': [
-            'base::StringPiece',
-            'GURL',
         ],
     },
     {
         'paths': ['third_party/blink/renderer/modules/manifest/'],
         'allowed': [
-            'base::.+',
+            'base::NullableString16',
             'net::ParseMimeTypeWithoutParameter',
-            'GURL',
         ],
-    }
+    },
+    {
+        'paths':
+        ['third_party/blink/renderer/core/fetch/fetch_request_data.cc'],
+        'allowed': ['net::RequestPriority'],
+    },
+    {
+        'paths': ['third_party/blink/renderer/core/frame/local_frame_view.cc'],
+        'allowed':
+        ['cc::frame_viewer_instrumentation::IsTracingLayerTreeSnapshots'],
+    },
+    {
+        'paths': [
+            'third_party/blink/renderer/modules/webaudio/audio_worklet_thread.cc'
+        ],
+        'allowed': ['base::ThreadPriority'],
+    },
+    {
+        'paths': ['third_party/blink/renderer/core/dom/document.cc'],
+        'allowed': [
+            'net::registry_controlled_domains::.+',
+        ],
+    },
 ]
 
 
@@ -682,13 +1087,15 @@ def _precompile_config():
     """Turns the raw config into a config of compiled regex."""
     match_nothing_re = re.compile('.^')
 
-    def compile_regexp(match_list):
+    def compile_regexp(match_list, is_list=True):
         """Turns a match list into a compiled regexp.
 
         If match_list is None, a regexp that matches nothing is returned.
         """
+        if (match_list and is_list):
+            match_list = '(?:%s)$' % '|'.join(match_list)
         if match_list:
-            return re.compile('(?:%s)$' % '|'.join(match_list))
+            return re.compile(match_list)
         return match_nothing_re
 
     def compile_disallowed(disallowed_list):
@@ -699,9 +1106,14 @@ def _precompile_config():
         advice_list = []
         for entry in disallowed_list:
             if isinstance(entry, tuple):
-                match, advice = entry
+                warning = ''
+                if len(entry) == 2:
+                    match, advice = entry
+                else:
+                    match, advice, warning = entry
                 match_list.append(match)
-                advice_list.append((compile_regexp(match), advice))
+                advice_list.append((compile_regexp(match, False), advice,
+                                    warning == 'Warning'))
             else:
                 # Just a string
                 match_list.append(entry)
@@ -711,10 +1123,14 @@ def _precompile_config():
     for raw_entry in _CONFIG:
         disallowed, advice = compile_disallowed(raw_entry.get('disallowed'))
         compiled_config.append({
-            'paths': raw_entry['paths'],
-            'allowed': compile_regexp(raw_entry.get('allowed')),
-            'disallowed': disallowed,
-            'advice': advice,
+            'paths':
+            raw_entry['paths'],
+            'allowed':
+            compile_regexp(raw_entry.get('allowed')),
+            'disallowed':
+            disallowed,
+            'advice':
+            advice,
         })
     return compiled_config
 
@@ -757,10 +1173,10 @@ def _find_matching_entries(path):
 def _check_entries_for_identifier(entries, identifier):
     """Check if an identifier is allowed"""
     for entry in entries:
-        if entry['allowed'].match(identifier):
-            return True
         if entry['disallowed'].match(identifier):
             return False
+        if entry['allowed'].match(identifier):
+            return True
     # Disallow by default.
     return False
 
@@ -768,18 +1184,20 @@ def _check_entries_for_identifier(entries, identifier):
 def _find_advice_for_identifier(entries, identifier):
     advice_list = []
     for entry in entries:
-        for matcher, advice in entry.get('advice', []):
+        for matcher, advice, warning in entry.get('advice', []):
             if matcher.match(identifier):
                 advice_list.append(advice)
-    return advice_list
+    return advice_list, warning
 
 
 class BadIdentifier(object):
     """Represents a single instance of a bad identifier."""
-    def __init__(self, identifier, line, advice=None):
+
+    def __init__(self, identifier, line, advice=None, warning=False):
         self.identifier = identifier
         self.line = line
         self.advice = advice
+        self.warning = warning
 
 
 def check(path, contents):
@@ -796,15 +1214,11 @@ def check(path, contents):
     # Because Windows.
     path = path.replace('\\', '/')
     basename, ext = os.path.splitext(path)
-    # Only check code. Ignore tests.
-    # TODO(tkent): Remove 'Test' after the great mv.
-    if (ext not in ('.cc', '.cpp', '.h', '.mm')
-            or path.find('/testing/') >= 0
-            or path.find('/tests/') >= 0
-            or basename.endswith('Test')
-            or basename.endswith('_test')
+    # Only check code. Ignore tests and fuzzers.
+    if (ext not in ('.cc', '.cpp', '.h', '.mm') or path.find('/testing/') >= 0
+            or path.find('/tests/') >= 0 or basename.endswith('_test')
             or basename.endswith('_test_helpers')
-            or basename.endswith('_unittest')):
+            or basename.endswith('_unittest') or basename.endswith('_fuzzer')):
         return results
     entries = _find_matching_entries(path)
     if not entries:
@@ -817,9 +1231,10 @@ def check(path, contents):
         if match:
             identifier = match.group(0)
             if not _check_entries_for_identifier(entries, identifier):
-                advice = _find_advice_for_identifier(entries, identifier)
+                advice, warning = _find_advice_for_identifier(
+                    entries, identifier)
                 results.append(
-                    BadIdentifier(identifier, line_number, advice))
+                    BadIdentifier(identifier, line_number, advice, warning))
     return results
 
 
@@ -828,13 +1243,13 @@ def main():
         try:
             with open(path, 'r') as f:
                 contents = f.read()
-                disallowed_identifiers = check(path, [
-                    (i + 1, l) for i, l in
-                    enumerate(contents.splitlines())])
+                disallowed_identifiers = check(
+                    path,
+                    [(i + 1, l) for i, l in enumerate(contents.splitlines())])
                 if disallowed_identifiers:
                     print '%s uses disallowed identifiers:' % path
                     for i in disallowed_identifiers:
-                        print (i.line, i.identifier, i.advice)
+                        print(i.line, i.identifier, i.advice)
         except IOError as e:
             print 'could not open %s: %s' % (path, e)
 

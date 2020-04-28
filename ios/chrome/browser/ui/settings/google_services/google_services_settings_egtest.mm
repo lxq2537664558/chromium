@@ -2,30 +2,33 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#import <EarlGrey/EarlGrey.h>
-#import <XCTest/XCTest.h>
-
-#include "components/prefs/pref_service.h"
-#include "ios/chrome/browser/browser_state/chrome_browser_state.h"
 #import "ios/chrome/browser/ui/authentication/signin_earl_grey_ui.h"
 #import "ios/chrome/browser/ui/authentication/signin_earlgrey_utils.h"
+#import "ios/chrome/browser/ui/settings/google_services/google_services_settings_app_interface.h"
+#import "ios/chrome/browser/ui/settings/google_services/google_services_settings_constants.h"
+#import "ios/chrome/browser/ui/settings/google_services/manage_sync_settings_constants.h"
 #include "ios/chrome/grit/ios_chromium_strings.h"
 #include "ios/chrome/grit/ios_strings.h"
-#import "ios/chrome/test/app/chrome_test_util.h"
-#include "ios/chrome/test/earl_grey/accessibility_util.h"
+#import "ios/chrome/test/earl_grey/chrome_earl_grey.h"
 #import "ios/chrome/test/earl_grey/chrome_earl_grey_ui.h"
 #import "ios/chrome/test/earl_grey/chrome_matchers.h"
 #import "ios/chrome/test/earl_grey/chrome_test_case.h"
+#import "ios/testing/earl_grey/earl_grey_test.h"
 #import "ui/base/l10n/l10n_util.h"
 
 #if !defined(__has_feature) || !__has_feature(objc_arc)
 #error "This file requires ARC support."
 #endif
 
+#if defined(CHROME_EARL_GREY_2)
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wc++98-compat-extra-semi"
+GREY_STUB_CLASS_IN_APP_MAIN_QUEUE(GoogleServicesSettingsAppInterface);
+#pragma clang diagnostic pop
+#endif  // defined(CHROME_EARL_GREY_2)
+
 using l10n_util::GetNSString;
-using chrome_test_util::GetOriginalBrowserState;
 using chrome_test_util::GoogleServicesSettingsButton;
-using chrome_test_util::SettingsMenuBackButton;
 using chrome_test_util::SettingsDoneButton;
 
 // Integration tests using the Google services settings screen.
@@ -37,8 +40,6 @@ using chrome_test_util::SettingsDoneButton;
 
 @implementation GoogleServicesSettingsTestCase
 
-@synthesize scrollViewMatcher = _scrollViewMatcher;
-
 // Opens the Google services settings view, and closes it.
 - (void)testOpenGoogleServicesSettings {
   [self openGoogleServicesSettings];
@@ -46,7 +47,7 @@ using chrome_test_util::SettingsDoneButton;
   // Assert title and accessibility.
   [[EarlGrey selectElementWithMatcher:self.scrollViewMatcher]
       assertWithMatcher:grey_notNil()];
-  chrome_test_util::VerifyAccessibilityForCurrentScreen();
+  [ChromeEarlGrey verifyAccessibilityForCurrentScreen];
 
   // Close settings.
   [[EarlGrey selectElementWithMatcher:SettingsDoneButton()]
@@ -59,6 +60,77 @@ using chrome_test_util::SettingsDoneButton;
   [self assertNonPersonalizedServices];
 }
 
+// Tests that the Google Services settings reloads without crashing when the
+// primary account is removed.
+// Regression test for crbug.com/1033901
+- (void)testRemovePrimaryAccount {
+  // Signin.
+  FakeChromeIdentity* fakeIdentity = [SigninEarlGreyUtils fakeIdentity1];
+  [SigninEarlGreyUI signinWithFakeIdentity:fakeIdentity];
+  // Open "Google Services" settings.
+  [self openGoogleServicesSettings];
+  // Remove the primary account.
+  [SigninEarlGreyUtils forgetFakeIdentity:fakeIdentity];
+  // Assert the UI has been reloaded by testing for the signin cell being
+  // visible.
+  id<GREYMatcher> signinCellMatcher =
+      [self cellMatcherWithTitleID:IDS_IOS_SIGN_IN_TO_CHROME_SETTING_TITLE
+                      detailTextID:
+                          IDS_IOS_GOOGLE_SERVICES_SETTINGS_SIGN_IN_DETAIL_TEXT];
+  [[EarlGrey selectElementWithMatcher:signinCellMatcher]
+      assertWithMatcher:grey_notNil()];
+  // Close settings.
+  [[EarlGrey selectElementWithMatcher:SettingsDoneButton()]
+      performAction:grey_tap()];
+}
+
+// Tests the following steps:
+//  + Opens sign-in from Google services
+//  + Taps on the settings link to open the advanced sign-in settings
+//  + Opens "Data from Chromium sync" to interrupt sign-in
+- (void)testInterruptSigninFromGoogleServicesSettings {
+  [GoogleServicesSettingsAppInterface
+      blockAllNavigationRequestsForCurrentWebState];
+  // Add default identity.
+  [self setTearDownHandler:^{
+    [GoogleServicesSettingsAppInterface
+        unblockAllNavigationRequestsForCurrentWebState];
+  }];
+  FakeChromeIdentity* fakeIdentity = [SigninEarlGreyUtils fakeIdentity1];
+  [SigninEarlGreyUtils addFakeIdentity:fakeIdentity];
+  // Open "Google Services" settings.
+  [self openGoogleServicesSettings];
+  // Open sign-in.
+  id<GREYMatcher> signinCellMatcher =
+      [self cellMatcherWithTitleID:IDS_IOS_SIGN_IN_TO_CHROME_SETTING_TITLE
+                      detailTextID:
+                          IDS_IOS_GOOGLE_SERVICES_SETTINGS_SIGN_IN_DETAIL_TEXT];
+  [[EarlGrey selectElementWithMatcher:signinCellMatcher]
+      performAction:grey_tap()];
+  // Open Settings link.
+  [SigninEarlGreyUI tapSettingsLink];
+  // Open "Manage Sync" settings.
+  id<GREYMatcher> manageSyncMatcher =
+      [self cellMatcherWithTitleID:IDS_IOS_MANAGE_SYNC_SETTINGS_TITLE
+                      detailTextID:0];
+  [[EarlGrey selectElementWithMatcher:manageSyncMatcher]
+      performAction:grey_tap()];
+  // Open "Data from Chrome sync".
+  id<GREYMatcher> manageSyncScrollViewMatcher =
+      grey_accessibilityID(kManageSyncTableViewAccessibilityIdentifier);
+  id<GREYMatcher> dataFromChromeSyncMatcher = [self
+      cellMatcherWithTitleID:IDS_IOS_MANAGE_SYNC_DATA_FROM_CHROME_SYNC_TITLE
+                detailTextID:
+                    IDS_IOS_MANAGE_SYNC_DATA_FROM_CHROME_SYNC_DESCRIPTION];
+  [[self elementInteractionWithGreyMatcher:dataFromChromeSyncMatcher
+                         scrollViewMatcher:manageSyncScrollViewMatcher]
+      performAction:grey_tap()];
+  [self openGoogleServicesSettings];
+  // Verify the sync is not confirmed yet.
+  [self assertCellWithTitleID:IDS_IOS_SYNC_SETUP_NOT_CONFIRMED_TITLE
+                 detailTextID:IDS_IOS_SYNC_SETTINGS_NOT_CONFIRMED_DESCRIPTION];
+}
+
 #pragma mark - Helpers
 
 // Opens the Google services settings.
@@ -66,7 +138,7 @@ using chrome_test_util::SettingsDoneButton;
   [ChromeEarlGreyUI openSettingsMenu];
   [ChromeEarlGreyUI tapSettingsMenuButton:GoogleServicesSettingsButton()];
   self.scrollViewMatcher =
-      grey_accessibilityID(@"google_services_settings_view_controller");
+      grey_accessibilityID(kGoogleServicesSettingsViewIdentifier);
   [[EarlGrey selectElementWithMatcher:self.scrollViewMatcher]
       assertWithMatcher:grey_notNil()];
 }
@@ -88,13 +160,15 @@ using chrome_test_util::SettingsDoneButton;
                                    GetNSString(detailTextID)];
   }
   return grey_allOf(grey_accessibilityLabel(accessibilityLabel),
-                    grey_kindOfClass([UITableViewCell class]),
+                    grey_kindOfClassName(@"UITableViewCell"),
                     grey_sufficientlyVisible(), nil);
 }
 
-// Returns GREYElementInteraction for |matcher|, with a scroll down action.
-- (GREYElementInteraction*)elementInteractionWithGreyMatcher:
-    (id<GREYMatcher>)matcher {
+// Returns GREYElementInteraction for |matcher|, using |scrollViewMatcher| to
+// scroll.
+- (GREYElementInteraction*)
+    elementInteractionWithGreyMatcher:(id<GREYMatcher>)matcher
+                    scrollViewMatcher:(id<GREYMatcher>)scrollViewMatcher {
   // Needs to scroll slowly to make sure to not miss a cell if it is not
   // currently on the screen. It should not be bigger than the visible part
   // of the collection view.
@@ -103,7 +177,15 @@ using chrome_test_util::SettingsDoneButton;
       grey_scrollInDirection(kGREYDirectionDown, kPixelsToScroll);
   return [[EarlGrey selectElementWithMatcher:matcher]
          usingSearchAction:searchAction
-      onElementWithMatcher:self.scrollViewMatcher];
+      onElementWithMatcher:scrollViewMatcher];
+}
+
+// Returns GREYElementInteraction for |matcher|, with |self.scrollViewMatcher|
+// to scroll.
+- (GREYElementInteraction*)elementInteractionWithGreyMatcher:
+    (id<GREYMatcher>)matcher {
+  return [self elementInteractionWithGreyMatcher:matcher
+                               scrollViewMatcher:self.scrollViewMatcher];
 }
 
 // Returns GREYElementInteraction for a cell based on the title string ID and

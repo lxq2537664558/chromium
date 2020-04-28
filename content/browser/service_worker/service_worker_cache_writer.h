@@ -16,6 +16,7 @@
 #include "content/common/content_export.h"
 #include "net/base/io_buffer.h"
 #include "net/base/net_errors.h"
+#include "services/network/public/mojom/url_response_head.mojom.h"
 
 namespace content {
 
@@ -44,9 +45,10 @@ class CONTENT_EXPORT ServiceWorkerCacheWriter {
   // will be written to storage.
   class WriteObserver {
    public:
-    // Called before response info is written to storage.
-    virtual void WillWriteInfo(
-        scoped_refptr<HttpResponseInfoIOBuffer> response_info) = 0;
+    // Called before response headers are written to storage.
+    // Returns net::OK if success. Other values are treated as errors.
+    virtual int WillWriteResponseHead(
+        const network::mojom::URLResponseHead& response_head) = 0;
 
     // Called before response data is written to storage.
     // Return value is used by cache writer to decide what to do next. A net
@@ -89,14 +91,14 @@ class CONTENT_EXPORT ServiceWorkerCacheWriter {
 
   ~ServiceWorkerCacheWriter();
 
-  // Writes the supplied |headers| back to the cache. Returns ERR_IO_PENDING if
-  // the write will complete asynchronously, in which case |callback| will be
-  // called when it completes. Otherwise, returns a code other than
-  // ERR_IO_PENDING and does not invoke |callback|. Note that this method will
-  // not necessarily write data back to the cache if the incoming data is
-  // equivalent to the existing cached data. See the source of this function for
-  // details about how this function drives the state machine.
-  net::Error MaybeWriteHeaders(HttpResponseInfoIOBuffer* headers,
+  // Writes the supplied |response_head| back to the cache. Returns
+  // ERR_IO_PENDING if the write will complete asynchronously, in which case
+  // |callback| will be called when it completes. Otherwise, returns a code
+  // other than ERR_IO_PENDING and does not invoke |callback|. Note that this
+  // method will not necessarily write data back to the cache if the incoming
+  // data is equivalent to the existing cached data. See the source of this
+  // function for details about how this function drives the state machine.
+  net::Error MaybeWriteHeaders(network::mojom::URLResponseHeadPtr response_head,
                                OnWriteCompleteCallback callback);
 
   // Writes the supplied body data |data| back to the cache. Returns
@@ -138,6 +140,8 @@ class CONTENT_EXPORT ServiceWorkerCacheWriter {
   }
 
  private:
+  friend class ServiceWorkerUpdateCheckTestUtils;
+
   // States for the state machine.
   //
   // The state machine flows roughly like this: if there is no existing cache
@@ -245,15 +249,19 @@ class CONTENT_EXPORT ServiceWorkerCacheWriter {
                      net::IOBuffer* buf,
                      int buf_len);
   // If no write observer is set through set_write_observer(),
-  // WriteInfo() operates the same as WriteInfoToResponseWriter() and
+  // WriteInfo() operates the same as WriteResponseHeadToResponseWriter() and
   // WriteData() operates the same as WriteDataToResponseWriter().
   // If observer is set, the argument |response_info| or |data| is first sent
-  // to observer then WriteInfoToResponseWriter() or
+  // to observer then WriteResponseHeadToResponseWriter() or
   // WriteDataToResponseWriter() is called.
+  // TODO(crbug.com/1060076): Remove WriteInfo() after |headers_to_read_| is
+  // replaced with a network::mojom::URLResponseHeadPtr.
   int WriteInfo(scoped_refptr<HttpResponseInfoIOBuffer> response_info);
+  int WriteResponseHead(const network::mojom::URLResponseHead& response_head);
   int WriteData(scoped_refptr<net::IOBuffer> data, int length);
-  int WriteInfoToResponseWriter(
-      scoped_refptr<HttpResponseInfoIOBuffer> response_info);
+  int WriteResponseHeadToResponseWriter(
+      const network::mojom::URLResponseHead& response_head,
+      int response_data_size);
   int WriteDataToResponseWriter(scoped_refptr<net::IOBuffer> data, int length);
 
   // Called when |write_observer_| finishes its WillWriteData() operation.
@@ -274,8 +282,10 @@ class CONTENT_EXPORT ServiceWorkerCacheWriter {
   bool io_pending_;
   bool comparing_;
 
+  // TODO(crbug.com/1060076): Replace HttpResponseInfoIOBuffer with
+  // network::mojom::URLResponseHeadPtr.
   scoped_refptr<HttpResponseInfoIOBuffer> headers_to_read_;
-  scoped_refptr<HttpResponseInfoIOBuffer> headers_to_write_;
+  network::mojom::URLResponseHeadPtr response_head_to_write_;
   scoped_refptr<net::IOBuffer> data_to_read_;
   int len_to_read_;
   scoped_refptr<net::IOBuffer> data_to_copy_;
@@ -314,7 +324,7 @@ class CONTENT_EXPORT ServiceWorkerCacheWriter {
   std::unique_ptr<ServiceWorkerResponseReader> compare_reader_;
   std::unique_ptr<ServiceWorkerResponseReader> copy_reader_;
   std::unique_ptr<ServiceWorkerResponseWriter> writer_;
-  base::WeakPtrFactory<ServiceWorkerCacheWriter> weak_factory_;
+  base::WeakPtrFactory<ServiceWorkerCacheWriter> weak_factory_{this};
 };
 
 }  // namespace content

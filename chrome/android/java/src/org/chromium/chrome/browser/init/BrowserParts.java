@@ -4,6 +4,8 @@
 
 package org.chromium.chrome.browser.init;
 
+import androidx.annotation.Nullable;
+
 /**
  * Interface that any {@link AsyncInitializationActivity} can use to interact with this delegate
  * during start up. Functions called by
@@ -54,6 +56,15 @@ public interface BrowserParts {
 
     /**
      * Called during {@link ChromeBrowserInitializer#handlePostNativeStartup(BrowserParts)}.
+     * Carry out remaining activity specific tasks for initialization, sub-classes may call
+     * finishNativeInitialization asynchronously.
+     */
+    default void startNativeInitialization() {
+        finishNativeInitialization();
+    }
+
+    /**
+     * Called during {@link ChromeBrowserInitializer#handlePostNativeStartup(BrowserParts)}.
      * Carry out remaining activity specific tasks for initialization
      */
     void finishNativeInitialization();
@@ -61,11 +72,12 @@ public interface BrowserParts {
     /**
      * Called during {@link ChromeBrowserInitializer#handlePostNativeStartup(BrowserParts)} if
      * there was an error during startup.
+     * @param failureCause The Exception from the original failure.
      */
-    void onStartupFailure();
+    void onStartupFailure(@Nullable Exception failureCause);
 
     /**
-     * @return Whether the activity this delegate represents has been destoyed or is in the
+     * @return Whether the activity this delegate represents has been destroyed or is in the
      *         process of finishing.
      */
     boolean isActivityFinishingOrDestroyed();

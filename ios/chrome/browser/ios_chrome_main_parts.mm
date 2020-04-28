@@ -13,6 +13,7 @@
 #include "base/path_service.h"
 #include "base/sequenced_task_runner.h"
 #include "base/task/post_task.h"
+#include "base/task/thread_pool.h"
 #include "base/time/default_tick_clock.h"
 #include "components/content_settings/core/browser/cookie_settings.h"
 #include "components/content_settings/core/common/content_settings_pattern.h"
@@ -26,6 +27,7 @@
 #include "components/prefs/json_pref_store.h"
 #include "components/prefs/pref_service.h"
 #include "components/rappor/rappor_service_impl.h"
+#include "components/safe_browsing/core/features.h"
 #include "components/translate/core/browser/translate_download_manager.h"
 #include "components/ukm/ios/features.h"
 #include "components/variations/field_trial_config/field_trial_util.h"
@@ -33,21 +35,22 @@
 #include "components/variations/synthetic_trials_active_group_id_provider.h"
 #include "components/variations/variations_crash_keys.h"
 #include "components/variations/variations_http_header_provider.h"
-#include "ios/chrome/browser/about_flags.h"
 #include "ios/chrome/browser/application_context_impl.h"
 #include "ios/chrome/browser/browser_state/browser_state_keyed_service_factories.h"
 #include "ios/chrome/browser/browser_state/chrome_browser_state.h"
 #include "ios/chrome/browser/browser_state/chrome_browser_state_manager.h"
 #include "ios/chrome/browser/chrome_paths.h"
 #import "ios/chrome/browser/first_run/first_run.h"
+#include "ios/chrome/browser/flags/about_flags.h"
 #include "ios/chrome/browser/install_time_util.h"
 #include "ios/chrome/browser/metrics/ios_expired_histograms_array.h"
 #include "ios/chrome/browser/open_from_clipboard/create_clipboard_recent_content.h"
 #include "ios/chrome/browser/pref_names.h"
+#include "ios/chrome/browser/safe_browsing/safe_browsing_service.h"
 #include "ios/chrome/browser/translate/translate_service_ios.h"
 #include "ios/public/provider/chrome/browser/chrome_browser_provider.h"
-#include "ios/web/public/web_task_traits.h"
-#include "ios/web/public/web_thread.h"
+#include "ios/web/public/thread/web_task_traits.h"
+#include "ios/web/public/thread/web_thread.h"
 #include "net/base/network_change_notifier.h"
 #include "net/http/http_network_layer.h"
 #include "net/http/http_stream_factory.h"
@@ -100,7 +103,7 @@ void IOSChromeMainParts::PreCreateThreads() {
   // remaining BACKGROUND+BLOCK_SHUTDOWN tasks is bumped by the ThreadPool on
   // shutdown.
   scoped_refptr<base::SequencedTaskRunner> local_state_task_runner =
-      base::CreateSequencedTaskRunnerWithTraits(
+      base::ThreadPool::CreateSequencedTaskRunner(
           {base::MayBlock(), base::TaskPriority::BEST_EFFORT,
            base::TaskShutdownBehavior::BLOCK_SHUTDOWN});
 
@@ -116,6 +119,11 @@ void IOSChromeMainParts::PreCreateThreads() {
   // because this is only to trigger the internal lookup and caching for later
   // use.)
   FirstRun::IsChromeFirstRun();
+
+  // Convert freeform experimental settings into switches before initializing
+  // local state, in case any of the settings affect policy.
+  AppendSwitchesFromExperimentalSettings(
+      base::CommandLine::ForCurrentProcess());
 
   // Initialize local state.
   local_state_ = application_context_->GetLocalState();
@@ -154,7 +162,7 @@ void IOSChromeMainParts::PreMainMessageLoopRun() {
   EnsureBrowserStateKeyedServiceFactoriesBuilt();
   ios::ChromeBrowserStateManager* browser_state_manager =
       application_context_->GetChromeBrowserStateManager();
-  ios::ChromeBrowserState* last_used_browser_state =
+  ChromeBrowserState* last_used_browser_state =
       browser_state_manager->GetLastUsedBrowserState();
 
   // This must occur at PreMainMessageLoopRun because |SetupMetrics()| uses the
@@ -198,6 +206,17 @@ void IOSChromeMainParts::PreMainMessageLoopRun() {
         last_used_browser_state->GetPrefs());
     variations_service->PerformPreMainMessageLoopStartup();
   }
+
+  if (base::FeatureList::IsEnabled(
+          safe_browsing::kSafeBrowsingAvailableOnIOS)) {
+    // Ensure that Safe Browsing is initialized.
+    SafeBrowsingService* safe_browsing_service =
+        application_context_->GetSafeBrowsingService();
+    base::FilePath user_data_path;
+    CHECK(base::PathService::Get(ios::DIR_USER_DATA, &user_data_path));
+    safe_browsing_service->Initialize(last_used_browser_state->GetPrefs(),
+                                      user_data_path);
+  }
 }
 
 void IOSChromeMainParts::PostMainMessageLoopRun() {
@@ -212,7 +231,7 @@ void IOSChromeMainParts::PostDestroyThreads() {
 // This will be called after the command-line has been mutated by about:flags
 void IOSChromeMainParts::SetupFieldTrials() {
   base::SetRecordActionTaskRunner(
-      base::CreateSingleThreadTaskRunnerWithTraits({web::WebThread::UI}));
+      base::CreateSingleThreadTaskRunner({web::WebThread::UI}));
 
   // Initialize FieldTrialList to support FieldTrials that use one-time
   // randomization.
@@ -231,10 +250,13 @@ void IOSChromeMainParts::SetupFieldTrials() {
 
   // On iOS, GPU benchmarking is not supported. So, pass in a dummy value for
   // the name of the switch that enables gpu benchmarking.
+  // TODO(crbug.com/988603): This should also set up extra switch-dependent
+  // feature overrides.
   application_context_->GetVariationsService()->SetupFieldTrials(
       "dummy-enable-gpu-benchmarking", switches::kEnableFeatures,
       switches::kDisableFeatures,
       /*unforceable_field_trials=*/std::set<std::string>(), variation_ids,
+      std::vector<base::FeatureList::FeatureOverrideInfo>(),
       std::move(feature_list), &ios_field_trials_);
 }
 

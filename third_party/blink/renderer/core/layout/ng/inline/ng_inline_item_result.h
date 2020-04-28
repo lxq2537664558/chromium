@@ -2,17 +2,17 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifndef NGInlineItemResult_h
-#define NGInlineItemResult_h
+#ifndef THIRD_PARTY_BLINK_RENDERER_CORE_LAYOUT_NG_INLINE_NG_INLINE_ITEM_RESULT_H_
+#define THIRD_PARTY_BLINK_RENDERER_CORE_LAYOUT_NG_INLINE_NG_INLINE_ITEM_RESULT_H_
 
 #include "third_party/blink/renderer/core/layout/ng/geometry/ng_box_strut.h"
+#include "third_party/blink/renderer/core/layout/ng/inline/ng_inline_item.h"
 #include "third_party/blink/renderer/core/layout/ng/inline/ng_physical_text_fragment.h"
-#include "third_party/blink/renderer/core/layout/ng/inline/ng_text_end_effect.h"
 #include "third_party/blink/renderer/core/layout/ng/ng_layout_result.h"
 #include "third_party/blink/renderer/core/layout/ng/ng_positioned_float.h"
 #include "third_party/blink/renderer/platform/fonts/shaping/shape_result.h"
 #include "third_party/blink/renderer/platform/geometry/layout_unit.h"
-#include "third_party/blink/renderer/platform/wtf/allocator.h"
+#include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
 
 namespace blink {
 
@@ -32,6 +32,29 @@ struct CORE_EXPORT NGInlineItemResult {
   DISALLOW_NEW();
 
  public:
+  NGTextOffset TextOffset() const { return {start_offset, end_offset}; }
+  unsigned Length() const {
+    DCHECK_GT(end_offset, start_offset);
+    return end_offset - start_offset;
+  }
+
+  // Return true if the fragment to be generated for the specified item is going
+  // to be the first fragment for the node.
+  bool IsFirstForNode() const {
+    DCHECK(item->Type() == NGInlineItem::kText ||
+           item->Type() == NGInlineItem::kControl);
+    return item->IsFirstForNode() && start_offset == item->StartOffset();
+  }
+
+  LayoutUnit HyphenInlineSize() const {
+    return hyphen_shape_result->SnappedWidth().ClampNegativeToZero();
+  }
+
+  void ClearHyphen() {
+    hyphen_string = String();
+    hyphen_shape_result = nullptr;
+  }
+
   // The NGInlineItem and its index.
   const NGInlineItem* item;
   unsigned item_index;
@@ -46,6 +69,10 @@ struct CORE_EXPORT NGInlineItemResult {
   // ShapeResult for text items. Maybe different from NGInlineItem if re-shape
   // is needed in the line breaker.
   scoped_refptr<const ShapeResultView> shape_result;
+
+  // Hyphen character and its |ShapeResult| if this text is hyphenated.
+  String hyphen_string;
+  scoped_refptr<const ShapeResult> hyphen_shape_result;
 
   // NGLayoutResult for atomic inline items.
   scoped_refptr<const NGLayoutResult> layout_result;
@@ -107,10 +134,6 @@ struct CORE_EXPORT NGInlineItemResult {
   // position) any unpositioned floats.
   bool has_unpositioned_floats = false;
 
-  // End effects for text items.
-  // The effects are included in |shape_result|, but not in text content.
-  NGTextEndEffect text_end_effect = NGTextEndEffect::kNone;
-
   NGInlineItemResult();
   NGInlineItemResult(const NGInlineItem*,
                      unsigned index,
@@ -134,7 +157,7 @@ using NGInlineItemResults = Vector<NGInlineItemResult, 32>;
 //
 // NGLineBreaker produces, and NGInlineLayoutAlgorithm consumes.
 class CORE_EXPORT NGLineInfo {
-  DISALLOW_NEW();
+  STACK_ALLOCATED();
 
  public:
   const NGInlineItemsData& ItemsData() const {
@@ -176,17 +199,22 @@ class CORE_EXPORT NGLineInfo {
   void SetTextIndent(LayoutUnit indent) { text_indent_ = indent; }
   LayoutUnit TextIndent() const { return text_indent_; }
 
+  ETextAlign TextAlign() const { return text_align_; }
+  // Update |TextAlign()| and related fields. This depends on |IsLastLine()| and
+  // that must be called after |SetIsLastLine()|.
+  void UpdateTextAlign();
+
   NGBfcOffset BfcOffset() const { return bfc_offset_; }
   LayoutUnit AvailableWidth() const { return available_width_; }
 
   // The width of this line. Includes trailing spaces if they were preserved.
   // Negative width created by negative 'text-indent' is clamped to zero.
   LayoutUnit Width() const { return width_.ClampNegativeToZero(); }
-  // Same as |Width()| but returns negative value as is.
-  LayoutUnit WidthForAlignment() const { return width_; }
-  // The width of preserved trailing spaces.
-  LayoutUnit ComputeTrailingSpaceWidth(
-      unsigned* end_offset_out = nullptr) const;
+  // Same as |Width()| but returns negative value as is. Preserved trailing
+  // spaces may or may not be included, depends on |ShouldHangTrailingSpaces()|.
+  LayoutUnit WidthForAlignment() const { return width_ - hang_width_; }
+  // Width that hangs over the end of the line; e.g., preserved trailing spaces.
+  LayoutUnit HangWidth() const { return hang_width_; }
   // Compute |Width()| from |Results()|. Used during line breaking, before
   // |Width()| is set. After line breaking, this should match to |Width()|
   // without clamping.
@@ -194,10 +222,11 @@ class CORE_EXPORT NGLineInfo {
 
   bool HasTrailingSpaces() const { return has_trailing_spaces_; }
   void SetHasTrailingSpaces() { has_trailing_spaces_ = true; }
+  bool ShouldHangTrailingSpaces() const;
 
   // True if this line has overflow, excluding preserved trailing spaces.
   bool HasOverflow() const { return has_overflow_; }
-  void SetHasOverflow() { has_overflow_ = true; }
+  void SetHasOverflow(bool value = true) { has_overflow_ = value; }
 
   void SetBfcOffset(const NGBfcOffset& bfc_offset) { bfc_offset_ = bfc_offset; }
   void SetWidth(LayoutUnit available_width, LayoutUnit width) {
@@ -211,6 +240,12 @@ class CORE_EXPORT NGLineInfo {
   // End text offset of this line, excluding out-of-flow objects such as
   // floating or positioned.
   unsigned InflowEndOffset() const;
+  // End text offset for `text-align: justify`. This excludes preserved trailing
+  // spaces. Available only when |TextAlign()| is |kJustify|.
+  unsigned EndOffsetForJustify() const {
+    DCHECK_EQ(text_align_, ETextAlign::kJustify);
+    return end_offset_for_justify_;
+  }
   // End item index of this line.
   unsigned EndItemIndex() const { return end_item_index_; }
   void SetEndItemIndex(unsigned index) { end_item_index_ = index; }
@@ -225,29 +260,29 @@ class CORE_EXPORT NGLineInfo {
   // justify alignment.
   bool NeedsAccurateEndPosition() const { return needs_accurate_end_position_; }
 
-  // Fragment to append to the line end. Used by 'text-overflow: ellipsis'.
-  scoped_refptr<const NGPhysicalTextFragment>& LineEndFragment() {
-    return line_end_fragment_;
-  }
-  void SetLineEndFragment(scoped_refptr<const NGPhysicalTextFragment>);
-
  private:
   bool ComputeNeedsAccurateEndPosition() const;
+
+  // The width of preserved trailing spaces.
+  LayoutUnit ComputeTrailingSpaceWidth(
+      unsigned* end_offset_out = nullptr) const;
 
   const NGInlineItemsData* items_data_ = nullptr;
   const ComputedStyle* line_style_ = nullptr;
   NGInlineItemResults results_;
-  scoped_refptr<const NGPhysicalTextFragment> line_end_fragment_;
 
   NGBfcOffset bfc_offset_;
 
   LayoutUnit available_width_;
   LayoutUnit width_;
+  LayoutUnit hang_width_;
   LayoutUnit text_indent_;
 
   unsigned start_offset_;
   unsigned end_item_index_;
+  unsigned end_offset_for_justify_;
 
+  ETextAlign text_align_ = ETextAlign::kLeft;
   TextDirection base_direction_ = TextDirection::kLtr;
 
   bool use_first_line_style_ = false;
@@ -260,4 +295,4 @@ class CORE_EXPORT NGLineInfo {
 
 }  // namespace blink
 
-#endif  // NGInlineItemResult_h
+#endif  // THIRD_PARTY_BLINK_RENDERER_CORE_LAYOUT_NG_INLINE_NG_INLINE_ITEM_RESULT_H_

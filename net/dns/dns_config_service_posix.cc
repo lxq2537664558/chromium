@@ -14,6 +14,7 @@
 #include "base/files/file_path_watcher.h"
 #include "base/lazy_instance.h"
 #include "base/location.h"
+#include "base/logging.h"
 #include "base/macros.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/single_thread_task_runner.h"
@@ -60,7 +61,7 @@ const base::FilePath::CharType kFilePathHosts[] =
 // There is no public API to watch the DNS configuration on iOS.
 class DnsConfigWatcher {
  public:
-  using CallbackType = base::Callback<void(bool succeeded)>;
+  using CallbackType = base::RepeatingCallback<void(bool succeeded)>;
 
   bool Watch(const CallbackType& callback) {
     return false;
@@ -78,7 +79,7 @@ class DnsConfigWatcher : public NetworkChangeNotifier::NetworkChangeObserver {
     NetworkChangeNotifier::RemoveNetworkChangeObserver(this);
   }
 
-  using CallbackType = base::Callback<void(bool succeeded)>;
+  using CallbackType = base::RepeatingCallback<void(bool succeeded)>;
 
   bool Watch(const CallbackType& callback) {
     callback_ = callback;
@@ -110,13 +111,13 @@ const base::FilePath::CharType kFilePathConfig[] =
 
 class DnsConfigWatcher {
  public:
-  using CallbackType = base::Callback<void(bool succeeded)>;
+  using CallbackType = base::RepeatingCallback<void(bool succeeded)>;
 
   bool Watch(const CallbackType& callback) {
     callback_ = callback;
     return watcher_.Watch(base::FilePath(kFilePathConfig), false,
-                          base::Bind(&DnsConfigWatcher::OnCallback,
-                                     base::Unretained(this)));
+                          base::BindRepeating(&DnsConfigWatcher::OnCallback,
+                                              base::Unretained(this)));
   }
 
  private:
@@ -196,7 +197,9 @@ ConfigParsePosixResult ReadDnsConfig(DnsConfig* dns_config) {
 
   if (base::android::BuildInfo::GetInstance()->sdk_int() >=
       base::android::SDK_VERSION_MARSHMALLOW) {
-    return net::android::GetDnsServers(&dns_config->nameservers);
+    return net::android::GetDnsServers(&dns_config->nameservers,
+                                       &dns_config->dns_over_tls_active,
+                                       &dns_config->dns_over_tls_hostname);
   }
 
   if (IsVpnPresent()) {
@@ -239,14 +242,13 @@ ConfigParsePosixResult ReadDnsConfig(DnsConfig* dns_config) {
 
 class DnsConfigServicePosix::Watcher {
  public:
-  explicit Watcher(DnsConfigServicePosix* service)
-      : service_(service), weak_factory_(this) {}
+  explicit Watcher(DnsConfigServicePosix* service) : service_(service) {}
   ~Watcher() = default;
 
   bool Watch() {
     bool success = true;
-    if (!config_watcher_.Watch(base::Bind(&Watcher::OnConfigChanged,
-                                          base::Unretained(this)))) {
+    if (!config_watcher_.Watch(base::BindRepeating(&Watcher::OnConfigChanged,
+                                                   base::Unretained(this)))) {
       LOG(ERROR) << "DNS config watch failed to start.";
       success = false;
       UMA_HISTOGRAM_ENUMERATION("AsyncDNS.WatchStatus",
@@ -256,9 +258,9 @@ class DnsConfigServicePosix::Watcher {
 // Hosts file should never change on Android or iOS (and watching it on Android
 // is problematic; see http://crbug.com/600442), so don't watch it there.
 #if !defined(OS_ANDROID) && !defined(OS_IOS)
-    if (!hosts_watcher_.Watch(
-            base::FilePath(service_->file_path_hosts_), false,
-            base::Bind(&Watcher::OnHostsChanged, base::Unretained(this)))) {
+    if (!hosts_watcher_.Watch(base::FilePath(service_->file_path_hosts_), false,
+                              base::BindRepeating(&Watcher::OnHostsChanged,
+                                                  base::Unretained(this)))) {
       LOG(ERROR) << "DNS hosts watch failed to start.";
       success = false;
       UMA_HISTOGRAM_ENUMERATION("AsyncDNS.WatchStatus",
@@ -294,7 +296,7 @@ class DnsConfigServicePosix::Watcher {
   base::FilePathWatcher hosts_watcher_;
 #endif  // !defined(OS_ANDROID) && !defined(OS_IOS)
 
-  base::WeakPtrFactory<Watcher> weak_factory_;
+  base::WeakPtrFactory<Watcher> weak_factory_{this};
 
   DISALLOW_COPY_AND_ASSIGN(Watcher);
 };
@@ -410,6 +412,12 @@ DnsConfigServicePosix::DnsConfigServicePosix()
 DnsConfigServicePosix::~DnsConfigServicePosix() {
   config_reader_->Cancel();
   hosts_reader_->Cancel();
+}
+
+void DnsConfigServicePosix::RefreshConfig() {
+  InvalidateConfig();
+  InvalidateHosts();
+  ReadNow();
 }
 
 void DnsConfigServicePosix::ReadNow() {
@@ -571,8 +579,15 @@ ConfigParsePosixResult ConvertResStateToDnsConfig(const struct __res_state& res,
 
 // static
 std::unique_ptr<DnsConfigService> DnsConfigService::CreateSystemService() {
+  // DnsConfigService on iOS doesn't watch the config so its result can become
+  // inaccurate at any time.  Disable it to prevent promulgation of inaccurate
+  // DnsConfigs.
+#ifdef OS_IOS
+  return nullptr;
+#else   // defined(OS_IOS)
   return std::unique_ptr<DnsConfigService>(
       new internal::DnsConfigServicePosix());
+#endif  // defined(OS_IOS)
 }
 
 }  // namespace net

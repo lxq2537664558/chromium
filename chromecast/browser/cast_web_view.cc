@@ -13,22 +13,10 @@ CastWebView::Delegate::RunBluetoothChooser(
   return nullptr;
 }
 
-CastWebView::CastWebView() {}
+CastWebView::CreateParams::CreateParams() = default;
 
-CastWebView::~CastWebView() {
-  for (Observer& observer : observer_list_) {
-    observer.OnPageDestroyed(this);
-  }
-}
+CastWebView::CreateParams::CreateParams(const CreateParams& other) = default;
 
-void CastWebView::AddObserver(CastWebView::Observer* observer) {
-  observer_list_.AddObserver(observer);
-}
-
-void CastWebView::RemoveObserver(CastWebView::Observer* observer) {
-  observer_list_.RemoveObserver(observer);
-}
-
-CastWebView::CreateParams::CreateParams() {}
+CastWebView::CreateParams::~CreateParams() = default;
 
 }  // namespace chromecast

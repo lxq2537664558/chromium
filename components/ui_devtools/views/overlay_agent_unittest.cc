@@ -12,6 +12,7 @@
 #include "ui/events/base_event_utils.h"
 #include "ui/events/event_constants.h"
 #include "ui/events/test/event_generator.h"
+#include "ui/events/types/event_type.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/views/test/views_test_base.h"
 #include "ui/views/widget/widget_utils.h"
@@ -53,7 +54,9 @@ class OverlayAgentTest : public views::ViewsTestBase {
   void TearDown() override {
     // Ensure DOMAgent shuts down before the root window closes to avoid
     // lifetime issues.
+    overlay_agent_->disable();
     overlay_agent_.reset();
+    dom_agent_->disable();
     dom_agent_.reset();
     uber_dispatcher_.reset();
     fake_frontend_channel_.reset();
@@ -120,7 +123,7 @@ class OverlayAgentTest : public views::ViewsTestBase {
 #if defined(USE_AURA)
     params.parent = GetContext();
 #endif
-    widget_->Init(params);
+    widget_->Init(std::move(params));
     widget_->Show();
   }
 

@@ -20,13 +20,21 @@ struct ArcValueEvent {
     kSwapRead,
     kSwapWrite,
     kSwapWait,
+    kGemObjects,
+    kGemSize,
+    kGpuFrequency,
+    kCpuTemperature,
+    kCpuFrequency,
+    kCpuPower,
+    kGpuPower,
+    kMemoryPower,
   };
 
   ArcValueEvent(int64_t timestamp, Type type, int value);
 
   bool operator==(const ArcValueEvent& other) const;
 
-  int64_t timestamp;
+  uint64_t timestamp;
   Type type;
   /**
    * kMemTotal - kb.
@@ -34,6 +42,14 @@ struct ArcValueEvent {
    * kSwapRead - number of sectors.
    * kSwapWrite - number of sectors.
    * kSwapWait - milliseconds.
+   * kGemObjects - number of objects
+   * kGemSize - kb
+   * kGpuFrequency - mhz
+   * kCpuTemperature - celsius * 1000
+   * kCpuFrequency - khz
+   * kCpuPower - milli-watts
+   * kGpuPower - milli-watts
+   * kMemporyPower - milli-watts
    */
   int value;
 };

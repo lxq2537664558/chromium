@@ -4,7 +4,7 @@
 
 #include "third_party/blink/renderer/core/fetch/fetch_response_data.h"
 
-#include "third_party/blink/public/platform/modules/service_worker/web_service_worker_response.h"
+#include "third_party/blink/public/mojom/fetch/fetch_api_response.mojom-blink.h"
 #include "third_party/blink/renderer/core/fetch/fetch_header_list.h"
 #include "third_party/blink/renderer/core/typed_arrays/dom_array_buffer.h"
 #include "third_party/blink/renderer/platform/bindings/exception_state.h"
@@ -12,6 +12,8 @@
 #include "third_party/blink/renderer/platform/loader/cors/cors.h"
 #include "third_party/blink/renderer/platform/loader/fetch/fetch_utils.h"
 #include "third_party/blink/renderer/platform/network/http_names.h"
+#include "third_party/blink/renderer/platform/network/http_parsers.h"
+#include "third_party/blink/renderer/platform/weborigin/kurl.h"
 #include "third_party/blink/renderer/platform/wtf/std_lib_extras.h"
 
 using Type = network::mojom::FetchResponseType;
@@ -21,20 +23,10 @@ namespace blink {
 
 namespace {
 
-WebVector<WebString> HeaderSetToWebVector(const WebHTTPHeaderSet& headers) {
-  // Can't just pass *headers to the WebVector constructor because HashSet
-  // iterators are not stl iterator compatible.
-  WebVector<WebString> result(static_cast<size_t>(headers.size()));
-  int idx = 0;
-  for (const auto& header : headers)
-    result[idx++] = WebString::FromASCII(header);
-  return result;
-}
-
-Vector<String> HeaderSetToVector(const WebHTTPHeaderSet& headers) {
+Vector<String> HeaderSetToVector(const HTTPHeaderSet& headers) {
   Vector<String> result;
   result.ReserveInitialCapacity(SafeCast<wtf_size_t>(headers.size()));
-  // WebHTTPHeaderSet stores headers using Latin1 encoding.
+  // HTTPHeaderSet stores headers using Latin1 encoding.
   for (const auto& header : headers)
     result.push_back(String(header.data(), header.size()));
   return result;
@@ -85,7 +77,7 @@ FetchResponseData* FetchResponseData::CreateBasicFilteredResponse() const {
 }
 
 FetchResponseData* FetchResponseData::CreateCorsFilteredResponse(
-    const WebHTTPHeaderSet& exposed_headers) const {
+    const HTTPHeaderSet& exposed_headers) const {
   DCHECK_EQ(type_, Type::kDefault);
   // "A CORS filtered response is a filtered response whose type is |CORS|,
   // header list excludes all headers in internal response's header list,
@@ -99,8 +91,8 @@ FetchResponseData* FetchResponseData::CreateCorsFilteredResponse(
   response->SetURLList(url_list_);
   for (const auto& header : header_list_->List()) {
     const String& name = header.first;
-    if (cors::IsOnAccessControlResponseHeaderWhitelist(name) ||
-        (exposed_headers.find(name.Ascii().data()) != exposed_headers.end() &&
+    if (cors::IsCorsSafelistedResponseHeader(name) ||
+        (exposed_headers.find(name.Ascii()) != exposed_headers.end() &&
          !FetchUtils::IsForbiddenResponseHeaderName(name))) {
       response->header_list_->Append(name, header.second);
     }
@@ -147,6 +139,13 @@ const KURL* FetchResponseData::Url() const {
   if (url_list_.IsEmpty())
     return nullptr;
   return &url_list_.back();
+}
+
+FetchHeaderList* FetchResponseData::InternalHeaderList() const {
+  if (internal_response_) {
+    return internal_response_->HeaderList();
+  }
+  return HeaderList();
 }
 
 String FetchResponseData::MimeType() const {
@@ -240,35 +239,11 @@ FetchResponseData* FetchResponseData::Clone(ScriptState* script_state,
   return new_response;
 }
 
-void FetchResponseData::PopulateWebServiceWorkerResponse(
-    WebServiceWorkerResponse& response) {
-  if (internal_response_) {
-    internal_response_->PopulateWebServiceWorkerResponse(response);
-    response.SetResponseType(type_);
-    response.SetResponseSource(response_source_);
-    response.SetCorsExposedHeaderNames(
-        HeaderSetToWebVector(cors_exposed_header_names_));
-    return;
-  }
-  response.SetURLList(url_list_);
-  response.SetStatus(Status());
-  response.SetStatusText(StatusMessage());
-  response.SetResponseType(type_);
-  response.SetResponseSource(response_source_);
-  response.SetResponseTime(ResponseTime());
-  response.SetCacheStorageCacheName(CacheStorageCacheName());
-  response.SetCorsExposedHeaderNames(
-      HeaderSetToWebVector(cors_exposed_header_names_));
-  for (const auto& header : HeaderList()->List()) {
-    response.AppendHeader(header.first, header.second);
-  }
-}
-
-mojom::blink::FetchAPIResponsePtr
-FetchResponseData::PopulateFetchAPIResponse() {
+mojom::blink::FetchAPIResponsePtr FetchResponseData::PopulateFetchAPIResponse(
+    const KURL& request_url) {
   if (internal_response_) {
     mojom::blink::FetchAPIResponsePtr response =
-        internal_response_->PopulateFetchAPIResponse();
+        internal_response_->PopulateFetchAPIResponse(request_url);
     response->response_type = type_;
     response->response_source = response_source_;
     response->cors_exposed_header_names =
@@ -286,9 +261,60 @@ FetchResponseData::PopulateFetchAPIResponse() {
   response->cache_storage_cache_name = cache_storage_cache_name_;
   response->cors_exposed_header_names =
       HeaderSetToVector(cors_exposed_header_names_);
+  response->side_data_blob = side_data_blob_;
+  response->loaded_with_credentials = loaded_with_credentials_;
   for (const auto& header : HeaderList()->List())
     response->headers.insert(header.first, header.second);
+  response->parsed_headers = ParseHeaders(
+      HeaderList()->GetAsRawString(status_, status_message_), request_url);
   return response;
+}
+
+void FetchResponseData::InitFromResourceResponse(
+    const Vector<KURL>& request_url_list,
+    network::mojom::CredentialsMode request_credentials,
+    FetchRequestData::Tainting tainting,
+    const ResourceResponse& response) {
+  SetStatus(response.HttpStatusCode());
+  if (response.CurrentRequestUrl().ProtocolIsAbout() ||
+      response.CurrentRequestUrl().ProtocolIsData() ||
+      response.CurrentRequestUrl().ProtocolIs("blob")) {
+    SetStatusMessage("OK");
+  } else {
+    SetStatusMessage(response.HttpStatusText());
+  }
+
+  for (auto& it : response.HttpHeaderFields())
+    HeaderList()->Append(it.key, it.value);
+
+  // Corresponds to https://fetch.spec.whatwg.org/#main-fetch step:
+  // "If |internalResponse|’s URL list is empty, then set it to a clone of
+  // |request|’s URL list."
+  if (response.UrlListViaServiceWorker().IsEmpty()) {
+    // Note: |UrlListViaServiceWorker()| is empty, unless the response came from
+    // a service worker, in which case it will only be empty if it was created
+    // through new Response().
+    SetURLList(request_url_list);
+  } else {
+    DCHECK(response.WasFetchedViaServiceWorker());
+    SetURLList(response.UrlListViaServiceWorker());
+  }
+
+  SetMimeType(response.MimeType());
+  SetResponseTime(response.ResponseTime());
+
+  if (response.WasCached()) {
+    SetResponseSource(network::mojom::FetchResponseSource::kHttpCache);
+  } else if (!response.WasFetchedViaServiceWorker()) {
+    SetResponseSource(network::mojom::FetchResponseSource::kNetwork);
+  }
+
+  // TODO(wanderview): Remove |tainting| and use |response.GetType()|
+  // instead once the OOR-CORS disabled path is removed.
+  SetLoadedWithCredentials(
+      request_credentials == network::mojom::CredentialsMode::kInclude ||
+      (request_credentials == network::mojom::CredentialsMode::kSameOrigin &&
+       tainting == FetchRequestData::kBasicTainting));
 }
 
 FetchResponseData::FetchResponseData(Type type,
@@ -300,7 +326,8 @@ FetchResponseData::FetchResponseData(Type type,
       status_(status),
       status_message_(status_message),
       header_list_(MakeGarbageCollected<FetchHeaderList>()),
-      response_time_(base::Time::Now()) {}
+      response_time_(base::Time::Now()),
+      loaded_with_credentials_(false) {}
 
 void FetchResponseData::ReplaceBodyStreamBuffer(BodyStreamBuffer* buffer) {
   if (type_ == Type::kBasic || type_ == Type::kCors) {
@@ -313,7 +340,7 @@ void FetchResponseData::ReplaceBodyStreamBuffer(BodyStreamBuffer* buffer) {
   }
 }
 
-void FetchResponseData::Trace(blink::Visitor* visitor) {
+void FetchResponseData::Trace(Visitor* visitor) {
   visitor->Trace(header_list_);
   visitor->Trace(internal_response_);
   visitor->Trace(buffer_);

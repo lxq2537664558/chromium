@@ -4,14 +4,15 @@
 
 #include "chrome/browser/performance_manager/decorators/frozen_frame_aggregator.h"
 
-#include "chrome/browser/performance_manager/graph/frame_node_impl.h"
-#include "chrome/browser/performance_manager/graph/node_attached_data_impl.h"
-#include "chrome/browser/performance_manager/graph/page_node_impl.h"
-#include "chrome/browser/performance_manager/graph/process_node_impl.h"
+#include "components/performance_manager/graph/frame_node_impl.h"
+#include "components/performance_manager/graph/graph_impl.h"
+#include "components/performance_manager/graph/node_attached_data_impl.h"
+#include "components/performance_manager/graph/page_node_impl.h"
+#include "components/performance_manager/graph/process_node_impl.h"
 
 namespace performance_manager {
 
-using LifecycleState = resource_coordinator::mojom::LifecycleState;
+using LifecycleState = performance_manager::mojom::LifecycleState;
 
 // Provides FrozenFrameAggregator machinery access to some internals of a
 // PageNodeImpl and ProcessNodeImpl.
@@ -33,8 +34,7 @@ class FrozenFrameAggregatorAccess {
   }
 
   static void NotifyAllFramesInProcessFrozen(ProcessNodeImpl* process_node) {
-    for (auto& observer : process_node->observers())
-      observer.OnAllFramesInProcessFrozen(process_node);
+    process_node->OnAllFramesInProcessFrozen();
   }
 };
 
@@ -52,7 +52,8 @@ class FrozenDataImpl : public FrozenFrameAggregator::Data,
   struct Traits : public NodeAttachedDataInternalOnNodeType<PageNodeImpl>,
                   public NodeAttachedDataInternalOnNodeType<ProcessNodeImpl> {};
 
-  FrozenDataImpl() = default;
+  explicit FrozenDataImpl(const PageNodeImpl* page_node) {}
+  explicit FrozenDataImpl(const ProcessNodeImpl* process_node) {}
   ~FrozenDataImpl() override = default;
 
   static StorageType* GetInternalStorage(PageNodeImpl* page_node) {
@@ -110,61 +111,66 @@ bool IsFrozen(const FrameNodeImpl* frame_node) {
 FrozenFrameAggregator::FrozenFrameAggregator() = default;
 FrozenFrameAggregator::~FrozenFrameAggregator() = default;
 
-bool FrozenFrameAggregator::ShouldObserve(const NodeBase* node) {
-  // Use the ShouldObserve hook to ensure page and process node attached data
-  // is initialized. There's no need to observe these nodes beyond that.
-  switch (node->id().type) {
-    case resource_coordinator::CoordinationUnitType::kFrame:
-      return true;
-
-    case resource_coordinator::CoordinationUnitType::kPage: {
-      auto* page_node = PageNodeImpl::FromNodeBase(node);
-      // Expect a page to always start in the running state.
-      DCHECK_EQ(LifecycleState::kRunning, page_node->lifecycle_state());
-      FrozenDataImpl::GetOrCreate(page_node);
-      return false;
-    }
-
-    case resource_coordinator::CoordinationUnitType::kProcess: {
-      FrozenDataImpl::GetOrCreate(ProcessNodeImpl::FromNodeBase(node));
-      return false;
-    }
-
-    default:
-      return false;
-  }
-  NOTREACHED();
+void FrozenFrameAggregator::OnFrameNodeAdded(const FrameNode* frame_node) {
+  auto* frame_impl = FrameNodeImpl::FromNode(frame_node);
+  DCHECK(!IsFrozen(frame_impl));  // A newly created node can never be frozen.
+  AddOrRemoveFrame(frame_impl, 1);
 }
 
-void FrozenFrameAggregator::OnNodeAdded(NodeBase* node) {
-  // We only observe frame nodes.
-  DCHECK_EQ(resource_coordinator::CoordinationUnitType::kFrame,
-            node->id().type);
-
-  auto* frame_node = FrameNodeImpl::FromNodeBase(node);
-  DCHECK(!IsFrozen(frame_node));  // A newly created node can never be frozen.
-  AddOrRemoveFrame(frame_node, 1);
+void FrozenFrameAggregator::OnBeforeFrameNodeRemoved(
+    const FrameNode* frame_node) {
+  AddOrRemoveFrame(FrameNodeImpl::FromNode(frame_node), -1);
 }
 
-void FrozenFrameAggregator::OnBeforeNodeRemoved(NodeBase* node) {
-  if (node->id().type != resource_coordinator::CoordinationUnitType::kFrame)
+void FrozenFrameAggregator::OnIsCurrentChanged(const FrameNode* frame_node) {
+  auto* frame_impl = FrameNodeImpl::FromNode(frame_node);
+  int32_t current_frame_delta = frame_impl->is_current() ? 1 : -1;
+  int32_t frozen_frame_delta = IsFrozen(frame_impl) ? current_frame_delta : 0;
+  UpdateFrameCounts(frame_impl, current_frame_delta, frozen_frame_delta);
+}
+
+void FrozenFrameAggregator::OnFrameLifecycleStateChanged(
+    const FrameNode* frame_node) {
+  auto* frame_impl = FrameNodeImpl::FromNode(frame_node);
+  if (!frame_impl->is_current())
     return;
-
-  auto* frame_node = FrameNodeImpl::FromNodeBase(node);
-  AddOrRemoveFrame(frame_node, -1);
+  int32_t frozen_frame_delta = IsFrozen(frame_impl) ? 1 : -1;
+  UpdateFrameCounts(frame_impl, 0, frozen_frame_delta);
 }
 
-void FrozenFrameAggregator::OnIsCurrentChanged(FrameNodeImpl* frame_node) {
-  int32_t current_frame_delta = frame_node->is_current() ? 1 : -1;
-  int32_t frozen_frame_delta = IsFrozen(frame_node) ? current_frame_delta : 0;
-  UpdateFrameCounts(frame_node, current_frame_delta, frozen_frame_delta);
+void FrozenFrameAggregator::OnPassedToGraph(Graph* graph) {
+  RegisterObservers(graph);
 }
 
-void FrozenFrameAggregator::OnLifecycleStateChanged(FrameNodeImpl* frame_node) {
-  if (!frame_node->is_current())
-    return;
-  int32_t frozen_frame_delta = IsFrozen(frame_node) ? 1 : -1;
-  UpdateFrameCounts(frame_node, 0, frozen_frame_delta);
+void FrozenFrameAggregator::OnTakenFromGraph(Graph* graph) {
+  UnregisterObservers(graph);
+}
+
+void FrozenFrameAggregator::OnPageNodeAdded(const PageNode* page_node) {
+  auto* page_impl = PageNodeImpl::FromNode(page_node);
+  DCHECK_EQ(LifecycleState::kRunning, page_impl->lifecycle_state());
+  FrozenDataImpl::GetOrCreate(page_impl);
+}
+
+void FrozenFrameAggregator::OnProcessNodeAdded(
+    const ProcessNode* process_node) {
+  FrozenDataImpl::GetOrCreate(ProcessNodeImpl::FromNode(process_node));
+}
+
+void FrozenFrameAggregator::RegisterObservers(Graph* graph) {
+  // This observer presumes that it's been added before any nodes exist in the
+  // graph.
+  // TODO(chrisha): Add graph introspection functions to Graph.
+  DCHECK(GraphImpl::FromGraph(graph)->nodes().empty());
+  graph->AddFrameNodeObserver(this);
+  graph->AddPageNodeObserver(this);
+  graph->AddProcessNodeObserver(this);
+}
+
+void FrozenFrameAggregator::UnregisterObservers(Graph* graph) {
+  graph->RemoveFrameNodeObserver(this);
+  graph->RemovePageNodeObserver(this);
+  graph->RemoveProcessNodeObserver(this);
 }
 
 void FrozenFrameAggregator::AddOrRemoveFrame(FrameNodeImpl* frame_node,

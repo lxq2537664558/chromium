@@ -12,8 +12,13 @@
 #include "base/bind.h"
 #include "base/strings/strcat.h"
 #include "base/threading/thread_task_runner_handle.h"
+#include "base/trace_event/trace_event.h"
+#include "cc/base/math_util.h"
 #include "ui/gfx/geometry/rect_conversions.h"
+#include "ui/gfx/overlay_transform_utils.h"
+#include "ui/gl/egl_util.h"
 #include "ui/gl/gl_context.h"
+#include "ui/gl/gl_fence_android_native_fence_sync.h"
 #include "ui/gl/gl_image_ahardwarebuffer.h"
 #include "ui/gl/gl_utils.h"
 
@@ -47,10 +52,11 @@ GLSurfaceEGLSurfaceControl::GLSurfaceEGLSurfaceControl(
                    ANativeWindow_getHeight(window)),
       root_surface_(
           new SurfaceControl::Surface(window, root_surface_name_.c_str())),
-      gpu_task_runner_(std::move(task_runner)),
-      weak_factory_(this) {}
+      gpu_task_runner_(std::move(task_runner)) {}
 
-GLSurfaceEGLSurfaceControl::~GLSurfaceEGLSurfaceControl() = default;
+GLSurfaceEGLSurfaceControl::~GLSurfaceEGLSurfaceControl() {
+  Destroy();
+}
 
 int GLSurfaceEGLSurfaceControl::GetBufferCount() const {
   // Triple buffering to match framework's BufferQueue.
@@ -58,21 +64,62 @@ int GLSurfaceEGLSurfaceControl::GetBufferCount() const {
 }
 
 bool GLSurfaceEGLSurfaceControl::Initialize(GLSurfaceFormat format) {
+  if (!root_surface_->surface())
+    return false;
+
   format_ = format;
+
+  // Surfaceless is always disabled on Android so we create a 1x1 pbuffer
+  // surface.
+  if (!offscreen_surface_) {
+    EGLDisplay display = GetDisplay();
+    if (!display) {
+      LOG(ERROR) << "Trying to create surface with invalid display.";
+      return false;
+    }
+
+    EGLint pbuffer_attribs[] = {
+        EGL_WIDTH, 1, EGL_HEIGHT, 1, EGL_NONE,
+    };
+    offscreen_surface_ =
+        eglCreatePbufferSurface(display, GetConfig(), pbuffer_attribs);
+    if (!offscreen_surface_) {
+      LOG(ERROR) << "eglCreatePbufferSurface failed with error "
+                 << ui::GetLastEGLErrorString();
+      return false;
+    }
+  }
+
   return true;
+}
+
+void GLSurfaceEGLSurfaceControl::PrepareToDestroy(bool have_context) {
+  // Drop all transaction callbacks since its not possible to make the context
+  // current after this point.
+  weak_factory_.InvalidateWeakPtrs();
 }
 
 void GLSurfaceEGLSurfaceControl::Destroy() {
   pending_transaction_.reset();
   surface_list_.clear();
   root_surface_.reset();
+
+  if (offscreen_surface_) {
+    if (!eglDestroySurface(GetDisplay(), offscreen_surface_)) {
+      LOG(ERROR) << "eglDestroySurface failed with error "
+                 << ui::GetLastEGLErrorString();
+    }
+    offscreen_surface_ = nullptr;
+  }
 }
 
 bool GLSurfaceEGLSurfaceControl::Resize(const gfx::Size& size,
                                         float scale_factor,
-                                        ColorSpace color_space,
+                                        const gfx::ColorSpace& color_space,
                                         bool has_alpha) {
-  window_rect_ = gfx::Rect(0, 0, size.width(), size.height());
+  // TODO(khushalsagar): Update GLSurfaceFormat using the |color_space| above?
+  // We don't do this for the NativeViewGLSurfaceEGL as well yet.
+  window_rect_ = gfx::Rect(size);
   return true;
 }
 
@@ -132,29 +179,46 @@ void GLSurfaceEGLSurfaceControl::CommitPendingTransaction(
     const gfx::Rect& damage_rect,
     SwapCompletionCallback completion_callback,
     PresentationCallback present_callback) {
-  DCHECK(pending_transaction_);
+  // The transaction is initialized on the first ScheduleOverlayPlane call. If
+  // we don't have a transaction at this point, it means the scheduling the
+  // overlay plane failed. Simply report a swap failure to lose the context and
+  // recreate the surface.
+  if (!pending_transaction_ || surface_lost_) {
+    LOG(ERROR) << "CommitPendingTransaction failed because surface is lost";
 
-  // Mark the intersection of a surface's rect with the damage rect as the dirty
-  // rect for that surface.
-  DCHECK_LE(pending_surfaces_count_, surface_list_.size());
+    surface_lost_ = true;
+    std::move(completion_callback).Run(gfx::SwapResult::SWAP_FAILED, nullptr);
+    std::move(present_callback).Run(gfx::PresentationFeedback::Failure());
+    return;
+  }
+
+  // This is to workaround an Android bug where not specifying a damage region
+  // is assumed to mean nothing is damaged. See crbug.com/993977.
   for (size_t i = 0; i < pending_surfaces_count_; ++i) {
     const auto& surface_state = surface_list_[i];
-    if (!surface_state.buffer_updated_in_pending_transaction)
+    if (!surface_state.hardware_buffer)
       continue;
 
-    gfx::Rect surface_damage_rect = surface_state.dst;
-    surface_damage_rect.Intersect(damage_rect);
-    pending_transaction_->SetDamageRect(*surface_state.surface,
-                                        surface_damage_rect);
+    pending_transaction_->SetDamageRect(
+        *surface_state.surface,
+        gfx::Rect(GetBufferSize(surface_state.hardware_buffer)));
   }
 
   // Surfaces which are present in the current frame but not in the next frame
   // need to be explicitly updated in order to get a release fence for them in
   // the next transaction.
+  DCHECK_LE(pending_surfaces_count_, surface_list_.size());
   for (size_t i = pending_surfaces_count_; i < surface_list_.size(); ++i) {
-    pending_transaction_->SetBuffer(*surface_list_[i].surface, nullptr,
+    const auto& surface_state = surface_list_[i];
+    pending_transaction_->SetBuffer(*surface_state.surface, nullptr,
                                     base::ScopedFD());
+    pending_transaction_->SetVisibility(*surface_state.surface, false);
   }
+
+  // TODO(khushalsagar): Consider using the SetDamageRect API for partial
+  // invalidations. Note that the damage rect set should be in the space in
+  // which the content is rendered (including the pre-transform). See
+  // crbug.com/988857 for details.
 
   // Release resources for the current frame once the next frame is acked.
   ResourceRefs resources_to_release;
@@ -204,9 +268,15 @@ bool GLSurfaceEGLSurfaceControl::ScheduleOverlayPlane(
     const gfx::RectF& crop_rect,
     bool enable_blend,
     std::unique_ptr<gfx::GpuFence> gpu_fence) {
-  if (!SurfaceControl::SupportsColorSpace(image->color_space())) {
+  if (surface_lost_) {
+    LOG(ERROR) << "ScheduleOverlayPlane failed because surface is lost";
+    return false;
+  }
+
+  const auto& image_color_space = GetNearestSupportedImageColorSpace(image);
+  if (!SurfaceControl::SupportsColorSpace(image_color_space)) {
     LOG(ERROR) << "Not supported color space used with overlay : "
-               << image->color_space().ToString();
+               << image_color_space.ToString();
   }
 
   if (!pending_transaction_)
@@ -261,12 +331,27 @@ bool GLSurfaceEGLSurfaceControl::ScheduleOverlayPlane(
   if (hardware_buffer) {
     gfx::Rect dst = bounds_rect;
 
+    // Get the crop rectangle from the image which is the actual region of valid
+    // pixels. This region could be smaller than the buffer dimensions. Hence
+    // scale the |crop_rect| according to the valid pixel area rather than
+    // buffer dimensions. crbug.com/1027766 for more details.
+    gfx::Rect valid_pixel_rect = image->GetCropRect();
     gfx::Size buffer_size = GetBufferSize(hardware_buffer);
-    gfx::RectF scaled_rect =
-        gfx::RectF(crop_rect.x() * buffer_size.width(),
-                   crop_rect.y() * buffer_size.height(),
-                   crop_rect.width() * buffer_size.width(),
-                   crop_rect.height() * buffer_size.height());
+
+    // If the image doesn't provide a |valid_pixel_rect|, assume the entire
+    // buffer is valid.
+    if (valid_pixel_rect.IsEmpty()) {
+      valid_pixel_rect.set_size(buffer_size);
+    } else {
+      // Clamp the |valid_pixel_rect| to the buffer dimensions to make sure for
+      // some reason it does not overflows.
+      valid_pixel_rect.Intersect(gfx::Rect(buffer_size));
+    }
+    gfx::RectF scaled_rect = gfx::RectF(
+        crop_rect.x() * valid_pixel_rect.width() + valid_pixel_rect.x(),
+        crop_rect.y() * valid_pixel_rect.height() + valid_pixel_rect.y(),
+        crop_rect.width() * valid_pixel_rect.width(),
+        crop_rect.height() * valid_pixel_rect.height());
     gfx::Rect src = gfx::ToEnclosedRect(scaled_rect);
 
     if (uninitialized || surface_state.src != src || surface_state.dst != dst ||
@@ -285,10 +370,10 @@ bool GLSurfaceEGLSurfaceControl::ScheduleOverlayPlane(
     pending_transaction_->SetOpaque(*surface_state.surface, opaque);
   }
 
-  if (uninitialized || surface_state.color_space != image->color_space()) {
-    surface_state.color_space = image->color_space();
+  if (uninitialized || surface_state.color_space != image_color_space) {
+    surface_state.color_space = image_color_space;
     pending_transaction_->SetColorSpace(*surface_state.surface,
-                                        image->color_space());
+                                        image_color_space);
   }
 
   return true;
@@ -299,7 +384,7 @@ bool GLSurfaceEGLSurfaceControl::IsSurfaceless() const {
 }
 
 void* GLSurfaceEGLSurfaceControl::GetHandle() {
-  return nullptr;
+  return offscreen_surface_;
 }
 
 bool GLSurfaceEGLSurfaceControl::SupportsPostSubBuffer() {
@@ -314,10 +399,6 @@ bool GLSurfaceEGLSurfaceControl::SupportsPlaneGpuFences() const {
   return true;
 }
 
-bool GLSurfaceEGLSurfaceControl::SupportsPresentationCallback() {
-  return true;
-}
-
 bool GLSurfaceEGLSurfaceControl::SupportsCommitOverlayPlanes() {
   return true;
 }
@@ -327,20 +408,13 @@ void GLSurfaceEGLSurfaceControl::OnTransactionAckOnGpuThread(
     PresentationCallback presentation_callback,
     ResourceRefs released_resources,
     SurfaceControl::TransactionStats transaction_stats) {
+  TRACE_EVENT0("gpu",
+               "GLSurfaceEGLSurfaceControl::OnTransactionAckOnGpuThread");
+
   DCHECK(gpu_task_runner_->BelongsToCurrentThread());
   DCHECK(transaction_ack_pending_);
 
   transaction_ack_pending_ = false;
-
-  // The presentation feedback callback must run after swap completion.
-  std::move(completion_callback).Run(gfx::SwapResult::SWAP_ACK, nullptr);
-
-  // TODO(khushalsagar): Maintain a queue of present fences so we poll to see if
-  // they are signaled every frame, and get a signal timestamp to feed into this
-  // feedback.
-  gfx::PresentationFeedback feedback(base::TimeTicks::Now(), base::TimeDelta(),
-                                     0 /* flags */);
-  std::move(presentation_callback).Run(feedback);
 
   const bool has_context = context_->MakeCurrent(this);
   for (auto& surface_stat : transaction_stats.surface_stats) {
@@ -369,11 +443,108 @@ void GLSurfaceEGLSurfaceControl::OnTransactionAckOnGpuThread(
   // won't be present in the ack.
   released_resources.clear();
 
+  // The presentation feedback callback must run after swap completion.
+  std::move(completion_callback).Run(gfx::SwapResult::SWAP_ACK, nullptr);
+
+  PendingPresentationCallback pending_cb;
+  pending_cb.latch_time = transaction_stats.latch_time;
+  pending_cb.present_fence = std::move(transaction_stats.present_fence);
+  pending_cb.callback = std::move(presentation_callback);
+  pending_presentation_callback_queue_.push(std::move(pending_cb));
+
+  CheckPendingPresentationCallbacks();
+
   if (!pending_transaction_queue_.empty()) {
     transaction_ack_pending_ = true;
     pending_transaction_queue_.front().Apply();
     pending_transaction_queue_.pop();
   }
+}
+
+void GLSurfaceEGLSurfaceControl::CheckPendingPresentationCallbacks() {
+  TRACE_EVENT0("gpu",
+               "GLSurfaceEGLSurfaceControl::CheckPendingPresentationCallbacks");
+  check_pending_presentation_callback_queue_task_.Cancel();
+
+  while (!pending_presentation_callback_queue_.empty()) {
+    auto& pending_cb = pending_presentation_callback_queue_.front();
+
+    base::TimeTicks signal_time;
+    auto status =
+        pending_cb.present_fence.is_valid()
+            ? GLFenceAndroidNativeFenceSync::GetStatusChangeTimeForFence(
+                  pending_cb.present_fence.get(), &signal_time)
+            : GLFenceAndroidNativeFenceSync::kInvalid;
+    if (status == GLFenceAndroidNativeFenceSync::kNotSignaled)
+      break;
+
+    auto flags = gfx::PresentationFeedback::kHWCompletion |
+                 gfx::PresentationFeedback::kVSync;
+    if (status == GLFenceAndroidNativeFenceSync::kInvalid) {
+      signal_time = pending_cb.latch_time;
+      flags = 0u;
+    }
+
+    TRACE_EVENT_INSTANT0(
+        "gpu",
+        "GLSurfaceEGLSurfaceControl::CheckPendingPresentationCallbacks - "
+        "presentation_feedback",
+        TRACE_EVENT_SCOPE_THREAD);
+    gfx::PresentationFeedback feedback(signal_time, base::TimeDelta(), flags);
+    std::move(pending_cb.callback).Run(feedback);
+    pending_presentation_callback_queue_.pop();
+  }
+
+  // If there are unsignaled fences and we don't have any pending transactions,
+  // schedule a task to poll the fences again. If there is a pending transaction
+  // already, then we'll poll when that transaction is acked.
+  if (!pending_presentation_callback_queue_.empty() &&
+      pending_transaction_queue_.empty()) {
+    check_pending_presentation_callback_queue_task_.Reset(base::BindOnce(
+        &GLSurfaceEGLSurfaceControl::CheckPendingPresentationCallbacks,
+        weak_factory_.GetWeakPtr()));
+    gpu_task_runner_->PostDelayedTask(
+        FROM_HERE, check_pending_presentation_callback_queue_task_.callback(),
+        base::TimeDelta::FromSeconds(1) / 60);
+  }
+}
+
+void GLSurfaceEGLSurfaceControl::SetDisplayTransform(
+    gfx::OverlayTransform transform) {
+  display_transform_ = transform;
+}
+
+gfx::SurfaceOrigin GLSurfaceEGLSurfaceControl::GetOrigin() const {
+  // GLSurfaceEGLSurfaceControl's y-axis is flipped compare to GL - (0,0) is at
+  // top left corner.
+  return gfx::SurfaceOrigin::kTopLeft;
+}
+
+gfx::Rect GLSurfaceEGLSurfaceControl::ApplyDisplayInverse(
+    const gfx::Rect& input) const {
+  gfx::Transform display_inverse = gfx::OverlayTransformToTransform(
+      gfx::InvertOverlayTransform(display_transform_),
+      gfx::SizeF(window_rect_.size()));
+  return cc::MathUtil::MapEnclosedRectWith2dAxisAlignedTransform(
+      display_inverse, input);
+}
+
+const gfx::ColorSpace&
+GLSurfaceEGLSurfaceControl::GetNearestSupportedImageColorSpace(
+    GLImage* image) const {
+  static constexpr gfx::ColorSpace kSRGB = gfx::ColorSpace::CreateSRGB();
+  static constexpr gfx::ColorSpace kP3 = gfx::ColorSpace::CreateDisplayP3D65();
+
+  switch (format_.GetColorSpace()) {
+    case GLSurfaceFormat::COLOR_SPACE_UNSPECIFIED:
+    case GLSurfaceFormat::COLOR_SPACE_SRGB:
+      return kSRGB;
+    case GLSurfaceFormat::COLOR_SPACE_DISPLAY_P3:
+      return image->color_space() == kP3 ? kP3 : kSRGB;
+  }
+
+  NOTREACHED();
+  return kSRGB;
 }
 
 GLSurfaceEGLSurfaceControl::SurfaceState::SurfaceState(
@@ -397,5 +568,15 @@ GLSurfaceEGLSurfaceControl::ResourceRef::ResourceRef(ResourceRef&& other) =
 GLSurfaceEGLSurfaceControl::ResourceRef&
 GLSurfaceEGLSurfaceControl::ResourceRef::operator=(ResourceRef&& other) =
     default;
+
+GLSurfaceEGLSurfaceControl::PendingPresentationCallback::
+    PendingPresentationCallback() = default;
+GLSurfaceEGLSurfaceControl::PendingPresentationCallback::
+    ~PendingPresentationCallback() = default;
+GLSurfaceEGLSurfaceControl::PendingPresentationCallback::
+    PendingPresentationCallback(PendingPresentationCallback&& other) = default;
+GLSurfaceEGLSurfaceControl::PendingPresentationCallback&
+GLSurfaceEGLSurfaceControl::PendingPresentationCallback::operator=(
+    PendingPresentationCallback&& other) = default;
 
 }  // namespace gl

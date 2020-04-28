@@ -16,7 +16,7 @@
 #include "chrome/test/base/testing_profile.h"
 #include "chromeos/login/auth/user_context.h"
 #include "components/prefs/pref_service.h"
-#include "content/public/test/test_browser_thread_bundle.h"
+#include "content/public/test/browser_task_environment.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace chromeos {
@@ -55,7 +55,7 @@ class QuickUnlockStorageUnitTest : public testing::Test {
         ->auth_token_->Reset();
   }
 
-  content::TestBrowserThreadBundle thread_bundle_;
+  content::BrowserTaskEnvironment task_environment_;
   std::unique_ptr<TestingProfile> profile_;
 
   DISALLOW_COPY_AND_ASSIGN(QuickUnlockStorageUnitTest);
@@ -113,7 +113,7 @@ TEST_F(QuickUnlockStorageUnitTest,
   PrefService* pref_service = profile_->GetPrefs();
   QuickUnlockStorageTestApi test_api(quick_unlock_storage);
 
-  // The default is one day, so verify moving the last strong auth time back 12
+  // The default is two days, so verify moving the last strong auth time back 24
   // hours(half of the expiration time) should not request strong auth.
   quick_unlock_storage->MarkStrongAuth();
   base::TimeDelta expiration_time = GetExpirationTime(pref_service);

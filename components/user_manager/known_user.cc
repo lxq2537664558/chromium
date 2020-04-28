@@ -11,6 +11,8 @@
 
 #include "base/logging.h"
 #include "base/metrics/histogram_macros.h"
+#include "base/time/time.h"
+#include "base/value_conversions.h"
 #include "base/values.h"
 #include "components/prefs/pref_registry_simple.h"
 #include "components/prefs/scoped_user_pref_update.h"
@@ -43,6 +45,9 @@ const char kAccountTypeKey[] = "account_type";
 // Key of whether this user ID refers to a SAML user.
 const char kUsingSAMLKey[] = "using_saml";
 
+// Key of whether this user authenticated via SAML using the principals API.
+const char kIsUsingSAMLPrincipalsAPI[] = "using_saml_principals_api";
+
 // Key of Device Id.
 const char kDeviceId[] = "device_id";
 
@@ -66,19 +71,29 @@ const char kProfileRequiresPolicy[] = "profile_requires_policy";
 // from the local state on logout.
 const char kIsEphemeral[] = "is_ephemeral";
 
+// Key of the list value that stores challenge-response authentication keys.
+const char kChallengeResponseKeys[] = "challenge_response_keys";
+
+const char kLastOnlineSignin[] = "last_online_singin";
+const char kOfflineSigninLimit[] = "offline_signin_limit";
+
 // List containing all the known user preferences keys.
 const char* kReservedKeys[] = {kCanonicalEmail,
                                kGAIAIdKey,
                                kObjGuidKey,
                                kAccountTypeKey,
                                kUsingSAMLKey,
+                               kIsUsingSAMLPrincipalsAPI,
                                kDeviceId,
                                kGAPSCookie,
                                kReauthReasonKey,
                                kGaiaIdMigration,
                                kMinimalMigrationAttempted,
                                kProfileRequiresPolicy,
-                               kIsEphemeral};
+                               kIsEphemeral,
+                               kChallengeResponseKeys,
+                               kLastOnlineSignin,
+                               kOfflineSigninLimit};
 
 PrefService* GetLocalState() {
   if (!UserManager::IsInitialized())
@@ -173,6 +188,9 @@ bool FindPrefs(const AccountId& account_id,
     return false;
   }
 
+  if (!account_id.is_valid())
+    return false;
+
   const base::ListValue* known_users = local_state->GetList(kKnownUsers);
   for (size_t i = 0; i < known_users->GetSize(); ++i) {
     const base::DictionaryValue* element = nullptr;
@@ -201,6 +219,9 @@ void UpdatePrefs(const AccountId& account_id,
       UserManager::Get()->IsUserNonCryptohomeDataEphemeral(account_id)) {
     return;
   }
+
+  if (!account_id.is_valid())
+    return;
 
   ListPrefUpdate update(local_state, kKnownUsers);
   for (size_t i = 0; i < update->GetSize(); ++i) {
@@ -519,6 +540,23 @@ bool IsUsingSAML(const AccountId& account_id) {
   return false;
 }
 
+void USER_MANAGER_EXPORT
+UpdateIsUsingSAMLPrincipalsAPI(const AccountId& account_id,
+                               bool is_using_saml_principals_api) {
+  SetBooleanPref(account_id, kIsUsingSAMLPrincipalsAPI,
+                 is_using_saml_principals_api);
+}
+
+bool USER_MANAGER_EXPORT
+GetIsUsingSAMLPrincipalsAPI(const AccountId& account_id) {
+  bool is_using_saml_principals_api;
+  if (GetBooleanPref(account_id, kIsUsingSAMLPrincipalsAPI,
+                     &is_using_saml_principals_api)) {
+    return is_using_saml_principals_api;
+  }
+  return false;
+}
+
 void SetProfileRequiresPolicy(const AccountId& account_id,
                               ProfileRequiresPolicy required) {
   DCHECK_NE(required, ProfileRequiresPolicy::kUnknown);
@@ -565,11 +603,56 @@ void SetUserHomeMinimalMigrationAttempted(const AccountId& account_id,
                  minimal_migration_attempted);
 }
 
+void SetChallengeResponseKeys(const AccountId& account_id, base::Value value) {
+  DCHECK(value.is_list());
+  SetPref(account_id, kChallengeResponseKeys, std::move(value));
+}
+
+base::Value GetChallengeResponseKeys(const AccountId& account_id) {
+  const base::Value* value = nullptr;
+  if (!GetPref(account_id, kChallengeResponseKeys, &value) || !value->is_list())
+    return base::Value();
+  return value->Clone();
+}
+
+void SetLastOnlineSignin(const AccountId& account_id, base::Time time) {
+  SetPref(account_id, kLastOnlineSignin, base::CreateTimeValue(time));
+}
+
+base::Time GetLastOnlineSignin(const AccountId& account_id) {
+  const base::Value* value = nullptr;
+  base::Time time = base::Time();
+  if (!GetPref(account_id, kLastOnlineSignin, &value))
+    return base::Time();
+  if (!base::GetValueAsTime(*value, &time))
+    return base::Time();
+  return time;
+}
+
+void SetOfflineSigninLimit(const AccountId& account_id,
+                           base::TimeDelta time_delta) {
+  SetPref(account_id, kOfflineSigninLimit,
+          base::CreateTimeDeltaValue(time_delta));
+}
+
+base::TimeDelta GetOfflineSigninLimit(const AccountId& account_id) {
+  const base::Value* value = nullptr;
+  base::TimeDelta time_delta = base::TimeDelta();
+  if (!GetPref(account_id, kOfflineSigninLimit, &value))
+    return base::TimeDelta();
+  if (!GetValueAsTimeDelta(*value, &time_delta))
+    return base::TimeDelta();
+  return time_delta;
+}
+
 void RemovePrefs(const AccountId& account_id) {
   PrefService* local_state = GetLocalState();
 
   // Local State may not be initialized in tests.
   if (!local_state)
+    return;
+
+  if (!account_id.is_valid())
     return;
 
   ListPrefUpdate update(local_state, kKnownUsers);
@@ -592,21 +675,13 @@ void CleanEphemeralUsers() {
     return;
 
   ListPrefUpdate update(local_state, kKnownUsers);
-  auto& list_storage = update->GetList();
-  for (auto it = list_storage.begin(); it < list_storage.end();) {
-    bool remove = false;
-    base::DictionaryValue* element = nullptr;
-    if (update->GetDictionary(std::distance(list_storage.begin(), it),
-                              &element)) {
-      base::Value* is_ephemeral = element->FindKey(kIsEphemeral);
-      if (is_ephemeral && is_ephemeral->GetBool())
-        remove = true;
-    }
-    if (remove)
-      it = list_storage.erase(it);
-    else
-      it++;
-  }
+  update->EraseListValueIf([](const auto& value) {
+    if (!value.is_dict())
+      return false;
+
+    base::Optional<bool> is_ephemeral = value.FindBoolKey(kIsEphemeral);
+    return is_ephemeral && *is_ephemeral;
+  });
 }
 
 void RegisterPrefs(PrefRegistrySimple* registry) {

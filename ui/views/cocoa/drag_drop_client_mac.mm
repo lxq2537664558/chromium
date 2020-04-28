@@ -7,17 +7,18 @@
 #include "base/mac/mac_util.h"
 #include "base/run_loop.h"
 #include "base/strings/sys_string_conversions.h"
+#import "components/remote_cocoa/app_shim/bridged_content_view.h"
+#import "components/remote_cocoa/app_shim/native_widget_ns_window_bridge.h"
 #import "ui/base/dragdrop/os_exchange_data_provider_mac.h"
 #include "ui/gfx/image/image_skia_util_mac.h"
 #include "ui/views/drag_utils.h"
 #include "ui/views/widget/native_widget_mac.h"
-#import "ui/views_bridge_mac/bridged_content_view.h"
-#import "ui/views_bridge_mac/bridged_native_widget_impl.h"
 
 namespace views {
 
-DragDropClientMac::DragDropClientMac(BridgedNativeWidgetImpl* bridge,
-                                     View* root_view)
+DragDropClientMac::DragDropClientMac(
+    remote_cocoa::NativeWidgetNSWindowBridge* bridge,
+    View* root_view)
     : drop_helper_(root_view), bridge_(bridge) {
   DCHECK(bridge);
 }
@@ -26,12 +27,10 @@ DragDropClientMac::~DragDropClientMac() {}
 
 void DragDropClientMac::StartDragAndDrop(
     View* view,
-    const ui::OSExchangeData& data,
+    std::unique_ptr<ui::OSExchangeData> data,
     int operation,
     ui::DragDropTypes::DragEventSource source) {
-  // TODO(avi): Why must this data be cloned?
-  exchange_data_ =
-      std::make_unique<ui::OSExchangeData>(data.provider().Clone());
+  exchange_data_ = std::move(data);
   source_operation_ = operation;
   is_drag_source_ = true;
 
@@ -125,7 +124,9 @@ void DragDropClientMac::DragExit() {
 }
 
 gfx::Point DragDropClientMac::LocationInView(NSPoint point) const {
-  return gfx::Point(point.x, NSHeight([bridge_->ns_window() frame]) - point.y);
+  NSRect content_rect = [bridge_->ns_window()
+      contentRectForFrameRect:[bridge_->ns_window() frame]];
+  return gfx::Point(point.x, NSHeight(content_rect) - point.y);
 }
 
 }  // namespace views

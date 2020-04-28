@@ -4,21 +4,35 @@
 
 /**
  * Confirm dialog.
- * @param {!HTMLElement} parentNode
- * @constructor
- * @extends {cr.ui.dialogs.ConfirmDialog}
  */
-const FilesConfirmDialog = function(parentNode) {
-  cr.ui.dialogs.ConfirmDialog.call(this, parentNode);
-};
+class FilesConfirmDialog extends cr.ui.dialogs.ConfirmDialog {
+  /**
+   * @param {!Element} parentElement
+   */
+  constructor(parentElement) {
+    super(parentElement);
 
-FilesConfirmDialog.prototype.__proto__ = cr.ui.dialogs.ConfirmDialog.prototype;
+    /**
+     * @type {?function()} showModalElement Optional call to show the
+     * modal <dialog> parent of |this| if needed.
+     * @public
+     */
+    this.showModalElement = null;
 
-/**
- * @protected
- * @override
- */
-FilesConfirmDialog.prototype.initDom_ = function() {
-  cr.ui.dialogs.ConfirmDialog.prototype.initDom_.call(this);
-  this.frame_.classList.add('files-confirm-dialog');
-};
+    /**
+     * @type {?function()} doneCallback Optional callback when |this|
+     * is closed confirmed or cancelled via dialog buttons.
+     * @public
+     */
+    this.doneCallback = null;
+  }
+
+  /**
+   * @protected
+   * @override
+   */
+  initDom() {
+    super.initDom();
+    this.frame.classList.add('files-confirm-dialog');
+  }
+}

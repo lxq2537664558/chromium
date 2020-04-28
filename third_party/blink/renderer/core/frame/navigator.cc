@@ -26,20 +26,21 @@
 #include "third_party/blink/public/common/user_agent/user_agent_metadata.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_controller.h"
 #include "third_party/blink/renderer/core/dom/document.h"
+#include "third_party/blink/renderer/core/frame/local_dom_window.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
 #include "third_party/blink/renderer/core/frame/navigator_id.h"
 #include "third_party/blink/renderer/core/frame/settings.h"
-#include "third_party/blink/renderer/core/loader/cookie_jar.h"
 #include "third_party/blink/renderer/core/loader/frame_loader.h"
 #include "third_party/blink/renderer/core/page/chrome_client.h"
 #include "third_party/blink/renderer/core/page/page.h"
+#include "third_party/blink/renderer/platform/instrumentation/memory_pressure_listener.h"
 #include "third_party/blink/renderer/platform/language.h"
-#include "third_party/blink/renderer/platform/memory_pressure_listener.h"
 
 namespace blink {
 
 Navigator::Navigator(LocalFrame* frame)
-    : NavigatorLanguage(frame->GetDocument()), DOMWindowClient(frame) {}
+    : NavigatorLanguage(frame ? frame->DomWindow() : nullptr),
+      ExecutionContextClient(frame) {}
 
 String Navigator::productSub() const {
   return "20030107";
@@ -58,10 +59,14 @@ String Navigator::vendorSub() const {
 }
 
 String Navigator::platform() const {
+  // TODO(955620): Consider changing devtools overrides to only allow overriding
+  // the platform with a frozen platform to distinguish between
+  // mobile and desktop when FreezeUserAgent is enabled.
   if (GetFrame() &&
       !GetFrame()->GetSettings()->GetNavigatorPlatformOverride().IsEmpty()) {
     return GetFrame()->GetSettings()->GetNavigatorPlatformOverride();
   }
+
   return NavigatorID::platform();
 }
 
@@ -78,18 +83,23 @@ UserAgentMetadata Navigator::GetUserAgentMetadata() const {
   if (!GetFrame() || !GetFrame()->GetPage())
     return blink::UserAgentMetadata();
 
-  return GetFrame()->Loader().UserAgentMetadata();
+  base::Optional<UserAgentMetadata> maybe_ua_metadata =
+      GetFrame()->Loader().UserAgentMetadata();
+  if (maybe_ua_metadata.has_value())
+    return maybe_ua_metadata.value();
+  else
+    return blink::UserAgentMetadata();
 }
 
 bool Navigator::cookieEnabled() const {
-  if (!GetFrame())
+  if (!GetFrame() || !GetFrame()->GetDocument())
     return false;
 
   Settings* settings = GetFrame()->GetSettings();
   if (!settings || !settings->GetCookieEnabled())
     return false;
 
-  return CookiesEnabled(GetFrame()->GetDocument());
+  return GetFrame()->GetDocument()->CookiesEnabled();
 }
 
 String Navigator::GetAcceptLanguages() {
@@ -104,11 +114,18 @@ String Navigator::GetAcceptLanguages() {
   return accept_languages;
 }
 
-void Navigator::Trace(blink::Visitor* visitor) {
+void Navigator::Trace(Visitor* visitor) {
   ScriptWrappable::Trace(visitor);
   NavigatorLanguage::Trace(visitor);
-  DOMWindowClient::Trace(visitor);
+  ExecutionContextClient::Trace(visitor);
   Supplementable<Navigator>::Trace(visitor);
+}
+
+ExecutionContext* Navigator::GetUAExecutionContext() const {
+  if (GetFrame() && GetFrame()->GetDocument()) {
+    return GetFrame()->GetDocument()->GetExecutionContext();
+  }
+  return nullptr;
 }
 
 }  // namespace blink

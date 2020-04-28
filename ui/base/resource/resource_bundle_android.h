@@ -14,10 +14,13 @@
 namespace ui {
 
 // Loads "resources.apk" from the .apk. Falls back to loading from disk, which
-// is necessary for tests. Returns true if it succeeds, false otherwise.
+// is necessary for tests.
 UI_BASE_EXPORT void LoadMainAndroidPackFile(
     const char* path_within_apk,
     const base::FilePath& disk_file_path);
+
+// Loads a PAK file from the APK and makes the contained resources accessible.
+UI_BASE_EXPORT void LoadPackFileFromApk(const std::string& path);
 
 // Returns the file descriptor and region for resources.pak.
 UI_BASE_EXPORT int GetMainAndroidPackFd(
@@ -51,6 +54,9 @@ UI_BASE_EXPORT void SetLoadSecondaryLocalePaks(bool value);
 UI_BASE_EXPORT std::string GetPathForAndroidLocalePakWithinApk(
     const std::string& locale,
     bool in_split = false);
+
+// Called in test when there are no locale pak files available.
+UI_BASE_EXPORT void SetNoAvailableLocalePaksForTest();
 
 // Get the density of the primary display. Use this instead of using Display
 // to avoid initializing Display in child processes.

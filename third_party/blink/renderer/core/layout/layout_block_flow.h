@@ -60,8 +60,9 @@ class LayoutMultiColumnSpannerPlaceholder;
 class LayoutRubyRun;
 class MarginInfo;
 class NGBlockBreakToken;
-class NGConstraintSpace;
+class NGFragmentItems;
 class NGOffsetMapping;
+class NGPhysicalContainerFragment;
 class NGPhysicalFragment;
 
 struct NGInlineNodeData;
@@ -104,7 +105,6 @@ class CORE_EXPORT LayoutBlockFlow : public LayoutBlock {
   static LayoutBlockFlow* CreateAnonymous(Document*,
                                           scoped_refptr<ComputedStyle>,
                                           LegacyLayout);
-  bool BeingDestroyed() const { return being_destroyed_; }
 
   bool IsLayoutBlockFlow() const final { return true; }
 
@@ -393,6 +393,11 @@ class CORE_EXPORT LayoutBlockFlow : public LayoutBlock {
 
   FloatingObject* InsertFloatingObject(LayoutBox&);
 
+  // Return the last placed float. If |iterator| is non-null, it will be set to
+  // the float right after said float.
+  FloatingObject* LastPlacedFloat(
+      FloatingObjectSetIterator* iterator = nullptr) const;
+
   // Position and lay out all floats that have not yet been positioned.
   //
   // This will mark them as "placed", which means that they have found their
@@ -425,7 +430,9 @@ class CORE_EXPORT LayoutBlockFlow : public LayoutBlock {
   bool RecalcInlineChildrenLayoutOverflow();
   void RecalcInlineChildrenVisualOverflow();
 
-  PositionWithAffinity PositionForPoint(const LayoutPoint&) const override;
+  PositionWithAffinity PositionForPoint(const PhysicalOffset&) const override;
+  PositionWithAffinity PositionForPoint(const LayoutObject& offset_parent,
+                                        const PhysicalOffset& offset) const;
 
   LayoutUnit LowestFloatLogicalBottom(EClear = EClear::kBoth) const;
 
@@ -439,15 +446,14 @@ class CORE_EXPORT LayoutBlockFlow : public LayoutBlock {
 
   LayoutUnit LogicalHeightWithVisibleOverflow() const final;
 
-  // This function is only public so we can call it from NGBlockNode while we're
-  // still working on LayoutNG.
-  void UpdateIsSelfCollapsing() {
-    is_self_collapsing_ = CheckIfIsSelfCollapsingBlock();
+  void SetIsSelfCollapsingFromNG(bool is_self_collapsing) {
+    is_self_collapsing_ = is_self_collapsing;
   }
 
   // These functions are only public so we can call it from NGBlockNode while
   // we're still working on LayoutNG.
   void AddVisualOverflowFromFloats();
+  void AddVisualOverflowFromFloats(const NGPhysicalContainerFragment& fragment);
   void AddLayoutOverflowFromFloats();
 
   virtual NGInlineNodeData* TakeNGInlineNodeData() { return nullptr; }
@@ -455,15 +461,12 @@ class CORE_EXPORT LayoutBlockFlow : public LayoutBlock {
   virtual void ResetNGInlineNodeData() {}
   virtual void ClearNGInlineNodeData() {}
   virtual bool HasNGInlineNodeData() const { return false; }
-  virtual bool AreCachedLinesValidFor(const NGConstraintSpace&) const;
   virtual void WillCollectInlines() {}
   virtual void SetPaintFragment(const NGBlockBreakToken*,
                                 scoped_refptr<const NGPhysicalFragment>);
-  virtual const NGPhysicalBoxFragment* CurrentFragment() const {
-    return nullptr;
-  }
+  const NGFragmentItems* FragmentItems() const;
 
-#ifndef NDEBUG
+#if DCHECK_IS_ON()
   void ShowLineTreeAndMark(const InlineBox* = nullptr,
                            const char* = nullptr,
                            const InlineBox* = nullptr,
@@ -485,8 +488,6 @@ class CORE_EXPORT LayoutBlockFlow : public LayoutBlock {
 
   void UpdateBlockChildDirtyBitsBeforeLayout(bool relayout_children,
                                              LayoutBox&);
-  void AbsoluteRects(Vector<IntRect>&,
-                     const LayoutPoint& accumulated_offset) const override;
   void AbsoluteQuads(Vector<FloatQuad>&,
                      MapCoordinatesFlags mode = 0) const override;
   void AbsoluteQuadsForSelf(Vector<FloatQuad>& quads,
@@ -522,20 +523,19 @@ class CORE_EXPORT LayoutBlockFlow : public LayoutBlock {
   void SetLogicalTopForChild(LayoutBox& child, LayoutUnit logical_top);
   void DetermineLogicalLeftPositionForChild(LayoutBox& child);
 
-  void AddOutlineRects(Vector<LayoutRect>&,
-                       const LayoutPoint& additional_offset,
+  void AddOutlineRects(Vector<PhysicalRect>&,
+                       const PhysicalOffset& additional_offset,
                        NGOutlineType) const override;
 
-  bool PaintedOutputOfObjectHasNoEffectRegardlessOfSize() const override;
   void InvalidateDisplayItemClients(PaintInvalidationReason) const override;
 
   Node* NodeForHitTest() const final;
   bool HitTestChildren(HitTestResult&,
-                       const HitTestLocation& location_in_container,
-                       const LayoutPoint& accumulated_offset,
+                       const HitTestLocation&,
+                       const PhysicalOffset& accumulated_offset,
                        HitTestAction) override;
 
-  LayoutSize AccumulateInFlowPositionOffsets() const override;
+  PhysicalOffset AccumulateInFlowPositionOffsets() const override;
 
  private:
   void ResetLayout();
@@ -580,8 +580,8 @@ class CORE_EXPORT LayoutBlockFlow : public LayoutBlock {
                             bool make_child_paint_other_floats);
 
   bool HitTestFloats(HitTestResult&,
-                     const HitTestLocation& location_in_container,
-                     const LayoutPoint& accumulated_offset);
+                     const HitTestLocation&,
+                     const PhysicalOffset& accumulated_offset);
 
   void ClearFloats(EClear);
 
@@ -642,7 +642,6 @@ class CORE_EXPORT LayoutBlockFlow : public LayoutBlock {
   void ReparentSubsequentFloatingOrOutOfFlowSiblings();
   void ReparentPrecedingFloatingOrOutOfFlowSiblings();
 
-  bool NeedsAnonymousInlineWrapper() const;
   void MakeChildrenInlineIfPossible();
 
   void MakeChildrenNonInline(LayoutObject* insertion_point = nullptr);
@@ -733,9 +732,8 @@ class CORE_EXPORT LayoutBlockFlow : public LayoutBlock {
   MarginValues MarginValuesForChild(LayoutBox& child) const;
 
   // Allocated only when some of these fields have non-default values
-  struct LayoutBlockFlowRareData {
-    USING_FAST_MALLOC(LayoutBlockFlowRareData);
-
+  struct LayoutBlockFlowRareData final
+      : public GarbageCollected<LayoutBlockFlowRareData> {
    public:
     explicit LayoutBlockFlowRareData(const LayoutBlockFlow* block);
     ~LayoutBlockFlowRareData();
@@ -755,6 +753,8 @@ class CORE_EXPORT LayoutBlockFlow : public LayoutBlock {
       return (-block->MarginAfter()).ClampNegativeToZero();
     }
 
+    void Trace(Visitor*) {}
+
     MarginValues margins_;
     LayoutUnit pagination_strut_propagated_from_child_;
 
@@ -772,12 +772,10 @@ class CORE_EXPORT LayoutBlockFlow : public LayoutBlock {
     unsigned break_after_ : 4;
     int line_break_to_avoid_widow_;
     bool did_break_at_line_to_avoid_widow_ : 1;
-    bool discard_margin_before_ : 1;
-    bool discard_margin_after_ : 1;
     DISALLOW_COPY_AND_ASSIGN(LayoutBlockFlowRareData);
   };
 
-  void ClearOffsetMapping();
+  void ClearOffsetMappingIfNeeded();
   const NGOffsetMapping* GetOffsetMapping() const;
   void SetOffsetMapping(std::unique_ptr<NGOffsetMapping>);
 
@@ -820,18 +818,6 @@ class CORE_EXPORT LayoutBlockFlow : public LayoutBlock {
   void SetMaxMarginBeforeValues(LayoutUnit pos, LayoutUnit neg);
   void SetMaxMarginAfterValues(LayoutUnit pos, LayoutUnit neg);
 
-  void SetMustDiscardMarginBefore(bool = true);
-  void SetMustDiscardMarginAfter(bool = true);
-
-  bool MustDiscardMarginBefore() const;
-  bool MustDiscardMarginAfter() const;
-
-  bool MustDiscardMarginBeforeForChild(const LayoutBox&) const;
-  bool MustDiscardMarginAfterForChild(const LayoutBox&) const;
-
-  bool MustSeparateMarginBeforeForChild(const LayoutBox&) const;
-  bool MustSeparateMarginAfterForChild(const LayoutBox&) const;
-
   void InitMaxMarginValues() {
     if (rare_data_) {
       rare_data_->margins_ = MarginValues(
@@ -839,9 +825,6 @@ class CORE_EXPORT LayoutBlockFlow : public LayoutBlock {
           LayoutBlockFlowRareData::NegativeMarginBeforeDefault(this),
           LayoutBlockFlowRareData::PositiveMarginAfterDefault(this),
           LayoutBlockFlowRareData::NegativeMarginAfterDefault(this));
-
-      rare_data_->discard_margin_before_ = false;
-      rare_data_->discard_margin_after_ = false;
     }
   }
 
@@ -863,29 +846,26 @@ class CORE_EXPORT LayoutBlockFlow : public LayoutBlock {
 
   LayoutUnit CollapseMargins(LayoutBox& child,
                              BlockChildrenLayoutInfo&,
-                             bool child_is_self_collapsing,
-                             bool child_discard_margin_before,
-                             bool child_discard_margin_after);
+                             bool child_is_self_collapsing);
   LayoutUnit ClearFloatsIfNeeded(LayoutBox& child,
                                  MarginInfo&,
                                  LayoutUnit old_top_pos_margin,
                                  LayoutUnit old_top_neg_margin,
                                  LayoutUnit y_pos,
-                                 bool child_is_self_collapsing,
-                                 bool child_discard_margin);
+                                 bool child_is_self_collapsing);
   LayoutUnit EstimateLogicalTopPosition(
       LayoutBox& child,
       const BlockChildrenLayoutInfo&,
       LayoutUnit& estimate_without_pagination);
-  void MarginBeforeEstimateForChild(LayoutBox&,
-                                    LayoutUnit&,
-                                    LayoutUnit&,
-                                    bool&) const;
+  void MarginBeforeEstimateForChild(LayoutBox&, LayoutUnit&, LayoutUnit&) const;
   void HandleAfterSideOfBlock(LayoutBox* last_child,
                               LayoutUnit top,
                               LayoutUnit bottom,
                               MarginInfo&);
   void SetCollapsedBottomMargin(const MarginInfo&);
+
+  static void RecalcFloatingDescendantsVisualOverflow(
+      const NGPhysicalContainerFragment& fragment);
 
   // Apply any forced fragmentainer break that's set on the current class A
   // break point.
@@ -931,7 +911,7 @@ class CORE_EXPORT LayoutBlockFlow : public LayoutBlock {
   bool CheckIfIsSelfCollapsingBlock() const;
 
  protected:
-  std::unique_ptr<LayoutBlockFlowRareData> rare_data_;
+  Persistent<LayoutBlockFlowRareData> rare_data_;
   std::unique_ptr<FloatingObjects> floating_objects_;
 
   friend class MarginInfo;
@@ -1031,8 +1011,6 @@ class CORE_EXPORT LayoutBlockFlow : public LayoutBlock {
 
   // END METHODS DEFINED IN LayoutBlockFlowLine
 };
-
-DEFINE_LAYOUT_OBJECT_TYPE_CASTS(LayoutBlockFlow, IsLayoutBlockFlow());
 
 template <>
 struct DowncastTraits<LayoutBlockFlow> {

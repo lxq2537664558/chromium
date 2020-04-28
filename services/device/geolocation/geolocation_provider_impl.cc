@@ -9,11 +9,12 @@
 #include "base/bind.h"
 #include "base/bind_helpers.h"
 #include "base/callback.h"
+#include "base/check.h"
 #include "base/lazy_instance.h"
 #include "base/location.h"
-#include "base/logging.h"
 #include "base/memory/ptr_util.h"
 #include "base/memory/singleton.h"
+#include "base/notreached.h"
 #include "base/single_thread_task_runner.h"
 #include "base/threading/thread_task_runner_handle.h"
 #include "base/time/default_tick_clock.h"
@@ -25,7 +26,7 @@
 
 #if defined(OS_ANDROID)
 #include "base/android/jni_android.h"
-#include "jni/LocationProviderFactory_jni.h"
+#include "services/device/geolocation/geolocation_jni_headers/LocationProviderFactory_jni.h"
 #endif
 
 namespace device {
@@ -33,8 +34,8 @@ namespace device {
 namespace {
 base::LazyInstance<CustomLocationProviderCallback>::Leaky
     g_custom_location_provider_callback = LAZY_INSTANCE_INITIALIZER;
-base::LazyInstance<std::unique_ptr<network::SharedURLLoaderFactoryInfo>>::Leaky
-    g_url_loader_factory_info = LAZY_INSTANCE_INITIALIZER;
+base::LazyInstance<std::unique_ptr<network::PendingSharedURLLoaderFactory>>::
+    Leaky g_pending_url_loader_factory = LAZY_INSTANCE_INITIALIZER;
 base::LazyInstance<std::string>::Leaky g_api_key = LAZY_INSTANCE_INITIALIZER;
 }  // namespace
 
@@ -50,7 +51,7 @@ void GeolocationProviderImpl::SetGeolocationConfiguration(
     const CustomLocationProviderCallback& custom_location_provider_getter,
     bool use_gms_core_location_provider) {
   if (url_loader_factory)
-    g_url_loader_factory_info.Get() = url_loader_factory->Clone();
+    g_pending_url_loader_factory.Get() = url_loader_factory->Clone();
   g_api_key.Get() = api_key;
   g_custom_location_provider_callback.Get() = custom_location_provider_getter;
   if (use_gms_core_location_provider) {
@@ -112,13 +113,14 @@ GeolocationProviderImpl* GeolocationProviderImpl::GetInstance() {
   return base::Singleton<GeolocationProviderImpl>::get();
 }
 
-void GeolocationProviderImpl::BindGeolocationControlRequest(
-    mojom::GeolocationControlRequest request) {
-  // The |binding_| has been bound already here means that more than one
+void GeolocationProviderImpl::BindGeolocationControlReceiver(
+    mojo::PendingReceiver<mojom::GeolocationControl> receiver) {
+  // The |receiver_| has been bound already here means that more than one
   // GeolocationPermissionContext in chrome tried to bind to Device Service.
-  // We only bind the first request. See more info in geolocation_control.mojom.
-  if (!binding_.is_bound())
-    binding_.Bind(std::move(request));
+  // We only bind the first receiver. See more info in
+  // geolocation_control.mojom.
+  if (!receiver_.is_bound())
+    receiver_.Bind(std::move(receiver));
 }
 
 void GeolocationProviderImpl::UserDidOptIntoLocationServices() {
@@ -133,12 +135,11 @@ GeolocationProviderImpl::GeolocationProviderImpl()
     : base::Thread("Geolocation"),
       user_did_opt_into_location_services_(false),
       ignore_location_updates_(false),
-      main_task_runner_(base::ThreadTaskRunnerHandle::Get()),
-      binding_(this) {
+      main_task_runner_(base::ThreadTaskRunnerHandle::Get()) {
   DCHECK(main_task_runner_->BelongsToCurrentThread());
-  high_accuracy_callbacks_.set_removal_callback(base::Bind(
+  high_accuracy_callbacks_.set_removal_callback(base::BindRepeating(
       &GeolocationProviderImpl::OnClientsChanged, base::Unretained(this)));
-  low_accuracy_callbacks_.set_removal_callback(base::Bind(
+  low_accuracy_callbacks_.set_removal_callback(base::BindRepeating(
       &GeolocationProviderImpl::OnClientsChanged, base::Unretained(this)));
 }
 
@@ -158,7 +159,7 @@ bool GeolocationProviderImpl::OnGeolocationThread() const {
 
 void GeolocationProviderImpl::OnClientsChanged() {
   DCHECK(main_task_runner_->BelongsToCurrentThread());
-  base::Closure task;
+  base::OnceClosure task;
   if (high_accuracy_callbacks_.empty() && low_accuracy_callbacks_.empty()) {
     DCHECK(IsRunning());
     if (!ignore_location_updates_) {
@@ -166,8 +167,8 @@ void GeolocationProviderImpl::OnClientsChanged() {
       // when the next observer is added we will not provide a stale position.
       position_ = mojom::Geoposition();
     }
-    task = base::Bind(&GeolocationProviderImpl::StopProviders,
-                      base::Unretained(this));
+    task = base::BindOnce(&GeolocationProviderImpl::StopProviders,
+                          base::Unretained(this));
   } else {
     if (!IsRunning()) {
       Start();
@@ -178,11 +179,11 @@ void GeolocationProviderImpl::OnClientsChanged() {
     bool enable_high_accuracy = !high_accuracy_callbacks_.empty();
 
     // Send the current options to the providers as they may have changed.
-    task = base::Bind(&GeolocationProviderImpl::StartProviders,
-                      base::Unretained(this), enable_high_accuracy);
+    task = base::BindOnce(&GeolocationProviderImpl::StartProviders,
+                          base::Unretained(this), enable_high_accuracy);
   }
 
-  task_runner()->PostTask(FROM_HERE, task);
+  task_runner()->PostTask(FROM_HERE, std::move(task));
 }
 
 void GeolocationProviderImpl::StopProviders() {
@@ -228,16 +229,17 @@ void GeolocationProviderImpl::Init() {
   if (arbitrator_)
     return;
 
-  LocationProvider::LocationProviderUpdateCallback callback = base::Bind(
-      &GeolocationProviderImpl::OnLocationUpdate, base::Unretained(this));
+  LocationProvider::LocationProviderUpdateCallback callback =
+      base::BindRepeating(&GeolocationProviderImpl::OnLocationUpdate,
+                          base::Unretained(this));
 
   scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory;
-  if (g_url_loader_factory_info.Get()) {
+  if (g_pending_url_loader_factory.Get()) {
     url_loader_factory = network::SharedURLLoaderFactory::Create(
-        std::move(g_url_loader_factory_info.Get()));
+        std::move(g_pending_url_loader_factory.Get()));
   }
 
-  DCHECK(net::NetworkChangeNotifier::HasNetworkChangeNotifier())
+  DCHECK(!net::NetworkChangeNotifier::CreateIfNeeded())
       << "PositionCacheImpl needs a global NetworkChangeNotifier";
   arbitrator_ = std::make_unique<LocationArbitrator>(
       g_custom_location_provider_callback.Get(), std::move(url_loader_factory),

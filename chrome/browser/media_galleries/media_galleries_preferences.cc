@@ -455,25 +455,23 @@ MediaGalleriesPreferences::GalleryChangeObserver::~GalleryChangeObserver() {}
 MediaGalleriesPreferences::MediaGalleriesPreferences(Profile* profile)
     : initialized_(false),
       profile_(profile),
-      extension_prefs_for_testing_(NULL),
-      weak_factory_(this) {
-}
+      extension_prefs_for_testing_(nullptr) {}
 
 MediaGalleriesPreferences::~MediaGalleriesPreferences() {
   if (StorageMonitor::GetInstance())
     StorageMonitor::GetInstance()->RemoveObserver(this);
 }
 
-void MediaGalleriesPreferences::EnsureInitialized(base::Closure callback) {
+void MediaGalleriesPreferences::EnsureInitialized(base::OnceClosure callback) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
 
   if (IsInitialized()) {
-    if (!callback.is_null())
-      callback.Run();
+    if (callback)
+      std::move(callback).Run();
     return;
   }
 
-  on_initialize_callbacks_.push_back(callback);
+  on_initialize_callbacks_.push_back(std::move(callback));
   if (on_initialize_callbacks_.size() > 1)
     return;
 
@@ -488,9 +486,8 @@ void MediaGalleriesPreferences::EnsureInitialized(base::Closure callback) {
   // return and add media galleries to it (hence why the APIHasBeenUsed check
   // needs to happen here rather than inside OnStorageMonitorInit itself).
   StorageMonitor::GetInstance()->EnsureInitialized(
-      base::Bind(&MediaGalleriesPreferences::OnStorageMonitorInit,
-                 weak_factory_.GetWeakPtr(),
-                 APIHasBeenUsed(profile_)));
+      base::BindOnce(&MediaGalleriesPreferences::OnStorageMonitorInit,
+                     weak_factory_.GetWeakPtr(), APIHasBeenUsed(profile_)));
 }
 
 bool MediaGalleriesPreferences::IsInitialized() const { return initialized_; }
@@ -574,10 +571,8 @@ void MediaGalleriesPreferences::OnStorageMonitorInit(
         existing_devices[i].total_size_in_bytes(), base::Time::Now(), 0, 0, 0);
   }
 
-  for (auto iter = on_initialize_callbacks_.begin();
-       iter != on_initialize_callbacks_.end(); ++iter) {
-    iter->Run();
-  }
+  for (base::OnceClosure& callback : on_initialize_callbacks_)
+    std::move(callback).Run();
   on_initialize_callbacks_.clear();
 }
 
@@ -693,7 +688,7 @@ base::FilePath MediaGalleriesPreferences::LookUpGalleryPathForExtension(
   DCHECK(IsInitialized());
   DCHECK(extension);
   if (!include_unpermitted_galleries &&
-      !base::ContainsKey(GalleriesForExtension(*extension), gallery_id))
+      !base::Contains(GalleriesForExtension(*extension), gallery_id))
     return base::FilePath();
 
   MediaGalleriesPrefInfoMap::const_iterator it =
@@ -1008,7 +1003,7 @@ void MediaGalleriesPreferences::EraseOrBlacklistGalleryById(
       new ListPrefUpdate(prefs, prefs::kMediaGalleriesRememberedGalleries));
   base::ListValue* list = update->Get();
 
-  if (!base::ContainsKey(known_galleries_, id))
+  if (!base::Contains(known_galleries_, id))
     return;
 
   for (auto iter = list->begin(); iter != list->end(); ++iter) {
@@ -1047,7 +1042,7 @@ void MediaGalleriesPreferences::EraseOrBlacklistGalleryById(
 bool MediaGalleriesPreferences::NonAutoGalleryHasPermission(
     MediaGalleryPrefId id) const {
   DCHECK(IsInitialized());
-  DCHECK(!base::ContainsKey(known_galleries_, id) ||
+  DCHECK(!base::Contains(known_galleries_, id) ||
          known_galleries_.find(id)->second.type !=
              MediaGalleryPrefInfo::kAutoDetected);
   ExtensionPrefs* prefs = GetExtensionPrefs();

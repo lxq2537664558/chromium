@@ -8,14 +8,19 @@
 #include "third_party/blink/renderer/platform/fonts/font_baseline.h"
 #include "third_party/blink/renderer/platform/geometry/float_point.h"
 #include "third_party/blink/renderer/platform/geometry/layout_unit.h"
-#include "third_party/blink/renderer/platform/wtf/allocator.h"
+#include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
 
 namespace blink {
 
 class ComputedStyle;
 class SimpleFontData;
 
-enum class ResolvedUnderlinePosition { kRoman, kUnder, kOver };
+enum class ResolvedUnderlinePosition {
+  kNearAlphabeticBaselineAuto,
+  kNearAlphabeticBaselineFromFont,
+  kUnder,
+  kOver
+};
 
 // Holds text decoration painting values to be computed once and subsequently
 // use multiple times to handle decoration paint order correctly. See also

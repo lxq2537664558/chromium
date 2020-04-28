@@ -5,18 +5,15 @@
 import("//third_party/closure_compiler/compile_js.gni")
 
 js_type_check("closure_compile") {
-  deps = [
-    ":local_ntp",
-  ]
+  deps = [ ":local_ntp" ]
 }
 
 js_library("local_ntp") {
   sources = [
     "animations.js",
-    "custom_backgrounds.js",
     "custom_links_edit.js",
+    "customize.js",
     "doodles.js",
-    "instant_iframe_validation.js",
     "local_ntp.js",
     "most_visited_single.js",
     "most_visited_title.js",
@@ -24,5 +21,6 @@ js_library("local_ntp") {
     "utils.js",
     "voice.js",
   ]
+  deps = [ "//ui/webui/resources/js:assert" ]
   externs_list = [ "externs.js" ]
 }

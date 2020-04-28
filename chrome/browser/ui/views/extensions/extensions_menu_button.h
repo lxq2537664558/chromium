@@ -9,24 +9,36 @@
 
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/toolbar/toolbar_actions_model.h"
-#include "chrome/browser/ui/views/hover_button.h"
+#include "chrome/browser/ui/views/extensions/extension_context_menu_controller.h"
 #include "chrome/browser/ui/views/toolbar/toolbar_action_view_delegate_views.h"
 #include "ui/views/bubble/bubble_dialog_delegate_view.h"
+#include "ui/views/controls/button/label_button.h"
+
+class ExtensionsMenuItemView;
 
 namespace views {
-class View;
+class Button;
 }  // namespace views
 
-class ExtensionsMenuButton : public HoverButton,
+// ExtensionsMenuButton is the single extension action button within a row in
+// the extensions menu. This includes the extension icon and name and triggers
+// the extension action.
+class ExtensionsMenuButton : public views::LabelButton,
                              public views::ButtonListener,
-                             public ToolbarActionViewDelegateViews,
-                             public views::ContextMenuController {
+                             public ToolbarActionViewDelegateViews {
  public:
   ExtensionsMenuButton(Browser* browser,
-                       std::unique_ptr<ToolbarActionViewController> controller);
+                       ExtensionsMenuItemView* parent,
+                       ToolbarActionViewController* controller);
   ~ExtensionsMenuButton() override;
 
   static const char kClassName[];
+
+  SkColor GetInkDropBaseColor() const override;
+
+  const base::string16& label_text_for_testing() const {
+    return label()->GetText();
+  }
 
  private:
   // views::ButtonListener:
@@ -36,18 +48,18 @@ class ExtensionsMenuButton : public HoverButton,
   // ToolbarActionViewDelegateViews:
   views::View* GetAsView() override;
   views::FocusManager* GetFocusManagerForAccelerator() override;
-  views::View* GetReferenceViewForPopup() override;
+  views::Button* GetReferenceButtonForPopup() override;
   content::WebContents* GetCurrentWebContents() const override;
   void UpdateState() override;
   bool IsMenuRunning() const override;
 
-  // views::ContextMenuController:
-  void ShowContextMenuForViewImpl(views::View* source,
-                                  const gfx::Point& point,
-                                  ui::MenuSourceType source_type) override;
-
   Browser* const browser_;
-  const std::unique_ptr<ToolbarActionViewController> controller_;
+
+  // The container containing this view.
+  ExtensionsMenuItemView* const parent_;
+
+  // Responsible for executing the extension's actions.
+  ToolbarActionViewController* const controller_;
 
   DISALLOW_COPY_AND_ASSIGN(ExtensionsMenuButton);
 };

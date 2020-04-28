@@ -10,6 +10,8 @@
 #include "base/strings/utf_string_conversions.h"
 #include "base/time/time.h"
 #include "build/build_config.h"
+#include "components/dom_distiller/core/url_constants.h"
+#include "components/dom_distiller/core/url_utils.h"
 #include "components/omnibox/browser/autocomplete_classifier.h"
 #include "components/omnibox/browser/autocomplete_match.h"
 #include "components/omnibox/browser/buildflags.h"
@@ -20,6 +22,7 @@
 #include "components/search_engines/template_url_service.h"
 #include "components/security_state/core/security_state.h"
 #include "components/strings/grit/components_strings.h"
+#include "content/public/common/origin_util.h"
 #include "net/cert/cert_status_flags.h"
 #include "net/cert/x509_certificate.h"
 #include "net/ssl/ssl_connection_status_flags.h"
@@ -31,6 +34,8 @@
 #include "components/omnibox/browser/vector_icons.h"  // nogncheck
 #include "components/vector_icons/vector_icons.h"     // nogncheck
 #endif
+
+using metrics::OmniboxEventProto;
 
 LocationBarModelImpl::LocationBarModelImpl(LocationBarModelDelegate* delegate,
                                            size_t max_url_display_chars)
@@ -48,10 +53,8 @@ base::string16 LocationBarModelImpl::GetFormattedFullURL() const {
 base::string16 LocationBarModelImpl::GetURLForDisplay() const {
   url_formatter::FormatUrlTypes format_types =
       url_formatter::kFormatUrlOmitDefaults;
-
-  // Early exit to prevent elision of URLs when relevant extension is enabled.
-  if (delegate_->ShouldPreventElision()) {
-    return GetFormattedURL(format_types);
+  if (delegate_->ShouldTrimDisplayUrlAfterHostName()) {
+    format_types |= url_formatter::kFormatUrlTrimAfterHost;
   }
 
 #if defined(OS_IOS)
@@ -67,12 +70,47 @@ base::string16 LocationBarModelImpl::GetURLForDisplay() const {
   if (base::FeatureList::IsEnabled(omnibox::kHideFileUrlScheme))
     format_types |= url_formatter::kFormatUrlOmitFileScheme;
 
+  if (dom_distiller::url_utils::IsDistilledPage(GetURL())) {
+    // We explicitly elide the scheme here to ensure that HTTPS and HTTP will
+    // be removed for display: Reader mode pages should not display a scheme,
+    // and should only run on HTTP/HTTPS pages.
+    // Users will be able to see the scheme when the URL is focused or being
+    // edited in the omnibox.
+    format_types |= url_formatter::kFormatUrlOmitHTTP;
+    format_types |= url_formatter::kFormatUrlOmitHTTPS;
+  }
+
   return GetFormattedURL(format_types);
 }
 
 base::string16 LocationBarModelImpl::GetFormattedURL(
     url_formatter::FormatUrlTypes format_types) const {
+  if (!ShouldDisplayURL())
+    return base::string16{};
+
+  // Reset |format_types| to prevent elision of URLs when relevant extension or
+  // pref is enabled.
+  if (delegate_->ShouldPreventElision()) {
+    format_types = url_formatter::kFormatUrlOmitDefaults &
+                   ~url_formatter::kFormatUrlOmitHTTP;
+  }
+
   GURL url(GetURL());
+  // Special handling for dom-distiller:. Instead of showing internal reader
+  // mode URLs, show the original article URL in the omnibox.
+  // Note that this does not disallow the user from seeing the distilled page
+  // URL in the view-source url or devtools. Note that this also impacts
+  // GetFormattedFullURL which uses GetFormattedURL as a helper.
+  // Virtual URLs were not a good solution for Reader Mode URLs because some
+  // security UI is based off of the virtual URL rather than the original URL,
+  // and Reader Mode has its own security chip. In addition virtual URLs would
+  // add a lot of complexity around passing necessary URL parameters to the
+  // Reader Mode pages.
+  // Note: if the URL begins with dom-distiller:// but is invalid we display it
+  // as-is because it cannot be transformed into an article URL.
+  if (dom_distiller::url_utils::IsDistilledPage(url))
+    url = dom_distiller::url_utils::GetOriginalUrlFromDistillerUrl(url);
+
   // Note that we can't unescape spaces here, because if the user copies this
   // and pastes it into another program, that program may think the URL ends at
   // the space.
@@ -93,7 +131,9 @@ base::string16 LocationBarModelImpl::GetFormattedURL(
 
 GURL LocationBarModelImpl::GetURL() const {
   GURL url;
-  return delegate_->GetURL(&url) ? url : GURL(url::kAboutBlankURL);
+  return (ShouldDisplayURL() && delegate_->GetURL(&url))
+             ? url
+             : GURL(url::kAboutBlankURL);
 }
 
 security_state::SecurityLevel LocationBarModelImpl::GetSecurityLevel() const {
@@ -130,6 +170,46 @@ bool LocationBarModelImpl::GetDisplaySearchTerms(base::string16* search_terms) {
   return true;
 }
 
+OmniboxEventProto::PageClassification
+LocationBarModelImpl::GetPageClassification(OmniboxFocusSource focus_source) {
+  // We may be unable to fetch the current URL during startup or shutdown when
+  // the omnibox exists but there is no attached page.
+  GURL gurl;
+  if (!delegate_->GetURL(&gurl))
+    return OmniboxEventProto::OTHER;
+
+  if (focus_source == OmniboxFocusSource::SEARCH_BUTTON)
+    return OmniboxEventProto::SEARCH_BUTTON_AS_STARTING_FOCUS;
+  if (delegate_->IsInstantNTP()) {
+    // Note that we treat OMNIBOX as the source if focus_source_ is INVALID,
+    // i.e., if input isn't actually in progress.
+    return (focus_source == OmniboxFocusSource::FAKEBOX)
+               ? OmniboxEventProto::INSTANT_NTP_WITH_FAKEBOX_AS_STARTING_FOCUS
+               : OmniboxEventProto::INSTANT_NTP_WITH_OMNIBOX_AS_STARTING_FOCUS;
+  }
+  if (!gurl.is_valid())
+    return OmniboxEventProto::INVALID_SPEC;
+  if (delegate_->IsNewTabPage(gurl))
+    return OmniboxEventProto::NTP;
+  if (gurl.spec() == url::kAboutBlankURL)
+    return OmniboxEventProto::BLANK;
+  if (delegate_->IsHomePage(gurl))
+    return OmniboxEventProto::HOME_PAGE;
+
+  TemplateURLService* template_url_service = delegate_->GetTemplateURLService();
+  if (template_url_service &&
+      template_url_service->IsSearchResultsPageFromDefaultSearchProvider(
+          gurl)) {
+    return GetDisplaySearchTerms(nullptr)
+               ? OmniboxEventProto::
+                     SEARCH_RESULT_PAGE_DOING_SEARCH_TERM_REPLACEMENT
+               : OmniboxEventProto::
+                     SEARCH_RESULT_PAGE_NO_SEARCH_TERM_REPLACEMENT;
+  }
+
+  return OmniboxEventProto::OTHER;
+}
+
 const gfx::VectorIcon& LocationBarModelImpl::GetVectorIcon() const {
 #if (!defined(OS_ANDROID) || BUILDFLAG(ENABLE_VR)) && !defined(OS_IOS)
   auto* const icon_override = delegate_->GetVectorIconOverride();
@@ -139,9 +219,16 @@ const gfx::VectorIcon& LocationBarModelImpl::GetVectorIcon() const {
   if (IsOfflinePage())
     return omnibox::kOfflinePinIcon;
 
-  switch (GetSecurityLevel()) {
+  security_state::SecurityLevel security_level = GetSecurityLevel();
+  switch (security_level) {
     case security_state::NONE:
-    case security_state::HTTP_SHOW_WARNING:
+      return omnibox::kHttpIcon;
+    case security_state::WARNING:
+      // When kMarkHttpAsParameterDangerWarning is enabled, show a danger
+      // triangle icon.
+      if (security_state::ShouldShowDangerTriangleForWarningLevel()) {
+        return omnibox::kNotSecureWarningIcon;
+      }
       return omnibox::kHttpIcon;
     case security_state::EV_SECURE:
     case security_state::SECURE:
@@ -149,7 +236,7 @@ const gfx::VectorIcon& LocationBarModelImpl::GetVectorIcon() const {
     case security_state::SECURE_WITH_POLICY_INSTALLED_CERT:
       return vector_icons::kBusinessIcon;
     case security_state::DANGEROUS:
-      return omnibox::kHttpsInvalidIcon;
+      return omnibox::kNotSecureWarningIcon;
     case security_state::SECURITY_LEVEL_COUNT:
       NOTREACHED();
       return omnibox::kHttpIcon;
@@ -163,56 +250,19 @@ const gfx::VectorIcon& LocationBarModelImpl::GetVectorIcon() const {
 #endif
 }
 
-LocationBarModelImpl::SecureChipText LocationBarModelImpl::GetSecureChipText()
-    const {
-  // Note that displayed text (the first output) will be implicitly used as the
-  // accessibility text unless no display text has been specified.
-
-  // Security UI study (https://crbug.com/803501): Change EV/Secure text.
-  const std::string securityUIStudyParam =
-      base::FeatureList::IsEnabled(omnibox::kSimplifyHttpsIndicator)
-          ? base::GetFieldTrialParamValueByFeature(
-                omnibox::kSimplifyHttpsIndicator,
-                OmniboxFieldTrial::kSimplifyHttpsIndicatorParameterName)
-          : std::string();
+base::string16 LocationBarModelImpl::GetSecureDisplayText() const {
+  // Note that display text will be implicitly used as the accessibility text.
+  // GetSecureAccessibilityText() handles special cases when no display text is set.
 
   if (IsOfflinePage())
-    return SecureChipText(l10n_util::GetStringUTF16(IDS_OFFLINE_VERBOSE_STATE));
+    return l10n_util::GetStringUTF16(IDS_OFFLINE_VERBOSE_STATE);
 
   switch (GetSecurityLevel()) {
-    case security_state::HTTP_SHOW_WARNING:
-      return SecureChipText(
-          l10n_util::GetStringUTF16(IDS_NOT_SECURE_VERBOSE_STATE));
-    case security_state::EV_SECURE: {
-      if (securityUIStudyParam ==
-          OmniboxFieldTrial::kSimplifyHttpsIndicatorParameterEvToSecure)
-        return SecureChipText(
-            l10n_util::GetStringUTF16(IDS_SECURE_VERBOSE_STATE));
-      if (securityUIStudyParam ==
-          OmniboxFieldTrial::kSimplifyHttpsIndicatorParameterBothToLock)
-        return SecureChipText(base::string16(), l10n_util::GetStringUTF16(
-                                                    IDS_SECURE_VERBOSE_STATE));
-
-      // Note: Cert is guaranteed non-NULL or the security level would be NONE.
-      scoped_refptr<net::X509Certificate> cert = delegate_->GetCertificate();
-      DCHECK(cert);
-
-      // EV are required to have an organization name and country.
-      DCHECK(!cert->subject().organization_names.empty());
-      DCHECK(!cert->subject().country_name.empty());
-
-      return SecureChipText(l10n_util::GetStringFUTF16(
-          IDS_SECURE_CONNECTION_EV,
-          base::UTF8ToUTF16(cert->subject().organization_names[0]),
-          base::UTF8ToUTF16(cert->subject().country_name)));
-    }
+    case security_state::WARNING:
+      return l10n_util::GetStringUTF16(IDS_NOT_SECURE_VERBOSE_STATE);
+    case security_state::EV_SECURE:
     case security_state::SECURE:
-      if (securityUIStudyParam !=
-          OmniboxFieldTrial::kSimplifyHttpsIndicatorParameterKeepSecureChip)
-        return SecureChipText(base::string16(), l10n_util::GetStringUTF16(
-                                                    IDS_SECURE_VERBOSE_STATE));
-      return SecureChipText(
-          l10n_util::GetStringUTF16(IDS_SECURE_VERBOSE_STATE));
+      return base::string16();
     case security_state::DANGEROUS: {
       std::unique_ptr<security_state::VisibleSecurityState>
           visible_security_state = delegate_->GetVisibleSecurityState();
@@ -226,29 +276,33 @@ LocationBarModelImpl::SecureChipText LocationBarModelImpl::GetSecureChipText()
         // interstitials.
         NOTREACHED();
 #endif
-        return SecureChipText(base::string16());
+        return base::string16();
       }
 
       bool fails_malware_check =
           visible_security_state->malicious_content_status !=
           security_state::MALICIOUS_CONTENT_STATUS_NONE;
-      return SecureChipText(l10n_util::GetStringUTF16(
-          fails_malware_check ? IDS_DANGEROUS_VERBOSE_STATE
-                              : IDS_NOT_SECURE_VERBOSE_STATE));
+      return l10n_util::GetStringUTF16(fails_malware_check
+                                           ? IDS_DANGEROUS_VERBOSE_STATE
+                                           : IDS_NOT_SECURE_VERBOSE_STATE);
     }
     default:
-      return SecureChipText(base::string16());
+      return base::string16();
   }
 }
 
-base::string16 LocationBarModelImpl::GetSecureDisplayText() const {
-  return GetSecureChipText().display_text_;
-}
-
 base::string16 LocationBarModelImpl::GetSecureAccessibilityText() const {
-  auto labels = GetSecureChipText();
-  return labels.display_text_.empty() ? labels.accessibility_label_
-                                      : labels.display_text_;
+  auto display_text = GetSecureDisplayText();
+  if (!display_text.empty())
+    return display_text;
+
+  switch (GetSecurityLevel()) {
+    case security_state::EV_SECURE:
+    case security_state::SECURE:
+      return l10n_util::GetStringUTF16(IDS_SECURE_VERBOSE_STATE);
+    default:
+      return base::string16();
+  }
 }
 
 bool LocationBarModelImpl::ShouldDisplayURL() const {

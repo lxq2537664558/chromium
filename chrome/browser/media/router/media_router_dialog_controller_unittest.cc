@@ -2,14 +2,16 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "chrome/browser/media/router/media_router_dialog_controller.h"
+
 #include <memory>
 #include <vector>
 
 #include "base/bind.h"
-#include "chrome/browser/media/router/media_router_dialog_controller.h"
+#include "chrome/browser/media/router/media_router_metrics.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/common/media_router/media_route.h"
-#include "chrome/common/media_router/media_source_helper.h"
+#include "chrome/common/media_router/media_source.h"
 #include "chrome/common/media_router/route_request_result.h"
 #include "chrome/test/base/chrome_render_view_host_test_harness.h"
 #include "content/public/browser/render_process_host.h"
@@ -30,7 +32,10 @@ class TestMediaRouterDialogController : public MediaRouterDialogController {
   ~TestMediaRouterDialogController() override {}
 
   bool IsShowingMediaRouterDialog() const override { return has_dialog_; }
-  void CreateMediaRouterDialog() override { has_dialog_ = true; }
+  void CreateMediaRouterDialog(
+      MediaRouterDialogOpenOrigin activation_location) override {
+    has_dialog_ = true;
+  }
   void CloseMediaRouterDialog() override { has_dialog_ = false; }
 
  private:
@@ -102,12 +107,14 @@ TEST_F(MediaRouterDialogControllerTest, CreateForWebContents) {
 
 TEST_F(MediaRouterDialogControllerTest, ShowAndHideDialog) {
   EXPECT_CALL(*web_contents_delegate_, ActivateContents(web_contents()));
-  EXPECT_TRUE(dialog_controller_->ShowMediaRouterDialog());
+  EXPECT_TRUE(dialog_controller_->ShowMediaRouterDialog(
+      MediaRouterDialogOpenOrigin::TOOLBAR));
   EXPECT_TRUE(dialog_controller_->IsShowingMediaRouterDialog());
 
   // If a dialog is already shown, ShowMediaRouterDialog() should return false.
   EXPECT_CALL(*web_contents_delegate_, ActivateContents(web_contents()));
-  EXPECT_FALSE(dialog_controller_->ShowMediaRouterDialog());
+  EXPECT_FALSE(dialog_controller_->ShowMediaRouterDialog(
+      MediaRouterDialogOpenOrigin::TOOLBAR));
 
   dialog_controller_->HideMediaRouterDialog();
   EXPECT_FALSE(dialog_controller_->IsShowingMediaRouterDialog());
@@ -115,7 +122,8 @@ TEST_F(MediaRouterDialogControllerTest, ShowAndHideDialog) {
   // Once the dialog is hidden, ShowMediaRouterDialog() should return true
   // again.
   EXPECT_CALL(*web_contents_delegate_, ActivateContents(web_contents()));
-  EXPECT_TRUE(dialog_controller_->ShowMediaRouterDialog());
+  EXPECT_TRUE(dialog_controller_->ShowMediaRouterDialog(
+      MediaRouterDialogOpenOrigin::TOOLBAR));
 }
 
 TEST_F(MediaRouterDialogControllerTest, ShowDialogForPresentation) {
@@ -142,7 +150,7 @@ TEST_F(MediaRouterDialogControllerTest, StartPresentationContext) {
       base::BindOnce(&MediaRouterDialogControllerTest::RequestError,
                      base::Unretained(this)));
 
-  MediaRoute route("routeId", MediaSourceForTab(1), "sinkId", "Description",
+  MediaRoute route("routeId", MediaSource::ForTab(1), "sinkId", "Description",
                    false, false);
   auto result = RouteRequestResult::FromSuccess(route, "presentationId");
 

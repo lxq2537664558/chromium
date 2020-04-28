@@ -14,37 +14,33 @@ namespace blink {
 XRGripSpace::XRGripSpace(XRSession* session, XRInputSource* source)
     : XRSpace(session), input_source_(source) {}
 
-XRPose* XRGripSpace::getPose(
-    XRSpace* other_space,
-    std::unique_ptr<TransformationMatrix> base_pose_matrix) {
+std::unique_ptr<TransformationMatrix> XRGripSpace::MojoFromNative() {
   // Grip is only available when using tracked pointer for input.
-  if (input_source_->target_ray_mode_ != XRInputSource::kTrackedPointer) {
+  if (input_source_->TargetRayMode() !=
+      device::mojom::XRTargetRayMode::POINTING) {
     return nullptr;
   }
 
-  // Make sure the required pose matrices are available.
-  if (!base_pose_matrix || !input_source_->base_pose_matrix_) {
+  if (!input_source_->MojoFromInput())
     return nullptr;
-  }
 
-  std::unique_ptr<TransformationMatrix> grip_pose =
-      other_space->TransformBaseInputPose(*(input_source_->base_pose_matrix_),
-                                          *base_pose_matrix);
-
-  if (!grip_pose) {
-    return nullptr;
-  }
-
-  // Account for any changes made to the reference space's origin offset so
-  // that things like teleportation works.
-  grip_pose = std::make_unique<TransformationMatrix>(
-      other_space->InverseOriginOffsetMatrix().Multiply(*grip_pose));
-
-  return MakeGarbageCollected<XRPose>(std::move(grip_pose),
-                                      input_source_->emulatedPosition());
+  return std::make_unique<TransformationMatrix>(
+      *(input_source_->MojoFromInput()));
 }
 
-void XRGripSpace::Trace(blink::Visitor* visitor) {
+std::unique_ptr<TransformationMatrix> XRGripSpace::NativeFromMojo() {
+  return TryInvert(MojoFromNative());
+}
+
+bool XRGripSpace::EmulatedPosition() const {
+  return input_source_->emulatedPosition();
+}
+
+base::Optional<XRNativeOriginInformation> XRGripSpace::NativeOrigin() const {
+  return input_source_->nativeOrigin();
+}
+
+void XRGripSpace::Trace(Visitor* visitor) {
   visitor->Trace(input_source_);
   XRSpace::Trace(visitor);
 }

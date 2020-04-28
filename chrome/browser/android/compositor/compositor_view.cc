@@ -15,21 +15,23 @@
 #include "base/bind.h"
 #include "base/command_line.h"
 #include "base/containers/id_map.h"
+#include "base/metrics/histogram_macros.h"
 #include "base/rand_util.h"
 #include "base/trace_event/trace_event.h"
 #include "cc/layers/layer.h"
 #include "cc/layers/layer_collections.h"
 #include "cc/layers/solid_color_layer.h"
 #include "cc/layers/texture_layer.h"
+#include "chrome/android/chrome_jni_headers/CompositorView_jni.h"
 #include "chrome/browser/android/compositor/layer/toolbar_layer.h"
 #include "chrome/browser/android/compositor/layer_title_cache.h"
 #include "chrome/browser/android/compositor/scene_layer/scene_layer.h"
 #include "chrome/browser/android/compositor/tab_content_manager.h"
 #include "content/public/browser/android/compositor.h"
 #include "content/public/browser/child_process_data.h"
+#include "content/public/browser/peak_gpu_memory_tracker.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/process_type.h"
-#include "jni/CompositorView_jni.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 #include "ui/android/resources/resource_manager.h"
 #include "ui/android/resources/ui_resource_provider.h"
@@ -84,7 +86,7 @@ CompositorView::CompositorView(JNIEnv* env,
       content_width_(0),
       content_height_(0),
       overlay_video_mode_(false),
-      weak_factory_(this) {
+      overlay_immersive_ar_mode_(false) {
   content::BrowserChildProcessObserver::Add(this);
   obj_.Reset(env, obj);
   compositor_.reset(content::Compositor::Create(this, window_android));
@@ -92,11 +94,15 @@ CompositorView::CompositorView(JNIEnv* env,
   root_layer_->SetIsDrawable(true);
   root_layer_->SetBackgroundColor(SK_ColorWHITE);
 
-  surface_control_feature_checker_ = content::GpuFeatureChecker::Create(
-      gpu::GpuFeatureType::GPU_FEATURE_TYPE_ANDROID_SURFACE_CONTROL,
-      base::Bind(&CompositorView::OnSurfaceControlFeatureStatusUpdate,
-                 weak_factory_.GetWeakPtr()));
-  surface_control_feature_checker_->CheckGpuFeatureAvailability();
+  // It is safe to not keep a ref on the feature checker because it adds one
+  // internally in CheckGpuFeatureAvailability and unrefs after the callback is
+  // dispatched.
+  scoped_refptr<content::GpuFeatureChecker> surface_control_feature_checker =
+      content::GpuFeatureChecker::Create(
+          gpu::GpuFeatureType::GPU_FEATURE_TYPE_ANDROID_SURFACE_CONTROL,
+          base::BindOnce(&CompositorView::OnSurfaceControlFeatureStatusUpdate,
+                         weak_factory_.GetWeakPtr()));
+  surface_control_feature_checker->CheckGpuFeatureAvailability();
 }
 
 CompositorView::~CompositorView() {
@@ -124,7 +130,7 @@ base::android::ScopedJavaLocalRef<jobject> CompositorView::GetResourceManager(
 
 void CompositorView::RecreateSurface() {
   JNIEnv* env = base::android::AttachCurrentThread();
-  compositor_->SetSurface(nullptr);
+  compositor_->SetSurface(nullptr, false);
   Java_CompositorView_recreateSurface(env, obj_);
 }
 
@@ -155,8 +161,6 @@ void CompositorView::OnSurfaceControlFeatureStatusUpdate(bool available) {
     JNIEnv* env = base::android::AttachCurrentThread();
     Java_CompositorView_notifyWillUseSurfaceControl(env, obj_);
   }
-
-  surface_control_feature_checker_.reset();
 }
 
 void CompositorView::SurfaceCreated(JNIEnv* env,
@@ -167,7 +171,7 @@ void CompositorView::SurfaceCreated(JNIEnv* env,
 
 void CompositorView::SurfaceDestroyed(JNIEnv* env,
                                       const JavaParamRef<jobject>& object) {
-  compositor_->SetSurface(nullptr);
+  compositor_->SetSurface(nullptr, false);
   current_surface_format_ = 0;
   tab_content_manager_->OnUIResourcesWereEvicted();
 }
@@ -177,11 +181,12 @@ void CompositorView::SurfaceChanged(JNIEnv* env,
                                     jint format,
                                     jint width,
                                     jint height,
+                                    bool can_be_used_with_surface_control,
                                     const JavaParamRef<jobject>& surface) {
   DCHECK(surface);
   if (current_surface_format_ != format) {
     current_surface_format_ = format;
-    compositor_->SetSurface(surface);
+    compositor_->SetSurface(surface, can_be_used_with_surface_control);
   }
   gfx::Size size = gfx::Size(width, height);
   compositor_->SetWindowBounds(size);
@@ -223,6 +228,24 @@ void CompositorView::SetOverlayVideoMode(JNIEnv* env,
   SetNeedsComposite(env, object);
 }
 
+void CompositorView::SetOverlayImmersiveArMode(
+    JNIEnv* env,
+    const JavaParamRef<jobject>& object,
+    bool enabled) {
+  // This mode is a variant of overlay video mode, the Java code is responsible
+  // for calling SetOverlayVideoMode(enabled) first to ensure consistent state.
+  // Check to make sure this didn't get bypassed.
+  DCHECK_EQ(enabled, overlay_video_mode_) << "missing SetOverlayVideoMode call";
+
+  overlay_immersive_ar_mode_ = enabled;
+  // This mode needs a transparent background color.
+  // ContentViewRenderView::SetOverlayVideoMode applies this, but the
+  // CompositorView::SetOverlayVideoMode version in this file doesn't.
+  compositor_->SetBackgroundColor(enabled ? SK_ColorTRANSPARENT
+                                          : SK_ColorWHITE);
+  compositor_->SetNeedsComposite();
+}
+
 void CompositorView::SetSceneLayer(JNIEnv* env,
                                    const JavaParamRef<jobject>& object,
                                    const JavaParamRef<jobject>& jscene_layer) {
@@ -247,7 +270,21 @@ void CompositorView::SetSceneLayer(JNIEnv* env,
     root_layer_->InsertChild(scene_layer->layer(), 0);
   }
 
-  if (scene_layer) {
+  if (overlay_immersive_ar_mode_) {
+    // Suppress the scene background's default background which breaks
+    // transparency. TODO(https://crbug.com/1002270): Remove this workaround
+    // once the issue with StaticTabSceneLayer's unexpected background is
+    // resolved.
+    bool should_show_background = scene_layer->ShouldShowBackground();
+    SkColor color = scene_layer->GetBackgroundColor();
+    if (should_show_background && color != SK_ColorTRANSPARENT) {
+      DVLOG(1) << "override non-transparent background 0x" << std::hex << color;
+      SetBackground(false, SK_ColorTRANSPARENT);
+    } else {
+      // No override needed, scene doesn't provide an opaque background.
+      SetBackground(should_show_background, color);
+    }
+  } else if (scene_layer) {
     SetBackground(scene_layer->ShouldShowBackground(),
                   scene_layer->GetBackgroundColor());
   } else {
@@ -281,7 +318,7 @@ void CompositorView::BrowserChildProcessKilled(
           base::android::SDK_VERSION_JELLY_BEAN_MR2 &&
       data.process_type == content::PROCESS_TYPE_GPU) {
     JNIEnv* env = base::android::AttachCurrentThread();
-    compositor_->SetSurface(nullptr);
+    compositor_->SetSurface(nullptr, false);
     Java_CompositorView_recreateSurface(env, obj_);
   }
 }
@@ -293,6 +330,36 @@ void CompositorView::SetCompositorWindow(
   ui::WindowAndroid* wa =
       ui::WindowAndroid::FromJavaWindowAndroid(window_android);
   compositor_->SetRootWindow(wa);
+}
+
+void CompositorView::CacheBackBufferForCurrentSurface(
+    JNIEnv* env,
+    const base::android::JavaParamRef<jobject>& object) {
+  compositor_->CacheBackBufferForCurrentSurface();
+}
+
+void CompositorView::EvictCachedBackBuffer(
+    JNIEnv* env,
+    const base::android::JavaParamRef<jobject>& object) {
+  compositor_->EvictCachedBackBuffer();
+}
+
+void CompositorView::OnTabChanged(
+    JNIEnv* env,
+    const base::android::JavaParamRef<jobject>& object) {
+  if (!compositor_)
+    return;
+  std::unique_ptr<content::PeakGpuMemoryTracker> tracker =
+      content::PeakGpuMemoryTracker::Create(
+          content::PeakGpuMemoryTracker::Usage::CHANGE_TAB);
+  compositor_->RequestPresentationTimeForNextFrame(base::BindOnce(
+      [](std::unique_ptr<content::PeakGpuMemoryTracker> tracker,
+         const gfx::PresentationFeedback& feedback) {
+        // This callback will be ran once the content::Compositor presents the
+        // next frame. The destruction of |tracker| will get the peak GPU memory
+        // and record a histogram.
+      },
+      std::move(tracker)));
 }
 
 }  // namespace android

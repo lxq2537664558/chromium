@@ -29,7 +29,6 @@
 #include "base/mac/scoped_nsobject.h"
 #import "third_party/blink/renderer/core/layout/layout_theme.h"
 #import "third_party/blink/renderer/core/paint/theme_painter_mac.h"
-#import "third_party/blink/renderer/platform/wtf/hash_map.h"
 
 @class BlinkLayoutThemeNotificationObserver;
 
@@ -43,15 +42,22 @@ class LayoutThemeMac final : public LayoutTheme {
                          const ComputedStyle&,
                          IntRect& border_box) override;
 
-  bool IsControlStyled(const ComputedStyle&) const override;
+  bool IsControlStyled(ControlPart part, const ComputedStyle&) const override;
 
-  Color PlatformActiveSelectionBackgroundColor() const override;
-  Color PlatformInactiveSelectionBackgroundColor() const override;
-  Color PlatformActiveSelectionForegroundColor() const override;
-  Color PlatformActiveListBoxSelectionBackgroundColor() const override;
-  Color PlatformActiveListBoxSelectionForegroundColor() const override;
-  Color PlatformInactiveListBoxSelectionBackgroundColor() const override;
-  Color PlatformInactiveListBoxSelectionForegroundColor() const override;
+  Color PlatformActiveSelectionBackgroundColor(
+      WebColorScheme color_scheme) const override;
+  Color PlatformInactiveSelectionBackgroundColor(
+      WebColorScheme color_scheme) const override;
+  Color PlatformActiveSelectionForegroundColor(
+      WebColorScheme color_scheme) const override;
+  Color PlatformActiveListBoxSelectionBackgroundColor(
+      WebColorScheme color_scheme) const override;
+  Color PlatformActiveListBoxSelectionForegroundColor(
+      WebColorScheme color_scheme) const override;
+  Color PlatformInactiveListBoxSelectionBackgroundColor(
+      WebColorScheme color_scheme) const override;
+  Color PlatformInactiveListBoxSelectionForegroundColor(
+      WebColorScheme color_scheme) const override;
   Color PlatformSpellingMarkerUnderlineColor() const override;
   Color PlatformGrammarMarkerUnderlineColor() const override;
   Color PlatformFocusRingColor() const override;
@@ -59,8 +65,6 @@ class LayoutThemeMac final : public LayoutTheme {
   ScrollbarControlSize ScrollbarControlSizeForPart(ControlPart part) override {
     return part == kListboxPart ? kSmallScrollbar : kRegularScrollbar;
   }
-
-  void PlatformColorsDidChange() override;
 
   // System fonts.
   void SystemFont(CSSValueID system_font_id,
@@ -77,8 +81,7 @@ class LayoutThemeMac final : public LayoutTheme {
   int SliderTickOffsetFromTrackCenter() const override;
 
   int PopupInternalPaddingStart(const ComputedStyle&) const override;
-  int PopupInternalPaddingEnd(const ChromeClient*,
-                              const ComputedStyle&) const override;
+  int PopupInternalPaddingEnd(LocalFrame*, const ComputedStyle&) const override;
   int PopupInternalPaddingTop(const ComputedStyle&) const override;
   int PopupInternalPaddingBottom(const ComputedStyle&) const override;
 
@@ -86,11 +89,11 @@ class LayoutThemeMac final : public LayoutTheme {
   bool PopsMenuBySpaceKey() const final { return true; }
 
   // Returns the repeat interval of the animation for the progress bar.
-  TimeDelta AnimationRepeatIntervalForProgressBar() const override;
+  base::TimeDelta AnimationRepeatIntervalForProgressBar() const override;
   // Returns the duration of the animation for the progress bar.
-  TimeDelta AnimationDurationForProgressBar() const override;
+  base::TimeDelta AnimationDurationForProgressBar() const override;
 
-  Color SystemColor(CSSValueID) const override;
+  Color SystemColor(CSSValueID, WebColorScheme color_scheme) const override;
 
   bool SupportsSelectionForegroundColors() const override { return false; }
 
@@ -153,8 +156,8 @@ class LayoutThemeMac final : public LayoutTheme {
 
   // We estimate the animation rate of a Mac OS X progress bar is 33 fps.
   // Hard code the value here because we haven't found API for it.
-  static constexpr TimeDelta kProgressAnimationFrameRate =
-      TimeDelta::FromMilliseconds(33);
+  static constexpr base::TimeDelta kProgressAnimationFrameRate =
+      base::TimeDelta::FromMilliseconds(33);
   // Mac OS X progress bar animation seems to have 256 frames.
   static constexpr double kProgressAnimationNumFrames = 256;
 
@@ -183,7 +186,8 @@ class LayoutThemeMac final : public LayoutTheme {
                             float zoom_factor) const override;
   LengthSize MinimumControlSize(ControlPart,
                                 const FontDescription&,
-                                float zoom_factor) const override;
+                                float zoom_factor,
+                                const ComputedStyle& style) const override;
 
   LengthBox ControlPadding(ControlPart,
                            const FontDescription&,
@@ -269,10 +273,7 @@ class LayoutThemeMac final : public LayoutTheme {
  private:
   const int* ProgressBarHeights() const;
   const int* ProgressBarMargins(NSControlSize) const;
-  String FileListNameForWidth(Locale&,
-                              const FileList*,
-                              const Font&,
-                              int width) const override;
+  String DisplayNameForFile(const File& file) const override;
   String ExtraDefaultStyleSheet() override;
   bool ThemeDrawsFocusRing(const ComputedStyle&) const override;
 
@@ -281,8 +282,6 @@ class LayoutThemeMac final : public LayoutTheme {
   mutable base::scoped_nsobject<NSPopUpButtonCell> popup_button_;
   mutable base::scoped_nsobject<NSSearchFieldCell> search_;
   mutable base::scoped_nsobject<NSTextFieldCell> text_field_;
-
-  mutable HashMap<CSSValueID, RGBA32> system_color_cache_;
 
   base::scoped_nsobject<BlinkLayoutThemeNotificationObserver>
       notification_observer_;

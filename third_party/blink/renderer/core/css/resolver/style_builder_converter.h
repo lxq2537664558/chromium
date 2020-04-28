@@ -36,6 +36,8 @@
 #include "third_party/blink/renderer/core/css/css_value_list.h"
 #include "third_party/blink/renderer/core/css/css_value_pair.h"
 #include "third_party/blink/renderer/core/css/css_variable_data.h"
+#include "third_party/blink/renderer/core/css/resolver/style_resolver_state.h"
+#include "third_party/blink/renderer/core/style/computed_style.h"
 #include "third_party/blink/renderer/core/style/grid_area.h"
 #include "third_party/blink/renderer/core/style/grid_positions_resolver.h"
 #include "third_party/blink/renderer/core/style/named_grid_lines_map.h"
@@ -51,7 +53,7 @@
 #include "third_party/blink/renderer/platform/graphics/image_orientation.h"
 #include "third_party/blink/renderer/platform/text/tab_size.h"
 #include "third_party/blink/renderer/platform/transforms/rotation.h"
-#include "third_party/blink/renderer/platform/wtf/allocator.h"
+#include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
 #include "third_party/blink/renderer/platform/wtf/text/text_encoding.h"
 
 namespace blink {
@@ -164,6 +166,7 @@ class StyleBuilderConverter {
   static Length ConvertLength(const StyleResolverState&, const CSSValue&);
   static UnzoomedLength ConvertUnzoomedLength(const StyleResolverState&,
                                               const CSSValue&);
+  static float ConvertZoom(const StyleResolverState&, const CSSValue&);
   static Length ConvertLengthOrAuto(const StyleResolverState&, const CSSValue&);
   static Length ConvertLengthSizing(StyleResolverState&, const CSSValue&);
   static Length ConvertLengthMaxSizing(StyleResolverState&, const CSSValue&);
@@ -230,9 +233,6 @@ class StyleBuilderConverter {
       const NamedGridAreaMap&,
       NamedGridLinesMap&,
       GridTrackSizingDirection);
-  static void ConvertOrderedNamedGridLinesMapToNamedGridLinesMap(
-      const OrderedNamedGridLines&,
-      NamedGridLinesMap&);
 
   static cc::ScrollSnapType ConvertSnapType(StyleResolverState&,
                                             const CSSValue&);
@@ -271,16 +271,25 @@ class StyleBuilderConverter {
       const CSSValue&,
       bool is_animation_tainted);
 
- private:
-  static const CSSToLengthConversionData& CssToLengthConversionData(
-      StyleResolverState&);
+  static LengthSize ConvertIntrinsicSize(StyleResolverState&, const CSSValue&);
+
+  static base::Optional<IntSize> ConvertAspectRatio(StyleResolverState&,
+                                                    const CSSValue&);
+
+  static bool ConvertInternalEmptyLineHeight(StyleResolverState& state,
+                                             const CSSValue& value);
+
+  static AtomicString ConvertPage(StyleResolverState&, const CSSValue&);
+
+  static RubyPosition ConvertRubyPosition(StyleResolverState& state,
+                                          const CSSValue& value);
 };
 
 template <typename T>
 T StyleBuilderConverter::ConvertComputedLength(StyleResolverState& state,
                                                const CSSValue& value) {
   return To<CSSPrimitiveValue>(value).ComputeLength<T>(
-      CssToLengthConversionData(state));
+      state.CssToLengthConversionData());
 }
 
 template <typename T>
@@ -317,8 +326,9 @@ T StyleBuilderConverter::ConvertLineWidth(StyleResolverState& state,
   // device pixels or zoom adjusted CSS pixels instead of raw CSS pixels.
   // Reference crbug.com/485650 and crbug.com/382483
   double result =
-      primitive_value.ComputeLength<double>(CssToLengthConversionData(state));
-  if (result > 0.0 && result < 1.0)
+      primitive_value.ComputeLength<double>(state.CssToLengthConversionData());
+  double zoomed_result = state.StyleRef().EffectiveZoom() * result;
+  if (zoomed_result > 0.0 && zoomed_result < 1.0)
     return 1.0;
   return clampTo<T>(RoundForImpreciseConversion<T>(result),
                     defaultMinimumForClamp<T>(), defaultMaximumForClamp<T>());

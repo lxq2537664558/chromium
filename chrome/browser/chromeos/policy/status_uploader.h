@@ -55,7 +55,7 @@ class StatusUploader : public MediaCaptureDevicesDispatcher::Observer {
   // MediaCaptureDevicesDispatcher::Observer implementation
   void OnRequestUpdate(int render_process_id,
                        int render_frame_id,
-                       blink::MediaStreamType stream_type,
+                       blink::mojom::MediaStreamType stream_type,
                        const content::MediaRequestState state) override;
 
   // Returns true if the next status upload has been scheduled successfully.
@@ -115,7 +115,7 @@ class StatusUploader : public MediaCaptureDevicesDispatcher::Observer {
 
   // Note: This should remain the last member so it'll be destroyed and
   // invalidate the weak pointers before any other members are destroyed.
-  base::WeakPtrFactory<StatusUploader> weak_factory_;
+  base::WeakPtrFactory<StatusUploader> weak_factory_{this};
 
   DISALLOW_COPY_AND_ASSIGN(StatusUploader);
 };

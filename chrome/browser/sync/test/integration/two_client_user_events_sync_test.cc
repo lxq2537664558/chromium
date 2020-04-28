@@ -8,10 +8,11 @@
 #include "chrome/browser/sync/test/integration/profile_sync_service_harness.h"
 #include "chrome/browser/sync/test/integration/sync_integration_test_util.h"
 #include "chrome/browser/sync/test/integration/sync_test.h"
+#include "chrome/browser/sync/test/integration/updated_progress_marker_checker.h"
 #include "chrome/browser/sync/test/integration/user_events_helper.h"
 #include "chrome/browser/sync/user_event_service_factory.h"
 #include "components/sync/protocol/user_event_specifics.pb.h"
-#include "components/sync/user_events/user_event_service.h"
+#include "components/sync_user_events/user_event_service.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace {
@@ -38,7 +39,7 @@ class TwoClientUserEventsSyncTest : public SyncTest {
   }
 
   bool WaitForBookmarksToMatchVerifier() {
-    return BookmarksMatchVerifierChecker().Wait();
+    return bookmarks_helper::BookmarksMatchVerifierChecker().Wait();
   }
 
   void AddTestBookmarksToClient(int index) {
@@ -61,8 +62,12 @@ IN_PROC_BROWSER_TEST_F(TwoClientUserEventsSyncTest,
   GetSyncService(kEncryptingClientId)
       ->GetUserSettings()
       ->SetEncryptionPassphrase("hunter2");
+  UpdatedProgressMarkerChecker update_checker(
+      GetSyncService(kEncryptingClientId));
   ASSERT_TRUE(
       PassphraseAcceptedChecker(GetSyncService(kEncryptingClientId)).Wait());
+  // Make sure the updates are committed before proceeding with the test.
+  ASSERT_TRUE(update_checker.Wait());
 
   // Record a user event on the second client before setting up sync (before
   // knowing it will be encrypted). This event should not get recorded while
@@ -73,9 +78,9 @@ IN_PROC_BROWSER_TEST_F(TwoClientUserEventsSyncTest,
       base::Time() + base::TimeDelta::FromMicroseconds(1)));
 
   // Set up sync on the second client.
-  ASSERT_TRUE(
-      GetClient(kDecryptingClientId)
-          ->SetupSyncNoWaitForCompletion(syncer::UserSelectableTypes()));
+  ASSERT_TRUE(GetClient(kDecryptingClientId)
+                  ->SetupSyncNoWaitForCompletion(
+                      GetRegisteredSelectableTypes(kDecryptingClientId)));
   // The second client asks the user to provide a password for decryption.
   ASSERT_TRUE(
       PassphraseRequiredChecker(GetSyncService(kDecryptingClientId)).Wait());

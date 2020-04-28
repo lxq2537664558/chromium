@@ -10,9 +10,9 @@
 #include "base/android/jni_array.h"
 #include "base/android/jni_string.h"
 #include "components/content_capture/android/content_capture_controller.h"
+#include "components/content_capture/android/jni_headers/ContentCaptureData_jni.h"
+#include "components/content_capture/android/jni_headers/ContentCaptureReceiverManager_jni.h"
 #include "content/public/browser/web_contents.h"
-#include "jni/ContentCaptureData_jni.h"
-#include "jni/ContentCaptureReceiverManager_jni.h"
 
 using base::android::AttachCurrentThread;
 using base::android::ConvertUTF16ToJavaString;
@@ -109,6 +109,21 @@ void ContentCaptureReceiverManagerAndroid::DidCaptureContent(
   if (jdata.is_null())
     return;
   Java_ContentCaptureReceiverManager_didCaptureContent(
+      env, java_ref_, ToJavaArrayOfContentCaptureData(env, parent_session),
+      jdata);
+}
+
+void ContentCaptureReceiverManagerAndroid::DidUpdateContent(
+    const ContentCaptureSession& parent_session,
+    const ContentCaptureData& data) {
+  JNIEnv* env = AttachCurrentThread();
+  DCHECK(java_ref_.obj());
+
+  ScopedJavaLocalRef<jobject> jdata =
+      ToJavaObjectOfContentCaptureData(env, data, JavaRef<jobject>());
+  if (jdata.is_null())
+    return;
+  Java_ContentCaptureReceiverManager_didUpdateContent(
       env, java_ref_, ToJavaArrayOfContentCaptureData(env, parent_session),
       jdata);
 }

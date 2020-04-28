@@ -10,6 +10,7 @@
 
 #include "base/feature_list.h"
 #include "base/i18n/rtl.h"
+#include "base/metrics/histogram_macros.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
@@ -20,7 +21,7 @@
 
 #ifdef OS_ANDROID
 #include "base/android/jni_string.h"
-#include "jni/SuggestionAnswer_jni.h"
+#include "components/omnibox/browser/jni_headers/SuggestionAnswer_jni.h"
 
 using base::android::ScopedJavaLocalRef;
 #endif
@@ -54,6 +55,12 @@ void AppendWithSpace(const SuggestionAnswer::TextField* text,
 
 SuggestionAnswer::TextField::TextField() = default;
 SuggestionAnswer::TextField::~TextField() = default;
+SuggestionAnswer::TextField::TextField(const TextField&) = default;
+SuggestionAnswer::TextField::TextField(TextField&&) noexcept = default;
+SuggestionAnswer::TextField& SuggestionAnswer::TextField::operator=(
+    const TextField&) = default;
+SuggestionAnswer::TextField& SuggestionAnswer::TextField::operator=(
+    TextField&&) noexcept = default;
 
 // static
 bool SuggestionAnswer::TextField::ParseTextField(const base::Value& field_json,
@@ -92,9 +99,12 @@ size_t SuggestionAnswer::TextField::EstimateMemoryUsage() const {
 SuggestionAnswer::ImageLine::ImageLine()
     : num_text_lines_(1) {}
 SuggestionAnswer::ImageLine::ImageLine(const ImageLine& line) = default;
+SuggestionAnswer::ImageLine::ImageLine(ImageLine&&) noexcept = default;
 
 SuggestionAnswer::ImageLine& SuggestionAnswer::ImageLine::operator=(
     const ImageLine& line) = default;
+SuggestionAnswer::ImageLine& SuggestionAnswer::ImageLine::operator=(
+    ImageLine&&) noexcept = default;
 
 SuggestionAnswer::ImageLine::~ImageLine() {}
 
@@ -250,7 +260,12 @@ SuggestionAnswer::SuggestionAnswer() = default;
 
 SuggestionAnswer::SuggestionAnswer(const SuggestionAnswer& answer) = default;
 
+SuggestionAnswer::SuggestionAnswer(SuggestionAnswer&&) noexcept = default;
+
 SuggestionAnswer& SuggestionAnswer::operator=(const SuggestionAnswer& answer) =
+    default;
+
+SuggestionAnswer& SuggestionAnswer::operator=(SuggestionAnswer&&) noexcept =
     default;
 
 SuggestionAnswer::~SuggestionAnswer() = default;
@@ -335,15 +350,6 @@ void SuggestionAnswer::InterpretTextTypes() {
                                  TextStyle::POSITIVE);
       second_line_.SetTextStyles(SuggestionAnswer::DESCRIPTION_NEGATIVE,
                                  TextStyle::NEGATIVE);
-      second_line_.SetTextStyles(SuggestionAnswer::ANSWER_TEXT_LARGE,
-                                 TextStyle::BOLD);
-      break;
-    }
-    case SuggestionAnswer::ANSWER_TYPE_DICTIONARY: {
-      // Because dictionary answers are excepted from line reversal, they
-      // get the expected normal first line and dim second line.
-      first_line_.SetTextStyles(0, TextStyle::NORMAL);
-      second_line_.SetTextStyles(0, TextStyle::NORMAL_DIM);
       break;
     }
     default:
@@ -352,9 +358,34 @@ void SuggestionAnswer::InterpretTextTypes() {
 
   // Most answers uniformly apply different styling for each answer line.
   // Any old styles not replaced above will get these by default.
-  first_line_.SetTextStyles(0, TextStyle::NORMAL_DIM);
-  second_line_.SetTextStyles(0, TextStyle::NORMAL);
+  if (IsExceptedFromLineReversal()) {
+    first_line_.SetTextStyles(0, TextStyle::NORMAL);
+    second_line_.SetTextStyles(0, TextStyle::NORMAL_DIM);
+  } else {
+    first_line_.SetTextStyles(0, TextStyle::NORMAL_DIM);
+    second_line_.SetTextStyles(0, TextStyle::NORMAL);
+  }
 }
+
+bool SuggestionAnswer::IsExceptedFromLineReversal() const {
+  return type() == SuggestionAnswer::ANSWER_TYPE_DICTIONARY;
+}
+
+// static
+void SuggestionAnswer::LogAnswerUsed(
+    const base::Optional<SuggestionAnswer>& answer) {
+  auto answer_type = SuggestionAnswer::ANSWER_TYPE_INVALID;
+  if (answer) {
+    answer_type = static_cast<SuggestionAnswer::AnswerType>(answer->type());
+  }
+  DCHECK_NE(-1, answer_type);  // just in case; |type_| is init'd to -1
+  UMA_HISTOGRAM_ENUMERATION(kAnswerUsedUmaHistogramName, answer_type,
+                            SuggestionAnswer::ANSWER_TYPE_TOTAL_COUNT);
+}
+
+// static
+const char SuggestionAnswer::kAnswerUsedUmaHistogramName[] =
+    "Omnibox.SuggestionUsed.AnswerInSuggest";
 
 #ifdef OS_ANDROID
 namespace {

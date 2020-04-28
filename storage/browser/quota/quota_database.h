@@ -22,10 +22,6 @@
 #include "third_party/blink/public/mojom/quota/quota_types.mojom-forward.h"
 #include "url/origin.h"
 
-namespace content {
-class QuotaDatabaseTest;
-}
-
 namespace sql {
 class Database;
 class MetaTable;
@@ -35,7 +31,11 @@ namespace storage {
 
 class SpecialStoragePolicy;
 
-// All the methods of this class, except the constructor, must run on the DB
+// Stores all origin scoped quota managed data and metadata.
+//
+// Instances are owned by QuotaManager. There is one instance per QuotaManager
+// instance.
+// All the methods of this class, except the constructor, must called on the DB
 // thread.
 class COMPONENT_EXPORT(STORAGE_BROWSER) QuotaDatabase {
  public:
@@ -214,7 +214,7 @@ class COMPONENT_EXPORT(STORAGE_BROWSER) QuotaDatabase {
 
   base::OneShotTimer timer_;
 
-  friend class content::QuotaDatabaseTest;
+  friend class QuotaDatabaseTest;
   friend class QuotaManager;
 
   static const TableSchema kTables[];

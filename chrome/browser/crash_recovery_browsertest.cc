@@ -26,6 +26,7 @@
 #include "content/public/browser/render_widget_host_view.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_test_utils.h"
+#include "content/public/test/no_renderer_crashes_assertion.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
 #include "net/test/embedded_test_server/http_request.h"
 #include "net/test/embedded_test_server/http_response.h"
@@ -89,11 +90,18 @@ class CrashRecoveryBrowserTest : public InProcessBrowserTest {
   void SetUpCommandLine(base::CommandLine* command_line) override {
     command_line->AppendSwitch(switches::kDisableBreakpad);
   }
+
+  content::ScopedAllowRendererCrashes scoped_allow_renderer_crashes_;
 };
 
 // Test that reload works after a crash.
-// Disabled, http://crbug.com/29331 , http://crbug.com/69637 .
-IN_PROC_BROWSER_TEST_F(CrashRecoveryBrowserTest, Reload) {
+// Flaky timeouts on Win7 Tests (dbg)(1); see https://crbug.com/985255.
+#if defined(OS_WIN) && !defined(NDEBUG)
+#define MAYBE_Reload DISABLED_Reload
+#else
+#define MAYBE_Reload Reload
+#endif
+IN_PROC_BROWSER_TEST_F(CrashRecoveryBrowserTest, MAYBE_Reload) {
   // The title of the active tab should change each time this URL is loaded.
   GURL url(
       "data:text/html,<script>document.title=new Date().valueOf()</script>");
@@ -106,7 +114,7 @@ IN_PROC_BROWSER_TEST_F(CrashRecoveryBrowserTest, Reload) {
                                                 &title_before_crash));
   SimulateRendererCrash(browser());
   chrome::Reload(browser(), WindowOpenDisposition::CURRENT_TAB);
-  content::WaitForLoadStop(GetActiveWebContents());
+  EXPECT_TRUE(content::WaitForLoadStop(GetActiveWebContents()));
   ASSERT_TRUE(ui_test_utils::GetCurrentTabTitle(browser(),
                                                 &title_after_crash));
   EXPECT_NE(title_before_crash, title_after_crash);
@@ -118,7 +126,14 @@ IN_PROC_BROWSER_TEST_F(CrashRecoveryBrowserTest, Reload) {
 }
 
 // Test that reload after a crash forces a cache revalidation.
-IN_PROC_BROWSER_TEST_F(CrashRecoveryBrowserTest, ReloadCacheRevalidate) {
+//
+// Flaky timeouts on Win7 Tests (dbg)(1); see https://crbug.com/985255.
+#if defined(OS_WIN) && !defined(NDEBUG)
+#define MAYBE_ReloadCacheRevalidate DISABLED_ReloadCacheRevalidate
+#else
+#define MAYBE_ReloadCacheRevalidate ReloadCacheRevalidate
+#endif
+IN_PROC_BROWSER_TEST_F(CrashRecoveryBrowserTest, MAYBE_ReloadCacheRevalidate) {
   const char kTestPath[] = "/test";
 
   // Use the test server so as not to bypass cache behavior. The title of the
@@ -137,7 +152,7 @@ IN_PROC_BROWSER_TEST_F(CrashRecoveryBrowserTest, ReloadCacheRevalidate) {
                                                 &title_before_crash));
   SimulateRendererCrash(browser());
   chrome::Reload(browser(), WindowOpenDisposition::CURRENT_TAB);
-  content::WaitForLoadStop(GetActiveWebContents());
+  EXPECT_TRUE(content::WaitForLoadStop(GetActiveWebContents()));
   ASSERT_TRUE(ui_test_utils::GetCurrentTabTitle(browser(),
                                                 &title_after_crash));
   EXPECT_NE(title_before_crash, title_after_crash);
@@ -147,7 +162,13 @@ IN_PROC_BROWSER_TEST_F(CrashRecoveryBrowserTest, ReloadCacheRevalidate) {
 // There was an earlier bug (1270510) in process-per-site in which the max page
 // ID of the RenderProcessHost was stale, so the NavigationEntry in the new tab
 // was not committed.  This prevents regression of that bug.
-IN_PROC_BROWSER_TEST_F(CrashRecoveryBrowserTest, LoadInNewTab) {
+// Flaky timeouts on Win7 Tests (dbg)(1); see https://crbug.com/985255.
+#if defined(OS_WIN) && !defined(NDEBUG)
+#define MAYBE_LoadInNewTab DISABLED_LoadInNewTab
+#else
+#define MAYBE_LoadInNewTab LoadInNewTab
+#endif
+IN_PROC_BROWSER_TEST_F(CrashRecoveryBrowserTest, MAYBE_LoadInNewTab) {
   const base::FilePath::CharType kTitle2File[] =
       FILE_PATH_LITERAL("title2.html");
 
@@ -166,7 +187,7 @@ IN_PROC_BROWSER_TEST_F(CrashRecoveryBrowserTest, LoadInNewTab) {
             GetActiveWebContents()->GetController().GetVisibleEntry()->
                 GetVirtualURL());
   chrome::Reload(browser(), WindowOpenDisposition::CURRENT_TAB);
-  content::WaitForLoadStop(GetActiveWebContents());
+  EXPECT_TRUE(content::WaitForLoadStop(GetActiveWebContents()));
   ASSERT_TRUE(ui_test_utils::GetCurrentTabTitle(browser(),
                                                 &title_after_crash));
   EXPECT_EQ(title_before_crash, title_after_crash);
@@ -174,25 +195,39 @@ IN_PROC_BROWSER_TEST_F(CrashRecoveryBrowserTest, LoadInNewTab) {
 
 // Tests that reloads of navigation errors behave correctly after a crash.
 // Regression test for http://crbug.com/348918
-IN_PROC_BROWSER_TEST_F(CrashRecoveryBrowserTest, DoubleReloadWithError) {
-  GURL url("chrome://bogus");
+//
+// Flaky timeouts on Win7 Tests (dbg)(1); see https://crbug.com/985255.
+#if defined(OS_WIN) && !defined(NDEBUG)
+#define MAYBE_DoubleReloadWithError DISABLED_DoubleReloadWithError
+#else
+#define MAYBE_DoubleReloadWithError DoubleReloadWithError
+#endif
+IN_PROC_BROWSER_TEST_F(CrashRecoveryBrowserTest, MAYBE_DoubleReloadWithError) {
+  GURL url(content::GetWebUIURL("bogus"));
   ui_test_utils::NavigateToURL(browser(), url);
   ASSERT_EQ(url, GetActiveWebContents()->GetVisibleURL());
 
   SimulateRendererCrash(browser());
 
   chrome::Reload(browser(), WindowOpenDisposition::CURRENT_TAB);
-  content::WaitForLoadStop(GetActiveWebContents());
+  EXPECT_FALSE(content::WaitForLoadStop(GetActiveWebContents()));
   ASSERT_EQ(url, GetActiveWebContents()->GetVisibleURL());
 
   chrome::Reload(browser(), WindowOpenDisposition::CURRENT_TAB);
-  content::WaitForLoadStop(GetActiveWebContents());
+  EXPECT_FALSE(content::WaitForLoadStop(GetActiveWebContents()));
   ASSERT_EQ(url, GetActiveWebContents()->GetVisibleURL());
 }
 
 // Tests that a beforeunload handler doesn't run if user navigates to
 // chrome::crash.
-IN_PROC_BROWSER_TEST_F(CrashRecoveryBrowserTest, BeforeUnloadNotRun) {
+//
+// Flaky timeouts on Win7 Tests (dbg)(1); see https://crbug.com/985255.
+#if defined(OS_WIN) && !defined(NDEBUG)
+#define MAYBE_BeforeUnloadNotRun DISABLED_BeforeUnloadNotRun
+#else
+#define MAYBE_BeforeUnloadNotRun BeforeUnloadNotRun
+#endif
+IN_PROC_BROWSER_TEST_F(CrashRecoveryBrowserTest, MAYBE_BeforeUnloadNotRun) {
   const char* kBeforeUnloadHTML =
     "<html><body>"
     "<script>window.onbeforeunload=function(e){return 'foo'}</script>"

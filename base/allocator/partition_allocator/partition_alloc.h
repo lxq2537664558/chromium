@@ -63,6 +63,7 @@
 #include <limits.h>
 #include <string.h>
 
+#include "base/allocator/partition_allocator/memory_reclaimer.h"
 #include "base/allocator/partition_allocator/page_allocator.h"
 #include "base/allocator/partition_allocator/partition_alloc_constants.h"
 #include "base/allocator/partition_allocator/partition_bucket.h"
@@ -82,6 +83,16 @@
 #include <stdlib.h>
 #endif
 
+// We use this to make MEMORY_TOOL_REPLACES_ALLOCATOR behave the same for max
+// size as other alloc code.
+#define CHECK_MAX_SIZE_OR_RETURN_NULLPTR(size, flags) \
+  if (size > kGenericMaxDirectMapped) {               \
+    if (flags & PartitionAllocReturnNull) {           \
+      return nullptr;                                 \
+    }                                                 \
+    CHECK(false);                                     \
+  }
+
 namespace base {
 
 class PartitionStatsDumper;
@@ -97,26 +108,27 @@ enum PartitionPurgeFlags {
 };
 
 // Never instantiate a PartitionRoot directly, instead use PartitionAlloc.
-struct BASE_EXPORT PartitionRoot : public internal::PartitionRootBase {
+struct BASE_EXPORT PartitionRoot
+    : public internal::PartitionRootBase<internal::NotThreadSafe> {
   PartitionRoot();
   ~PartitionRoot() override;
   // This references the buckets OFF the edge of this struct. All uses of
   // PartitionRoot must have the bucket array come right after.
   //
   // The PartitionAlloc templated class ensures the following is correct.
-  ALWAYS_INLINE internal::PartitionBucket* buckets() {
-    return reinterpret_cast<internal::PartitionBucket*>(this + 1);
+  ALWAYS_INLINE Bucket* buckets() {
+    return reinterpret_cast<Bucket*>(this + 1);
   }
-  ALWAYS_INLINE const internal::PartitionBucket* buckets() const {
-    return reinterpret_cast<const internal::PartitionBucket*>(this + 1);
+  ALWAYS_INLINE const Bucket* buckets() const {
+    return reinterpret_cast<const Bucket*>(this + 1);
   }
 
-  void Init(size_t num_buckets, size_t max_allocation);
+  void Init(size_t bucket_count, size_t maximum_allocation);
 
   ALWAYS_INLINE void* Alloc(size_t size, const char* type_name);
   ALWAYS_INLINE void* AllocFlags(int flags, size_t size, const char* type_name);
 
-  void PurgeMemory(int flags);
+  void PurgeMemory(int flags) override;
 
   void DumpStats(const char* partition_name,
                  bool is_light_dump,
@@ -125,10 +137,10 @@ struct BASE_EXPORT PartitionRoot : public internal::PartitionRootBase {
 
 // Never instantiate a PartitionRootGeneric directly, instead use
 // PartitionAllocatorGeneric.
-struct BASE_EXPORT PartitionRootGeneric : public internal::PartitionRootBase {
+struct BASE_EXPORT PartitionRootGeneric
+    : public internal::PartitionRootBase<internal::ThreadSafe> {
   PartitionRootGeneric();
   ~PartitionRootGeneric() override;
-  subtle::SpinLock lock;
   // Some pre-computed constants.
   size_t order_index_shifts[kBitsPerSizeT + 1] = {};
   size_t order_sub_index_masks[kBitsPerSizeT + 1] = {};
@@ -137,18 +149,15 @@ struct BASE_EXPORT PartitionRootGeneric : public internal::PartitionRootBase {
   // sizes.  It is one flat array instead of a 2D array because in the 2D
   // world, we'd need to index array[blah][max+1] which risks undefined
   // behavior.
-  internal::PartitionBucket*
-      bucket_lookups[((kBitsPerSizeT + 1) * kGenericNumBucketsPerOrder) + 1] =
-          {};
-  internal::PartitionBucket buckets[kGenericNumBuckets] = {};
+  Bucket* bucket_lookups[((kBitsPerSizeT + 1) * kGenericNumBucketsPerOrder) +
+                         1] = {};
+  Bucket buckets[kGenericNumBuckets] = {};
 
   // Public API.
   void Init();
 
   ALWAYS_INLINE void* Alloc(size_t size, const char* type_name);
   ALWAYS_INLINE void* AllocFlags(int flags, size_t size, const char* type_name);
-  ALWAYS_INLINE void Free(void* ptr);
-
   NOINLINE void* Realloc(void* ptr, size_t new_size, const char* type_name);
   // Overload that may return nullptr if reallocation isn't possible. In this
   // case, |ptr| remains valid.
@@ -156,7 +165,7 @@ struct BASE_EXPORT PartitionRootGeneric : public internal::PartitionRootBase {
 
   ALWAYS_INLINE size_t ActualSize(size_t size);
 
-  void PurgeMemory(int flags);
+  void PurgeMemory(int flags) override;
 
   void DumpStats(const char* partition_name,
                  bool is_light_dump,
@@ -209,59 +218,7 @@ class BASE_EXPORT PartitionStatsDumper {
                                          const PartitionBucketMemoryStats*) = 0;
 };
 
-BASE_EXPORT void PartitionAllocGlobalInit(void (*oom_handling_function)());
-
-class BASE_EXPORT PartitionAllocHooks {
- public:
-  typedef void AllocationHook(void* address, size_t, const char* type_name);
-  typedef void FreeHook(void* address);
-
-  // To unhook, call Set*Hook with nullptr.
-  static void SetAllocationHook(AllocationHook* hook) {
-    // Chained allocation hooks are not supported. Registering a non-null
-    // hook when a non-null hook is already registered indicates somebody is
-    // trying to overwrite a hook.
-    CHECK(!hook || !allocation_hook_) << "Overwriting allocation hook";
-    allocation_hook_ = hook;
-  }
-  static void SetFreeHook(FreeHook* hook) {
-    CHECK(!hook || !free_hook_) << "Overwriting free hook";
-    free_hook_ = hook;
-  }
-
-  static void AllocationHookIfEnabled(void* address,
-                                      size_t size,
-                                      const char* type_name) {
-    AllocationHook* hook = allocation_hook_;
-    if (UNLIKELY(hook != nullptr))
-      hook(address, size, type_name);
-  }
-
-  static void FreeHookIfEnabled(void* address) {
-    FreeHook* hook = free_hook_;
-    if (UNLIKELY(hook != nullptr))
-      hook(address);
-  }
-
-  static void ReallocHookIfEnabled(void* old_address,
-                                   void* new_address,
-                                   size_t size,
-                                   const char* type_name) {
-    // Report a reallocation as a free followed by an allocation.
-    AllocationHook* allocation_hook = allocation_hook_;
-    FreeHook* free_hook = free_hook_;
-    if (UNLIKELY(allocation_hook && free_hook)) {
-      free_hook(old_address);
-      allocation_hook(new_address, size, type_name);
-    }
-  }
-
- private:
-  // Pointers to hook functions that PartitionAlloc will call on allocation and
-  // free if the pointers are non-null.
-  static AllocationHook* allocation_hook_;
-  static FreeHook* free_hook_;
-};
+BASE_EXPORT void PartitionAllocGlobalInit(OomFunction on_out_of_memory);
 
 ALWAYS_INLINE void* PartitionRoot::Alloc(size_t size, const char* type_name) {
   return AllocFlags(0, size, type_name);
@@ -271,24 +228,37 @@ ALWAYS_INLINE void* PartitionRoot::AllocFlags(int flags,
                                               size_t size,
                                               const char* type_name) {
 #if defined(MEMORY_TOOL_REPLACES_ALLOCATOR)
-  // Make MEMORY_TOOL_REPLACES_ALLOCATOR behave the same for max size
-  // as other alloc code.
-  if (size > kGenericMaxDirectMapped)
-    return nullptr;
+  CHECK_MAX_SIZE_OR_RETURN_NULLPTR(size, flags);
   void* result = malloc(size);
   CHECK(result);
   return result;
 #else
+  DCHECK(max_allocation == 0 || size <= max_allocation);
+  void* result;
+  const bool hooks_enabled = PartitionAllocHooks::AreHooksEnabled();
+  if (UNLIKELY(hooks_enabled)) {
+    if (PartitionAllocHooks::AllocationOverrideHookIfEnabled(&result, flags,
+                                                             size, type_name)) {
+      PartitionAllocHooks::AllocationObserverHookIfEnabled(result, size,
+                                                           type_name);
+      return result;
+    }
+  }
   size_t requested_size = size;
   size = internal::PartitionCookieSizeAdjustAdd(size);
-  DCHECK(this->initialized);
+  DCHECK(initialized);
   size_t index = size >> kBucketShift;
-  DCHECK(index < this->num_buckets);
+  DCHECK(index < num_buckets);
   DCHECK(size == index << kBucketShift);
-  internal::PartitionBucket* bucket = &this->buckets()[index];
-  void* result = AllocFromBucket(bucket, flags, size);
-  PartitionAllocHooks::AllocationHookIfEnabled(result, requested_size,
-                                               type_name);
+  {
+    ScopedGuard guard{lock_};
+    Bucket* bucket = &buckets()[index];
+    result = AllocFromBucket(bucket, flags, size);
+  }
+  if (UNLIKELY(hooks_enabled)) {
+    PartitionAllocHooks::AllocationObserverHookIfEnabled(result, requested_size,
+                                                         type_name);
+  }
   return result;
 #endif  // defined(MEMORY_TOOL_REPLACES_ALLOCATOR)
 }
@@ -306,39 +276,23 @@ ALWAYS_INLINE size_t PartitionAllocGetSize(void* ptr) {
   // cause trouble, and the caller is responsible for that not happening.
   DCHECK(PartitionAllocSupportsGetSize());
   ptr = internal::PartitionCookieFreePointerAdjust(ptr);
-  internal::PartitionPage* page = internal::PartitionPage::FromPointer(ptr);
+  internal::PartitionPage<internal::ThreadSafe>* page =
+      internal::PartitionPage<internal::ThreadSafe>::FromPointer(ptr);
   // TODO(palmer): See if we can afford to make this a CHECK.
-  DCHECK(internal::PartitionRootBase::IsValidPage(page));
+  DCHECK(internal::PartitionRootBase<internal::ThreadSafe>::IsValidPage(page));
   size_t size = page->bucket->slot_size;
   return internal::PartitionCookieSizeAdjustSubtract(size);
 }
 
-ALWAYS_INLINE void PartitionFree(void* ptr) {
-#if defined(MEMORY_TOOL_REPLACES_ALLOCATOR)
-  free(ptr);
-#else
-  void* original_ptr = ptr;
-  // TODO(palmer): Check ptr alignment before continuing. Shall we do the check
-  // inside PartitionCookieFreePointerAdjust?
-  PartitionAllocHooks::FreeHookIfEnabled(original_ptr);
-  ptr = internal::PartitionCookieFreePointerAdjust(ptr);
-  internal::PartitionPage* page = internal::PartitionPage::FromPointer(ptr);
-  // TODO(palmer): See if we can afford to make this a CHECK.
-  DCHECK(internal::PartitionRootBase::IsValidPage(page));
-  page->Free(ptr);
-#endif
-}
-
-ALWAYS_INLINE internal::PartitionBucket* PartitionGenericSizeToBucket(
-    PartitionRootGeneric* root,
-    size_t size) {
+ALWAYS_INLINE internal::PartitionBucket<internal::ThreadSafe>*
+PartitionGenericSizeToBucket(PartitionRootGeneric* root, size_t size) {
   size_t order = kBitsPerSizeT - bits::CountLeadingZeroBitsSizeT(size);
   // The order index is simply the next few bits after the most significant bit.
   size_t order_index = (size >> root->order_index_shifts[order]) &
                        (kGenericNumBucketsPerOrder - 1);
   // And if the remaining bits are non-zero we must bump the bucket up.
   size_t sub_order_index = size & root->order_sub_index_masks[order];
-  internal::PartitionBucket* bucket =
+  internal::PartitionBucket<internal::ThreadSafe>* bucket =
       root->bucket_lookups[(order << kGenericNumBucketsPerOrderBits) +
                            order_index + !!sub_order_index];
   CHECK(bucket);
@@ -354,27 +308,40 @@ ALWAYS_INLINE void* PartitionAllocGenericFlags(PartitionRootGeneric* root,
   DCHECK_LT(flags, PartitionAllocLastFlag << 1);
 
 #if defined(MEMORY_TOOL_REPLACES_ALLOCATOR)
-  // Make MEMORY_TOOL_REPLACES_ALLOCATOR behave the same for max size
-  // as other alloc code.
-  if (size > kGenericMaxDirectMapped)
-    return nullptr;
+  CHECK_MAX_SIZE_OR_RETURN_NULLPTR(size, flags);
   const bool zero_fill = flags & PartitionAllocZeroFill;
   void* result = zero_fill ? calloc(1, size) : malloc(size);
   CHECK(result || flags & PartitionAllocReturnNull);
   return result;
 #else
   DCHECK(root->initialized);
+  // Only SizeSpecificPartitionAllocator should use max_allocation.
+  DCHECK(root->max_allocation == 0);
+  void* result;
+  const bool hooks_enabled = PartitionAllocHooks::AreHooksEnabled();
+  if (UNLIKELY(hooks_enabled)) {
+    if (PartitionAllocHooks::AllocationOverrideHookIfEnabled(&result, flags,
+                                                             size, type_name)) {
+      PartitionAllocHooks::AllocationObserverHookIfEnabled(result, size,
+                                                           type_name);
+      return result;
+    }
+  }
   size_t requested_size = size;
   size = internal::PartitionCookieSizeAdjustAdd(size);
-  internal::PartitionBucket* bucket = PartitionGenericSizeToBucket(root, size);
-  void* ret = nullptr;
+  internal::PartitionBucket<internal::ThreadSafe>* bucket =
+      PartitionGenericSizeToBucket(root, size);
+  DCHECK(bucket);
   {
-    subtle::SpinLock::Guard guard(root->lock);
-    ret = root->AllocFromBucket(bucket, flags, size);
+    PartitionRootGeneric::ScopedGuard guard{root->lock_};
+    result = root->AllocFromBucket(bucket, flags, size);
   }
-  PartitionAllocHooks::AllocationHookIfEnabled(ret, requested_size, type_name);
+  if (UNLIKELY(hooks_enabled)) {
+    PartitionAllocHooks::AllocationObserverHookIfEnabled(result, requested_size,
+                                                         type_name);
+  }
 
-  return ret;
+  return result;
 #endif
 }
 
@@ -389,27 +356,6 @@ ALWAYS_INLINE void* PartitionRootGeneric::AllocFlags(int flags,
   return PartitionAllocGenericFlags(this, flags, size, type_name);
 }
 
-ALWAYS_INLINE void PartitionRootGeneric::Free(void* ptr) {
-#if defined(MEMORY_TOOL_REPLACES_ALLOCATOR)
-  free(ptr);
-#else
-  DCHECK(this->initialized);
-
-  if (UNLIKELY(!ptr))
-    return;
-
-  PartitionAllocHooks::FreeHookIfEnabled(ptr);
-  ptr = internal::PartitionCookieFreePointerAdjust(ptr);
-  internal::PartitionPage* page = internal::PartitionPage::FromPointer(ptr);
-  // TODO(palmer): See if we can afford to make this a CHECK.
-  DCHECK(IsValidPage(page));
-  {
-    subtle::SpinLock::Guard guard(this->lock);
-    page->Free(ptr);
-  }
-#endif
-}
-
 BASE_EXPORT void* PartitionReallocGenericFlags(PartitionRootGeneric* root,
                                                int flags,
                                                void* ptr,
@@ -420,15 +366,15 @@ ALWAYS_INLINE size_t PartitionRootGeneric::ActualSize(size_t size) {
 #if defined(MEMORY_TOOL_REPLACES_ALLOCATOR)
   return size;
 #else
-  DCHECK(this->initialized);
+  DCHECK(initialized);
   size = internal::PartitionCookieSizeAdjustAdd(size);
-  internal::PartitionBucket* bucket = PartitionGenericSizeToBucket(this, size);
+  Bucket* bucket = PartitionGenericSizeToBucket(this, size);
   if (LIKELY(!bucket->is_direct_mapped())) {
     size = bucket->slot_size;
   } else if (size > kGenericMaxDirectMapped) {
     // Too large to allocate => return the size unchanged.
   } else {
-    size = internal::PartitionBucket::get_direct_map_size(size);
+    size = Bucket::get_direct_map_size(size);
   }
   return internal::PartitionCookieSizeAdjustSubtract(size);
 #endif
@@ -439,25 +385,39 @@ class SizeSpecificPartitionAllocator {
  public:
   SizeSpecificPartitionAllocator() {
     memset(actual_buckets_, 0,
-           sizeof(internal::PartitionBucket) * base::size(actual_buckets_));
+           sizeof(PartitionRoot::Bucket) * base::size(actual_buckets_));
   }
-  ~SizeSpecificPartitionAllocator() = default;
+  ~SizeSpecificPartitionAllocator() {
+    PartitionAllocMemoryReclaimer::Instance()->UnregisterPartition(
+        &partition_root_);
+  }
   static const size_t kMaxAllocation = N - kAllocationGranularity;
   static const size_t kNumBuckets = N / kAllocationGranularity;
-  void init() { partition_root_.Init(kNumBuckets, kMaxAllocation); }
+  void init() {
+    partition_root_.Init(kNumBuckets, kMaxAllocation);
+    PartitionAllocMemoryReclaimer::Instance()->RegisterPartition(
+        &partition_root_);
+  }
   ALWAYS_INLINE PartitionRoot* root() { return &partition_root_; }
 
  private:
   PartitionRoot partition_root_;
-  internal::PartitionBucket actual_buckets_[kNumBuckets];
+  PartitionRoot::Bucket actual_buckets_[kNumBuckets];
 };
 
 class BASE_EXPORT PartitionAllocatorGeneric {
  public:
   PartitionAllocatorGeneric();
-  ~PartitionAllocatorGeneric();
+  ~PartitionAllocatorGeneric() {
+    PartitionAllocMemoryReclaimer::Instance()->UnregisterPartition(
+        &partition_root_);
+  }
 
-  void init() { partition_root_.Init(); }
+  void init() {
+    partition_root_.Init();
+    PartitionAllocMemoryReclaimer::Instance()->RegisterPartition(
+        &partition_root_);
+  }
   ALWAYS_INLINE PartitionRootGeneric* root() { return &partition_root_; }
 
  private:

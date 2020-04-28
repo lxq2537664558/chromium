@@ -8,7 +8,7 @@
 #include <memory>
 #include <string>
 
-#include "ash/public/interfaces/locale.mojom.h"
+#include "ash/public/cpp/locale_update_controller.h"
 #include "base/callback.h"
 #include "base/macros.h"
 #include "base/memory/ref_counted.h"
@@ -75,9 +75,9 @@ class WelcomeScreen : public BaseScreen,
   base::RepeatingClosure* exit_callback() { return &exit_callback_; }
 
  private:
-  // BaseScreen implementation:
-  void Show() override;
-  void Hide() override;
+  // BaseScreen:
+  void ShowImpl() override;
+  void HideImpl() override;
   void OnUserAction(const std::string& action_id) override;
 
   // InputMethodManager::Observer implementation:
@@ -108,10 +108,9 @@ class WelcomeScreen : public BaseScreen,
   // Callback when the system timezone settings is changed.
   void OnSystemTimezoneChanged();
 
-  // Notifies locale change via mojom.
-  void ConnectToLocaleUpdateController();
+  // Notifies locale change via ash::LocaleUpdateController.
   void NotifyLocaleChange();
-  void OnLocaleChangeResult(ash::mojom::LocaleNotificationResult result);
+  void OnLocaleChangeResult(ash::LocaleNotificationResult result);
 
   WelcomeView* view_ = nullptr;
   base::RepeatingClosure exit_callback_;
@@ -129,10 +128,7 @@ class WelcomeScreen : public BaseScreen,
 
   base::ObserverList<Observer>::Unchecked observers_;
 
-  // Ash's mojom::LocaleUpdateController
-  ash::mojom::LocaleUpdateControllerPtr locale_update_controller_ = nullptr;
-
-  base::WeakPtrFactory<WelcomeScreen> weak_factory_;
+  base::WeakPtrFactory<WelcomeScreen> weak_factory_{this};
 
   DISALLOW_COPY_AND_ASSIGN(WelcomeScreen);
 };

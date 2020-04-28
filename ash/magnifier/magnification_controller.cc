@@ -9,11 +9,12 @@
 #include <utility>
 #include <vector>
 
-#include "ash/accelerators/accelerator_controller.h"
+#include "ash/accelerators/accelerator_controller_impl.h"
 #include "ash/accessibility/accessibility_delegate.h"
 #include "ash/display/root_window_transformers.h"
 #include "ash/host/ash_window_tree_host.h"
 #include "ash/host/root_window_transformer.h"
+#include "ash/keyboard/ui/keyboard_ui_controller.h"
 #include "ash/magnifier/magnifier_utils.h"
 #include "ash/public/cpp/shell_window_ids.h"
 #include "ash/root_window_controller.h"
@@ -36,7 +37,6 @@
 #include "ui/gfx/geometry/point3_f.h"
 #include "ui/gfx/geometry/point_conversions.h"
 #include "ui/gfx/geometry/rect_conversions.h"
-#include "ui/keyboard/keyboard_controller.h"
 #include "ui/wm/core/compound_event_filter.h"
 #include "ui/wm/core/coordinate_conversion.h"
 
@@ -177,11 +177,11 @@ void MagnificationController::SetEnabled(bool enabled) {
   // Keyboard overscroll creates layout issues with fullscreen magnification
   // so it needs to be disabled when magnification is enabled.
   // TODO(spqchan): Fix the keyboard overscroll issues.
-  auto config = keyboard::KeyboardController::Get()->keyboard_config();
+  auto config = keyboard::KeyboardUIController::Get()->keyboard_config();
   config.overscroll_behavior =
-      is_enabled_ ? keyboard::mojom::KeyboardOverscrollBehavior::kDisabled
-                  : keyboard::mojom::KeyboardOverscrollBehavior::kDefault;
-  keyboard::KeyboardController::Get()->UpdateKeyboardConfig(config);
+      is_enabled_ ? keyboard::KeyboardOverscrollBehavior::kDisabled
+                  : keyboard::KeyboardOverscrollBehavior::kDefault;
+  keyboard::KeyboardUIController::Get()->UpdateKeyboardConfig(config);
 }
 
 bool MagnificationController::IsEnabled() const {
@@ -636,25 +636,35 @@ bool MagnificationController::RedrawDIP(const gfx::PointF& position_in_dip,
   display::Display display =
       display::Screen::GetScreen()->GetDisplayNearestWindow(root_window_);
   std::unique_ptr<RootWindowTransformer> transformer(
-      CreateRootWindowTransformerForDisplay(root_window_, display));
+      CreateRootWindowTransformerForDisplay(display));
 
-  // Inverse the transformation on the keyboard container so the keyboard will
-  // remain zoomed out. Apply the same animation settings to it.
-  // Note: if |scale_| is 1.0f, the transform matrix will be an identity matrix.
-  // Applying the inverse of an identity matrix will not change the
-  // transformation.
+  // Inverse the transformation on the keyboard container and display
+  // identification highlight so the keyboard will remain zoomed out and the
+  // highlight will render around the edges of the display. Apply the same
+  // animation settings to it. Note: if |scale_| is 1.0f, the transform matrix
+  // will be an identity matrix. Applying the inverse of an identity matrix will
+  // not change the transformation.
   // TODO(spqchan): Find a way to sync the layer animations together.
-  aura::Window* virtual_keyboard_container =
-      root_window_->GetChildById(kShellWindowId_ImeWindowParentContainer);
+  gfx::Transform inverse_transform;
+  if (GetMagnifierTransform().GetInverse(&inverse_transform)) {
+    std::vector<aura::Window*> undo_transform_windows = {
+        root_window_->GetChildById(kShellWindowId_ImeWindowParentContainer)};
 
-  gfx::Transform vk_transform;
-  if (GetMagnifierTransform().GetInverse(&vk_transform)) {
-    ui::ScopedLayerAnimationSettings vk_layer_settings(
-        virtual_keyboard_container->layer()->GetAnimator());
-    vk_layer_settings.SetPreemptionStrategy(strategy);
-    vk_layer_settings.SetTweenType(tween_type);
-    vk_layer_settings.SetTransitionDuration(duration);
-    virtual_keyboard_container->SetTransform(vk_transform);
+    aura::Window* display_identification_highlight =
+        root_window_->GetChildById(kShellWindowId_ScreenRotationContainer)
+            ->GetChildById(kShellWindowId_DisplayIdentificationHighlightWindow);
+
+    if (display_identification_highlight)
+      undo_transform_windows.push_back(display_identification_highlight);
+
+    for (auto* window : undo_transform_windows) {
+      ui::ScopedLayerAnimationSettings layer_settings(
+          window->layer()->GetAnimator());
+      layer_settings.SetPreemptionStrategy(strategy);
+      layer_settings.SetTweenType(tween_type);
+      layer_settings.SetTransitionDuration(duration);
+      window->SetTransform(inverse_transform);
+    }
   }
 
   RootWindowController::ForWindow(root_window_)
@@ -725,7 +735,7 @@ void MagnificationController::OnMouseMove(const gfx::Point& location) {
 
   // Reduce the bottom margin if the keyboard is visible.
   bool reduce_bottom_margin =
-      keyboard::KeyboardController::Get()->IsKeyboardVisible();
+      keyboard::KeyboardUIController::Get()->IsKeyboardVisible();
 
   MoveMagnifierWindowFollowPoint(mouse, margin, margin, margin, margin,
                                  reduce_bottom_margin);
@@ -821,9 +831,25 @@ bool MagnificationController::ProcessGestures() {
       if (!consume_touch_event_)
         cancel_pressed_touches = true;
     } else if (gesture->type() == ui::ET_GESTURE_SCROLL_UPDATE) {
+      // The scroll offsets are apparently in pixels and does not take into
+      // account the display rotation. Convert back to dip by applying the
+      // inverse transform of the rotation (these are offsets, so we don't care
+      // about scale or translation. We'll take care of the scale below).
+      // https://crbug.com/867537.
+      const auto display =
+          display::Screen::GetScreen()->GetDisplayNearestWindow(root_window_);
+      gfx::Transform rotation_transform;
+      rotation_transform.Rotate(display.PanelRotationAsDegree());
+      gfx::Transform rotation_inverse_transform;
+      const bool result =
+          rotation_transform.GetInverse(&rotation_inverse_transform);
+      DCHECK(result);
+      gfx::PointF scroll(details.scroll_x(), details.scroll_y());
+      rotation_inverse_transform.TransformPoint(&scroll);
+
       // Divide by scale to keep scroll speed same at any scale.
-      float new_x = origin_.x() + (-1.0f * details.scroll_x() / scale_);
-      float new_y = origin_.y() + (-1.0f * details.scroll_y() / scale_);
+      float new_x = origin_.x() + (-scroll.x() / scale_);
+      float new_y = origin_.y() + (-scroll.y() / scale_);
 
       RedrawDIP(gfx::PointF(new_x, new_y), scale_, 0,
                 kDefaultAnimationTweenType);
@@ -903,8 +929,8 @@ void MagnificationController::MoveMagnifierWindowCenterPoint(
   gfx::Rect window_rect = GetViewportRect();
 
   // Reduce the viewport bounds if the keyboard is up.
-  if (keyboard::KeyboardController::Get()->IsEnabled()) {
-    gfx::Rect keyboard_rect = keyboard::KeyboardController::Get()
+  if (keyboard::KeyboardUIController::Get()->IsEnabled()) {
+    gfx::Rect keyboard_rect = keyboard::KeyboardUIController::Get()
                                   ->GetKeyboardWindow()
                                   ->GetBoundsInScreen();
     window_rect.set_height(window_rect.height() -

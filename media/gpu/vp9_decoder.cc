@@ -7,39 +7,88 @@
 #include <memory>
 
 #include "base/bind.h"
+#include "base/feature_list.h"
 #include "base/logging.h"
+#include "build/build_config.h"
 #include "media/base/limits.h"
+#include "media/base/media_switches.h"
 #include "media/gpu/vp9_decoder.h"
 
 namespace media {
+
+namespace {
+std::vector<uint32_t> GetSpatialLayerFrameSize(
+    const DecoderBuffer& decoder_buffer) {
+#if defined(ARCH_CPU_X86_FAMILY) && defined(OS_CHROMEOS)
+  const uint32_t* cue_data =
+      reinterpret_cast<const uint32_t*>(decoder_buffer.side_data());
+  if (!cue_data) {
+    return {};
+  }
+  if (!base::FeatureList::IsEnabled(media::kVp9kSVCHWDecoding)) {
+    DLOG(ERROR) << "Vp9Parser doesn't support parsing SVC stream";
+    return {};
+  }
+
+  size_t num_of_layers = decoder_buffer.side_data_size() / sizeof(uint32_t);
+  if (num_of_layers > 3u) {
+    DLOG(WARNING) << "The maximum number of spatial layers in VP9 is three";
+    return {};
+  }
+  return std::vector<uint32_t>(cue_data, cue_data + num_of_layers);
+#endif  // defined(ARCH_CPU_X86_FAMILY) && defined(OS_CHROMEOS)
+  return {};
+}
+
+VideoCodecProfile VP9ProfileToVideoCodecProfile(uint8_t profile) {
+  switch (profile) {
+    case 0:
+      return VP9PROFILE_PROFILE0;
+    case 1:
+      return VP9PROFILE_PROFILE1;
+    case 2:
+      return VP9PROFILE_PROFILE2;
+    case 3:
+      return VP9PROFILE_PROFILE3;
+    default:
+      return VIDEO_CODEC_PROFILE_UNKNOWN;
+  }
+}
+
+}  // namespace
 
 VP9Decoder::VP9Accelerator::VP9Accelerator() {}
 
 VP9Decoder::VP9Accelerator::~VP9Accelerator() {}
 
 VP9Decoder::VP9Decoder(std::unique_ptr<VP9Accelerator> accelerator,
+                       VideoCodecProfile profile,
                        const VideoColorSpace& container_color_space)
     : state_(kNeedStreamMetadata),
       container_color_space_(container_color_space),
+      // TODO(hiroh): Set profile to UNKNOWN.
+      profile_(profile),
       accelerator_(std::move(accelerator)),
-      parser_(accelerator_->IsFrameContextRequired()) {
-}
+      parser_(accelerator_->IsFrameContextRequired()) {}
 
 VP9Decoder::~VP9Decoder() = default;
 
-void VP9Decoder::SetStream(int32_t id,
-                           const uint8_t* ptr,
-                           size_t size,
-                           const DecryptConfig* decrypt_config) {
+void VP9Decoder::SetStream(int32_t id, const DecoderBuffer& decoder_buffer) {
+  const uint8_t* ptr = decoder_buffer.data();
+  const size_t size = decoder_buffer.data_size();
+  const DecryptConfig* decrypt_config = decoder_buffer.decrypt_config();
+
   DCHECK(ptr);
   DCHECK(size);
   DVLOG(4) << "New input stream id: " << id << " at: " << (void*)ptr
            << " size: " << size;
   stream_id_ = id;
   if (decrypt_config) {
-    parser_.SetStream(ptr, size, decrypt_config->Clone());
+    parser_.SetStream(ptr, size, GetSpatialLayerFrameSize(decoder_buffer),
+                      decrypt_config->Clone());
   } else {
-    parser_.SetStream(ptr, size, nullptr);
+    parser_.SetStream(ptr, size, GetSpatialLayerFrameSize(decoder_buffer),
+                      nullptr);
   }
 }
 
@@ -56,8 +105,9 @@ void VP9Decoder::Reset() {
 
   parser_.Reset();
 
-  if (state_ == kDecoding)
+  if (state_ == kDecoding) {
     state_ = kAfterReset;
+  }
 }
 
 VP9Decoder::DecodeResult VP9Decoder::Decode() {
@@ -65,12 +115,14 @@ VP9Decoder::DecodeResult VP9Decoder::Decode() {
     // Read a new frame header if one is not awaiting decoding already.
     std::unique_ptr<DecryptConfig> decrypt_config;
     if (!curr_frame_hdr_) {
+      gfx::Size allocate_size;
       std::unique_ptr<Vp9FrameHeader> hdr(new Vp9FrameHeader());
       Vp9Parser::Result res =
-          parser_.ParseNextFrame(hdr.get(), &decrypt_config);
+          parser_.ParseNextFrame(hdr.get(), &allocate_size, &decrypt_config);
       switch (res) {
         case Vp9Parser::kOk:
           curr_frame_hdr_ = std::move(hdr);
+          curr_frame_size_ = allocate_size;
           break;
 
         case Vp9Parser::kEOStream:
@@ -133,15 +185,30 @@ VP9Decoder::DecodeResult VP9Decoder::Decode() {
       continue;
     }
 
-    gfx::Size new_pic_size(curr_frame_hdr_->frame_width,
-                           curr_frame_hdr_->frame_height);
-    DCHECK(!new_pic_size.IsEmpty());
+    gfx::Size new_pic_size = curr_frame_size_;
+    gfx::Rect new_render_rect(curr_frame_hdr_->render_width,
+                              curr_frame_hdr_->render_height);
+    // For safety, check the validity of render size or leave it as pic size.
+    if (!gfx::Rect(new_pic_size).Contains(new_render_rect)) {
+      DVLOG(1) << "Render size exceeds picture size. render size: "
+               << new_render_rect.ToString()
+               << ", picture size: " << new_pic_size.ToString();
+      new_render_rect = gfx::Rect(new_pic_size);
+    }
+    VideoCodecProfile new_profile =
+        VP9ProfileToVideoCodecProfile(curr_frame_hdr_->profile);
+    if (new_profile == VIDEO_CODEC_PROFILE_UNKNOWN) {
+      VLOG(1) << "Invalid profile: " << curr_frame_hdr_->profile;
+      return kDecodeError;
+    }
 
-    if (new_pic_size != pic_size_) {
-      DVLOG(1) << "New resolution: " << new_pic_size.ToString();
+    DCHECK(!new_pic_size.IsEmpty());
+    if (new_pic_size != pic_size_ || new_profile != profile_) {
+      DVLOG(1) << "New profile: " << GetProfileName(new_profile)
+               << ", New resolution: " << new_pic_size.ToString();
 
       if (!curr_frame_hdr_->IsKeyframe() &&
-          (curr_frame_hdr_->IsIntra() && pic_size_.IsEmpty())) {
+          !(curr_frame_hdr_->IsIntra() && pic_size_.IsEmpty())) {
         // TODO(posciak): This is doable, but requires a few modifications to
         // VDA implementations to allow multiple picture buffer sets in flight.
         // http://crbug.com/832264
@@ -159,27 +226,20 @@ VP9Decoder::DecodeResult VP9Decoder::Decode() {
 
       // TODO(posciak): This requires us to be on a keyframe (see above) and is
       // required, because VDA clients expect all surfaces to be returned before
-      // they can cycle surface sets after receiving kAllocateNewSurfaces.
+      // they can cycle surface sets after receiving kConfigChange.
       // This is only an implementation detail of VDAs and can be improved.
       ref_frames_.Clear();
 
       pic_size_ = new_pic_size;
+      visible_rect_ = new_render_rect;
+      profile_ = new_profile;
       size_change_failure_counter_ = 0;
-      return kAllocateNewSurfaces;
+      return kConfigChange;
     }
 
     scoped_refptr<VP9Picture> pic = accelerator_->CreateVP9Picture();
-    if (!pic)
+    if (!pic) {
       return kRanOutOfSurfaces;
-
-    gfx::Rect new_render_rect(curr_frame_hdr_->render_width,
-                              curr_frame_hdr_->render_height);
-    // For safety, check the validity of render size or leave it as (0, 0).
-    if (!gfx::Rect(pic_size_).Contains(new_render_rect)) {
-      DVLOG(1) << "Render size exceeds picture size. render size: "
-               << new_render_rect.ToString()
-               << ", picture size: " << pic_size_.ToString();
-      new_render_rect = gfx::Rect();
     }
     DVLOG(2) << "Render resolution: " << new_render_rect.ToString();
 
@@ -196,7 +256,7 @@ VP9Decoder::DecodeResult VP9Decoder::Decode() {
     }
     pic->frame_hdr = std::move(curr_frame_hdr_);
 
-    if (!DecodeAndOutputPicture(pic)) {
+    if (!DecodeAndOutputPicture(std::move(pic))) {
       SetError();
       return kDecodeError;
     }
@@ -204,42 +264,47 @@ VP9Decoder::DecodeResult VP9Decoder::Decode() {
 }
 
 void VP9Decoder::UpdateFrameContext(
-    const scoped_refptr<VP9Picture>& pic,
-    const base::Callback<void(const Vp9FrameContext&)>& context_refresh_cb) {
+    scoped_refptr<VP9Picture> pic,
+    Vp9Parser::ContextRefreshCallback context_refresh_cb) {
   DCHECK(context_refresh_cb);
   Vp9FrameContext frame_ctx;
   memset(&frame_ctx, 0, sizeof(frame_ctx));
 
-  if (!accelerator_->GetFrameContext(pic, &frame_ctx)) {
+  if (!accelerator_->GetFrameContext(std::move(pic), &frame_ctx)) {
     SetError();
     return;
   }
 
-  context_refresh_cb.Run(frame_ctx);
+  std::move(context_refresh_cb).Run(frame_ctx);
 }
 
 bool VP9Decoder::DecodeAndOutputPicture(scoped_refptr<VP9Picture> pic) {
   DCHECK(!pic_size_.IsEmpty());
   DCHECK(pic->frame_hdr);
 
-  base::Closure done_cb;
-  const auto& context_refresh_cb =
+  base::OnceClosure done_cb;
+  Vp9Parser::ContextRefreshCallback context_refresh_cb =
       parser_.GetContextRefreshCb(pic->frame_hdr->frame_context_idx);
-  if (context_refresh_cb)
-    done_cb = base::Bind(&VP9Decoder::UpdateFrameContext,
-                         base::Unretained(this), pic, context_refresh_cb);
+  if (context_refresh_cb) {
+    done_cb =
+        base::BindOnce(&VP9Decoder::UpdateFrameContext, base::Unretained(this),
+                       pic, std::move(context_refresh_cb));
+  }
 
   const Vp9Parser::Context& context = parser_.context();
   if (!accelerator_->SubmitDecode(pic, context.segmentation(),
-                                  context.loop_filter(), ref_frames_, done_cb))
+                                  context.loop_filter(), ref_frames_,
+                                  std::move(done_cb))) {
     return false;
-
-  if (pic->frame_hdr->show_frame) {
-    if (!accelerator_->OutputPicture(pic))
-      return false;
   }
 
-  ref_frames_.Refresh(pic);
+  if (pic->frame_hdr->show_frame) {
+    if (!accelerator_->OutputPicture(pic)) {
+      return false;
+    }
+  }
+
+  ref_frames_.Refresh(std::move(pic));
   return true;
 }
 
@@ -250,6 +315,14 @@ void VP9Decoder::SetError() {
 
 gfx::Size VP9Decoder::GetPicSize() const {
   return pic_size_;
+}
+
+gfx::Rect VP9Decoder::GetVisibleRect() const {
+  return visible_rect_;
+}
+
+VideoCodecProfile VP9Decoder::GetProfile() const {
+  return profile_;
 }
 
 size_t VP9Decoder::GetRequiredNumOfPictures() const {

@@ -20,7 +20,7 @@ class MODULES_EXPORT MediaControlSliderElement
   USING_GARBAGE_COLLECTED_MIXIN(MediaControlSliderElement);
 
  public:
-  void Trace(blink::Visitor*) override;
+  void Trace(Visitor*) override;
 
   // Stores the position of the segment in proportion from 0.0 to 1.0.
   struct Position {
@@ -33,7 +33,12 @@ class MODULES_EXPORT MediaControlSliderElement
   // simplicity; deliberately ignores pinch zoom's pageScaleFactor).
   int TrackWidth();
 
+  void OnControlsShown();
+  void OnControlsHidden();
+
  protected:
+  friend class MediaControlsImplTest;
+
   class MediaControlSliderElementResizeObserverDelegate;
 
   MediaControlSliderElement(MediaControlsImpl&);

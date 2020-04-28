@@ -4,14 +4,13 @@
 
 #include "chrome/browser/performance_manager/observers/metrics_collector.h"
 
+#include "base/memory/ptr_util.h"
 #include "base/test/metrics/histogram_tester.h"
-#include "base/test/simple_test_tick_clock.h"
 #include "build/build_config.h"
-#include "chrome/browser/performance_manager/graph/frame_node_impl.h"
-#include "chrome/browser/performance_manager/graph/graph_test_harness.h"
-#include "chrome/browser/performance_manager/graph/page_node_impl.h"
-#include "chrome/browser/performance_manager/graph/process_node_impl.h"
-#include "chrome/browser/performance_manager/performance_manager_clock.h"
+#include "components/performance_manager/graph/frame_node_impl.h"
+#include "components/performance_manager/graph/page_node_impl.h"
+#include "components/performance_manager/graph/process_node_impl.h"
+#include "components/performance_manager/test_support/graph_test_harness.h"
 #include "components/ukm/test_ukm_recorder.h"
 #include "url/gurl.h"
 
@@ -21,7 +20,13 @@ const char kResponsivenessMeasurement[] = "ResponsivenessMeasurement";
 const char kExpectedQueueingTime[] = "ExpectedTaskQueueingDuration";
 const base::TimeDelta kTestMetricsReportDelayTimeout =
     kMetricsReportDelayTimeout + base::TimeDelta::FromSeconds(1);
-const GURL kDummyUrl("http://www.example.org");
+const std::string kHtmlMimeType = "text/html";
+
+// TODO(https://crbug.com/1042727): Fix test GURL scoping and remove this getter
+// function.
+GURL DummyUrl() {
+  return GURL("http://www.example.org");
+}
 
 // TODO(crbug.com/759905) Enable on Windows once this bug is fixed.
 #if defined(OS_WIN)
@@ -34,38 +39,33 @@ class MAYBE_MetricsCollectorTest : public GraphTestHarness {
   MAYBE_MetricsCollectorTest() : GraphTestHarness() {}
 
   void SetUp() override {
-    metrics_collector_ = std::make_unique<MetricsCollector>();
-    PerformanceManagerClock::SetClockForTesting(&clock_);
-
-    // Sets a valid starting time.
-    clock_.SetNowTicks(base::TimeTicks::Now());
-    graph()->RegisterObserver(metrics_collector_.get());
+    metrics_collector_ = new MetricsCollector();
+    graph()->PassToGraph(base::WrapUnique(metrics_collector_));
   }
 
   void TearDown() override {
-    graph()->UnregisterObserver(metrics_collector_.get());
-    PerformanceManagerClock::ResetClockForTesting();
+    graph()->TakeFromGraph(metrics_collector_);  // Destroy the observer.
+    metrics_collector_ = nullptr;
+    GraphTestHarness::TearDown();
   }
 
  protected:
   static constexpr uint64_t kDummyID = 1u;
 
-  void AdvanceClock(base::TimeDelta delta) { clock_.Advance(delta); }
 
   base::HistogramTester histogram_tester_;
-  base::SimpleTestTickClock clock_;
 
  private:
-  std::unique_ptr<MetricsCollector> metrics_collector_;
+  MetricsCollector* metrics_collector_ = nullptr;
 
   DISALLOW_COPY_AND_ASSIGN(MAYBE_MetricsCollectorTest);
 };
 
 TEST_F(MAYBE_MetricsCollectorTest, FromBackgroundedToFirstTitleUpdatedUMA) {
-  auto page_node = CreateNode<PageNodeImpl>(nullptr);
+  auto page_node = CreateNode<PageNodeImpl>();
 
-  page_node->OnMainFrameNavigationCommitted(PerformanceManagerClock::NowTicks(),
-                                            kDummyID, kDummyUrl);
+  page_node->OnMainFrameNavigationCommitted(
+      false, base::TimeTicks::Now(), kDummyID, DummyUrl(), kHtmlMimeType);
   AdvanceClock(kTestMetricsReportDelayTimeout);
 
   page_node->SetIsVisible(true);
@@ -95,10 +95,10 @@ TEST_F(MAYBE_MetricsCollectorTest, FromBackgroundedToFirstTitleUpdatedUMA) {
 
 TEST_F(MAYBE_MetricsCollectorTest,
        FromBackgroundedToFirstTitleUpdatedUMA5MinutesTimeout) {
-  auto page_node = CreateNode<PageNodeImpl>(nullptr);
+  auto page_node = CreateNode<PageNodeImpl>();
 
-  page_node->OnMainFrameNavigationCommitted(PerformanceManagerClock::NowTicks(),
-                                            kDummyID, kDummyUrl);
+  page_node->OnMainFrameNavigationCommitted(
+      false, base::TimeTicks::Now(), kDummyID, DummyUrl(), kHtmlMimeType);
   page_node->SetIsVisible(false);
   page_node->OnTitleUpdated();
   // The page is within 5 minutes after main frame navigation was committed,
@@ -114,12 +114,11 @@ TEST_F(MAYBE_MetricsCollectorTest,
 TEST_F(MAYBE_MetricsCollectorTest,
        FromBackgroundedToFirstNonPersistentNotificationCreatedUMA) {
   auto process_node = CreateNode<ProcessNodeImpl>();
-  auto page_node = CreateNode<PageNodeImpl>(nullptr);
-  auto frame_node = CreateNode<FrameNodeImpl>(process_node.get(),
-                                              page_node.get(), nullptr, 0);
+  auto page_node = CreateNode<PageNodeImpl>();
+  auto frame_node = CreateFrameNodeAutoId(process_node.get(), page_node.get());
 
-  page_node->OnMainFrameNavigationCommitted(PerformanceManagerClock::NowTicks(),
-                                            kDummyID, kDummyUrl);
+  page_node->OnMainFrameNavigationCommitted(
+      false, base::TimeTicks::Now(), kDummyID, DummyUrl(), kHtmlMimeType);
   AdvanceClock(kTestMetricsReportDelayTimeout);
 
   page_node->SetIsVisible(true);
@@ -151,12 +150,11 @@ TEST_F(
     MAYBE_MetricsCollectorTest,
     FromBackgroundedToFirstNonPersistentNotificationCreatedUMA5MinutesTimeout) {
   auto process_node = CreateNode<ProcessNodeImpl>();
-  auto page_node = CreateNode<PageNodeImpl>(nullptr);
-  auto frame_node = CreateNode<FrameNodeImpl>(process_node.get(),
-                                              page_node.get(), nullptr, 0);
+  auto page_node = CreateNode<PageNodeImpl>();
+  auto frame_node = CreateFrameNodeAutoId(process_node.get(), page_node.get());
 
-  page_node->OnMainFrameNavigationCommitted(PerformanceManagerClock::NowTicks(),
-                                            kDummyID, kDummyUrl);
+  page_node->OnMainFrameNavigationCommitted(
+      false, base::TimeTicks::Now(), kDummyID, DummyUrl(), kHtmlMimeType);
   page_node->SetIsVisible(false);
   frame_node->OnNonPersistentNotificationCreated();
   // The page is within 5 minutes after main frame navigation was committed,
@@ -170,10 +168,10 @@ TEST_F(
 }
 
 TEST_F(MAYBE_MetricsCollectorTest, FromBackgroundedToFirstFaviconUpdatedUMA) {
-  auto page_node = CreateNode<PageNodeImpl>(nullptr);
+  auto page_node = CreateNode<PageNodeImpl>();
 
-  page_node->OnMainFrameNavigationCommitted(PerformanceManagerClock::NowTicks(),
-                                            kDummyID, kDummyUrl);
+  page_node->OnMainFrameNavigationCommitted(
+      false, base::TimeTicks::Now(), kDummyID, DummyUrl(), kHtmlMimeType);
   AdvanceClock(kTestMetricsReportDelayTimeout);
 
   page_node->SetIsVisible(true);
@@ -203,10 +201,10 @@ TEST_F(MAYBE_MetricsCollectorTest, FromBackgroundedToFirstFaviconUpdatedUMA) {
 
 TEST_F(MAYBE_MetricsCollectorTest,
        FromBackgroundedToFirstFaviconUpdatedUMA5MinutesTimeout) {
-  auto page_node = CreateNode<PageNodeImpl>(nullptr);
+  auto page_node = CreateNode<PageNodeImpl>();
 
-  page_node->OnMainFrameNavigationCommitted(PerformanceManagerClock::NowTicks(),
-                                            kDummyID, kDummyUrl);
+  page_node->OnMainFrameNavigationCommitted(
+      false, base::TimeTicks::Now(), kDummyID, DummyUrl(), kHtmlMimeType);
   page_node->SetIsVisible(false);
   page_node->OnFaviconUpdated();
   // The page is within 5 minutes after main frame navigation was committed,
@@ -222,9 +220,8 @@ TEST_F(MAYBE_MetricsCollectorTest,
 // Flaky test: https://crbug.com/833028
 TEST_F(MAYBE_MetricsCollectorTest, ResponsivenessMetric) {
   auto process_node = CreateNode<ProcessNodeImpl>();
-  auto page_node = CreateNode<PageNodeImpl>(nullptr);
-  auto frame_node = CreateNode<FrameNodeImpl>(process_node.get(),
-                                              page_node.get(), nullptr, 0);
+  auto page_node = CreateNode<PageNodeImpl>();
+  auto frame_node = CreateFrameNodeAutoId(process_node.get(), page_node.get());
 
   ukm::TestUkmRecorder ukm_recorder;
   graph()->set_ukm_recorder(&ukm_recorder);
@@ -233,8 +230,8 @@ TEST_F(MAYBE_MetricsCollectorTest, ResponsivenessMetric) {
   GURL url = GURL("https://google.com/foobar");
   ukm_recorder.UpdateSourceURL(id, url);
   page_node->SetUkmSourceId(id);
-  page_node->OnMainFrameNavigationCommitted(PerformanceManagerClock::NowTicks(),
-                                            kDummyID, kDummyUrl);
+  page_node->OnMainFrameNavigationCommitted(
+      false, base::TimeTicks::Now(), kDummyID, DummyUrl(), kHtmlMimeType);
 
   for (int count = 1; count < kDefaultFrequencyUkmEQTReported; ++count) {
     process_node->SetExpectedTaskQueueingDuration(

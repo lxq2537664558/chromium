@@ -17,10 +17,17 @@
 #include "base/strings/stringprintf.h"
 #include "base/threading/sequenced_task_runner_handle.h"
 #include "base/unguessable_token.h"
+#include "chrome/browser/policy/profile_policy_connector.h"
+#include "chrome/browser/profiles/profile.h"
+#include "components/policy/core/common/policy_service.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/render_process_host.h"
 #include "third_party/zlib/zlib.h"
+
+#if defined OS_CHROMEOS
+#include "chrome/browser/chromeos/profiles/profile_helper.h"
+#endif
 
 namespace webrtc_event_logging {
 
@@ -44,19 +51,29 @@ static_assert(kInvalidWebRtcEventLogWebAppId < kMinWebRtcEventLogWebAppId ||
 const char kRemoteBoundWebRtcEventLogFileNamePrefix[] = "webrtc_event_log";
 
 // Important! These values may be relied on by web-apps. Do not change.
+const char kStartRemoteLoggingFailureAlreadyLogging[] = "Already logging.";
+const char kStartRemoteLoggingFailureDeadRenderProcessHost[] =
+    "RPH already dead.";
 const char kStartRemoteLoggingFailureFeatureDisabled[] = "Feature disabled.";
-const char kStartRemoteLoggingFailureUnlimitedSizeDisallowed[] =
-    "Unlimited size disallowed.";
-const char kStartRemoteLoggingFailureMaxSizeTooSmall[] = "Max size too small.";
+const char kStartRemoteLoggingFailureFileCreationError[] =
+    "Could not create file.";
+const char kStartRemoteLoggingFailureFilePathUsedHistory[] =
+    "Used history file path.";
+const char kStartRemoteLoggingFailureFilePathUsedLog[] = "Used log file path.";
+const char kStartRemoteLoggingFailureIllegalWebAppId[] = "Illegal web-app ID.";
+const char kStartRemoteLoggingFailureLoggingDisabledBrowserContext[] =
+    "Disabled for browser context.";
 const char kStartRemoteLoggingFailureMaxSizeTooLarge[] =
     "Excessively large max log size.";
+const char kStartRemoteLoggingFailureMaxSizeTooSmall[] = "Max size too small.";
+const char kStartRemoteLoggingFailureNoAdditionalActiveLogsAllowed[] =
+    "No additional active logs allowed.";
 const char kStartRemoteLoggingFailureOutputPeriodMsTooLarge[] =
     "Excessively large output period (ms).";
-const char kStartRemoteLoggingFailureIllegalWebAppId[] = "Illegal web-app ID.";
 const char kStartRemoteLoggingFailureUnknownOrInactivePeerConnection[] =
     "Unknown or inactive peer connection.";
-const char kStartRemoteLoggingFailureAlreadyLogging[] = "Already logging.";
-const char kStartRemoteLoggingFailureGeneric[] = "Unspecified error.";
+const char kStartRemoteLoggingFailureUnlimitedSizeDisallowed[] =
+    "Unlimited size disallowed.";
 
 const BrowserContextId kNullBrowserContextId =
     reinterpret_cast<BrowserContextId>(nullptr);
@@ -67,6 +84,10 @@ void UmaRecordWebRtcEventLoggingApi(WebRtcEventLoggingApiUma result) {
 
 void UmaRecordWebRtcEventLoggingUpload(WebRtcEventLoggingUploadUma result) {
   base::UmaHistogramEnumeration("WebRtcEventLogging.Upload", result);
+}
+
+void UmaRecordWebRtcEventLoggingNetErrorType(int net_error) {
+  base::UmaHistogramSparse("WebRtcEventLogging.NetError", net_error);
 }
 
 namespace {
@@ -994,6 +1015,43 @@ size_t ExtractRemoteBoundWebRtcEventLogWebAppIdFromPath(
   base::StringPiece id_str(&filename[kPrefixLength + 1], kWebAppIdLength);
 
   return ExtractWebAppId(id_str);
+}
+
+bool DoesProfileDefaultToLoggingEnabled(const Profile* const profile) {
+// For Chrome OS, exclude special profiles and users.
+#if defined(OS_CHROMEOS)
+  const user_manager::User* user =
+      chromeos::ProfileHelper::Get()->GetUserByProfile(profile);
+  // We do not log an error here since this can happen in several cases,
+  // e.g. for signin profiles or lock screen app profiles.
+  if (!user) {
+    return false;
+  }
+  const user_manager::UserType user_type = user->GetType();
+  if (user_type != user_manager::USER_TYPE_REGULAR) {
+    return false;
+  }
+  if (chromeos::ProfileHelper::IsEphemeralUserProfile(profile)) {
+    return false;
+  }
+#endif
+
+  // We only want a default of true for regular (i.e. logged-in) profiles
+  // receiving cloud-based user-level enterprise policies. Supervised (child)
+  // profiles are considered regular and can also receive cloud policies in some
+  // cases (e.g. on Chrome OS). Although currently this should be covered by the
+  // other checks, let's explicitly check to anticipate edge cases and make the
+  // requirement explicit.
+  if (!profile->IsRegularProfile() || profile->IsSupervised()) {
+    return false;
+  }
+
+  const policy::ProfilePolicyConnector* const policy_connector =
+      profile->GetProfilePolicyConnector();
+
+  return policy_connector->policy_service()->IsInitializationComplete(
+             policy::POLICY_DOMAIN_CHROME) &&
+         policy_connector->IsManaged();
 }
 
 }  // namespace webrtc_event_logging

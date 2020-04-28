@@ -12,16 +12,16 @@ Are you a Google employee? See
 
 ## System requirements
 
-*   A 64-bit Mac running 10.12+.
-*   [Xcode](https://developer.apple.com/xcode) 8+
-*   The OS X 10.12 SDK. Run
+*   A 64-bit Mac running 10.14+.
+*   [Xcode](https://developer.apple.com/xcode) 11+
+*   The OS X 10.15 SDK. Run
 
     ```shell
     $ ls `xcode-select -p`/Platforms/MacOSX.platform/Developer/SDKs
     ```
 
     to check whether you have it.  Building with a newer SDK works too, but
-    the releases currently use the 10.12 SDK.
+    the releases currently use the 10.15 SDK.
 
 ## Install `depot_tools`
 
@@ -31,9 +31,10 @@ Clone the `depot_tools` repository:
 $ git clone https://chromium.googlesource.com/chromium/tools/depot_tools.git
 ```
 
-Add `depot_tools` to the end of your PATH (you will probably want to put this
-in your `~/.bashrc` or `~/.zshrc`). Assuming you cloned `depot_tools` to
-`/path/to/depot_tools`:
+Add `depot_tools` to the end of your PATH (you will probably want to put this in
+your `~/.bash_profile` or `~/.zshrc`). Assuming you cloned `depot_tools` to
+`/path/to/depot_tools` (note: you **must** use the absolute path or Python will
+not be able to find infra tools):
 
 ```shell
 $ export PATH="$PATH:/path/to/depot_tools"
@@ -53,7 +54,6 @@ has no spaces):
 
 ```shell
 $ mkdir chromium && cd chromium
-$ git config --global core.precomposeUnicode true
 ```
 
 Run the `fetch` tool from `depot_tools` to check out the code and its
@@ -64,7 +64,8 @@ $ fetch chromium
 ```
 
 If you don't need the full repo history, you can save time by using
-`fetch --no-history chromium`.
+`fetch --no-history chromium`. You can call `git fetch --unshallow` to retrieve
+the full history later.
 
 Expect the command to take 30 minutes on even a fast connection, and many
 hours on slower ones.
@@ -102,7 +103,7 @@ $ gn gen out/Default
   The default will be a debug component build matching the current host
   operating system and CPU.
 * For more info on GN, run `gn help` on the command line or read the
-  [quick start guide](../tools/gn/docs/quick_start.md).
+  [quick start guide](https://gn.googlesource.com/gn/+/master/docs/quick_start.md).
 
 
 ### Faster builds
@@ -138,15 +139,6 @@ symbol_level = 0
 in your args.gn to disable debug symbols altogether.  This makes both full
 rebuilds and linking faster (at the cost of not getting symbolized backtraces
 in gdb).
-
-#### Jumbo/Unity builds
-
-Jumbo builds merge many translation units ("source files") and compile them
-together. Since a large portion of Chromium's code is in shared header files,
-this dramatically reduces the total amount of work needed. Check out the
-[Jumbo / Unity builds](jumbo.md) for more information.
-
-Enable jumbo builds by setting the GN arg `use_jumbo_build=true`.
 
 #### CCache
 

@@ -8,8 +8,9 @@ import android.accounts.Account;
 import android.accounts.AuthenticatorDescription;
 import android.app.Activity;
 import android.content.Intent;
-import android.support.annotation.IntDef;
-import android.support.annotation.Nullable;
+
+import androidx.annotation.IntDef;
+import androidx.annotation.Nullable;
 
 import org.junit.Assert;
 
@@ -18,8 +19,8 @@ import org.chromium.base.Log;
 import org.chromium.base.ObserverList;
 import org.chromium.base.ThreadUtils;
 import org.chromium.components.signin.AccountManagerDelegate;
-import org.chromium.components.signin.AccountManagerDelegateException;
-import org.chromium.components.signin.AccountManagerFacade;
+import org.chromium.components.signin.AccountManagerFacadeProvider;
+import org.chromium.components.signin.AccountUtils;
 import org.chromium.components.signin.AccountsChangeObserver;
 import org.chromium.components.signin.AuthException;
 import org.chromium.components.signin.ProfileDataSource;
@@ -60,14 +61,33 @@ public class FakeAccountManagerDelegate implements AccountManagerDelegate {
     /** Use {@link FakeProfileDataSource}. */
     public static final int ENABLE_PROFILE_DATA_SOURCE = 1;
 
+    /** Controls whether FakeAccountManagerDelegate should block get accounts. */
+    @IntDef({ENABLE_BLOCK_GET_ACCOUNTS, DISABLE_BLOCK_GET_ACCOUNTS})
+    @Retention(RetentionPolicy.SOURCE)
+    public @interface BlockGetAccountsFlag {}
+
+    /** Disables block get accounts: {@link #getAccountsSync()} will return immediately. */
+    public static final int DISABLE_BLOCK_GET_ACCOUNTS = 0;
+    /** Block get accounts until {@link #unblockGetAccounts()} is called. */
+    public static final int ENABLE_BLOCK_GET_ACCOUNTS = 1;
+
     private final Set<AccountHolder> mAccounts = new LinkedHashSet<>();
     private final ObserverList<AccountsChangeObserver> mObservers = new ObserverList<>();
     private boolean mRegisterObserversCalled;
     private FakeProfileDataSource mFakeProfileDataSource;
+    private final CountDownLatch mBlockGetAccounts = new CountDownLatch(1);
 
     public FakeAccountManagerDelegate(@ProfileDataSourceFlag int profileDataSourceFlag) {
+        this(profileDataSourceFlag, DISABLE_BLOCK_GET_ACCOUNTS);
+    }
+
+    public FakeAccountManagerDelegate(@ProfileDataSourceFlag int profileDataSourceFlag,
+            @BlockGetAccountsFlag int blockGetAccountsFlag) {
         if (profileDataSourceFlag == ENABLE_PROFILE_DATA_SOURCE) {
             mFakeProfileDataSource = new FakeProfileDataSource();
+        }
+        if (blockGetAccountsFlag == DISABLE_BLOCK_GET_ACCOUNTS) {
+            mBlockGetAccounts.countDown();
         }
     }
 
@@ -81,6 +101,17 @@ public class FakeAccountManagerDelegate implements AccountManagerDelegate {
     @Override
     public ProfileDataSource getProfileDataSource() {
         return mFakeProfileDataSource;
+    }
+
+    @Nullable
+    @Override
+    public String getAccountGaiaId(String accountEmail) {
+        return "gaia-id-" + accountEmail.replace("@", "_at_");
+    }
+
+    @Override
+    public boolean isGooglePlayServicesAvailable() {
+        return true;
     }
 
     @Override
@@ -103,7 +134,14 @@ public class FakeAccountManagerDelegate implements AccountManagerDelegate {
     }
 
     @Override
-    public Account[] getAccountsSync() throws AccountManagerDelegateException {
+    public Account[] getAccountsSync() {
+        // Blocks thread that's trying to get accounts from the delegate.
+        try {
+            mBlockGetAccounts.await();
+        } catch (InterruptedException e) {
+            throw new RuntimeException(e);
+        }
+
         return getAccountsSyncNoThrow();
     }
 
@@ -115,6 +153,10 @@ public class FakeAccountManagerDelegate implements AccountManagerDelegate {
             }
         }
         return result.toArray(new Account[0]);
+    }
+
+    public void unblockGetAccounts() {
+        mBlockGetAccounts.countDown();
     }
 
     /**
@@ -172,7 +214,8 @@ public class FakeAccountManagerDelegate implements AccountManagerDelegate {
         try {
             ThreadUtils.runOnUiThreadBlocking(() -> {
                 addAccountHolderExplicitly(accountHolder);
-                AccountManagerFacade.get().waitForPendingUpdates(cacheUpdated::countDown);
+                AccountManagerFacadeProvider.getInstance().waitForPendingUpdates(
+                        cacheUpdated::countDown);
             });
 
             cacheUpdated.await();
@@ -194,7 +237,8 @@ public class FakeAccountManagerDelegate implements AccountManagerDelegate {
         try {
             ThreadUtils.runOnUiThreadBlocking(() -> {
                 removeAccountHolderExplicitly(accountHolder);
-                AccountManagerFacade.get().waitForPendingUpdates(cacheUpdated::countDown);
+                AccountManagerFacadeProvider.getInstance().waitForPendingUpdates(
+                        cacheUpdated::countDown);
             });
 
             cacheUpdated.await();
@@ -243,8 +287,8 @@ public class FakeAccountManagerDelegate implements AccountManagerDelegate {
 
     @Override
     public AuthenticatorDescription[] getAuthenticatorTypes() {
-        AuthenticatorDescription googleAuthenticator = new AuthenticatorDescription(
-                AccountManagerFacade.GOOGLE_ACCOUNT_TYPE, "p1", 0, 0, 0, 0);
+        AuthenticatorDescription googleAuthenticator =
+                new AuthenticatorDescription(AccountUtils.GOOGLE_ACCOUNT_TYPE, "p1", 0, 0, 0, 0);
 
         return new AuthenticatorDescription[] {googleAuthenticator};
     }

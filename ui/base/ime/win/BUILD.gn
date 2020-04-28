@@ -33,9 +33,7 @@ jumbo_component("win") {
 
   defines = [ "IS_UI_BASE_IME_WIN_IMPL" ]
 
-  public_deps = [
-    "//ui/base/ime",
-  ]
+  public_deps = [ "//ui/base/ime" ]
 
   deps = [
     "//ui/base",
@@ -43,6 +41,8 @@ jumbo_component("win") {
   ]
 
   libs = [ "imm32.lib" ]
+
+  ldflags = [ "/DELAYLOAD:imm32.dll" ]
 
   jumbo_excluded_sources = [
     # tsf_text_store.cc needs INITGUID to be defined before

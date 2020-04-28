@@ -172,9 +172,7 @@ void PasswordRequirementsSpecFetcherImpl::Fetch(GURL origin,
       })");
   auto resource_request = std::make_unique<network::ResourceRequest>();
   resource_request->url = GetUrlForRequirementsSpec(version_, hash_prefix);
-  resource_request->load_flags = net::LOAD_DO_NOT_SAVE_COOKIES |
-                                 net::LOAD_DO_NOT_SEND_COOKIES |
-                                 net::LOAD_DO_NOT_SEND_AUTH_DATA;
+  resource_request->credentials_mode = network::mojom::CredentialsMode::kOmit;
   lookup->url_loader = network::SimpleURLLoader::Create(
       std::move(resource_request), traffic_annotation);
   lookup->url_loader->DownloadToStringOfUnboundedSizeUntilCrashAndDie(
@@ -184,8 +182,8 @@ void PasswordRequirementsSpecFetcherImpl::Fetch(GURL origin,
 
   lookup->download_timer.Start(
       FROM_HERE, base::TimeDelta::FromMilliseconds(timeout_),
-      base::BindRepeating(&PasswordRequirementsSpecFetcherImpl::OnFetchTimeout,
-                          base::Unretained(this), hash_prefix));
+      base::BindOnce(&PasswordRequirementsSpecFetcherImpl::OnFetchTimeout,
+                     base::Unretained(this), hash_prefix));
 
   lookups_in_flight_[hash_prefix] = std::move(lookup);
 }

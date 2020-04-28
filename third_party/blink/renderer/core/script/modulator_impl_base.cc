@@ -4,20 +4,22 @@
 
 #include "third_party/blink/renderer/core/script/modulator_impl_base.h"
 
+#include "third_party/blink/public/mojom/devtools/console_message.mojom-blink.h"
 #include "third_party/blink/public/platform/task_type.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_promise_resolver.h"
 #include "third_party/blink/renderer/core/execution_context/execution_context.h"
-#include "third_party/blink/renderer/core/frame/use_counter.h"
+#include "third_party/blink/renderer/core/frame/web_feature.h"
 #include "third_party/blink/renderer/core/loader/modulescript/module_script_fetch_request.h"
 #include "third_party/blink/renderer/core/loader/modulescript/module_tree_linker.h"
 #include "third_party/blink/renderer/core/loader/modulescript/module_tree_linker_registry.h"
 #include "third_party/blink/renderer/core/script/dynamic_module_resolver.h"
 #include "third_party/blink/renderer/core/script/import_map.h"
+#include "third_party/blink/renderer/core/script/js_module_script.h"
 #include "third_party/blink/renderer/core/script/module_map.h"
 #include "third_party/blink/renderer/core/script/module_record_resolver_impl.h"
-#include "third_party/blink/renderer/core/script/module_script.h"
 #include "third_party/blink/renderer/core/script/parsed_specifier.h"
 #include "third_party/blink/renderer/platform/bindings/v8_throw_exception.h"
+#include "third_party/blink/renderer/platform/instrumentation/use_counter.h"
 #include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 
 namespace blink {
@@ -47,42 +49,8 @@ bool ModulatorImplBase::IsScriptingDisabled() const {
   return !GetExecutionContext()->CanExecuteScripts(kAboutToExecuteScript);
 }
 
-bool ModulatorImplBase::BuiltInModuleInfraEnabled() const {
-  return RuntimeEnabledFeatures::BuiltInModuleInfraEnabled(
-      GetExecutionContext());
-}
-
-bool ModulatorImplBase::BuiltInModuleEnabled(
-    blink::layered_api::Module module) const {
-  DCHECK(BuiltInModuleInfraEnabled());
-  switch (module) {
-    case blink::layered_api::Module::kBlank:
-      return true;
-    case blink::layered_api::Module::kVirtualScroller:
-      return RuntimeEnabledFeatures::BuiltInModuleAllEnabled();
-    case blink::layered_api::Module::kKvStorage:
-      return RuntimeEnabledFeatures::BuiltInModuleAllEnabled() ||
-             RuntimeEnabledFeatures::BuiltInModuleKvStorageEnabled(
-                 GetExecutionContext());
-  }
-}
-
-void ModulatorImplBase::BuiltInModuleUseCount(
-    blink::layered_api::Module module) const {
-  DCHECK(BuiltInModuleInfraEnabled());
-  DCHECK(BuiltInModuleEnabled(module));
-  switch (module) {
-    case blink::layered_api::Module::kBlank:
-      break;
-    case blink::layered_api::Module::kVirtualScroller:
-      UseCounter::Count(GetExecutionContext(),
-                        WebFeature::kBuiltInModuleVirtualScroller);
-      break;
-    case blink::layered_api::Module::kKvStorage:
-      UseCounter::Count(GetExecutionContext(),
-                        WebFeature::kBuiltInModuleKvStorage);
-      break;
-  }
+bool ModulatorImplBase::ImportMapsEnabled() const {
+  return RuntimeEnabledFeatures::ImportMapsEnabled(GetExecutionContext());
 }
 
 // <specdef label="fetch-a-module-script-tree"
@@ -92,46 +60,26 @@ void ModulatorImplBase::BuiltInModuleUseCount(
 void ModulatorImplBase::FetchTree(
     const KURL& url,
     ResourceFetcher* fetch_client_settings_object_fetcher,
-    mojom::RequestContextType destination,
+    mojom::RequestContextType context_type,
+    network::mojom::RequestDestination destination,
     const ScriptFetchOptions& options,
     ModuleScriptCustomFetchType custom_fetch_type,
     ModuleTreeClient* client) {
-  // <spec label="fetch-a-module-script-tree" step="2">Perform the internal
-  // module script graph fetching procedure given url, settings object,
-  // destination, options, settings object, visited set, "client", and with the
-  // top-level module fetch flag set. If the caller of this algorithm specified
-  // custom perform the fetch steps, pass those along as well.</spec>
-
-  // <spec label="fetch-a-module-worker-script-tree" step="3">Perform the
-  // internal module script graph fetching procedure given url, fetch client
-  // settings object, destination, options, module map settings object, visited
-  // set, "client", and with the top-level module fetch flag set. If the caller
-  // of this algorithm specified custom perform the fetch steps, pass those
-  // along as well.</spec>
-
   ModuleTreeLinker::Fetch(url, fetch_client_settings_object_fetcher,
-                          destination, options, this, custom_fetch_type,
-                          tree_linker_registry_, client);
-
-  // <spec label="fetch-a-module-script-tree" step="3">When the internal module
-  // script graph fetching procedure asynchronously completes with result,
-  // asynchronously complete this algorithm with result.</spec>
-
-  // <spec label="fetch-a-module-worker-script-tree" step="4">When the internal
-  // module script graph fetching procedure asynchronously completes with
-  // result, asynchronously complete this algorithm with result.</spec>
-
-  // Note: We delegate to ModuleTreeLinker to notify ModuleTreeClient.
+                          context_type, destination, options, this,
+                          custom_fetch_type, tree_linker_registry_, client);
 }
 
 void ModulatorImplBase::FetchDescendantsForInlineScript(
     ModuleScript* module_script,
     ResourceFetcher* fetch_client_settings_object_fetcher,
-    mojom::RequestContextType destination,
+    mojom::RequestContextType context_type,
+    network::mojom::RequestDestination destination,
     ModuleTreeClient* client) {
   ModuleTreeLinker::FetchDescendantsForInlineScript(
-      module_script, fetch_client_settings_object_fetcher, destination, this,
-      ModuleScriptCustomFetchType::kNone, tree_linker_registry_, client);
+      module_script, fetch_client_settings_object_fetcher, context_type,
+      destination, this, ModuleScriptCustomFetchType::kNone,
+      tree_linker_registry_, client);
 }
 
 void ModulatorImplBase::FetchSingle(
@@ -171,8 +119,8 @@ KURL ModulatorImplBase::ResolveModuleSpecifier(const String& specifier,
   base::Optional<KURL> mapped_url;
   if (import_map_) {
     String import_map_debug_message;
-    mapped_url =
-        import_map_->Resolve(parsed_specifier, &import_map_debug_message);
+    mapped_url = import_map_->Resolve(parsed_specifier, base_url,
+                                      &import_map_debug_message);
 
     // Output the resolution log. This is too verbose to be always shown, but
     // will be helpful for Web developers (and also Chromium developers) for
@@ -200,13 +148,6 @@ KURL ModulatorImplBase::ResolveModuleSpecifier(const String& specifier,
       return KURL();
 
     case ParsedSpecifier::Type::kBare:
-      // Allow |@std/x| specifiers if Layered API is enabled.
-      if (BuiltInModuleInfraEnabled()) {
-        if (parsed_specifier.GetImportMapKeyString().StartsWith("@std/")) {
-          return KURL("import:" + parsed_specifier.GetImportMapKeyString());
-        }
-      }
-
       // Reject bare specifiers as specced by the pre-ImportMap spec.
       if (failure_reason) {
         *failure_reason =
@@ -220,22 +161,54 @@ KURL ModulatorImplBase::ResolveModuleSpecifier(const String& specifier,
   }
 }
 
-void ModulatorImplBase::RegisterImportMap(const ImportMap* import_map) {
+ScriptValue ModulatorImplBase::CreateTypeError(const String& message) const {
+  ScriptState::Scope scope(script_state_);
+  ScriptValue error(
+      script_state_->GetIsolate(),
+      V8ThrowException::CreateTypeError(script_state_->GetIsolate(), message));
+  return error;
+}
+
+ScriptValue ModulatorImplBase::CreateSyntaxError(const String& message) const {
+  ScriptState::Scope scope(script_state_);
+  ScriptValue error(script_state_->GetIsolate(),
+                    V8ThrowException::CreateSyntaxError(
+                        script_state_->GetIsolate(), message));
+  return error;
+}
+
+// <specdef href="https://wicg.github.io/import-maps/#register-an-import-map">
+void ModulatorImplBase::RegisterImportMap(const ImportMap* import_map,
+                                          ScriptValue error_to_rethrow) {
+  DCHECK(import_map);
+  DCHECK(ImportMapsEnabled());
+
+  // <spec step="7">If import map parse result’s error to rethrow is not null,
+  // then:</spec>
+  if (!error_to_rethrow.IsEmpty()) {
+    // <spec step="7.1">Report the exception given import map parse result’s
+    // error to rethrow. ...</spec>
+    if (!IsScriptingDisabled()) {
+      ScriptState::Scope scope(script_state_);
+      ModuleRecord::ReportException(script_state_, error_to_rethrow.V8Value());
+    }
+
+    // <spec step="7.2">Return.</spec>
+    return;
+  }
+
+  // <spec step="8">Update element’s node document's import map with import map
+  // parse result’s import map.</spec>
+  //
+  // TODO(crbug.com/927119): Implement merging. Currently only one import map is
+  // allowed.
   if (import_map_) {
-    // Only one import map is allowed.
-    // TODO(crbug.com/927119): Implement merging.
     GetExecutionContext()->AddConsoleMessage(
         mojom::ConsoleMessageSource::kOther, mojom::ConsoleMessageLevel::kError,
         "Multiple import maps are not yet supported. https://crbug.com/927119");
     return;
   }
 
-  if (!BuiltInModuleInfraEnabled()) {
-    GetExecutionContext()->AddConsoleMessage(
-        mojom::ConsoleMessageSource::kOther, mojom::ConsoleMessageLevel::kError,
-        "Import maps are disabled when Layered API Infra is disabled.");
-    return;
-  }
   import_map_ = import_map;
 }
 
@@ -262,35 +235,39 @@ void ModulatorImplBase::ResolveDynamically(
 
 // <specdef href="https://html.spec.whatwg.org/C/#hostgetimportmetaproperties">
 ModuleImportMeta ModulatorImplBase::HostGetImportMetaProperties(
-    ModuleRecord record) const {
+    v8::Local<v8::Module> record) const {
   // <spec step="1">Let module script be moduleRecord.[[HostDefined]].</spec>
   const ModuleScript* module_script =
-      module_record_resolver_->GetHostDefined(record);
+      module_record_resolver_->GetModuleScriptFromModuleRecord(record);
   DCHECK(module_script);
 
-  // <spec step="2">Let urlString be module script's base URL,
+  // <spec step="3">Let urlString be module script's base URL,
   // serialized.</spec>
   String url_string = module_script->BaseURL().GetString();
 
-  // <spec step="3">Return « Record { [[Key]]: "url", [[Value]]: urlString }
+  // <spec step="4">Return « Record { [[Key]]: "url", [[Value]]: urlString }
   // ».</spec>
   return ModuleImportMeta(url_string);
 }
 
-ScriptValue ModulatorImplBase::InstantiateModule(ModuleRecord module_record) {
+ScriptValue ModulatorImplBase::InstantiateModule(
+    v8::Local<v8::Module> module_record,
+    const KURL& source_url) {
   UseCounter::Count(GetExecutionContext(),
                     WebFeature::kInstantiateModuleScript);
 
   ScriptState::Scope scope(script_state_);
-  return module_record.Instantiate(script_state_);
+  return ModuleRecord::Instantiate(script_state_, module_record, source_url);
 }
 
 Vector<Modulator::ModuleRequest>
-ModulatorImplBase::ModuleRequestsFromModuleRecord(ModuleRecord module_record) {
+ModulatorImplBase::ModuleRequestsFromModuleRecord(
+    v8::Local<v8::Module> module_record) {
   ScriptState::Scope scope(script_state_);
-  Vector<String> specifiers = module_record.ModuleRequests(script_state_);
+  Vector<String> specifiers =
+      ModuleRecord::ModuleRequests(script_state_, module_record);
   Vector<TextPosition> positions =
-      module_record.ModuleRequestPositions(script_state_);
+      ModuleRecord::ModuleRequestPositions(script_state_, module_record);
   DCHECK_EQ(specifiers.size(), positions.size());
   Vector<ModuleRequest> requests;
   requests.ReserveInitialCapacity(specifiers.size());
@@ -316,10 +293,13 @@ void ModulatorImplBase::ProduceCacheModuleTree(
     HeapHashSet<Member<const ModuleScript>>* discovered_set) {
   DCHECK(module_script);
 
+  v8::Isolate* isolate = GetScriptState()->GetIsolate();
+  v8::HandleScope scope(isolate);
+
   discovered_set->insert(module_script);
 
-  ModuleRecord record = module_script->Record();
-  DCHECK(!record.IsNull());
+  v8::Local<v8::Module> record = module_script->V8Module();
+  DCHECK(!record.IsEmpty());
 
   module_script->ProduceCache();
 
@@ -378,11 +358,12 @@ ScriptValue ModulatorImplBase::ExecuteModule(
     // <spec step="7">Otherwise:</spec>
 
     // <spec step="7.1">Let record be script's record.</spec>
-    const ModuleRecord& record = module_script->Record();
-    CHECK(!record.IsNull());
+    v8::Local<v8::Module> record = module_script->V8Module();
+    CHECK(!record.IsEmpty());
 
     // <spec step="7.2">Set evaluationStatus to record.Evaluate(). ...</spec>
-    error = record.Evaluate(script_state_);
+    error = ModuleRecord::Evaluate(script_state_, record,
+                                   module_script->SourceURL());
 
     // <spec step="7.2">... If Evaluate fails to complete as a result of the
     // user agent aborting the running script, then set evaluationStatus to
@@ -416,7 +397,7 @@ ScriptValue ModulatorImplBase::ExecuteModule(
   return ScriptValue();
 }
 
-void ModulatorImplBase::Trace(blink::Visitor* visitor) {
+void ModulatorImplBase::Trace(Visitor* visitor) {
   visitor->Trace(script_state_);
   visitor->Trace(map_);
   visitor->Trace(tree_linker_registry_);

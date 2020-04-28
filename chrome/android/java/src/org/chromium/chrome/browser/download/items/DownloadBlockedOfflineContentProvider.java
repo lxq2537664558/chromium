@@ -7,11 +7,12 @@ package org.chromium.chrome.browser.download.items;
 import org.chromium.base.Callback;
 import org.chromium.base.ObserverList;
 import org.chromium.components.offline_items_collection.ContentId;
-import org.chromium.components.offline_items_collection.LaunchLocation;
 import org.chromium.components.offline_items_collection.LegacyHelpers;
 import org.chromium.components.offline_items_collection.OfflineContentProvider;
 import org.chromium.components.offline_items_collection.OfflineItem;
+import org.chromium.components.offline_items_collection.OpenParams;
 import org.chromium.components.offline_items_collection.ShareCallback;
+import org.chromium.components.offline_items_collection.UpdateDelta;
 import org.chromium.components.offline_items_collection.VisualsCallback;
 
 import java.util.ArrayList;
@@ -33,9 +34,9 @@ class DownloadBlockedOfflineContentProvider
     }
 
     @Override
-    public void openItem(@LaunchLocation int location, ContentId id) {
+    public void openItem(OpenParams openParams, ContentId id) {
         assert !LegacyHelpers.isLegacyDownload(id);
-        mProvider.openItem(location, id);
+        mProvider.openItem(openParams, id);
     }
 
     @Override
@@ -117,10 +118,10 @@ class DownloadBlockedOfflineContentProvider
     }
 
     @Override
-    public void onItemUpdated(OfflineItem item) {
+    public void onItemUpdated(OfflineItem item, UpdateDelta updateDelta) {
         if (LegacyHelpers.isLegacyDownload(item.id)) return;
         for (Observer observer : mObservers) {
-            observer.onItemUpdated(item);
+            observer.onItemUpdated(item, updateDelta);
         }
     }
 

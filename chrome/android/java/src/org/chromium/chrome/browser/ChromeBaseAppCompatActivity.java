@@ -5,14 +5,17 @@
 package org.chromium.chrome.browser;
 
 import android.content.Context;
+import android.content.SharedPreferences;
 import android.content.res.Configuration;
 import android.os.Bundle;
-import android.support.annotation.CallSuper;
-import android.support.annotation.Nullable;
-import android.support.annotation.StyleRes;
-import android.support.v7.app.AppCompatActivity;
 
-import org.chromium.chrome.browser.night_mode.GlobalNightModeStateController;
+import androidx.annotation.CallSuper;
+import androidx.annotation.Nullable;
+import androidx.annotation.StyleRes;
+import androidx.appcompat.app.AppCompatActivity;
+
+import org.chromium.base.ContextUtils;
+import org.chromium.chrome.browser.night_mode.GlobalNightModeStateProviderHolder;
 import org.chromium.chrome.browser.night_mode.NightModeStateProvider;
 import org.chromium.chrome.browser.night_mode.NightModeUtils;
 
@@ -26,16 +29,16 @@ public class ChromeBaseAppCompatActivity
     private @StyleRes int mThemeResId;
 
     @Override
-    protected void attachBaseContext(Context newBase) {
-        super.attachBaseContext(newBase);
+    protected void attachBaseContext(Context baseContext) {
         mNightModeStateProvider = createNightModeStateProvider();
-
-        Configuration config = new Configuration();
         // Pre-Android O, fontScale gets initialized to 1 in the constructor. Set it to 0 so
-        // that applyOverrideConfiguration() does not interpret it as an overridden value.
+        // that it is not interpreted as an overridden value.
         // https://crbug.com/834191
-        config.fontScale = 0;
-        if (applyOverrides(newBase, config)) applyOverrideConfiguration(config);
+        Configuration overrideConfig = new Configuration();
+        overrideConfig.fontScale = 0;
+        applyConfigurationOverrides(baseContext, overrideConfig);
+
+        super.attachBaseContext(baseContext.createConfigurationContext(overrideConfig));
     }
 
     @Override
@@ -64,18 +67,13 @@ public class ChromeBaseAppCompatActivity
     }
 
     /**
-     * Called during {@link #attachBaseContext(Context)} to allow configuration overrides to be
-     * applied. If this methods return true, the overrides will be applied using
-     * {@link #applyOverrideConfiguration(Configuration)}.
+     * Called during {@link #attachBaseContext(Context)} to allow for configuration overrides.
      * @param baseContext The base {@link Context} attached to this class.
-     * @param overrideConfig The {@link Configuration} that will be passed to
-     *                       @link #applyOverrideConfiguration(Configuration)} if necessary.
-     * @return True if any configuration overrides were applied, and false otherwise.
+     * @return A Configuration object with overrides set.
      */
     @CallSuper
-    protected boolean applyOverrides(Context baseContext, Configuration overrideConfig) {
-        return NightModeUtils.applyOverridesForNightMode(
-                getNightModeStateProvider(), overrideConfig);
+    protected void applyConfigurationOverrides(Context baseContext, Configuration overrideConfig) {
+        NightModeUtils.applyOverridesForNightMode(mNightModeStateProvider, overrideConfig);
     }
 
     /**
@@ -90,7 +88,7 @@ public class ChromeBaseAppCompatActivity
      *         of this class.
      */
     protected NightModeStateProvider createNightModeStateProvider() {
-        return GlobalNightModeStateController.getInstance();
+        return GlobalNightModeStateProviderHolder.getInstance();
     }
 
     /**
@@ -104,5 +102,13 @@ public class ChromeBaseAppCompatActivity
     @Override
     public void onNightModeStateChanged() {
         if (!isFinishing()) recreate();
+    }
+
+    /**
+     * Required to make preference fragments use InMemorySharedPreferences in tests.
+     */
+    @Override
+    public SharedPreferences getSharedPreferences(String name, int mode) {
+        return ContextUtils.getApplicationContext().getSharedPreferences(name, mode);
     }
 }

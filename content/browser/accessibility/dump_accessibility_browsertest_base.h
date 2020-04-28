@@ -5,18 +5,20 @@
 #ifndef CONTENT_BROWSER_ACCESSIBILITY_DUMP_ACCESSIBILITY_BROWSERTEST_BASE_H_
 #define CONTENT_BROWSER_ACCESSIBILITY_DUMP_ACCESSIBILITY_BROWSERTEST_BASE_H_
 
+#include <memory>
 #include <string>
 #include <vector>
 
-#include "base/debug/leak_annotations.h"
 #include "base/strings/string16.h"
 #include "base/test/scoped_feature_list.h"
-#include "build/build_config.h"
 #include "content/browser/accessibility/accessibility_event_recorder.h"
-#include "content/browser/accessibility/accessibility_tree_formatter.h"
+#include "content/public/browser/accessibility_tree_formatter.h"
 #include "content/public/test/content_browser_test.h"
+#include "third_party/blink/public/common/features.h"
 
 namespace content {
+
+class BrowserAccessibility;
 
 // Base class for an accessibility browsertest that takes an HTML file as
 // input, loads it into a tab, dumps some accessibility data in text format,
@@ -63,6 +65,10 @@ class DumpAccessibilityTestBase : public ContentBrowserTest,
   // additional useful info.
   virtual void OnDiffFailed() {}
 
+  // Choose which feature flags to enable or disable.
+  virtual void ChooseFeatures(std::vector<base::Feature>* enabled_features,
+                              std::vector<base::Feature>* disabled_features);
+
   //
   // Helpers
   //
@@ -70,11 +76,6 @@ class DumpAccessibilityTestBase : public ContentBrowserTest,
   // Dump the whole accessibility tree, without applying any filters,
   // and return it as a string.
   base::string16 DumpUnfilteredAccessibilityTreeAsString();
-
-  // Utility helper that does a comment-aware equality check.
-  // Returns array of lines from expected file which are different.
-  std::vector<int> DiffLines(const std::vector<std::string>& expected_lines,
-                             const std::vector<std::string>& actual_lines);
 
   // Parse the test html file and parse special directives, usually
   // beginning with an '@' and inside an HTML comment, that control how the
@@ -97,9 +98,21 @@ class DumpAccessibilityTestBase : public ContentBrowserTest,
   // @WAIT-FOR: directives.
   void ParseHtmlForExtraDirectives(const std::string& test_html,
                                    std::vector<std::string>* wait_for,
-                                   std::vector<std::string>* run_until);
+                                   std::vector<std::string>* execute,
+                                   std::vector<std::string>* run_until,
+                                   std::vector<std::string>* default_action_on);
 
   void RunTestForPlatform(const base::FilePath file_path, const char* file_dir);
+
+  // Retrieve the accessibility node that matches the accessibility name. There
+  // is an optional search_root parameter that defaults to the document root if
+  // not provided.
+  BrowserAccessibility* FindNode(const std::string& name,
+                                 BrowserAccessibility* search_root = nullptr);
+
+  // Retrieve the browser accessibility manager object for the current web
+  // contents.
+  BrowserAccessibilityManager* GetManager();
 
   // The default property filters plus the property filters loaded from the test
   // file.
@@ -107,11 +120,6 @@ class DumpAccessibilityTestBase : public ContentBrowserTest,
 
   // The node filters loaded from the test file.
   std::vector<AccessibilityTreeFormatter::NodeFilter> node_filters_;
-
-#if defined(LEAK_SANITIZER) && !defined(OS_NACL)
-  // http://crbug.com/568674
-  ScopedLeakSanitizerDisabler lsan_disabler;
-#endif
 
   // The current tree-formatter and event-recorder factories.
   AccessibilityTreeFormatter::FormatterFactory formatter_factory_;
@@ -125,6 +133,13 @@ class DumpAccessibilityTestBase : public ContentBrowserTest,
   bool enable_accessibility_after_navigating_;
 
   base::test::ScopedFeatureList scoped_feature_list_;
+
+ private:
+  BrowserAccessibility* FindNodeInSubtree(BrowserAccessibility& node,
+                                          const std::string& name);
+
+  void WaitForAXTreeLoaded(WebContentsImpl* web_contents,
+                           const std::vector<std::string>& wait_for);
 };
 
 }  // namespace content

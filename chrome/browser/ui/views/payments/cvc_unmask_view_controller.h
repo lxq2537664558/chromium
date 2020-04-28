@@ -70,6 +70,7 @@ class CvcUnmaskViewController
   base::string16 GetSheetTitle() override;
   void FillContentView(views::View* content_view) override;
   std::unique_ptr<views::Button> CreatePrimaryButton() override;
+  bool ShouldShowSecondaryButton() override;
   void ButtonPressed(views::Button* sender, const ui::Event& event) override;
 
  private:
@@ -102,7 +103,7 @@ class CvcUnmaskViewController
   autofill::payments::FullCardRequest full_card_request_;
   base::WeakPtr<autofill::CardUnmaskDelegate> unmask_delegate_;
 
-  base::WeakPtrFactory<CvcUnmaskViewController> weak_ptr_factory_;
+  base::WeakPtrFactory<CvcUnmaskViewController> weak_ptr_factory_{this};
 
   DISALLOW_COPY_AND_ASSIGN(CvcUnmaskViewController);
 };

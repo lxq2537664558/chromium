@@ -18,6 +18,8 @@
 
 namespace net {
 
+class ProxyResolutionRequest;
+
 namespace test {
 
 class JobControllerPeer;
@@ -109,15 +111,6 @@ class HttpStreamFactory::JobController
                           const SSLConfig& used_ssl_config,
                           const SSLInfo& ssl_info) override;
 
-  // Invoked when |job| has a failure of the CONNECT request (due to 302
-  // redirect) through an HTTPS proxy.
-  void OnHttpsProxyTunnelResponseRedirect(
-      Job* job,
-      const HttpResponseInfo& response_info,
-      const SSLConfig& used_ssl_config,
-      const ProxyInfo& used_proxy_info,
-      std::unique_ptr<HttpStream> stream) override;
-
   // Invoked when |job| raises failure for SSL Client Auth.
   void OnNeedsClientAuth(Job* job,
                          const SSLConfig& used_ssl_config,
@@ -129,8 +122,6 @@ class HttpStreamFactory::JobController
                         const SSLConfig& used_ssl_config,
                         const ProxyInfo& used_proxy_info,
                         HttpAuthController* auth_controller) override;
-
-  bool OnInitConnection(const ProxyInfo& proxy_info) override;
 
   // Invoked when the |job| finishes pre-connecting sockets.
   void OnPreconnectsComplete(Job* job) override;
@@ -259,13 +250,12 @@ class HttpStreamFactory::JobController
       HttpStreamRequest::Delegate* delegate,
       HttpStreamRequest::StreamType stream_type);
 
-  // Returns a quic::QuicTransportVersion that has been advertised in
-  // |advertised_versions| and is supported.  If more than one
-  // QuicTransportVersions are supported, the first matched in the supported
-  // versions will be returned.  If no mutually supported version is found,
-  // QUIC_VERSION_UNSUPPORTED_VERSION will be returned.
-  quic::QuicTransportVersion SelectQuicVersion(
-      const quic::QuicTransportVersionVector& advertised_versions);
+  // Returns the first quic::ParsedQuicVersion that has been advertised in
+  // |advertised_versions| and is supported, following the order of
+  // |advertised_versions|.  If no mutually supported version is found,
+  // quic::UnsupportedQuicVersion() will be returned.
+  quic::ParsedQuicVersion SelectQuicVersion(
+      const quic::ParsedQuicVersionVector& advertised_versions);
 
   // Returns true if the |request_| can be fetched via an alternative
   // proxy server, and sets |alternative_proxy_info| to the alternative proxy
@@ -291,8 +281,8 @@ class HttpStreamFactory::JobController
   // given error code is simply returned.
   int ReconsiderProxyAfterError(Job* job, int error);
 
-  // Returns true if QUIC is whitelisted for |host|.
-  bool IsQuicWhitelistedForHost(const std::string& host);
+  // Returns true if QUIC is allowed for |host|.
+  bool IsQuicAllowedForHost(const std::string& host);
 
   HttpStreamFactory* factory_;
   HttpNetworkSession* session_;
@@ -359,7 +349,7 @@ class HttpStreamFactory::JobController
   bool can_start_alternative_proxy_job_;
 
   State next_state_;
-  std::unique_ptr<ProxyResolutionService::Request> proxy_resolve_request_;
+  std::unique_ptr<ProxyResolutionRequest> proxy_resolve_request_;
   const HttpRequestInfo request_info_;
   ProxyInfo proxy_info_;
   const SSLConfig server_ssl_config_;
@@ -369,7 +359,7 @@ class HttpStreamFactory::JobController
   RequestPriority priority_;
   const NetLogWithSource net_log_;
 
-  base::WeakPtrFactory<JobController> ptr_factory_;
+  base::WeakPtrFactory<JobController> ptr_factory_{this};
 };
 
 }  // namespace net

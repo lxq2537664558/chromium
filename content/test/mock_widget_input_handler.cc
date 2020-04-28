@@ -17,18 +17,18 @@ using blink::WebTouchPoint;
 
 namespace content {
 
-MockWidgetInputHandler::MockWidgetInputHandler() : binding_(this) {}
+MockWidgetInputHandler::MockWidgetInputHandler() = default;
 
 MockWidgetInputHandler::MockWidgetInputHandler(
-    mojom::WidgetInputHandlerRequest request,
-    mojom::WidgetInputHandlerHostPtr host)
-    : binding_(this, std::move(request)), host_(std::move(host)) {}
+    mojo::PendingReceiver<mojom::WidgetInputHandler> receiver,
+    mojo::PendingRemote<mojom::WidgetInputHandlerHost> host)
+    : receiver_(this, std::move(receiver)), host_(std::move(host)) {}
 
 MockWidgetInputHandler::~MockWidgetInputHandler() {
   // We explicitly close the binding before the tearing down the vector of
   // messages, as some of them may spin a RunLoop on destruction and we don't
   // want to accept more messages beyond this point.
-  binding_.Close();
+  receiver_.reset();
 }
 
 void MockWidgetInputHandler::SetFocus(bool focused) {
@@ -41,6 +41,11 @@ void MockWidgetInputHandler::MouseCaptureLost() {
       std::make_unique<DispatchedMessage>("MouseCaptureLost"));
 }
 
+void MockWidgetInputHandler::MouseLockLost() {
+  dispatched_messages_.emplace_back(
+      std::make_unique<DispatchedMessage>("MouseLockLost"));
+}
+
 void MockWidgetInputHandler::SetEditCommandsForNextKeyEvent(
     const std::vector<content::EditCommand>& commands) {
   dispatched_messages_.emplace_back(
@@ -50,11 +55,6 @@ void MockWidgetInputHandler::SetEditCommandsForNextKeyEvent(
 void MockWidgetInputHandler::CursorVisibilityChanged(bool visible) {
   dispatched_messages_.emplace_back(
       std::make_unique<DispatchedMessage>("CursorVisibilityChanged"));
-}
-
-void MockWidgetInputHandler::FallbackCursorModeToggled(bool is_on) {
-  dispatched_messages_.emplace_back(
-      std::make_unique<DispatchedMessage>("FallbackCursorModeToggled"));
 }
 
 void MockWidgetInputHandler::ImeSetComposition(
@@ -122,9 +122,10 @@ MockWidgetInputHandler::GetAndResetDispatchedMessages() {
 }
 
 void MockWidgetInputHandler::AttachSynchronousCompositor(
-    mojom::SynchronousCompositorControlHostPtr control_host,
-    mojom::SynchronousCompositorHostAssociatedPtrInfo host,
-    mojom::SynchronousCompositorAssociatedRequest compositor_request) {}
+    mojo::PendingRemote<mojom::SynchronousCompositorControlHost> control_host,
+    mojo::PendingAssociatedRemote<mojom::SynchronousCompositorHost> host,
+    mojo::PendingAssociatedReceiver<mojom::SynchronousCompositor>
+        compositor_request) {}
 
 MockWidgetInputHandler::DispatchedMessage::DispatchedMessage(
     const std::string& name)
@@ -212,9 +213,10 @@ MockWidgetInputHandler::DispatchedEventMessage::DispatchedEventMessage(
 
 MockWidgetInputHandler::DispatchedEventMessage::~DispatchedEventMessage() {
   if (callback_) {
-    std::move(callback_).Run(InputEventAckSource::UNKNOWN, ui::LatencyInfo(),
-                             INPUT_EVENT_ACK_STATE_NOT_CONSUMED, base::nullopt,
-                             base::nullopt);
+    std::move(callback_).Run(blink::mojom::InputEventResultSource::kUnknown,
+                             ui::LatencyInfo(),
+                             blink::mojom::InputEventResultState::kNotConsumed,
+                             base::nullopt, base::nullopt);
     base::RunLoop().RunUntilIdle();
   }
 }
@@ -225,9 +227,9 @@ MockWidgetInputHandler::DispatchedEventMessage::ToEvent() {
 }
 
 void MockWidgetInputHandler::DispatchedEventMessage::CallCallback(
-    InputEventAckState state) {
+    blink::mojom::InputEventResultState state) {
   if (callback_) {
-    std::move(callback_).Run(InputEventAckSource::MAIN_THREAD,
+    std::move(callback_).Run(blink::mojom::InputEventResultSource::kMainThread,
                              ui::LatencyInfo(), state, base::nullopt,
                              base::nullopt);
     base::RunLoop().RunUntilIdle();
@@ -235,9 +237,9 @@ void MockWidgetInputHandler::DispatchedEventMessage::CallCallback(
 }
 
 void MockWidgetInputHandler::DispatchedEventMessage::CallCallback(
-    InputEventAckSource source,
+    blink::mojom::InputEventResultSource source,
     const ui::LatencyInfo& latency_info,
-    InputEventAckState state,
+    blink::mojom::InputEventResultState state,
     const base::Optional<ui::DidOverscrollParams>& overscroll,
     const base::Optional<cc::TouchAction>& touch_action) {
   if (callback_) {

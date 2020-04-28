@@ -10,20 +10,21 @@
 #include "components/viz/service/display/output_surface_client.h"
 #include "components/viz/test/begin_frame_args_test.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "ui/gfx/buffer_format_util.h"
 #include "ui/gfx/presentation_feedback.h"
-#include "ui/gl/gl_utils.h"
+#include "ui/gfx/swap_result.h"
 
 namespace viz {
 
 FakeOutputSurface::FakeOutputSurface(
     scoped_refptr<ContextProvider> context_provider)
-    : OutputSurface(std::move(context_provider)), weak_ptr_factory_(this) {
+    : OutputSurface(std::move(context_provider)) {
   DCHECK(OutputSurface::context_provider());
 }
 
 FakeOutputSurface::FakeOutputSurface(
     std::unique_ptr<SoftwareOutputDevice> software_device)
-    : OutputSurface(std::move(software_device)), weak_ptr_factory_(this) {
+    : OutputSurface(std::move(software_device)) {
   DCHECK(OutputSurface::software_device());
 }
 
@@ -32,12 +33,12 @@ FakeOutputSurface::~FakeOutputSurface() = default;
 void FakeOutputSurface::Reshape(const gfx::Size& size,
                                 float device_scale_factor,
                                 const gfx::ColorSpace& color_space,
-                                bool has_alpha,
+                                gfx::BufferFormat format,
                                 bool use_stencil) {
   if (context_provider()) {
     context_provider()->ContextGL()->ResizeCHROMIUM(
         size.width(), size.height(), device_scale_factor,
-        gl::GetGLColorSpace(color_space), has_alpha);
+        color_space.AsGLColorSpace(), gfx::AlphaBitsForBufferFormat(format));
   } else {
     software_device()->Resize(size, device_scale_factor);
   }
@@ -54,9 +55,9 @@ void FakeOutputSurface::SwapBuffers(OutputSurfaceFrame frame) {
 }
 
 void FakeOutputSurface::SwapBuffersAck() {
-  client_->DidReceiveSwapBuffersAck();
-  client_->DidReceivePresentationFeedback(
-      {base::TimeTicks::Now(), base::TimeDelta(), 0});
+  base::TimeTicks now = base::TimeTicks::Now();
+  client_->DidReceiveSwapBuffersAck({now, now});
+  client_->DidReceivePresentationFeedback({now, base::TimeDelta(), 0});
 }
 
 void FakeOutputSurface::BindFramebuffer() {
@@ -84,15 +85,6 @@ bool FakeOutputSurface::HasExternalStencilTest() const {
   return has_external_stencil_test_;
 }
 
-OverlayCandidateValidator* FakeOutputSurface::GetOverlayCandidateValidator()
-    const {
-  return overlay_candidate_validator_;
-}
-
-gfx::BufferFormat FakeOutputSurface::GetOverlayBufferFormat() const {
-  return gfx::BufferFormat::RGBX_8888;
-}
-
 bool FakeOutputSurface::IsDisplayedAsOverlayPlane() const {
   return overlay_texture_id_ != 0;
 }
@@ -105,4 +97,31 @@ unsigned FakeOutputSurface::UpdateGpuFence() {
   return gpu_fence_id_;
 }
 
+void FakeOutputSurface::SetUpdateVSyncParametersCallback(
+    UpdateVSyncParametersCallback callback) {}
+
+void FakeOutputSurface::SetDisplayTransformHint(
+    gfx::OverlayTransform transform) {
+  if (support_display_transform_hint_)
+    display_transform_hint_ = transform;
+}
+
+gfx::OverlayTransform FakeOutputSurface::GetDisplayTransform() {
+  return support_display_transform_hint_ ? display_transform_hint_
+                                         : gfx::OVERLAY_TRANSFORM_NONE;
+}
+
+#if defined(OS_LINUX) && !defined(OS_CHROMEOS)
+void FakeOutputSurface::SetNeedsSwapSizeNotifications(
+    bool needs_swap_size_notifications) {}
+#endif
+
+scoped_refptr<gpu::GpuTaskSchedulerHelper>
+FakeOutputSurface::GetGpuTaskSchedulerHelper() {
+  return nullptr;
+}
+
+gpu::MemoryTracker* FakeOutputSurface::GetMemoryTracker() {
+  return nullptr;
+}
 }  // namespace viz

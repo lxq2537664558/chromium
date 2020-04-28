@@ -13,16 +13,17 @@
 #include "base/base64.h"
 #include "base/bind.h"
 #include "base/callback.h"
+#include "base/check_op.h"
 #include "base/command_line.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/lazy_instance.h"
-#include "base/logging.h"
 #include "base/metrics/field_trial_params.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/metrics/persistent_histogram_allocator.h"
 #include "base/metrics/persistent_memory_allocator.h"
 #include "base/metrics/statistics_recorder.h"
+#include "base/notreached.h"
 #include "base/path_service.h"
 #include "base/rand_util.h"
 #include "base/stl_util.h"
@@ -30,21 +31,23 @@
 #include "base/strings/string_piece.h"
 #include "base/task/post_task.h"
 #include "base/task/task_traits.h"
+#include "base/task/thread_pool.h"
 #include "base/threading/platform_thread.h"
+#include "base/threading/sequenced_task_runner_handle.h"
 #include "base/threading/thread_task_runner_handle.h"
 #include "build/build_config.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/google/google_brand.h"
 #include "chrome/browser/history/history_service_factory.h"
+#include "chrome/browser/metrics/cached_metrics_profile.h"
 #include "chrome/browser/metrics/chrome_metrics_service_accessor.h"
 #include "chrome/browser/metrics/chrome_stability_metrics_provider.h"
+#include "chrome/browser/metrics/desktop_platform_features_metrics_provider.h"
 #include "chrome/browser/metrics/desktop_session_duration/desktop_profile_session_durations_service_factory.h"
 #include "chrome/browser/metrics/https_engagement_metrics_provider.h"
 #include "chrome/browser/metrics/metrics_reporting_state.h"
 #include "chrome/browser/metrics/network_quality_estimator_provider_impl.h"
-#include "chrome/browser/metrics/persistent_histograms.h"
-#include "chrome/browser/metrics/process_memory_metrics_emitter.h"
 #include "chrome/browser/metrics/sampling_metrics_provider.h"
 #include "chrome/browser/metrics/subprocess_metrics_provider.h"
 #include "chrome/browser/profiles/profile_manager.h"
@@ -59,36 +62,42 @@
 #include "chrome/common/chrome_paths_internal.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/pref_names.h"
-#include "chrome/installer/util/util_constants.h"
-#include "components/browser_watcher/stability_paths.h"
 #include "components/crash/core/common/crash_keys.h"
 #include "components/history/core/browser/history_service.h"
 #include "components/metrics/call_stack_profile_metrics_provider.h"
 #include "components/metrics/component_metrics_provider.h"
 #include "components/metrics/cpu_metrics_provider.h"
+#include "components/metrics/demographic_metrics_provider.h"
 #include "components/metrics/drive_metrics_provider.h"
+#include "components/metrics/entropy_state_provider.h"
 #include "components/metrics/field_trials_provider.h"
 #include "components/metrics/gpu/gpu_metrics_provider.h"
+#include "components/metrics/gpu/rendering_perf_metrics_provider.h"
 #include "components/metrics/metrics_log_uploader.h"
 #include "components/metrics/metrics_pref_names.h"
 #include "components/metrics/metrics_reporting_default_state.h"
 #include "components/metrics/metrics_service.h"
 #include "components/metrics/metrics_service_client.h"
 #include "components/metrics/metrics_state_manager.h"
+#include "components/metrics/metrics_switches.h"
 #include "components/metrics/net/cellular_logic_helper.h"
 #include "components/metrics/net/net_metrics_log_uploader.h"
 #include "components/metrics/net/network_metrics_provider.h"
+#include "components/metrics/persistent_histograms.h"
 #include "components/metrics/stability_metrics_helper.h"
 #include "components/metrics/ui/screen_info_metrics_provider.h"
 #include "components/metrics/url_constants.h"
 #include "components/metrics/version_utils.h"
+#include "components/network_time/network_time_tracker.h"
 #include "components/omnibox/browser/omnibox_metrics_provider.h"
 #include "components/prefs/pref_registry_simple.h"
 #include "components/prefs/pref_service.h"
-#include "components/sync/device_info/device_count_metrics_provider.h"
+#include "components/sync/driver/passphrase_type_metrics_provider.h"
 #include "components/sync/driver/sync_service.h"
+#include "components/sync_device_info/device_count_metrics_provider.h"
 #include "components/ukm/ukm_service.h"
 #include "components/version_info/version_info.h"
+#include "content/browser/accessibility/accessibility_metrics_provider.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/histogram_fetcher.h"
@@ -100,9 +109,11 @@
 #include "services/network/public/cpp/shared_url_loader_factory.h"
 
 #if defined(OS_ANDROID)
-#include "base/android/build_info.h"
-#include "chrome/browser/metrics/android_metrics_provider.h"
+#include "chrome/browser/metrics/chrome_android_metrics_provider.h"
 #include "chrome/browser/metrics/page_load_metrics_provider.h"
+#include "components/metrics/android_metrics_provider.h"
+#else
+#include "chrome/browser/metrics/browser_activity_watcher.h"
 #endif
 
 #if defined(OS_POSIX)
@@ -127,14 +138,10 @@
 #if defined(OS_CHROMEOS)
 #include "chrome/browser/chromeos/printing/printer_metrics_provider.h"
 #include "chrome/browser/chromeos/profiles/profile_helper.h"
+#include "chrome/browser/metrics/assistant_service_metrics_provider.h"
 #include "chrome/browser/metrics/chromeos_metrics_provider.h"
 #include "chrome/browser/signin/signin_status_metrics_provider_chromeos.h"
-#include "chromeos/assistant/buildflags.h"
-
-#if BUILDFLAG(ENABLE_CROS_ASSISTANT)
-#include "chrome/browser/metrics/assistant_service_metrics_provider.h"
-#endif
-
+#include "components/metrics/structured/structured_metrics_provider.h"
 #endif
 
 #if defined(OS_WIN)
@@ -142,14 +149,13 @@
 
 #include "chrome/browser/metrics/antivirus_metrics_provider_win.h"
 #include "chrome/browser/metrics/google_update_metrics_provider_win.h"
-#include "chrome/common/metrics_constants_util_win.h"
 #include "chrome/install_static/install_util.h"
+#include "chrome/installer/util/util_constants.h"
 #include "chrome/notification_helper/notification_helper_constants.h"
-#include "components/browser_watcher/watcher_metrics_provider_win.h"
-#include "content/public/common/service_manager_connection.h"
+#include "content/public/browser/system_connector.h"
 #endif
 
-#if defined(OS_WIN) || defined(OS_MACOSX)
+#if defined(OS_WIN) || defined(OS_MACOSX) || defined(OS_ANDROID)
 #include "third_party/crashpad/crashpad/client/crashpad_info.h"
 #endif
 
@@ -182,7 +188,7 @@ const int kMaxHistogramGatheringWaitDuration = 60000;  // 60 seconds.
 // third_party/crashpad/crashpad/handler/handler_main.cc.
 const char kCrashpadHistogramAllocatorName[] = "CrashpadMetrics";
 
-#if defined(OS_WIN) || defined(OS_MACOSX)
+#if defined(OS_WIN) || defined(OS_MACOSX) || defined(OS_ANDROID)
 // The stream type assigned to the minidump stream that holds the serialized
 // system profile proto.
 const uint32_t kSystemProfileMinidumpStreamType = 0x4B6B0003;
@@ -193,7 +199,7 @@ const uint32_t kSystemProfileMinidumpStreamType = 0x4B6B0003;
 // not assume it.
 // TODO(manzagop): revisit this if the Crashpad API evolves.
 base::LazyInstance<std::string>::Leaky g_environment_for_crash_reporter;
-#endif  // defined(OS_WIN) || defined(OS_MACOSX)
+#endif  // defined(OS_WIN) || defined(OS_MACOSX) || defined(OS_ANDROID)
 
 void RegisterFileMetricsPreferences(PrefRegistrySimple* registry) {
   metrics::FileMetricsProvider::RegisterPrefs(registry, kBrowserMetricsName);
@@ -232,7 +238,7 @@ void RegisterOrRemovePreviousRunMetricsFile(
   } else {
     // When metrics reporting is not enabled, any existing file should be
     // deleted in order to preserve user privacy.
-    base::PostTaskWithTraits(
+    base::ThreadPool::PostTask(
         FROM_HERE,
         {base::MayBlock(), base::TaskPriority::BEST_EFFORT,
          base::TaskShutdownBehavior::CONTINUE_ON_SHUTDOWN},
@@ -286,7 +292,7 @@ std::unique_ptr<metrics::FileMetricsProvider> CreateFileMetricsProvider(
     } else {
       // When metrics reporting is not enabled, any existing files should be
       // deleted in order to preserve user privacy.
-      base::PostTaskWithTraits(
+      base::ThreadPool::PostTask(
           FROM_HERE,
           {base::MayBlock(), base::TaskPriority::BEST_EFFORT,
            base::TaskShutdownBehavior::SKIP_ON_SHUTDOWN},
@@ -322,7 +328,7 @@ std::unique_ptr<metrics::FileMetricsProvider> CreateFileMetricsProvider(
               metrics::FileMetricsProvider::ASSOCIATE_CURRENT_RUN,
               notification_helper::kNotificationHelperHistogramAllocatorName));
     } else {
-      base::PostTaskWithTraits(
+      base::ThreadPool::PostTask(
           FROM_HERE,
           {base::MayBlock(), base::TaskPriority::BEST_EFFORT,
            base::TaskShutdownBehavior::CONTINUE_ON_SHUTDOWN},
@@ -335,24 +341,6 @@ std::unique_ptr<metrics::FileMetricsProvider> CreateFileMetricsProvider(
 
   return file_metrics_provider;
 }
-
-#if defined(OS_WIN)
-void GetExecutableVersionDetails(base::string16* product_name,
-                                 base::string16* version_number,
-                                 base::string16* channel_name) {
-  DCHECK_NE(nullptr, product_name);
-  DCHECK_NE(nullptr, version_number);
-  DCHECK_NE(nullptr, channel_name);
-
-  wchar_t exe_file[MAX_PATH] = {};
-  CHECK(::GetModuleFileName(nullptr, exe_file, base::size(exe_file)));
-
-  base::string16 unused_special_build;
-  install_static::GetExecutableVersionDetails(
-      exe_file, product_name, version_number, &unused_special_build,
-      channel_name);
-}
-#endif  // OS_WIN
 
 ChromeMetricsServiceClient::IsProcessRunningFunction g_is_process_running =
     nullptr;
@@ -382,6 +370,52 @@ bool IsProcessRunning(base::ProcessId pid) {
   return false;
 }
 
+// Client used by DemographicMetricsProvider to retrieve Profile information.
+class ProfileClientImpl
+    : public metrics::DemographicMetricsProvider::ProfileClient {
+ public:
+  ~ProfileClientImpl() override {}
+  ProfileClientImpl() = default;
+
+  int GetNumberOfProfilesOnDisk() override {
+    return g_browser_process->profile_manager()->GetNumberOfProfiles();
+  }
+
+  syncer::SyncService* GetSyncService() override {
+    Profile* profile = cached_metrics_profile_.GetMetricsProfile();
+    if (!profile)
+      return nullptr;
+
+    return ProfileSyncServiceFactory::GetForProfile(profile);
+  }
+
+  base::Time GetNetworkTime() const override {
+    base::Time time;
+    if (g_browser_process->network_time_tracker()->GetNetworkTime(&time,
+                                                                  nullptr) !=
+        network_time::NetworkTimeTracker::NETWORK_TIME_AVAILABLE) {
+      // Return null time to indicate that it could not get the network time. It
+      // is the responsibility of the client to have the strategy to deal with
+      // the absence of network time.
+      return base::Time();
+    }
+    return time;
+  }
+
+ private:
+  // Provides the same cached Profile each time.
+  metrics::CachedMetricsProfile cached_metrics_profile_;
+
+  DISALLOW_COPY_AND_ASSIGN(ProfileClientImpl);
+};
+
+std::unique_ptr<metrics::DemographicMetricsProvider>
+MakeDemographicMetricsProvider(
+    metrics::MetricsLogUploader::MetricServiceType metrics_service_type) {
+  return std::make_unique<metrics::DemographicMetricsProvider>(
+      std::make_unique<ProfileClientImpl>(), metrics_service_type);
+}
+
 }  // namespace
 
 // UKM suffix for field trial recording.
@@ -389,17 +423,10 @@ const char kUKMFieldTrialSuffix[] = "UKM";
 
 ChromeMetricsServiceClient::ChromeMetricsServiceClient(
     metrics::MetricsStateManager* state_manager)
-    : metrics_state_manager_(state_manager),
-      waiting_for_collect_final_metrics_step_(false),
-      num_async_histogram_fetches_in_progress_(0),
-#if BUILDFLAG(ENABLE_PLUGINS)
-      plugin_metrics_provider_(nullptr),
-#endif
-      weak_ptr_factory_(this) {
+    : metrics_state_manager_(state_manager) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   RecordCommandLineMetrics();
-  notification_listeners_active_ = RegisterForNotifications();
-  incognito_observer_ = std::make_unique<IncognitoObserver>(
+  incognito_observer_ = IncognitoObserver::Create(
       base::BindRepeating(&ChromeMetricsServiceClient::UpdateRunningServices,
                           weak_ptr_factory_.GetWeakPtr()));
 }
@@ -469,7 +496,7 @@ std::string ChromeMetricsServiceClient::GetVersionString() {
 }
 
 void ChromeMetricsServiceClient::OnEnvironmentUpdate(std::string* environment) {
-#if defined(OS_WIN) || defined(OS_MACOSX)
+#if defined(OS_WIN) || defined(OS_MACOSX) || defined(OS_ANDROID)
   DCHECK(environment);
 
   // Register the environment with the crash reporter. Note this only registers
@@ -490,22 +517,14 @@ void ChromeMetricsServiceClient::OnEnvironmentUpdate(std::string* environment) {
       reinterpret_cast<const void*>(
           g_environment_for_crash_reporter.Get().data()),
       g_environment_for_crash_reporter.Get().size());
-#endif  // OS_WIN || OS_MACOSX
-}
-
-void ChromeMetricsServiceClient::OnLogCleanShutdown() {
-#if defined(OS_WIN)
-  base::FilePath user_data_dir;
-  if (base::PathService::Get(chrome::DIR_USER_DATA, &user_data_dir))
-    browser_watcher::MarkOwnStabilityFileDeleted(user_data_dir);
-#endif  // OS_WIN
+#endif  // OS_WIN || OS_MACOSX || OS_ANDROID
 }
 
 void ChromeMetricsServiceClient::CollectFinalMetricsForLog(
-    const base::Closure& done_callback) {
+    base::OnceClosure done_callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
-  collect_final_metrics_done_callback_ = done_callback;
+  collect_final_metrics_done_callback_ = std::move(done_callback);
   CollectFinalHistograms();
 }
 
@@ -522,7 +541,7 @@ ChromeMetricsServiceClient::CreateUploader(
 }
 
 base::TimeDelta ChromeMetricsServiceClient::GetStandardUploadInterval() {
-  return metrics::GetUploadInterval();
+  return metrics::GetUploadInterval(metrics::ShouldUseCellularUploadInterval());
 }
 
 void ChromeMetricsServiceClient::OnPluginLoadingError(
@@ -554,9 +573,10 @@ void ChromeMetricsServiceClient::Initialize() {
   local_state->ClearPref(prefs::kCrashReportingEnabled);
 #endif
 
-  metrics_service_.reset(
-      new metrics::MetricsService(metrics_state_manager_, this, local_state));
+  metrics_service_ = std::make_unique<metrics::MetricsService>(
+      metrics_state_manager_, this, local_state);
 
+  notification_listeners_active_ = RegisterForNotifications();
   RegisterMetricsServiceProviders();
 
   if (IsMetricsReportingForceEnabled() ||
@@ -564,12 +584,19 @@ void ChromeMetricsServiceClient::Initialize() {
     // We only need to restrict to whitelisted Entries if metrics reporting
     // is not forced.
     bool restrict_to_whitelist_entries = !IsMetricsReportingForceEnabled();
-    ukm_service_.reset(
-        new ukm::UkmService(local_state, this, restrict_to_whitelist_entries));
+    ukm_service_.reset(new ukm::UkmService(
+        local_state, this, restrict_to_whitelist_entries,
+        MakeDemographicMetricsProvider(
+            metrics::MetricsLogUploader::MetricServiceType::UKM)));
     ukm_service_->SetIsWebstoreExtensionCallback(
         base::BindRepeating(&IsWebstoreExtension));
     RegisterUKMProviders();
   }
+
+#if defined(OS_CHROMEOS)
+  metrics::structured::Recorder::GetInstance()->SetUiTaskRunner(
+      base::SequencedTaskRunnerHandle::Get());
+#endif
 }
 
 void ChromeMetricsServiceClient::RegisterMetricsServiceProviders() {
@@ -599,7 +626,13 @@ void ChromeMetricsServiceClient::RegisterMetricsServiceProviders() {
       std::make_unique<metrics::GPUMetricsProvider>());
 
   metrics_service_->RegisterMetricsProvider(
+      std::make_unique<metrics::RenderingPerfMetricsProvider>());
+
+  metrics_service_->RegisterMetricsProvider(
       std::make_unique<metrics::CPUMetricsProvider>());
+
+  metrics_service_->RegisterMetricsProvider(
+      std::make_unique<metrics::EntropyStateProvider>(local_state));
 
   metrics_service_->RegisterMetricsProvider(
       std::make_unique<metrics::ScreenInfoMetricsProvider>());
@@ -627,9 +660,14 @@ void ChromeMetricsServiceClient::RegisterMetricsServiceProviders() {
   metrics_service_->RegisterMetricsProvider(
       std::make_unique<tracing::BackgroundTracingMetricsProvider>());
 
+  metrics_service_->RegisterMetricsProvider(MakeDemographicMetricsProvider(
+      metrics::MetricsLogUploader::MetricServiceType::UMA));
+
 #if defined(OS_ANDROID)
   metrics_service_->RegisterMetricsProvider(
-      std::make_unique<AndroidMetricsProvider>());
+      std::make_unique<metrics::AndroidMetricsProvider>());
+  metrics_service_->RegisterMetricsProvider(
+      std::make_unique<ChromeAndroidMetricsProvider>());
   metrics_service_->RegisterMetricsProvider(
       std::make_unique<PageLoadMetricsProvider>());
 #endif  // defined(OS_ANDROID)
@@ -637,24 +675,16 @@ void ChromeMetricsServiceClient::RegisterMetricsServiceProviders() {
 #if defined(OS_WIN)
   metrics_service_->RegisterMetricsProvider(
       std::make_unique<GoogleUpdateMetricsProviderWin>());
-
-  base::FilePath user_data_dir;
-  base::FilePath crash_dir;
-  if (!base::PathService::Get(chrome::DIR_USER_DATA, &user_data_dir) ||
-      !base::PathService::Get(chrome::DIR_CRASH_DUMPS, &crash_dir)) {
-    // If either call fails, then clear both.
-    user_data_dir = base::FilePath();
-    crash_dir = base::FilePath();
-  }
   metrics_service_->RegisterMetricsProvider(
-      std::make_unique<browser_watcher::WatcherMetricsProviderWin>(
-          chrome::GetBrowserExitCodesRegistryPath(), user_data_dir, crash_dir,
-          base::Bind(&GetExecutableVersionDetails)));
-
-  metrics_service_->RegisterMetricsProvider(
-      std::make_unique<AntiVirusMetricsProvider>(
-          content::ServiceManagerConnection::GetForProcess()->GetConnector()));
+      std::make_unique<AntiVirusMetricsProvider>());
 #endif  // defined(OS_WIN)
+
+#if defined(OS_WIN) || defined(OS_MACOSX) || \
+    (defined(OS_LINUX) && !defined(OS_CHROMEOS))
+  metrics_service_->RegisterMetricsProvider(
+      std::make_unique<DesktopPlatformFeaturesMetricsProvider>());
+#endif  //  defined(OS_WIN) || defined(OS_MACOSX) || \
+        // (defined(OS_LINUX) && !defined(OS_CHROMEOS))
 
 #if BUILDFLAG(ENABLE_PLUGINS)
   plugin_metrics_provider_ = new PluginMetricsProvider(local_state);
@@ -680,17 +710,30 @@ void ChromeMetricsServiceClient::RegisterMetricsServiceProviders() {
 
   metrics_service_->RegisterMetricsProvider(
       std::make_unique<chromeos::PrinterMetricsProvider>());
+
+  metrics_service_->RegisterMetricsProvider(
+      std::make_unique<metrics::structured::StructuredMetricsProvider>());
+
+  metrics_service_->RegisterMetricsProvider(
+      std::make_unique<AssistantServiceMetricsProvider>());
 #endif  // defined(OS_CHROMEOS)
 
 #if !defined(OS_CHROMEOS)
   metrics_service_->RegisterMetricsProvider(
       SigninStatusMetricsProvider::CreateInstance(
           std::make_unique<ChromeSigninStatusMetricsProviderDelegate>()));
+  // ChromeOS uses ChromeOSMetricsProvider for accessibility metrics provider.
+  metrics_service_->RegisterMetricsProvider(
+      std::make_unique<AccessibilityMetricsProvider>());
 #endif  // !defined(OS_CHROMEOS)
 
   metrics_service_->RegisterMetricsProvider(
       std::make_unique<syncer::DeviceCountMetricsProvider>(base::BindRepeating(
           &DeviceInfoSyncServiceFactory::GetAllDeviceInfoTrackers)));
+
+  metrics_service_->RegisterMetricsProvider(
+      std::make_unique<syncer::PassphraseTypeMetricsProvider>(
+          base::BindRepeating(&ProfileSyncServiceFactory::GetAllSyncServices)));
 
   metrics_service_->RegisterMetricsProvider(
       std::make_unique<HttpsEngagementMetricsProvider>());
@@ -707,13 +750,6 @@ void ChromeMetricsServiceClient::RegisterMetricsServiceProviders() {
   metrics_service_->RegisterMetricsProvider(
       std::make_unique<PowerMetricsProvider>());
 #endif
-
-#if defined(OS_CHROMEOS)
-#if BUILDFLAG(ENABLE_CROS_ASSISTANT)
-  metrics_service_->RegisterMetricsProvider(
-      std::make_unique<AssistantServiceMetricsProvider>());
-#endif  // BUILDFLAG(ENABLE_CROS_ASSISTANT)
-#endif  // defined(OS_CHROMEOS)
 }
 
 void ChromeMetricsServiceClient::RegisterUKMProviders() {
@@ -737,7 +773,7 @@ void ChromeMetricsServiceClient::RegisterUKMProviders() {
   ukm_service_->RegisterMetricsProvider(
       std::make_unique<metrics::ScreenInfoMetricsProvider>());
 
-  // TODO(rkaplow): Support synthetic trials for UKM.
+  // TODO(crbug.com/754877): Support synthetic trials for UKM.
   ukm_service_->RegisterMetricsProvider(
       std::make_unique<variations::FieldTrialsProvider>(nullptr,
                                                         kUKMFieldTrialSuffix));
@@ -754,17 +790,13 @@ void ChromeMetricsServiceClient::CollectFinalHistograms() {
   DCHECK(!waiting_for_collect_final_metrics_step_);
   waiting_for_collect_final_metrics_step_ = true;
 
-  base::Closure callback =
-      base::Bind(&ChromeMetricsServiceClient::OnMemoryDetailCollectionDone,
-                 weak_ptr_factory_.GetWeakPtr());
+  base::OnceClosure callback =
+      base::BindOnce(&ChromeMetricsServiceClient::OnMemoryDetailCollectionDone,
+                     weak_ptr_factory_.GetWeakPtr());
 
-  scoped_refptr<MetricsMemoryDetails> details(
-      new MetricsMemoryDetails(callback));
+  auto details =
+      base::MakeRefCounted<MetricsMemoryDetails>(std::move(callback));
   details->StartFetch();
-
-  scoped_refptr<ProcessMemoryMetricsEmitter> emitter(
-      new ProcessMemoryMetricsEmitter);
-  emitter->FetchAndEmitProcessMemoryMetrics();
 }
 
 void ChromeMetricsServiceClient::OnMemoryDetailCollectionDone() {
@@ -775,7 +807,7 @@ void ChromeMetricsServiceClient::OnMemoryDetailCollectionDone() {
   DCHECK(waiting_for_collect_final_metrics_step_);
 
   // Create a callback_task for OnHistogramSynchronizationDone.
-  base::Closure callback = base::Bind(
+  base::RepeatingClosure callback = base::BindRepeating(
       &ChromeMetricsServiceClient::OnHistogramSynchronizationDone,
       weak_ptr_factory_.GetWeakPtr());
 
@@ -800,7 +832,7 @@ void ChromeMetricsServiceClient::OnMemoryDetailCollectionDone() {
 #endif
 
   // Merge histograms from metrics providers into StatisticsRecorder.
-  base::PostTaskWithTraitsAndReply(
+  base::PostTaskAndReply(
       FROM_HERE, {content::BrowserThread::UI},
       base::BindOnce(&base::StatisticsRecorder::ImportProvidedHistograms),
       callback);
@@ -809,7 +841,7 @@ void ChromeMetricsServiceClient::OnMemoryDetailCollectionDone() {
   // child processes. |timeout| specifies how long to wait before absolutely
   // calling us back on the task.
   content::FetchHistogramsAsynchronously(base::ThreadTaskRunnerHandle::Get(),
-                                         callback, timeout);
+                                         std::move(callback), timeout);
 }
 
 void ChromeMetricsServiceClient::OnHistogramSynchronizationDone() {
@@ -825,7 +857,7 @@ void ChromeMetricsServiceClient::OnHistogramSynchronizationDone() {
     return;
 
   waiting_for_collect_final_metrics_step_ = false;
-  collect_final_metrics_done_callback_.Run();
+  std::move(collect_final_metrics_done_callback_).Run();
 }
 
 void ChromeMetricsServiceClient::RecordCommandLineMetrics() {
@@ -851,14 +883,6 @@ void ChromeMetricsServiceClient::RecordCommandLineMetrics() {
 }
 
 bool ChromeMetricsServiceClient::RegisterForNotifications() {
-  registrar_.Add(this, chrome::NOTIFICATION_BROWSER_OPENED,
-                 content::NotificationService::AllBrowserContextsAndSources());
-  registrar_.Add(this, chrome::NOTIFICATION_BROWSER_CLOSED,
-                 content::NotificationService::AllSources());
-  registrar_.Add(this, chrome::NOTIFICATION_TAB_PARENTED,
-                 content::NotificationService::AllSources());
-  registrar_.Add(this, chrome::NOTIFICATION_TAB_CLOSING,
-                 content::NotificationService::AllSources());
   registrar_.Add(this, content::NOTIFICATION_LOAD_START,
                  content::NotificationService::AllSources());
   registrar_.Add(this, content::NOTIFICATION_LOAD_STOP,
@@ -867,15 +891,19 @@ bool ChromeMetricsServiceClient::RegisterForNotifications() {
                  content::NotificationService::AllSources());
   registrar_.Add(this, content::NOTIFICATION_RENDER_WIDGET_HOST_HANG,
                  content::NotificationService::AllSources());
+  registrar_.Add(this, chrome::NOTIFICATION_PROFILE_ADDED,
+                 content::NotificationService::AllBrowserContextsAndSources());
 
   omnibox_url_opened_subscription_ =
       OmniboxEventGlobalTracker::GetInstance()->RegisterCallback(
           base::Bind(&ChromeMetricsServiceClient::OnURLOpenedFromOmnibox,
                      base::Unretained(this)));
 
-  // Observe history deletions for all profiles.
-  registrar_.Add(this, chrome::NOTIFICATION_PROFILE_ADDED,
-                 content::NotificationService::AllBrowserContextsAndSources());
+#if !defined(OS_ANDROID)
+  browser_activity_watcher_ = std::make_unique<BrowserActivityWatcher>(
+      base::BindRepeating(&metrics::MetricsService::OnApplicationNotIdle,
+                          base::Unretained(metrics_service_.get())));
+#endif
 
   bool all_profiles_succeeded = true;
   for (Profile* profile :
@@ -895,6 +923,22 @@ bool ChromeMetricsServiceClient::RegisterForProfileEvents(Profile* profile) {
       chromeos::ProfileHelper::IsLockScreenAppProfile(profile)) {
     // No listeners, but still a success case.
     return true;
+  }
+
+  // Begin initializing the structured metrics system, which is currently
+  // only implemented for Chrome OS. Initialization must wait until a
+  // profile is added, because it reads keys stored within the user's
+  // cryptohome. We only initialize for profiles that are valid candidates
+  // for metrics collection, ignoring the sign-in profile, lock screen app
+  // profile, and guest sessions.
+  //
+  // TODO(crbug.com/1016655): This conditional would be better placed in
+  // metrics::structured::Recorder, but can't be because it depends on Chrome
+  // code. Investigate whether there's a way of checking this from the
+  // component.
+  if (!profile->IsGuestSession()) {
+    metrics::structured::Recorder::GetInstance()->ProfileAdded(
+        profile->GetPath());
   }
 #endif
 #if defined(OS_WIN) || defined(OS_MACOSX) || \
@@ -918,7 +962,7 @@ bool ChromeMetricsServiceClient::RegisterForProfileEvents(Profile* profile) {
   if (!sync) {
     return false;
   }
-  ObserveServiceForSyncDisables(sync, profile->GetPrefs());
+  StartObserving(sync, profile->GetPrefs());
   return true;
 }
 
@@ -929,12 +973,6 @@ void ChromeMetricsServiceClient::Observe(
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   switch (type) {
-    case chrome::NOTIFICATION_BROWSER_OPENED:
-      metrics_service_->OnApplicationNotIdle();
-      break;
-    case chrome::NOTIFICATION_BROWSER_CLOSED:
-    case chrome::NOTIFICATION_TAB_PARENTED:
-    case chrome::NOTIFICATION_TAB_CLOSING:
     case content::NOTIFICATION_LOAD_STOP:
     case content::NOTIFICATION_LOAD_START:
     case content::NOTIFICATION_RENDERER_PROCESS_CLOSED:
@@ -964,7 +1002,7 @@ void ChromeMetricsServiceClient::OnURLOpenedFromOmnibox(OmniboxLog* log) {
 }
 
 bool ChromeMetricsServiceClient::IsUMACellularUploadLogicEnabled() {
-  return metrics::IsCellularLogicEnabled();
+  return metrics::ShouldUseCellularUploadInterval();
 }
 
 void ChromeMetricsServiceClient::OnHistoryDeleted() {
@@ -972,13 +1010,16 @@ void ChromeMetricsServiceClient::OnHistoryDeleted() {
     ukm_service_->Purge();
 }
 
-void ChromeMetricsServiceClient::OnSyncPrefsChanged(bool must_purge) {
+void ChromeMetricsServiceClient::OnUkmAllowedStateChanged(bool must_purge) {
   if (!ukm_service_)
     return;
   if (must_purge) {
     ukm_service_->Purge();
-    ukm_service_->ResetClientState(ukm::ResetReason::kOnSyncPrefsChanged);
+    ukm_service_->ResetClientState(ukm::ResetReason::kOnUkmAllowedStateChanged);
+  } else if (!IsUkmAllowedWithExtensionsForAllProfiles()) {
+    ukm_service_->PurgeExtensions();
   }
+
   // Signal service manager to enable/disable UKM based on new state.
   UpdateRunningServices();
 }
@@ -1037,12 +1078,12 @@ void ChromeMetricsServiceClient::SetIsProcessRunningForTesting(
   g_is_process_running = func;
 }
 
-bool ChromeMetricsServiceClient::SyncStateAllowsUkm() {
-  return SyncDisableObserver::SyncStateAllowsUkm();
+bool ChromeMetricsServiceClient::IsUkmAllowedForAllProfiles() {
+  return UkmConsentStateObserver::IsUkmAllowedForAllProfiles();
 }
 
-bool ChromeMetricsServiceClient::SyncStateAllowsExtensionUkm() {
-  return SyncDisableObserver::SyncStateAllowsExtensionUkm();
+bool ChromeMetricsServiceClient::IsUkmAllowedWithExtensionsForAllProfiles() {
+  return UkmConsentStateObserver::IsUkmAllowedWithExtensionsForAllProfiles();
 }
 
 bool g_notification_listeners_failed = false;
@@ -1060,14 +1101,15 @@ bool ChromeMetricsServiceClient::
 }
 
 std::string ChromeMetricsServiceClient::GetAppPackageName() {
-#if defined(OS_ANDROID)
-  return base::android::BuildInfo::GetInstance()->package_name();
-#endif
-  return std::string();
+  return metrics::GetAppPackageName();
 }
 
 std::string ChromeMetricsServiceClient::GetUploadSigningKey() {
   std::string decoded_key;
   base::Base64Decode(google_apis::GetMetricsKey(), &decoded_key);
   return decoded_key;
+}
+
+bool ChromeMetricsServiceClient::ShouldResetClientIdsOnClonedInstall() {
+  return metrics_service_->ShouldResetClientIdsOnClonedInstall();
 }

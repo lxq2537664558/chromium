@@ -6,10 +6,10 @@
 
 #include <stdint.h>
 
+#include "chrome/android/chrome_jni_headers/UmaUtils_jni.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/metrics/chrome_metrics_services_manager_client.h"
 #include "components/metrics/metrics_reporting_default_state.h"
-#include "jni/UmaUtils_jni.h"
 
 using base::android::JavaParamRef;
 
@@ -18,10 +18,10 @@ class PrefService;
 namespace chrome {
 namespace android {
 
-base::TimeTicks GetMainEntryPointTimeTicks() {
+base::TimeTicks GetApplicationStartTime() {
   JNIEnv* env = base::android::AttachCurrentThread();
   return base::TimeTicks::FromUptimeMillis(
-      Java_UmaUtils_getMainEntryPointTicks(env));
+      Java_UmaUtils_getApplicationStartTime(env));
 }
 
 static jboolean JNI_UmaUtils_IsClientInMetricsReportingSample(JNIEnv* env) {

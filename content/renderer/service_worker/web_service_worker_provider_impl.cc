@@ -13,8 +13,9 @@
 #include "content/common/service_worker/service_worker_utils.h"
 #include "content/renderer/service_worker/service_worker_provider_context.h"
 #include "content/renderer/service_worker/service_worker_type_converters.h"
+#include "content/renderer/worker/fetch_client_settings_object_helpers.h"
 #include "third_party/blink/public/common/messaging/message_port_channel.h"
-#include "third_party/blink/public/mojom/service_worker/service_worker_provider_type.mojom.h"
+#include "third_party/blink/public/mojom/service_worker/service_worker_container_type.mojom.h"
 #include "third_party/blink/public/mojom/service_worker/service_worker_registration.mojom.h"
 #include "third_party/blink/public/platform/modules/service_worker/web_service_worker_error.h"
 #include "third_party/blink/public/platform/modules/service_worker/web_service_worker_provider_client.h"
@@ -33,10 +34,10 @@ const char kLostConnectionErrorMessage[] =
 
 WebServiceWorkerProviderImpl::WebServiceWorkerProviderImpl(
     ServiceWorkerProviderContext* context)
-    : context_(context), provider_client_(nullptr), weak_factory_(this) {
+    : context_(context), provider_client_(nullptr) {
   DCHECK(context_);
-  DCHECK_EQ(context_->provider_type(),
-            blink::mojom::ServiceWorkerProviderType::kForWindow);
+  DCHECK_EQ(context_->container_type(),
+            blink::mojom::ServiceWorkerContainerType::kForWindow);
   context_->SetWebServiceWorkerProvider(weak_factory_.GetWeakPtr());
 }
 
@@ -63,27 +64,27 @@ void WebServiceWorkerProviderImpl::RegisterServiceWorker(
     const WebURL& web_script_url,
     blink::mojom::ScriptType script_type,
     blink::mojom::ServiceWorkerUpdateViaCache update_via_cache,
+    const blink::WebFetchClientSettingsObject& fetch_client_settings_object,
     std::unique_ptr<WebServiceWorkerRegistrationCallbacks> callbacks) {
   DCHECK(callbacks);
 
   GURL pattern(web_pattern);
   GURL script_url(web_script_url);
+  const std::string error_prefix("Failed to register a ServiceWorker: ");
   if (pattern.possibly_invalid_spec().size() > url::kMaxURLChars ||
       script_url.possibly_invalid_spec().size() > url::kMaxURLChars) {
-    std::string error_message(kServiceWorkerRegisterErrorPrefix);
-    error_message += "The provided scriptURL or scope is too long.";
     callbacks->OnError(blink::WebServiceWorkerError(
         blink::mojom::ServiceWorkerErrorType::kSecurity,
-        blink::WebString::FromASCII(error_message)));
+        blink::WebString::FromASCII(
+            error_prefix + "The provided scriptURL or scope is too long.")));
     return;
   }
 
   if (!context_->container_host()) {
-    std::string error_message(kServiceWorkerRegisterErrorPrefix);
-    error_message += kLostConnectionErrorMessage;
     callbacks->OnError(blink::WebServiceWorkerError(
         blink::mojom::ServiceWorkerErrorType::kAbort,
-        blink::WebString::FromASCII(error_message)));
+        blink::WebString::FromASCII(error_prefix +
+                                    kLostConnectionErrorMessage)));
     return;
   }
 
@@ -99,6 +100,7 @@ void WebServiceWorkerProviderImpl::RegisterServiceWorker(
       pattern, script_type, update_via_cache);
   context_->container_host()->Register(
       script_url, std::move(options),
+      FetchClientSettingsObjectFromWebToMojom(fetch_client_settings_object),
       base::BindOnce(&WebServiceWorkerProviderImpl::OnRegistered,
                      weak_factory_.GetWeakPtr(), std::move(callbacks)));
 }
@@ -108,21 +110,20 @@ void WebServiceWorkerProviderImpl::GetRegistration(
     std::unique_ptr<WebServiceWorkerGetRegistrationCallbacks> callbacks) {
   DCHECK(callbacks);
   GURL document_url(web_document_url);
+  const std::string error_prefix("Failed to get a ServiceWorkerRegistration: ");
   if (document_url.possibly_invalid_spec().size() > url::kMaxURLChars) {
-    std::string error_message(kServiceWorkerGetRegistrationErrorPrefix);
-    error_message += "The provided documentURL is too long.";
     callbacks->OnError(blink::WebServiceWorkerError(
         blink::mojom::ServiceWorkerErrorType::kSecurity,
-        blink::WebString::FromASCII(error_message)));
+        blink::WebString::FromASCII(error_prefix +
+                                    "The provided documentURL is too long.")));
     return;
   }
 
   if (!context_->container_host()) {
-    std::string error_message(kServiceWorkerGetRegistrationErrorPrefix);
-    error_message += kLostConnectionErrorMessage;
     callbacks->OnError(blink::WebServiceWorkerError(
         blink::mojom::ServiceWorkerErrorType::kAbort,
-        blink::WebString::FromASCII(error_message)));
+        blink::WebString::FromASCII(error_prefix +
+                                    kLostConnectionErrorMessage)));
     return;
   }
 
@@ -139,11 +140,12 @@ void WebServiceWorkerProviderImpl::GetRegistrations(
     std::unique_ptr<WebServiceWorkerGetRegistrationsCallbacks> callbacks) {
   DCHECK(callbacks);
   if (!context_->container_host()) {
-    std::string error_message(kServiceWorkerGetRegistrationsErrorPrefix);
-    error_message += kLostConnectionErrorMessage;
+    const std::string error_prefix(
+        "Failed to get ServiceWorkerRegistration objects: ");
     callbacks->OnError(blink::WebServiceWorkerError(
         blink::mojom::ServiceWorkerErrorType::kAbort,
-        blink::WebString::FromASCII(error_message)));
+        blink::WebString::FromASCII(error_prefix +
+                                    kLostConnectionErrorMessage)));
     return;
   }
 
@@ -190,7 +192,7 @@ void WebServiceWorkerProviderImpl::SetController(
   for (blink::mojom::WebFeature feature : features)
     provider_client_->CountFeature(feature);
   provider_client_->SetController(
-      controller.To<blink::WebServiceWorkerObjectInfo>(),
+      std::move(controller).To<blink::WebServiceWorkerObjectInfo>(),
       should_notify_controller_change);
 }
 
@@ -201,7 +203,8 @@ void WebServiceWorkerProviderImpl::PostMessageToClient(
     return;
 
   provider_client_->ReceiveMessage(
-      source.To<blink::WebServiceWorkerObjectInfo>(), std::move(message));
+      std::move(source).To<blink::WebServiceWorkerObjectInfo>(),
+      std::move(message));
 }
 
 void WebServiceWorkerProviderImpl::CountFeature(
@@ -233,7 +236,8 @@ void WebServiceWorkerProviderImpl::OnRegistered(
   DCHECK_NE(blink::mojom::kInvalidServiceWorkerRegistrationId,
             registration->registration_id);
   callbacks->OnSuccess(
-      registration.To<blink::WebServiceWorkerRegistrationObjectInfo>());
+      std::move(registration)
+          .To<blink::WebServiceWorkerRegistrationObjectInfo>());
 }
 
 void WebServiceWorkerProviderImpl::OnDidGetRegistration(
@@ -260,7 +264,8 @@ void WebServiceWorkerProviderImpl::OnDidGetRegistration(
          registration->registration_id !=
              blink::mojom::kInvalidServiceWorkerRegistrationId);
   callbacks->OnSuccess(
-      registration.To<blink::WebServiceWorkerRegistrationObjectInfo>());
+      std::move(registration)
+          .To<blink::WebServiceWorkerRegistrationObjectInfo>());
 }
 
 void WebServiceWorkerProviderImpl::OnDidGetRegistrations(
@@ -290,7 +295,8 @@ void WebServiceWorkerProviderImpl::OnDidGetRegistrations(
     DCHECK_NE(blink::mojom::kInvalidServiceWorkerRegistrationId,
               (*infos)[i]->registration_id);
     registrations.emplace_back(
-        (*infos)[i].To<blink::WebServiceWorkerRegistrationObjectInfo>());
+        std::move((*infos)[i])
+            .To<blink::WebServiceWorkerRegistrationObjectInfo>());
   }
   callbacks->OnSuccess(std::move(registrations));
 }
@@ -314,7 +320,8 @@ void WebServiceWorkerProviderImpl::OnDidGetRegistrationForReady(
   DCHECK_NE(blink::mojom::kInvalidServiceWorkerRegistrationId,
             registration->registration_id);
   std::move(callback).Run(
-      registration.To<blink::WebServiceWorkerRegistrationObjectInfo>());
+      std::move(registration)
+          .To<blink::WebServiceWorkerRegistrationObjectInfo>());
 }
 
 }  // namespace content

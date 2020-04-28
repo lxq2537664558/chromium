@@ -24,6 +24,10 @@
 #include "chromeos/dbus/power_manager/suspend.pb.h"
 #include "third_party/cros_system_api/dbus/service_constants.h"
 
+namespace base {
+class UnguessableToken;
+}
+
 namespace dbus {
 class Bus;
 }
@@ -63,12 +67,23 @@ class COMPONENT_EXPORT(DBUS_POWER) PowerManagerClient {
    public:
     virtual ~Observer() {}
 
+    // Called when the power manager service becomes available. Will be called
+    // immediately and synchronously when a new observer is added to
+    // PowerManagerClient if the service's availability is already known.
+    virtual void PowerManagerBecameAvailable(bool available) {}
+
+    // Called when the power manager is completely initialized.
+    virtual void PowerManagerInitialized() {}
+
     // Called if the power manager process restarts.
     virtual void PowerManagerRestarted() {}
 
     // Called when the screen brightness is changed.
     virtual void ScreenBrightnessChanged(
         const power_manager::BacklightBrightnessChange& change) {}
+
+    // Called when the ambient light changed.
+    virtual void AmbientColorChanged(const int32_t color_temperature) {}
 
     // Called when the keyboard brightness is changed.
     virtual void KeyboardBrightnessChanged(
@@ -103,9 +118,9 @@ class COMPONENT_EXPORT(DBUS_POWER) PowerManagerClient {
     // all observers' implementations of this method have finished running.
     //
     // If an observer wishes to asynchronously delay suspend,
-    // PowerManagerClient::GetSuspendReadinessCallback() may be called from
-    // within SuspendImminent().  The returned callback must be called once
-    // the observer is ready for suspend.
+    // PowerManagerClient::BlockSuspend() may be called from within
+    // SuspendImminent().  UnblockSuspend() must be called once the observer is
+    // ready for suspend.
     virtual void SuspendImminent(
         power_manager::SuspendImminent::Reason reason) {}
 
@@ -117,10 +132,16 @@ class COMPONENT_EXPORT(DBUS_POWER) PowerManagerClient {
     // Called when the system is about to resuspend from a dark resume.  Like
     // SuspendImminent(), the suspend will be deferred until all observers have
     // finished running and those observers that wish to asynchronously delay
-    // the suspend should call PowerManagerClient::GetSuspendReadinessCallback()
-    // from within this method.  The returned callback should be run once the
+    // the suspend should call PowerManagerClient::BlockSuspend()
+    // from within this method.  UnblockSuspend() must be called once the
     // observer is ready for suspend.
     virtual void DarkSuspendImminent() {}
+
+    // Called when the browser is about to request shutdown. Shutdown is
+    // deferred until all observers' implementations of this method have
+    // finished running.
+    virtual void ShutdownRequested(
+        power_manager::RequestShutdownReason reason) {}
 
     // Called when the power button is pressed or released.
     virtual void PowerButtonEventReceived(bool down,
@@ -136,9 +157,6 @@ class COMPONENT_EXPORT(DBUS_POWER) PowerManagerClient {
     virtual void TabletModeEventReceived(TabletMode mode,
                                          const base::TimeTicks& timestamp) {}
 
-    // Called just before the screen is dimmed in response to user inactivity.
-    virtual void ScreenDimImminent() {}
-
     // Called when the idle action will be performed after
     // |time_until_idle_action|.
     virtual void IdleActionImminent(
@@ -153,10 +171,6 @@ class COMPONENT_EXPORT(DBUS_POWER) PowerManagerClient {
   virtual void AddObserver(Observer* observer) = 0;
   virtual void RemoveObserver(Observer* observer) = 0;
   virtual bool HasObserver(const Observer* observer) const = 0;
-
-  // Runs the callback as soon as the service becomes available.
-  virtual void WaitForServiceToBeAvailable(
-      WaitForServiceToBeAvailableCallback callback) = 0;
 
   // Interface for managing the power consumption of renderer processes.
   class RenderProcessManagerDelegate {
@@ -274,10 +288,20 @@ class COMPONENT_EXPORT(DBUS_POWER) PowerManagerClient {
       DBusMethodCallback<power_manager::PowerManagementPolicy::Delays>
           callback) = 0;
 
-  // Returns a callback that can be called by an observer to report readiness
-  // for suspend. See Observer::SuspendImminent().
-  virtual base::OnceClosure GetSuspendReadinessCallback(
-      const base::Location& from_where) = 0;
+  // Used by client code to temporarily block an imminent suspend (for up to
+  // kSuspendDelayTimeoutMs, i.e. 5 seconds). See Observer::SuspendImminent.
+  // |debug_info| should be a human-readable string that assists in determining
+  // what code called BlockSuspend(). Afterwards, callers must release the block
+  // via UnblockSuspend.
+  virtual void BlockSuspend(const base::UnguessableToken& token,
+                            const std::string& debug_info) = 0;
+
+  // Used to indicate that the client code which passed |token| before is now
+  // ready for a suspend.
+  virtual void UnblockSuspend(const base::UnguessableToken& token) = 0;
+
+  // Whether the device supports Ambient color.
+  virtual bool SupportsAmbientColor() = 0;
 
   // Creates timers corresponding to clocks present in |arc_timer_requests|.
   // ScopedFDs are used to indicate timer expiration as described in
@@ -309,10 +333,8 @@ class COMPONENT_EXPORT(DBUS_POWER) PowerManagerClient {
   virtual void DeleteArcTimers(const std::string& tag,
                                VoidDBusMethodCallback callback) = 0;
 
-  // Instructs powerd to defer dimming the screen. This only has an effect when
-  // called shortly (i.e. seconds) after observers have received
-  // ScreenDimImminent notifications.
-  virtual void DeferScreenDim() = 0;
+  // The time power manager will wait before resuspending from a dark resume.
+  virtual base::TimeDelta GetDarkSuspendDelayTimeout() = 0;
 
   PowerManagerClient();
   virtual ~PowerManagerClient();

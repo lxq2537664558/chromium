@@ -19,6 +19,7 @@
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
 #include "base/threading/scoped_blocking_call.h"
+#include "base/threading/scoped_thread_priority.h"
 #include "base/win/win_util.h"
 #include "base/win/windows_version.h"
 #include "ui/base/ui_base_switches.h"
@@ -53,6 +54,11 @@ bool InvokeShellExecute(const base::string16 path,
   sei.lpDirectory =
       (working_directory.empty() ? nullptr : working_directory.c_str());
   sei.lpParameters = (args.empty() ? nullptr : args.c_str());
+
+  // Mitigate the issues caused by loading DLLs on a background thread
+  // (http://crbug/973868).
+  SCOPED_MAY_LOAD_LIBRARY_AT_BACKGROUND_PRIORITY();
+
   return ::ShellExecuteExW(&sei);
 }
 
@@ -185,7 +191,7 @@ bool IsAeroGlassEnabled() {
 bool IsDwmCompositionEnabled() {
   // As of Windows 8, DWM composition is always enabled.
   // In Windows 7 this can change at runtime.
-  if (base::win::GetVersion() >= base::win::VERSION_WIN8) {
+  if (base::win::GetVersion() >= base::win::Version::WIN8) {
     return true;
   }
   BOOL is_enabled;

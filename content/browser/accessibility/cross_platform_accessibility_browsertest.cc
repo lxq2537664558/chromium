@@ -11,6 +11,7 @@
 
 #include "base/macros.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/test/scoped_feature_list.h"
 #include "build/build_config.h"
 #include "content/browser/accessibility/browser_accessibility.h"
 #include "content/browser/accessibility/browser_accessibility_manager.h"
@@ -19,11 +20,12 @@
 #include "content/public/browser/notification_service.h"
 #include "content/public/browser/notification_types.h"
 #include "content/public/browser/render_widget_host_view.h"
+#include "content/public/test/accessibility_notification_waiter.h"
 #include "content/public/test/browser_test_utils.h"
 #include "content/public/test/content_browser_test.h"
 #include "content/public/test/content_browser_test_utils.h"
 #include "content/shell/browser/shell.h"
-#include "content/test/accessibility_browser_test_utils.h"
+#include "third_party/blink/public/common/features.h"
 #include "ui/accessibility/ax_node.h"
 #include "ui/accessibility/ax_tree.h"
 
@@ -62,8 +64,8 @@ class CrossPlatformAccessibilityBrowserTest : public ContentBrowserTest {
                                 std::unordered_set<int>* ids) {
     ASSERT_TRUE(ids->find(node->id()) == ids->end());
     ids->insert(node->id());
-    for (int i = 0; i < node->child_count(); i++)
-      RecursiveAssertUniqueIds(node->ChildAtIndex(i), ids);
+    for (const auto* child : node->children())
+      RecursiveAssertUniqueIds(child, ids);
   }
 
   // ContentBrowserTest
@@ -77,7 +79,7 @@ class CrossPlatformAccessibilityBrowserTest : public ContentBrowserTest {
     AccessibilityNotificationWaiter waiter(shell()->web_contents(),
                                            accessibility_mode,
                                            ax::mojom::Event::kLoadComplete);
-    NavigateToURL(shell(), url);
+    EXPECT_TRUE(NavigateToURL(shell(), url));
     waiter.WaitForNotification();
   }
 
@@ -162,6 +164,24 @@ bool CrossPlatformAccessibilityBrowserTest::GetBoolAttr(
   return false;
 }
 
+namespace {
+
+// Convenience method to find a node by its role value.
+BrowserAccessibility* FindNodeByRole(BrowserAccessibility* root,
+                                     ax::mojom::Role role) {
+  if (root->GetRole() == role)
+    return root;
+  for (uint32_t i = 0; i < root->InternalChildCount(); ++i) {
+    BrowserAccessibility* child = root->InternalGetChild(i);
+    DCHECK(child);
+    if (BrowserAccessibility* result = FindNodeByRole(child, role))
+      return result;
+  }
+  return nullptr;
+}
+
+}  // namespace
+
 IN_PROC_BROWSER_TEST_F(CrossPlatformAccessibilityBrowserTest,
                        WebpageAccessibility) {
   // Create a data url and load it.
@@ -172,7 +192,7 @@ IN_PROC_BROWSER_TEST_F(CrossPlatformAccessibilityBrowserTest,
       "<body><input type='button' value='push' /><input type='checkbox' />"
       "</body></html>";
   GURL url(url_str);
-  NavigateToURL(shell(), url);
+  EXPECT_TRUE(NavigateToURL(shell(), url));
   const ui::AXTree& tree = GetAXTree();
   const ui::AXNode* root = tree.root();
 
@@ -188,8 +208,8 @@ IN_PROC_BROWSER_TEST_F(CrossPlatformAccessibilityBrowserTest,
   EXPECT_EQ(ax::mojom::Role::kRootWebArea, root->data().role);
 
   // Check properties of the BODY element.
-  ASSERT_EQ(1, root->child_count());
-  const ui::AXNode* body = root->ChildAtIndex(0);
+  ASSERT_EQ(1u, root->GetUnignoredChildCount());
+  const ui::AXNode* body = root->GetUnignoredChildAtIndex(0);
   EXPECT_EQ(ax::mojom::Role::kGenericContainer, body->data().role);
   EXPECT_STREQ("body",
                GetAttr(body, ax::mojom::StringAttribute::kHtmlTag).c_str());
@@ -197,9 +217,9 @@ IN_PROC_BROWSER_TEST_F(CrossPlatformAccessibilityBrowserTest,
                GetAttr(body, ax::mojom::StringAttribute::kDisplay).c_str());
 
   // Check properties of the two children of the BODY element.
-  ASSERT_EQ(2, body->child_count());
+  ASSERT_EQ(2u, body->GetUnignoredChildCount());
 
-  const ui::AXNode* button = body->ChildAtIndex(0);
+  const ui::AXNode* button = body->GetUnignoredChildAtIndex(0);
   EXPECT_EQ(ax::mojom::Role::kButton, button->data().role);
   EXPECT_STREQ("input",
                GetAttr(button, ax::mojom::StringAttribute::kHtmlTag).c_str());
@@ -213,7 +233,7 @@ IN_PROC_BROWSER_TEST_F(CrossPlatformAccessibilityBrowserTest,
   EXPECT_STREQ("value", button->data().html_attributes[1].first.c_str());
   EXPECT_STREQ("push", button->data().html_attributes[1].second.c_str());
 
-  const ui::AXNode* checkbox = body->ChildAtIndex(1);
+  const ui::AXNode* checkbox = body->GetUnignoredChildAtIndex(1);
   EXPECT_EQ(ax::mojom::Role::kCheckBox, checkbox->data().role);
   EXPECT_STREQ("input",
                GetAttr(checkbox, ax::mojom::StringAttribute::kHtmlTag).c_str());
@@ -234,14 +254,14 @@ IN_PROC_BROWSER_TEST_F(CrossPlatformAccessibilityBrowserTest,
       "<input value=\"Hello, world.\"/>"
       "</body></html>";
   GURL url(url_str);
-  NavigateToURL(shell(), url);
+  EXPECT_TRUE(NavigateToURL(shell(), url));
 
   const ui::AXTree& tree = GetAXTree();
   const ui::AXNode* root = tree.root();
-  ASSERT_EQ(1, root->child_count());
-  const ui::AXNode* body = root->ChildAtIndex(0);
-  ASSERT_EQ(1, body->child_count());
-  const ui::AXNode* text = body->ChildAtIndex(0);
+  ASSERT_EQ(1u, root->GetUnignoredChildCount());
+  const ui::AXNode* body = root->GetUnignoredChildAtIndex(0);
+  ASSERT_EQ(1u, body->GetUnignoredChildCount());
+  const ui::AXNode* text = body->GetUnignoredChildAtIndex(0);
   EXPECT_EQ(ax::mojom::Role::kTextField, text->data().role);
   EXPECT_STREQ("input",
                GetAttr(text, ax::mojom::StringAttribute::kHtmlTag).c_str());
@@ -265,14 +285,14 @@ IN_PROC_BROWSER_TEST_F(CrossPlatformAccessibilityBrowserTest,
       "<input value=\"Hello, world.\"/>"
       "</body></html>";
   GURL url(url_str);
-  NavigateToURL(shell(), url);
+  EXPECT_TRUE(NavigateToURL(shell(), url));
 
   const ui::AXTree& tree = GetAXTree();
   const ui::AXNode* root = tree.root();
-  ASSERT_EQ(1, root->child_count());
-  const ui::AXNode* body = root->ChildAtIndex(0);
-  ASSERT_EQ(1, body->child_count());
-  const ui::AXNode* text = body->ChildAtIndex(0);
+  ASSERT_EQ(1u, root->GetUnignoredChildCount());
+  const ui::AXNode* body = root->GetUnignoredChildAtIndex(0);
+  ASSERT_EQ(1u, body->GetUnignoredChildCount());
+  const ui::AXNode* text = body->GetUnignoredChildAtIndex(0);
   EXPECT_EQ(ax::mojom::Role::kTextField, text->data().role);
   EXPECT_STREQ("input",
                GetAttr(text, ax::mojom::StringAttribute::kHtmlTag).c_str());
@@ -297,7 +317,7 @@ IN_PROC_BROWSER_TEST_F(CrossPlatformAccessibilityBrowserTest,
       "  }, 1);\n"
       "</script>";
   GURL url(url_str);
-  NavigateToURL(shell(), url);
+  EXPECT_TRUE(NavigateToURL(shell(), url));
 
   const ui::AXTree& tree = GetAXTree();
   const ui::AXNode* root = tree.root();
@@ -319,40 +339,152 @@ IN_PROC_BROWSER_TEST_F(CrossPlatformAccessibilityBrowserTest,
       "<button>Button 3</button>"
       "</body></html>";
   GURL url(url_str);
-  NavigateToURL(shell(), url);
+  EXPECT_TRUE(NavigateToURL(shell(), url));
 
   const ui::AXTree& tree = GetAXTree();
   const ui::AXNode* root = tree.root();
-  ASSERT_EQ(1, root->child_count());
-  const ui::AXNode* body = root->ChildAtIndex(0);
-  ASSERT_EQ(3, body->child_count());
+  ASSERT_EQ(1u, root->GetUnignoredChildCount());
+  const ui::AXNode* body = root->GetUnignoredChildAtIndex(0);
+  ASSERT_EQ(3u, body->GetUnignoredChildCount());
 
-  const ui::AXNode* button1 = body->ChildAtIndex(0);
+  const ui::AXNode* button1 = body->GetUnignoredChildAtIndex(0);
   EXPECT_EQ(ax::mojom::Role::kButton, button1->data().role);
   EXPECT_STREQ("Button 1",
                GetAttr(button1, ax::mojom::StringAttribute::kName).c_str());
 
-  const ui::AXNode* iframe = body->ChildAtIndex(1);
+  const ui::AXNode* iframe = body->GetUnignoredChildAtIndex(1);
   EXPECT_STREQ("iframe",
                GetAttr(iframe, ax::mojom::StringAttribute::kHtmlTag).c_str());
-  ASSERT_EQ(1, iframe->child_count());
+  ASSERT_EQ(1u, iframe->GetUnignoredChildCount());
 
-  const ui::AXNode* sub_document = iframe->ChildAtIndex(0);
+  const ui::AXNode* sub_document = iframe->GetUnignoredChildAtIndex(0);
   EXPECT_EQ(ax::mojom::Role::kWebArea, sub_document->data().role);
-  ASSERT_EQ(1, sub_document->child_count());
+  ASSERT_EQ(1u, sub_document->GetUnignoredChildCount());
 
-  const ui::AXNode* sub_body = sub_document->ChildAtIndex(0);
-  ASSERT_EQ(1, sub_body->child_count());
+  const ui::AXNode* sub_body = sub_document->GetUnignoredChildAtIndex(0);
+  ASSERT_EQ(1u, sub_body->GetUnignoredChildCount());
 
-  const ui::AXNode* button2 = sub_body->ChildAtIndex(0);
+  const ui::AXNode* button2 = sub_body->GetUnignoredChildAtIndex(0);
   EXPECT_EQ(ax::mojom::Role::kButton, button2->data().role);
   EXPECT_STREQ("Button 2",
                GetAttr(button2, ax::mojom::StringAttribute::kName).c_str());
 
-  const ui::AXNode* button3 = body->ChildAtIndex(2);
+  const ui::AXNode* button3 = body->GetUnignoredChildAtIndex(2);
   EXPECT_EQ(ax::mojom::Role::kButton, button3->data().role);
   EXPECT_STREQ("Button 3",
                GetAttr(button3, ax::mojom::StringAttribute::kName).c_str());
+}
+
+IN_PROC_BROWSER_TEST_F(CrossPlatformAccessibilityBrowserTest,
+                       PlatformIframeAccessibility) {
+  AccessibilityNotificationWaiter waiter(shell()->web_contents(),
+                                         ui::kAXModeComplete,
+                                         ax::mojom::Event::kLoadComplete);
+  // Create a data url and load it.
+  GURL url(
+      "data:text/html,"
+      "<!doctype html><html><body>"
+      "<button>Button 1</button>"
+      "<iframe src='data:text/html,"
+      "<!doctype html><html><body><button>Button 2</button></body></html>"
+      "'></iframe>"
+      "<button>Button 3</button>"
+      "</body></html>");
+
+  EXPECT_TRUE(NavigateToURL(shell(), url));
+  waiter.WaitForNotification();
+  WaitForAccessibilityTreeToContainNodeWithName(shell()->web_contents(),
+                                                "Button 2");
+
+  const BrowserAccessibility* root = GetManager()->GetRoot();
+  ASSERT_EQ(1U, root->PlatformChildCount());
+  const BrowserAccessibility* body = root->PlatformGetChild(0);
+  ASSERT_EQ(3U, body->PlatformChildCount());
+
+  const BrowserAccessibility* button1 = body->PlatformGetChild(0);
+  EXPECT_EQ(ax::mojom::Role::kButton, button1->GetData().role);
+  EXPECT_STREQ(
+      "Button 1",
+      GetAttr(button1->node(), ax::mojom::StringAttribute::kName).c_str());
+
+  const BrowserAccessibility* iframe = body->PlatformGetChild(1);
+  EXPECT_STREQ(
+      "iframe",
+      GetAttr(iframe->node(), ax::mojom::StringAttribute::kHtmlTag).c_str());
+  EXPECT_EQ(1U, iframe->PlatformChildCount());
+
+  const BrowserAccessibility* sub_document = iframe->PlatformGetChild(0);
+  EXPECT_EQ(ax::mojom::Role::kRootWebArea, sub_document->GetData().role);
+  ASSERT_EQ(1U, sub_document->PlatformChildCount());
+
+  const BrowserAccessibility* sub_body = sub_document->PlatformGetChild(0);
+  ASSERT_EQ(1U, sub_body->PlatformChildCount());
+
+  const BrowserAccessibility* button2 = sub_body->PlatformGetChild(0);
+  EXPECT_EQ(ax::mojom::Role::kButton, button2->GetData().role);
+  EXPECT_STREQ(
+      "Button 2",
+      GetAttr(button2->node(), ax::mojom::StringAttribute::kName).c_str());
+
+  const BrowserAccessibility* button3 = body->PlatformGetChild(2);
+  EXPECT_EQ(ax::mojom::Role::kButton, button3->GetData().role);
+  EXPECT_STREQ(
+      "Button 3",
+      GetAttr(button3->node(), ax::mojom::StringAttribute::kName).c_str());
+}
+
+IN_PROC_BROWSER_TEST_F(CrossPlatformAccessibilityBrowserTest,
+                       PlatformIterator) {
+  AccessibilityNotificationWaiter waiter(shell()->web_contents(),
+                                         ui::kAXModeComplete,
+                                         ax::mojom::Event::kLoadComplete);
+  // Create a data url and load it.
+  GURL url(
+      "data:text/html,"
+      "<!doctype html><html><body>"
+      "<button>Button 1</button>"
+      "<iframe src='data:text/html,"
+      "<!doctype html><html><body>"
+      "<button>Button 2</button>"
+      "<button>Button 3</button>"
+      "</body></html>'></iframe>"
+      "<button>Button 4</button>"
+      "</body></html>");
+
+  EXPECT_TRUE(NavigateToURL(shell(), url));
+  waiter.WaitForNotification();
+  WaitForAccessibilityTreeToContainNodeWithName(shell()->web_contents(),
+                                                "Button 2");
+  const BrowserAccessibility* root = GetManager()->GetRoot();
+  BrowserAccessibility::PlatformChildIterator it =
+      root->PlatformChildrenBegin();
+  EXPECT_EQ(ax::mojom::Role::kGenericContainer, (*it).GetData().role);
+  it = (*it).PlatformChildrenBegin();
+  EXPECT_STREQ(
+      "Button 1",
+      GetAttr((*it).node(), ax::mojom::StringAttribute::kName).c_str());
+  ++it;
+  EXPECT_STREQ(
+      "iframe",
+      GetAttr((*it).node(), ax::mojom::StringAttribute::kHtmlTag).c_str());
+  EXPECT_EQ(1U, (*it).PlatformChildCount());
+  auto iframe_iterator = (*it).PlatformChildrenBegin();
+  EXPECT_EQ(ax::mojom::Role::kRootWebArea, (*iframe_iterator).GetData().role);
+  iframe_iterator = (*iframe_iterator).PlatformChildrenBegin();
+  EXPECT_EQ(ax::mojom::Role::kGenericContainer,
+            (*iframe_iterator).GetData().role);
+  iframe_iterator = (*iframe_iterator).PlatformChildrenBegin();
+  EXPECT_STREQ("Button 2", GetAttr((*iframe_iterator).node(),
+                                   ax::mojom::StringAttribute::kName)
+                               .c_str());
+  ++iframe_iterator;
+  EXPECT_STREQ("Button 3", GetAttr((*iframe_iterator).node(),
+                                   ax::mojom::StringAttribute::kName)
+                               .c_str());
+  ++it;
+  EXPECT_STREQ(
+      "Button 4",
+      GetAttr((*it).node(), ax::mojom::StringAttribute::kName).c_str());
 }
 
 IN_PROC_BROWSER_TEST_F(CrossPlatformAccessibilityBrowserTest,
@@ -365,7 +497,7 @@ IN_PROC_BROWSER_TEST_F(CrossPlatformAccessibilityBrowserTest,
       "<!doctype html>"
       "<em><code ><h4 ></em>";
   GURL url(url_str);
-  NavigateToURL(shell(), url);
+  EXPECT_TRUE(NavigateToURL(shell(), url));
 
   const ui::AXTree& tree = GetAXTree();
   const ui::AXNode* root = tree.root();
@@ -392,22 +524,28 @@ IN_PROC_BROWSER_TEST_F(CrossPlatformAccessibilityBrowserTest, MAYBE_TableSpan) {
       " </tr>"
       "</table>";
   GURL url(url_str);
-  NavigateToURL(shell(), url);
+  EXPECT_TRUE(NavigateToURL(shell(), url));
 
   const ui::AXTree& tree = GetAXTree();
   const ui::AXNode* root = tree.root();
-  const ui::AXNode* table = root->ChildAtIndex(0);
+  const ui::AXNode* table = root->GetUnignoredChildAtIndex(0);
   EXPECT_EQ(ax::mojom::Role::kTable, table->data().role);
-  ASSERT_GE(table->child_count(), 2);
-  EXPECT_EQ(ax::mojom::Role::kRow, table->ChildAtIndex(0)->data().role);
-  EXPECT_EQ(ax::mojom::Role::kRow, table->ChildAtIndex(1)->data().role);
+  ASSERT_GE(table->GetUnignoredChildCount(), 2u);
+  EXPECT_EQ(ax::mojom::Role::kRow,
+            table->GetUnignoredChildAtIndex(0)->data().role);
+  EXPECT_EQ(ax::mojom::Role::kRow,
+            table->GetUnignoredChildAtIndex(1)->data().role);
   EXPECT_EQ(3, GetIntAttr(table, ax::mojom::IntAttribute::kTableColumnCount));
   EXPECT_EQ(2, GetIntAttr(table, ax::mojom::IntAttribute::kTableRowCount));
 
-  const ui::AXNode* cell1 = table->ChildAtIndex(0)->ChildAtIndex(0);
-  const ui::AXNode* cell2 = table->ChildAtIndex(0)->ChildAtIndex(1);
-  const ui::AXNode* cell3 = table->ChildAtIndex(1)->ChildAtIndex(0);
-  const ui::AXNode* cell4 = table->ChildAtIndex(1)->ChildAtIndex(1);
+  const ui::AXNode* cell1 =
+      table->GetUnignoredChildAtIndex(0)->GetUnignoredChildAtIndex(0);
+  const ui::AXNode* cell2 =
+      table->GetUnignoredChildAtIndex(0)->GetUnignoredChildAtIndex(1);
+  const ui::AXNode* cell3 =
+      table->GetUnignoredChildAtIndex(1)->GetUnignoredChildAtIndex(0);
+  const ui::AXNode* cell4 =
+      table->GetUnignoredChildAtIndex(1)->GetUnignoredChildAtIndex(1);
 
   EXPECT_EQ(0,
             GetIntAttr(cell1, ax::mojom::IntAttribute::kTableCellColumnIndex));
@@ -437,11 +575,11 @@ IN_PROC_BROWSER_TEST_F(CrossPlatformAccessibilityBrowserTest, WritableElement) {
       " Some text"
       "</div>";
   GURL url(url_str);
-  NavigateToURL(shell(), url);
+  EXPECT_TRUE(NavigateToURL(shell(), url));
   const ui::AXTree& tree = GetAXTree();
   const ui::AXNode* root = tree.root();
-  ASSERT_EQ(1, root->child_count());
-  const ui::AXNode* textbox = root->ChildAtIndex(0);
+  ASSERT_EQ(1u, root->GetUnignoredChildCount());
+  const ui::AXNode* textbox = root->GetUnignoredChildAtIndex(0);
   EXPECT_TRUE(textbox->data().HasAction(ax::mojom::Action::kSetValue));
 }
 
@@ -458,21 +596,21 @@ IN_PROC_BROWSER_TEST_F(CrossPlatformAccessibilityBrowserTest,
       "<th scope='col'>col header 3</th>"
       "</tr></table>";
   GURL url(url_str);
-  NavigateToURL(shell(), url);
+  EXPECT_TRUE(NavigateToURL(shell(), url));
 
   const ui::AXTree& tree = GetAXTree();
   const ui::AXNode* root = tree.root();
-  const ui::AXNode* table = root->ChildAtIndex(0);
+  const ui::AXNode* table = root->GetUnignoredChildAtIndex(0);
   EXPECT_EQ(ax::mojom::Role::kTable, table->data().role);
-  EXPECT_EQ(1, table->child_count());
-  const ui::AXNode* row = table->ChildAtIndex(0);
-  EXPECT_EQ(5, row->child_count());
+  EXPECT_EQ(1u, table->GetUnignoredChildCount());
+  const ui::AXNode* row = table->GetUnignoredChildAtIndex(0);
+  EXPECT_EQ(5u, row->GetUnignoredChildCount());
 
-  const ui::AXNode* header1 = row->ChildAtIndex(0);
-  const ui::AXNode* header2 = row->ChildAtIndex(1);
-  const ui::AXNode* header3 = row->ChildAtIndex(2);
-  const ui::AXNode* header4 = row->ChildAtIndex(3);
-  const ui::AXNode* header5 = row->ChildAtIndex(4);
+  const ui::AXNode* header1 = row->GetUnignoredChildAtIndex(0);
+  const ui::AXNode* header2 = row->GetUnignoredChildAtIndex(1);
+  const ui::AXNode* header3 = row->GetUnignoredChildAtIndex(2);
+  const ui::AXNode* header4 = row->GetUnignoredChildAtIndex(3);
+  const ui::AXNode* header5 = row->GetUnignoredChildAtIndex(4);
 
   EXPECT_EQ(static_cast<int>(ax::mojom::SortDirection::kAscending),
             GetIntAttr(header1, ax::mojom::IntAttribute::kSortDirection));
@@ -513,7 +651,7 @@ IN_PROC_BROWSER_TEST_F(CrossPlatformAccessibilityBrowserTest,
       "<div role='region' aria-label='region'></div>"
       "<div role='search' aria-label='search'></div>");
 
-  NavigateToURL(shell(), url);
+  EXPECT_TRUE(NavigateToURL(shell(), url));
   waiter.WaitForNotification();
 
   BrowserAccessibility* root = GetManager()->GetRoot();
@@ -535,17 +673,17 @@ IN_PROC_BROWSER_TEST_F(CrossPlatformAccessibilityBrowserTest,
       };
 
   // For testing purposes, assume we get en-US localized strings.
-  TestLocalizedLandmarkType(0, ax::mojom::Role::kBanner, "header",
+  TestLocalizedLandmarkType(0, ax::mojom::Role::kHeader, "header",
                             base::ASCIIToUTF16("banner"));
   TestLocalizedLandmarkType(1, ax::mojom::Role::kComplementary, "aside",
                             base::ASCIIToUTF16("complementary"));
   TestLocalizedLandmarkType(2, ax::mojom::Role::kFooter, "footer",
-                            base::ASCIIToUTF16("content info"));
+                            base::ASCIIToUTF16("content information"));
   TestLocalizedLandmarkType(3, ax::mojom::Role::kForm, "form");
   TestLocalizedLandmarkType(4, ax::mojom::Role::kMain, "main");
   TestLocalizedLandmarkType(5, ax::mojom::Role::kNavigation, "nav");
-  TestLocalizedLandmarkType(6, ax::mojom::Role::kRegion, "");
-  TestLocalizedLandmarkType(7, ax::mojom::Role::kRegion, "section",
+  TestLocalizedLandmarkType(6, ax::mojom::Role::kSection, "");
+  TestLocalizedLandmarkType(7, ax::mojom::Role::kSection, "section",
                             base::ASCIIToUTF16("region"));
 
   TestLocalizedLandmarkType(8, ax::mojom::Role::kBanner, "banner",
@@ -553,7 +691,7 @@ IN_PROC_BROWSER_TEST_F(CrossPlatformAccessibilityBrowserTest,
   TestLocalizedLandmarkType(9, ax::mojom::Role::kComplementary, "complementary",
                             base::ASCIIToUTF16("complementary"));
   TestLocalizedLandmarkType(10, ax::mojom::Role::kContentInfo, "contentinfo",
-                            base::ASCIIToUTF16("content info"));
+                            base::ASCIIToUTF16("content information"));
   TestLocalizedLandmarkType(11, ax::mojom::Role::kForm, "role_form");
   TestLocalizedLandmarkType(12, ax::mojom::Role::kMain, "role_main");
   TestLocalizedLandmarkType(13, ax::mojom::Role::kNavigation, "role_nav");
@@ -561,6 +699,83 @@ IN_PROC_BROWSER_TEST_F(CrossPlatformAccessibilityBrowserTest,
   TestLocalizedLandmarkType(15, ax::mojom::Role::kRegion, "region",
                             base::ASCIIToUTF16("region"));
   TestLocalizedLandmarkType(16, ax::mojom::Role::kSearch, "search");
+}
+
+// TODO(https://crbug.com/1020456) re-enable when crashing on linux is resolved.
+#if defined(OS_LINUX)
+#define MAYBE_LocalizedRoleDescription DISABLED_LocalizedRoleDescription
+#else
+#define MAYBE_LocalizedRoleDescription LocalizedRoleDescription
+#endif
+IN_PROC_BROWSER_TEST_F(CrossPlatformAccessibilityBrowserTest,
+                       MAYBE_LocalizedRoleDescription) {
+  AccessibilityNotificationWaiter waiter(shell()->web_contents(),
+                                         ui::kAXModeComplete,
+                                         ax::mojom::Event::kLoadComplete);
+  GURL url(
+      "data:text/html,"
+      "<article></article>"
+      "<audio controls></audio>"
+      "<details></details>"
+      "<figure></figure>"
+      "<footer></footer>"
+      "<header></header>"
+      "<input>"
+      "<input type='color'>"
+      "<input type='date'>"
+      "<input type='datetime-local'>"
+      "<input type='email'>"
+      "<input type='tel'>"
+      "<input type='url'>"
+      "<input type='week'>"
+      "<mark></mark>"
+      "<meter></meter>"
+      "<output></output>"
+      "<section></section>"
+      "<section aria-label='section'></section>"
+      "<time></time>"
+      "<div role='contentinfo' aria-label='contentinfo'></div>");
+
+  EXPECT_TRUE(NavigateToURL(shell(), url));
+  waiter.WaitForNotification();
+
+  BrowserAccessibility* root = GetManager()->GetRoot();
+  ASSERT_NE(nullptr, root);
+  ASSERT_EQ(21u, root->PlatformChildCount());
+
+  auto TestLocalizedRoleDescription =
+      [root](int child_index,
+             const base::string16& expected_localized_role_description = {}) {
+        BrowserAccessibility* node = root->PlatformGetChild(child_index);
+        ASSERT_NE(nullptr, node);
+
+        EXPECT_EQ(expected_localized_role_description,
+                  node->GetLocalizedStringForRoleDescription());
+      };
+
+  // For testing purposes, assume we get en-US localized strings.
+  TestLocalizedRoleDescription(0, base::ASCIIToUTF16("article"));
+  TestLocalizedRoleDescription(1, base::ASCIIToUTF16("audio"));
+  TestLocalizedRoleDescription(2, base::ASCIIToUTF16("details"));
+  TestLocalizedRoleDescription(3, base::ASCIIToUTF16("figure"));
+  TestLocalizedRoleDescription(4, base::ASCIIToUTF16("footer"));
+  TestLocalizedRoleDescription(5, base::ASCIIToUTF16("header"));
+  TestLocalizedRoleDescription(6, base::ASCIIToUTF16(""));
+  TestLocalizedRoleDescription(7, base::ASCIIToUTF16("color picker"));
+  TestLocalizedRoleDescription(8, base::ASCIIToUTF16("date picker"));
+  TestLocalizedRoleDescription(
+      9, base::ASCIIToUTF16("local date and time picker"));
+  TestLocalizedRoleDescription(10, base::ASCIIToUTF16("email"));
+  TestLocalizedRoleDescription(11, base::ASCIIToUTF16("telephone"));
+  TestLocalizedRoleDescription(12, base::ASCIIToUTF16("url"));
+  TestLocalizedRoleDescription(13, base::ASCIIToUTF16("week picker"));
+  TestLocalizedRoleDescription(14, base::ASCIIToUTF16("highlight"));
+  TestLocalizedRoleDescription(15, base::ASCIIToUTF16("meter"));
+  TestLocalizedRoleDescription(16, base::ASCIIToUTF16("output"));
+  TestLocalizedRoleDescription(17, base::ASCIIToUTF16(""));
+  TestLocalizedRoleDescription(18, base::ASCIIToUTF16("section"));
+  TestLocalizedRoleDescription(19, base::ASCIIToUTF16("time"));
+  TestLocalizedRoleDescription(20, base::ASCIIToUTF16("content information"));
 }
 
 IN_PROC_BROWSER_TEST_F(CrossPlatformAccessibilityBrowserTest,
@@ -573,7 +788,7 @@ IN_PROC_BROWSER_TEST_F(CrossPlatformAccessibilityBrowserTest,
       "<!doctype html>"
       "<p>text <mark>mark text</mark></p>");
 
-  NavigateToURL(shell(), url);
+  EXPECT_TRUE(NavigateToURL(shell(), url));
   waiter.WaitForNotification();
 
   BrowserAccessibility* root = GetManager()->GetRoot();
@@ -602,17 +817,16 @@ IN_PROC_BROWSER_TEST_F(CrossPlatformAccessibilityBrowserTest,
                                              ax::mojom::Role::kStaticText);
 
   BrowserAccessibility* mark_node = para_node->PlatformGetChild(1);
-  TestGetStyleNameAttributeAsLocalizedString(
-      mark_node, ax::mojom::Role::kMark,
-      base::ASCIIToUTF16("highlighted content"));
+  TestGetStyleNameAttributeAsLocalizedString(mark_node, ax::mojom::Role::kMark,
+                                             base::ASCIIToUTF16("highlight"));
 
   // Android doesn't always have a child in this case.
-  if (mark_node->PlatformChildCount() > 0) {
+  if (mark_node->PlatformChildCount() > 0u) {
     BrowserAccessibility* mark_text_node = mark_node->PlatformGetChild(0);
     ASSERT_EQ(0u, mark_text_node->PlatformChildCount());
-    TestGetStyleNameAttributeAsLocalizedString(
-        mark_text_node, ax::mojom::Role::kStaticText,
-        base::ASCIIToUTF16("highlighted content"));
+    TestGetStyleNameAttributeAsLocalizedString(mark_text_node,
+                                               ax::mojom::Role::kStaticText,
+                                               base::ASCIIToUTF16("highlight"));
   }
 }
 
@@ -625,12 +839,12 @@ IN_PROC_BROWSER_TEST_F(CrossPlatformAccessibilityBrowserTest,
       "<input type='text' title='title' aria-labelledby='inputlabel'>"
       "<div id='inputlabel'>aria-labelledby</div>";
   GURL url(url_str);
-  NavigateToURL(shell(), url);
+  EXPECT_TRUE(NavigateToURL(shell(), url));
 
   const ui::AXTree& tree = GetAXTree();
   const ui::AXNode* root = tree.root();
-  const ui::AXNode* input1 = root->ChildAtIndex(0);
-  const ui::AXNode* input2 = root->ChildAtIndex(1);
+  const ui::AXNode* input1 = root->GetUnignoredChildAtIndex(0);
+  const ui::AXNode* input2 = root->GetUnignoredChildAtIndex(1);
 
   EXPECT_EQ(static_cast<int>(ax::mojom::NameFrom::kTitle),
             GetIntAttr(input1, ax::mojom::IntAttribute::kNameFrom));
@@ -656,13 +870,13 @@ IN_PROC_BROWSER_TEST_F(
       "<input type='text' placeholder='placeholder'>"
       "<input type='text' placeholder='placeholder' aria-label='label'>";
   GURL url(url_str);
-  NavigateToURL(shell(), url);
+  EXPECT_TRUE(NavigateToURL(shell(), url));
 
   const ui::AXTree& tree = GetAXTree();
   const ui::AXNode* root = tree.root();
-  const ui::AXNode* group = root->ChildAtIndex(0);
-  const ui::AXNode* input1 = group->ChildAtIndex(0);
-  const ui::AXNode* input2 = group->ChildAtIndex(1);
+  const ui::AXNode* group = root->children().front();
+  const ui::AXNode* input1 = group->children()[0];
+  const ui::AXNode* input2 = group->children()[1];
 
   using ax::mojom::StringAttribute;
 
@@ -782,5 +996,268 @@ IN_PROC_BROWSER_TEST_F(CrossPlatformAccessibilityBrowserTest,
                                 ui::AXClippingBehavior::kUnclipped)
                 .ToString());
 }
-#endif
+
+IN_PROC_BROWSER_TEST_F(CrossPlatformAccessibilityBrowserTest,
+                       TestControlsIdsForDateTimePopup) {
+  // Create a data url and load it.
+  const char url_str[] =
+      R"HTML(data:text/html,<!DOCTYPE html>
+        <html>
+          <input type="datetime-local" aria-label="datetime"
+                 aria-controls="button1">
+          <button id="button1">button</button>
+        </html>)HTML";
+  GURL url(url_str);
+
+  // Load the document and wait for it
+  {
+    AccessibilityNotificationWaiter waiter(shell()->web_contents(),
+                                           ui::kAXModeComplete,
+                                           ax::mojom::Event::kLoadComplete);
+    EXPECT_TRUE(NavigateToURL(shell(), url));
+    waiter.WaitForNotification();
+  }
+
+  BrowserAccessibilityManager* manager = GetManager();
+  ASSERT_NE(nullptr, manager);
+  BrowserAccessibility* root = manager->GetRoot();
+  ASSERT_NE(nullptr, root);
+
+  // Find the input control, and the popup-button
+  BrowserAccessibility* input_control =
+      FindNodeByRole(root, ax::mojom::Role::kDateTime);
+  ASSERT_NE(nullptr, input_control);
+  BrowserAccessibility* popup_control =
+      FindNodeByRole(input_control, ax::mojom::Role::kPopUpButton);
+  ASSERT_NE(nullptr, popup_control);
+  const BrowserAccessibility* sibling_button_control =
+      FindNodeByRole(root, ax::mojom::Role::kButton);
+  ASSERT_NE(nullptr, sibling_button_control);
+
+  // Get the list of ControlsIds; should initially just point to the sibling
+  // button control.
+  {
+    const auto& controls_ids = input_control->GetIntListAttribute(
+        ax::mojom::IntListAttribute::kControlsIds);
+    ASSERT_EQ(1u, controls_ids.size());
+    EXPECT_EQ(controls_ids[0], sibling_button_control->GetId());
+  }
+
+  // Expand the popup, and wait for it to appear
+  {
+    AccessibilityNotificationWaiter waiter(shell()->web_contents(),
+                                           ui::kAXModeComplete,
+                                           ax::mojom::Event::kClicked);
+
+    ui::AXActionData action_data;
+    action_data.action = ax::mojom::Action::kDoDefault;
+    popup_control->AccessibilityPerformAction(action_data);
+
+    waiter.WaitForNotification();
+  }
+
+  // Get the list of ControlsIds again; should now also include the popup
+  {
+    const auto& controls_ids = input_control->GetIntListAttribute(
+        ax::mojom::IntListAttribute::kControlsIds);
+    ASSERT_EQ(2u, controls_ids.size());
+    EXPECT_EQ(controls_ids[0], sibling_button_control->GetId());
+
+    const BrowserAccessibility* popup_area =
+        manager->GetFromID(controls_ids[1]);
+    ASSERT_NE(nullptr, popup_area);
+    EXPECT_EQ(ax::mojom::Role::kRootWebArea, popup_area->GetRole());
+  }
+}
+
+IN_PROC_BROWSER_TEST_F(CrossPlatformAccessibilityBrowserTest,
+                       TestControlsIdsForColorPopup) {
+  // Create a data url and load it.
+  const char url_str[] =
+      R"HTML(data:text/html,<!DOCTYPE html>
+        <html>
+          <input type="color" aria-label="color" list="colorlist">
+          <datalist id="colorlist">
+            <option value="#ff0000">
+            <option value="#00ff00">
+            <option value="#0000ff">
+          </datalist>
+        </html>)HTML";
+  GURL url(url_str);
+
+  // Load the document and wait for it
+  {
+    AccessibilityNotificationWaiter waiter(shell()->web_contents(),
+                                           ui::kAXModeComplete,
+                                           ax::mojom::Event::kLoadComplete);
+    EXPECT_TRUE(NavigateToURL(shell(), url));
+    waiter.WaitForNotification();
+  }
+
+  BrowserAccessibilityManager* manager = GetManager();
+  ASSERT_NE(nullptr, manager);
+  BrowserAccessibility* root = manager->GetRoot();
+  ASSERT_NE(nullptr, root);
+
+  // Find the input control
+  BrowserAccessibility* input_control =
+      FindNodeByRole(root, ax::mojom::Role::kColorWell);
+  ASSERT_NE(nullptr, input_control);
+
+  // Get the list of ControlsIds; should initially be empty.
+  {
+    const auto& controls_ids = input_control->GetIntListAttribute(
+        ax::mojom::IntListAttribute::kControlsIds);
+    ASSERT_EQ(0u, controls_ids.size());
+  }
+
+  // Expand the popup, and wait for it to appear
+  {
+    AccessibilityNotificationWaiter waiter(shell()->web_contents(),
+                                           ui::kAXModeComplete,
+                                           ax::mojom::Event::kClicked);
+
+    ui::AXActionData action_data;
+    action_data.action = ax::mojom::Action::kDoDefault;
+    input_control->AccessibilityPerformAction(action_data);
+
+    waiter.WaitForNotification();
+  }
+
+  // Get the list of ControlsIds again; should now include the popup
+  {
+    const auto& controls_ids = input_control->GetIntListAttribute(
+        ax::mojom::IntListAttribute::kControlsIds);
+    ASSERT_EQ(1u, controls_ids.size());
+
+    const BrowserAccessibility* popup_area =
+        manager->GetFromID(controls_ids[0]);
+    ASSERT_NE(nullptr, popup_area);
+    EXPECT_EQ(ax::mojom::Role::kRootWebArea, popup_area->GetRole());
+  }
+}
+
+IN_PROC_BROWSER_TEST_F(CrossPlatformAccessibilityBrowserTest,
+                       TextFragmentAnchor) {
+  EXPECT_TRUE(NavigateToURL(shell(), GURL(url::kAboutBlankURL)));
+  AccessibilityNotificationWaiter anchor_waiter(
+      shell()->web_contents(), ui::kAXModeComplete,
+      ax::mojom::Event::kScrolledToAnchor);
+
+  GURL url(
+      "data:text/html,"
+      "<p>Some text</p>"
+      "<p id='target' style='position: absolute; top: 1000px'>Anchor text</p>"
+      "#:~:text=Anchor%20text");
+  EXPECT_TRUE(NavigateToURL(shell(), url));
+  anchor_waiter.WaitForNotification();
+  WaitForAccessibilityTreeToContainNodeWithName(shell()->web_contents(),
+                                                "Anchor text");
+
+  const BrowserAccessibility* root = GetManager()->GetRoot();
+  ASSERT_EQ(2u, root->PlatformChildCount());
+  const BrowserAccessibility* target = root->PlatformGetChild(1);
+  ASSERT_EQ(1u, target->PlatformChildCount());
+  const BrowserAccessibility* text = target->PlatformGetChild(0);
+
+  EXPECT_EQ(text->GetId(), anchor_waiter.event_target_id());
+}
+
+IN_PROC_BROWSER_TEST_F(CrossPlatformAccessibilityBrowserTest,
+                       IFrameContentHadFocus_ThenRootDocumentGainedFocus) {
+  // Start by loading a document with iframes.
+  LoadInitialAccessibilityTreeFromHtmlFilePath(
+      "/accessibility/html/iframe-padding.html");
+  WaitForAccessibilityTreeToContainNodeWithName(shell()->web_contents(),
+                                                "Second Button");
+
+  // Get the root BrowserAccessibilityManager and BrowserAccessibility node.
+  BrowserAccessibilityManager* root_accessibility_manager = GetManager();
+  ASSERT_NE(nullptr, root_accessibility_manager);
+  BrowserAccessibility* root_browser_accessibility =
+      root_accessibility_manager->GetRoot();
+  ASSERT_NE(nullptr, root_browser_accessibility);
+  ASSERT_EQ(ax::mojom::Role::kRootWebArea,
+            root_browser_accessibility->GetRole());
+
+  // Focus the button within the iframe.
+  {
+    BrowserAccessibility* leaf_iframe_browser_accessibility =
+        root_browser_accessibility->InternalDeepestLastChild();
+    ASSERT_NE(nullptr, leaf_iframe_browser_accessibility);
+    ASSERT_EQ(ax::mojom::Role::kIframe,
+              leaf_iframe_browser_accessibility->GetRole());
+    BrowserAccessibility* second_iframe_root_browser_accessibility =
+        leaf_iframe_browser_accessibility->PlatformGetChild(0);
+    ASSERT_NE(nullptr, second_iframe_root_browser_accessibility);
+    ASSERT_EQ(ax::mojom::Role::kRootWebArea,
+              second_iframe_root_browser_accessibility->GetRole());
+    BrowserAccessibility* second_button = FindNodeByRole(
+        second_iframe_root_browser_accessibility, ax::mojom::Role::kButton);
+    ASSERT_NE(nullptr, second_button);
+
+    AccessibilityNotificationWaiter waiter(
+        shell()->web_contents(), ui::kAXModeComplete, ax::mojom::Event::kFocus);
+    second_iframe_root_browser_accessibility->manager()->SetFocus(
+        *second_button);
+    waiter.WaitForNotification();
+    ASSERT_EQ(second_button, root_accessibility_manager->GetFocus());
+  }
+
+  // Focusing the root Document should cause the iframe content to blur.
+  // The Document Element becomes implicitly focused when the focus is cleared,
+  // so there will not be a focus event.
+  {
+    AccessibilityNotificationWaiter waiter(
+        shell()->web_contents(), ui::kAXModeComplete, ax::mojom::Event::kBlur);
+    root_accessibility_manager->SetFocus(*root_browser_accessibility);
+    waiter.WaitForNotification();
+    ASSERT_EQ(root_browser_accessibility,
+              root_accessibility_manager->GetFocus());
+  }
+}
+#endif  // ifndef OS_ANDROID
+
+class CrossPlatformAccessibilityBrowserTestWithImplicitRootScrolling
+    : public CrossPlatformAccessibilityBrowserTest {
+  void SetUp() override {
+    scoped_feature_list_.InitAndEnableFeature(
+        blink::features::kImplicitRootScroller);
+    CrossPlatformAccessibilityBrowserTest::SetUp();
+  }
+
+ private:
+  base::test::ScopedFeatureList scoped_feature_list_;
+};
+
+IN_PROC_BROWSER_TEST_F(
+    CrossPlatformAccessibilityBrowserTestWithImplicitRootScrolling,
+    ImplicitRootScroller) {
+  LoadInitialAccessibilityTreeFromHtmlFilePath(
+      "/accessibility/scrolling/implicit-root-scroller.html");
+
+  BrowserAccessibilityManager* manager = GetManager();
+  const BrowserAccessibility* heading =
+      FindNodeByRole(manager->GetRoot(), ax::mojom::Role::kHeading);
+
+  // Ensure that this page has an implicit root scroller that's something
+  // other than the root of the accessibility tree.
+  ui::AXNode::AXID root_scroller_id = manager->GetTreeData().root_scroller_id;
+  BrowserAccessibility* root_scroller = manager->GetFromID(root_scroller_id);
+  ASSERT_TRUE(root_scroller);
+  EXPECT_NE(root_scroller_id, manager->GetRoot()->GetId());
+
+  // If we take the root scroll offsets into account (most platforms)
+  // the heading should be scrolled above the top.
+  manager->SetUseRootScrollOffsetsWhenComputingBoundsForTesting(true);
+  gfx::Rect bounds = heading->GetUnclippedRootFrameBoundsRect();
+  EXPECT_LT(bounds.y(), 0);
+
+  // If we don't take the root scroll offsets into account (Android)
+  // the heading should not have a negative top coordinate.
+  manager->SetUseRootScrollOffsetsWhenComputingBoundsForTesting(false);
+  bounds = heading->GetUnclippedRootFrameBoundsRect();
+  EXPECT_GT(bounds.y(), 0);
+}
+
 }  // namespace content

@@ -4,12 +4,12 @@
 
 #include "base/android/task_scheduler/post_task_android.h"
 
+#include "base/android_runtime_jni_headers/Runnable_jni.h"
+#include "base/base_jni_headers/PostTask_jni.h"
 #include "base/no_destructor.h"
 #include "base/run_loop.h"
 #include "base/task/post_task.h"
-#include "base/task/thread_pool/thread_pool.h"
-#include "jni/PostTask_jni.h"
-#include "jni/Runnable_jni.h"
+#include "base/task/thread_pool/thread_pool_instance.h"
 
 namespace base {
 
@@ -19,8 +19,9 @@ void PostTaskAndroid::SignalNativeSchedulerReady() {
 }
 
 // static
-void PostTaskAndroid::SignalNativeSchedulerShutdown() {
-  Java_PostTask_onNativeSchedulerShutdown(base::android::AttachCurrentThread());
+void PostTaskAndroid::SignalNativeSchedulerShutdownForTesting() {
+  Java_PostTask_onNativeSchedulerShutdownForTesting(
+      base::android::AttachCurrentThread());
 }
 
 namespace {
@@ -45,39 +46,35 @@ std::array<uint8_t, TaskTraitsExtensionStorage::kStorageSize> GetExtensionData(
 // static
 TaskTraits PostTaskAndroid::CreateTaskTraits(
     JNIEnv* env,
-    jboolean priority_set_explicitly,
     jint priority,
     jboolean may_block,
+    jboolean use_thread_pool,
     jbyte extension_id,
     const base::android::JavaParamRef<jbyteArray>& extension_data) {
-  return TaskTraits(priority_set_explicitly,
-                    static_cast<TaskPriority>(priority),
-                    /* shutdown_behavior_set_explicitly */ false,
-                    TaskShutdownBehavior::SKIP_ON_SHUTDOWN, may_block,
-                    /* with_base_sync_primitives */ false,
+  return TaskTraits(static_cast<TaskPriority>(priority), may_block,
+                    use_thread_pool,
                     TaskTraitsExtensionStorage(
                         extension_id, GetExtensionData(env, extension_data)));
 }
 
 void JNI_PostTask_PostDelayedTask(
     JNIEnv* env,
-    jboolean priority_set_explicitly,
     jint priority,
     jboolean may_block,
+    jboolean use_thread_pool,
     jbyte extension_id,
     const base::android::JavaParamRef<jbyteArray>& extension_data,
     const base::android::JavaParamRef<jobject>& task,
     jlong delay) {
   // This could be run on any java thread, so we can't cache |env| in the
   // BindOnce because JNIEnv is thread specific.
-  PostDelayedTaskWithTraits(
-      FROM_HERE,
-      PostTaskAndroid::CreateTaskTraits(env, priority_set_explicitly, priority,
-                                        may_block, extension_id,
-                                        extension_data),
-      BindOnce(&PostTaskAndroid::RunJavaTask,
-               base::android::ScopedJavaGlobalRef<jobject>(task)),
-      TimeDelta::FromMilliseconds(delay));
+  PostDelayedTask(FROM_HERE,
+                  PostTaskAndroid::CreateTaskTraits(
+                      env, priority, may_block, use_thread_pool, extension_id,
+                      extension_data),
+                  BindOnce(&PostTaskAndroid::RunJavaTask,
+                           base::android::ScopedJavaGlobalRef<jobject>(task)),
+                  TimeDelta::FromMilliseconds(delay));
 }
 
 // static

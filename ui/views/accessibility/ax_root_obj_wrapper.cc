@@ -32,7 +32,7 @@ AXRootObjWrapper::~AXRootObjWrapper() {
 bool AXRootObjWrapper::HasChild(views::AXAuraObjWrapper* child) {
   std::vector<views::AXAuraObjWrapper*> children;
   GetChildren(&children);
-  return base::ContainsValue(children, child);
+  return base::Contains(children, child);
 }
 
 bool AXRootObjWrapper::IsIgnored() {
@@ -75,7 +75,11 @@ int32_t AXRootObjWrapper::GetUniqueId() const {
   return unique_id_.Get();
 }
 
+std::string AXRootObjWrapper::ToString() const {
+  return "root";
+}
+
 void AXRootObjWrapper::OnDisplayMetricsChanged(const display::Display& display,
                                                uint32_t changed_metrics) {
-  delegate_->OnEvent(this, ax::mojom::Event::kLocationChanged);
+  delegate_->OnEvent(this, ax::mojom::Event::kLoadComplete);
 }

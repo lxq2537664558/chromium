@@ -31,9 +31,6 @@ class MockFetchContext : public FetchContext {
 
   uint64_t GetTransferSize() const { return transfer_size_; }
 
-  void CountUsage(mojom::WebFeature) const override {}
-  void CountDeprecation(mojom::WebFeature) const override {}
-
   bool AllowImage(bool images_enabled, const KURL&) const override {
     return true;
   }
@@ -42,7 +39,7 @@ class MockFetchContext : public FetchContext {
       const ResourceRequest&,
       const KURL&,
       const ResourceLoaderOptions&,
-      SecurityViolationReportingPolicy,
+      ReportingDisposition,
       ResourceRequest::RedirectStatus redirect_status) const override {
     return base::nullopt;
   }
@@ -50,7 +47,7 @@ class MockFetchContext : public FetchContext {
       mojom::RequestContextType,
       const KURL& url,
       const ResourceLoaderOptions& options,
-      SecurityViolationReportingPolicy reporting_policy,
+      ReportingDisposition reporting_disposition,
       ResourceRequest::RedirectStatus redirect_status) const override {
     return base::nullopt;
   }

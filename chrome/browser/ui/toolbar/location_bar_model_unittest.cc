@@ -9,18 +9,21 @@
 #include "base/bind.h"
 #include "base/command_line.h"
 #include "base/macros.h"
+#include "base/no_destructor.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/scoped_feature_list.h"
 #include "chrome/browser/autocomplete/autocomplete_classifier_factory.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
+#include "chrome/common/webui_url_constants.h"
 #include "chrome/test/base/browser_with_test_window_test.h"
 #include "components/omnibox/common/omnibox_features.h"
 #include "content/public/browser/navigation_entry.h"
 #include "content/public/browser/ssl_status.h"
 #include "content/public/common/content_constants.h"
 #include "content/public/common/url_constants.h"
+#include "content/public/test/test_utils.h"
 #include "ui/gfx/text_elider.h"
 
 #if BUILDFLAG(ENABLE_EXTENSIONS)
@@ -33,50 +36,70 @@
 
 namespace {
 
+// TODO(https://crbug.com/1042727): Fix test GURL scoping and remove this getter
+// function.
+GURL GetViewSourceURL(const char* path) {
+  GURL::Replacements replace_path;
+  replace_path.SetPathStr(path);
+  return GURL("view-source:").ReplaceComponents(replace_path);
+}
+
 struct TestItem {
   GURL url;
-  const char* expected_formatted_full_url;
-  const char* expected_elided_url_for_display = expected_formatted_full_url;
-} test_items[] = {
-    {
-        GURL("view-source:http://www.google.com"), "view-source:www.google.com",
-        "view-source:google.com",
-    },
-    {
-        GURL("chrome://newtab/"), "",
-    },
-    {
-        GURL("view-source:chrome://newtab/"), "view-source:chrome://newtab",
-    },
-    {
-        GURL("chrome-search://local-ntp/local-ntp.html"), "",
-    },
-    {
-        GURL("view-source:chrome-search://local-ntp/local-ntp.html"),
-        "view-source:chrome-search://local-ntp/local-ntp.html",
-    },
-    {
-        GURL("chrome-extension://fooooooooooooooooooooooooooooooo/bar.html"),
-        "chrome-extension://fooooooooooooooooooooooooooooooo/bar.html",
-    },
-    {
-        GURL(url::kAboutBlankURL), url::kAboutBlankURL,
-    },
-    {
-        GURL("http://searchurl/?q=tractor+supply"),
-        "searchurl/?q=tractor+supply",
-    },
-    {
-        GURL("http://www.google.com/search?q=tractor+supply"),
-        "www.google.com/search?q=tractor+supply",
-        "google.com/search?q=tractor+supply",
-    },
-    {
-        GURL("https://m.google.ca/search?q=tractor+supply"),
-        "https://m.google.ca/search?q=tractor+supply",
-        "m.google.ca/search?q=tractor+supply",
-    },
+  const std::string expected_formatted_full_url;
+  const std::string expected_elided_url_for_display =
+      expected_formatted_full_url;
 };
+
+const std::vector<TestItem>& TestItems() {
+  static base::NoDestructor<std::vector<TestItem>> items{{
+      {
+          GetViewSourceURL("http://www.google.com"),
+          "view-source:www.google.com",
+          "view-source:www.google.com",
+      },
+      {
+          GURL(chrome::kChromeUINewTabURL),
+          "",
+      },
+      {
+          GetViewSourceURL(chrome::kChromeUINewTabURL),
+          "view-source:" +
+              content::GetWebUIURLString(chrome::kChromeUINewTabHost),
+      },
+      {
+          GURL("chrome-search://local-ntp/local-ntp.html"),
+          "",
+      },
+      {
+          GURL("view-source:chrome-search://local-ntp/local-ntp.html"),
+          "view-source:chrome-search://local-ntp/local-ntp.html",
+      },
+      {
+          GURL("chrome-extension://fooooooooooooooooooooooooooooooo/bar.html"),
+          "chrome-extension://fooooooooooooooooooooooooooooooo/bar.html",
+      },
+      {
+          GURL(url::kAboutBlankURL),
+          url::kAboutBlankURL,
+      },
+      {
+          GURL("http://searchurl/?q=tractor+supply"),
+          "searchurl/?q=tractor+supply",
+      },
+      {
+          GURL("http://www.google.com/search?q=tractor+supply"),
+          "www.google.com/search?q=tractor+supply",
+          "google.com/search?q=tractor+supply",
+      },
+      {
+          GURL("https://m.google.ca/search?q=tractor+supply"),
+          "https://m.google.ca/search?q=tractor+supply",
+          "m.google.ca/search?q=tractor+supply",
+      },
+  }};
+  return *items;
+}
 
 }  // namespace
 
@@ -203,7 +226,7 @@ TEST_F(LocationBarModelTest, ShouldDisplayURL) {
 
   AddTab(browser(), GURL(url::kAboutBlankURL));
 
-  for (const TestItem& test_item : test_items) {
+  for (const TestItem& test_item : TestItems()) {
     NavigateAndCheckText(
         test_item.url,
         base::ASCIIToUTF16(test_item.expected_formatted_full_url),

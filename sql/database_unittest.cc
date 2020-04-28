@@ -20,7 +20,6 @@
 #include "sql/database.h"
 #include "sql/database_memory_dump_provider.h"
 #include "sql/meta_table.h"
-#include "sql/sql_features.h"
 #include "sql/statement.h"
 #include "sql/test/database_test_peer.h"
 #include "sql/test/error_callback_support.h"
@@ -136,7 +135,13 @@ TEST_F(SQLDatabaseTest, ExecuteWithErrorCode) {
                               "INSERT INTO foo(a, b) VALUES (1, 2, 3, 4)"));
 }
 
-TEST_F(SQLDatabaseTest, CachedStatement) {
+// Flaky on Windows ASAN. https://crbug.com/1027481
+#if defined(OS_WIN) && defined(ADDRESS_SANITIZER)
+#define MAYBE_CachedStatement DISABLED_CachedStatement
+#else
+#define MAYBE_CachedStatement CachedStatement
+#endif
+TEST_F(SQLDatabaseTest, MAYBE_CachedStatement) {
   sql::StatementID id1 = SQL_FROM_HERE;
   sql::StatementID id2 = SQL_FROM_HERE;
   static const char kId1Sql[] = "SELECT a FROM foo";
@@ -680,7 +685,13 @@ TEST_F(SQLDatabaseTest, RazeAndClose) {
 
 // Test that various operations fail without crashing after
 // RazeAndClose().
-TEST_F(SQLDatabaseTest, RazeAndCloseDiagnostics) {
+// Flaky on Windows ASAN. https://crbug.com/1027481
+#if defined(OS_WIN) && defined(ADDRESS_SANITIZER)
+#define MAYBE_RazeAndCloseDiagnostics DISABLED_RazeAndCloseDiagnostics
+#else
+#define MAYBE_RazeAndCloseDiagnostics RazeAndCloseDiagnostics
+#endif
+TEST_F(SQLDatabaseTest, MAYBE_RazeAndCloseDiagnostics) {
   const char* kCreateSql = "CREATE TABLE foo (id INTEGER PRIMARY KEY, value)";
   const char* kPopulateSql = "INSERT INTO foo (value) VALUES (12)";
   const char* kSimpleSql = "SELECT 1";
@@ -1224,7 +1235,13 @@ TEST_F(SQLDatabaseTest, GetAppropriateMmapSizeAltStatus) {
 // To prevent invalid SQL from accidentally shipping to production, prepared
 // statements which fail to compile with SQLITE_ERROR call DLOG(DCHECK).  This
 // case cannot be suppressed with an error callback.
-TEST_F(SQLDatabaseTest, CompileError) {
+// Flaky on Windows ASAN. https://crbug.com/1027481
+#if defined(OS_WIN) && defined(ADDRESS_SANITIZER)
+#define MAYBE_CompileError DISABLED_CompileError
+#else
+#define MAYBE_CompileError CompileError
+#endif
+TEST_F(SQLDatabaseTest, MAYBE_CompileError) {
 // DEATH tests not supported on Android, iOS, or Fuchsia.
 #if !defined(OS_ANDROID) && !defined(OS_IOS) && !defined(OS_FUCHSIA)
   if (DLOG_IS_ON(FATAL)) {
@@ -1233,24 +1250,6 @@ TEST_F(SQLDatabaseTest, CompileError) {
                  "SQL compile error no such column: x");
   }
 #endif  // !defined(OS_ANDROID) && !defined(OS_IOS) && !defined(OS_FUCHSIA)
-}
-
-// Verify that Raze() can handle an empty file.  SQLite should treat
-// this as an empty database.
-TEST_F(SQLDatabaseTest, SqlTempMemoryFeatureFlagDefault) {
-  EXPECT_EQ("0", ExecuteWithResult(&db(), "PRAGMA temp_store"))
-      << "temp_store should not be set by default";
-}
-
-TEST_F(SQLDatabaseTest, SqlTempMemoryFeatureFlagEnabled) {
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitAndEnableFeature(features::kSqlTempStoreMemory);
-
-  db().Close();
-
-  ASSERT_TRUE(db().Open(db_path()));
-  EXPECT_EQ("2", ExecuteWithResult(&db(), "PRAGMA temp_store"))
-      << "temp_store should be set by the feature flag SqlTempStoreMemory";
 }
 
 }  // namespace sql

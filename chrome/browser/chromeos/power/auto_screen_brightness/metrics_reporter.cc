@@ -4,7 +4,7 @@
 
 #include "chrome/browser/chromeos/power/auto_screen_brightness/metrics_reporter.h"
 
-#include "base/logging.h"
+#include "base/check_op.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/metrics/histogram_macros.h"
 #include "chrome/common/pref_names.h"
@@ -21,24 +21,28 @@ namespace {
 constexpr base::TimeDelta kCheckDailyEventInternal =
     base::TimeDelta::FromSeconds(60);
 
-// Prefs corresponding to UserAdjustment values.
-constexpr std::array<const char*, MetricsReporter::kNumberAdjustmentTypes>
+// Prefs corresponding to DeviceClass values.
+constexpr std::array<const char*, MetricsReporter::kNumberDeviceClasses>
     kDailyCountPrefs = {
         prefs::kAutoScreenBrightnessMetricsNoAlsUserAdjustmentCount,
         prefs::kAutoScreenBrightnessMetricsSupportedAlsUserAdjustmentCount,
         prefs::kAutoScreenBrightnessMetricsUnsupportedAlsUserAdjustmentCount,
         prefs::kAutoScreenBrightnessMetricsAtlasUserAdjustmentCount,
         prefs::kAutoScreenBrightnessMetricsEveUserAdjustmentCount,
+        prefs::kAutoScreenBrightnessMetricsNocturneUserAdjustmentCount,
+        prefs::kAutoScreenBrightnessMetricsKohakuUserAdjustmentCount,
 };
 
 // Histograms corresponding to UserAdjustment values.
-constexpr std::array<const char*, MetricsReporter::kNumberAdjustmentTypes>
+constexpr std::array<const char*, MetricsReporter::kNumberDeviceClasses>
     kDailyCountHistograms = {
         MetricsReporter::kNoAlsUserAdjustmentName,
         MetricsReporter::kSupportedAlsUserAdjustmentName,
         MetricsReporter::kUnsupportedAlsUserAdjustmentName,
         MetricsReporter::kAtlasUserAdjustmentName,
         MetricsReporter::kEveUserAdjustmentName,
+        MetricsReporter::kNocturneUserAdjustmentName,
+        MetricsReporter::kKohakuUserAdjustmentName,
 };
 
 }  // namespace
@@ -49,8 +53,10 @@ constexpr char MetricsReporter::kSupportedAlsUserAdjustmentName[];
 constexpr char MetricsReporter::kUnsupportedAlsUserAdjustmentName[];
 constexpr char MetricsReporter::kAtlasUserAdjustmentName[];
 constexpr char MetricsReporter::kEveUserAdjustmentName[];
+constexpr char MetricsReporter::kNocturneUserAdjustmentName[];
+constexpr char MetricsReporter::kKohakuUserAdjustmentName[];
 
-constexpr int MetricsReporter::kNumberAdjustmentTypes;
+constexpr int MetricsReporter::kNumberDeviceClasses;
 
 // This class is needed since metrics::DailyEvent requires taking ownership
 // of its observers. It just forwards events to MetricsReporter.
@@ -107,14 +113,18 @@ void MetricsReporter::SuspendDone(const base::TimeDelta& duration) {
   daily_event_->CheckInterval();
 }
 
-void MetricsReporter::OnUserBrightnessChangeRequested(
-    UserAdjustment user_adjustment) {
-  const size_t user_adjustment_uint = static_cast<size_t>(user_adjustment);
-  DCHECK_LT(user_adjustment_uint, kDailyCountPrefs.size());
-  const char* daily_count_pref = kDailyCountPrefs[user_adjustment_uint];
-  ++daily_counts_[user_adjustment_uint];
-  pref_service_->SetInteger(daily_count_pref,
-                            daily_counts_[user_adjustment_uint]);
+void MetricsReporter::SetDeviceClass(DeviceClass device_class) {
+  DCHECK(!device_class_);
+  device_class_ = device_class;
+  DCHECK_LT(static_cast<size_t>(device_class), kDailyCountPrefs.size());
+}
+
+void MetricsReporter::OnUserBrightnessChangeRequested() {
+  DCHECK(device_class_);
+  const size_t index = static_cast<size_t>(*device_class_);
+  const char* daily_count_pref = kDailyCountPrefs[index];
+  ++daily_counts_[index];
+  pref_service_->SetInteger(daily_count_pref, daily_counts_[index]);
 }
 
 void MetricsReporter::ReportDailyMetricsForTesting(
@@ -124,11 +134,14 @@ void MetricsReporter::ReportDailyMetricsForTesting(
 
 void MetricsReporter::ReportDailyMetrics(
     metrics::DailyEvent::IntervalType type) {
+  if (!device_class_)
+    return;
+
   // Don't send metrics on first run or if the clock is changed.
   if (type == metrics::DailyEvent::IntervalType::DAY_ELAPSED) {
-    for (size_t i = 0; i < kDailyCountHistograms.size(); ++i) {
-      base::UmaHistogramCounts100(kDailyCountHistograms[i], daily_counts_[i]);
-    }
+    const size_t index = static_cast<size_t>(*device_class_);
+    base::UmaHistogramCounts100(kDailyCountHistograms[index],
+                                daily_counts_[index]);
   }
 
   for (size_t i = 0; i < kDailyCountPrefs.size(); ++i) {

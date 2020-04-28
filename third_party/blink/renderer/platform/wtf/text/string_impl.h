@@ -27,11 +27,12 @@
 #include <limits.h>
 #include <string.h>
 
+#include "base/containers/span.h"
 #include "base/macros.h"
 #include "base/memory/ref_counted.h"
 #include "base/numerics/checked_math.h"
 #include "build/build_config.h"
-#include "third_party/blink/renderer/platform/wtf/allocator.h"
+#include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
 #include "third_party/blink/renderer/platform/wtf/forward.h"
 #include "third_party/blink/renderer/platform/wtf/hash_map.h"
 #include "third_party/blink/renderer/platform/wtf/text/ascii_ctype.h"
@@ -85,10 +86,10 @@ class WTF_EXPORT StringImpl {
   void* operator new(size_t, void* ptr) { return ptr; }
   void operator delete(void*);
 
-  // Used to construct static strings, which have an special refCount that can
-  // never hit zero.  This means that the static string will never be
-  // destroyed, which is important because static strings will be shared
-  // across threads & ref-counted in a non-threadsafe manner.
+  // Used to construct static strings, which have a special ref_count_ that can
+  // never hit zero. This means that the static string will never be destroyed,
+  // which is important because static strings will be shared across threads &
+  // ref-counted in a non-threadsafe manner.
   enum ConstructEmptyStringTag { kConstructEmptyString };
   explicit StringImpl(ConstructEmptyStringTag)
       : ref_count_(1),
@@ -210,6 +211,14 @@ class WTF_EXPORT StringImpl {
     DCHECK(!Is8Bit());
     return reinterpret_cast<const UChar*>(this + 1);
   }
+  ALWAYS_INLINE base::span<const LChar> Span8() const {
+    DCHECK(Is8Bit());
+    return {reinterpret_cast<const LChar*>(this + 1), length_};
+  }
+  ALWAYS_INLINE base::span<const UChar> Span16() const {
+    DCHECK(!Is8Bit());
+    return {reinterpret_cast<const UChar*>(this + 1), length_};
+  }
   ALWAYS_INLINE const void* Bytes() const {
     return reinterpret_cast<const void*>(this + 1);
   }
@@ -270,7 +279,8 @@ class WTF_EXPORT StringImpl {
 #if DCHECK_IS_ON()
     DCHECK(IsStatic() || verifier_.OnRef(ref_count_)) << AsciiForDebugging();
 #endif
-    ++ref_count_;
+    if (!IsStatic())
+      ref_count_ = base::CheckAdd(ref_count_, 1).ValueOrDie();
   }
 
   ALWAYS_INLINE void Release() const {
@@ -278,7 +288,19 @@ class WTF_EXPORT StringImpl {
     DCHECK(IsStatic() || verifier_.OnDeref(ref_count_))
         << AsciiForDebugging() << " " << CurrentThread();
 #endif
-    if (!--ref_count_)
+
+    if (!IsStatic()) {
+#if DCHECK_IS_ON()
+      // In non-DCHECK builds, we can save a bit of time in micro-benchmarks by
+      // not checking the arithmetic. We hope that checking in DCHECK builds is
+      // enough to catch implementation bugs, and that implementation bugs are
+      // the only way we'd experience underflow.
+      ref_count_ = base::CheckSub(ref_count_, 1).ValueOrDie();
+#else
+      --ref_count_;
+#endif
+    }
+    if (ref_count_ == 0)
       DestroyIfNotStatic();
   }
 
@@ -323,6 +345,7 @@ class WTF_EXPORT StringImpl {
   uint64_t ToUInt64(NumberParsingOptions, bool* ok) const;
 
   wtf_size_t HexToUIntStrict(bool* ok);
+  uint64_t HexToUInt64Strict(bool* ok);
 
   // FIXME: Like NumberParsingOptions::kStrict, these give false for "ok" when
   // there is trailing garbage.  Like NumberParsingOptions::kLoose, these return
@@ -331,12 +354,8 @@ class WTF_EXPORT StringImpl {
   double ToDouble(bool* ok = nullptr);
   float ToFloat(bool* ok = nullptr);
 
-  scoped_refptr<StringImpl> LowerUnicode();
   scoped_refptr<StringImpl> LowerASCII();
-  scoped_refptr<StringImpl> UpperUnicode();
   scoped_refptr<StringImpl> UpperASCII();
-  scoped_refptr<StringImpl> LowerUnicode(const AtomicString& locale_identifier);
-  scoped_refptr<StringImpl> UpperUnicode(const AtomicString& locale_identifier);
 
   scoped_refptr<StringImpl> Fill(UChar);
   // FIXME: Do we need fill(char) or can we just do the right thing if UChar is
@@ -592,8 +611,8 @@ inline bool EqualIgnoringASCIICase(const CharacterTypeA* a,
   return true;
 }
 
-WTF_EXPORT int CodePointCompareIgnoringASCIICase(const StringImpl*,
-                                                 const LChar*);
+WTF_EXPORT int CodeUnitCompareIgnoringASCIICase(const StringImpl*,
+                                                const LChar*);
 
 inline wtf_size_t Find(const LChar* characters,
                        wtf_size_t length,
@@ -737,10 +756,10 @@ bool EqualIgnoringNullity(const Vector<UChar, inlineCapacity>& a,
 }
 
 template <typename CharacterType1, typename CharacterType2>
-static inline int CodePointCompare(wtf_size_t l1,
-                                   wtf_size_t l2,
-                                   const CharacterType1* c1,
-                                   const CharacterType2* c2) {
+static inline int CodeUnitCompare(wtf_size_t l1,
+                                  wtf_size_t l2,
+                                  const CharacterType1* c1,
+                                  const CharacterType2* c2) {
   const wtf_size_t lmin = l1 < l2 ? l1 : l2;
   wtf_size_t pos = 0;
   while (pos < lmin && *c1 == *c2) {
@@ -758,26 +777,26 @@ static inline int CodePointCompare(wtf_size_t l1,
   return (l1 > l2) ? 1 : -1;
 }
 
-static inline int CodePointCompare8(const StringImpl* string1,
-                                    const StringImpl* string2) {
-  return CodePointCompare(string1->length(), string2->length(),
-                          string1->Characters8(), string2->Characters8());
-}
-
-static inline int CodePointCompare16(const StringImpl* string1,
-                                     const StringImpl* string2) {
-  return CodePointCompare(string1->length(), string2->length(),
-                          string1->Characters16(), string2->Characters16());
-}
-
-static inline int CodePointCompare8To16(const StringImpl* string1,
-                                        const StringImpl* string2) {
-  return CodePointCompare(string1->length(), string2->length(),
-                          string1->Characters8(), string2->Characters16());
-}
-
-static inline int CodePointCompare(const StringImpl* string1,
+static inline int CodeUnitCompare8(const StringImpl* string1,
                                    const StringImpl* string2) {
+  return CodeUnitCompare(string1->length(), string2->length(),
+                         string1->Characters8(), string2->Characters8());
+}
+
+static inline int CodeUnitCompare16(const StringImpl* string1,
+                                    const StringImpl* string2) {
+  return CodeUnitCompare(string1->length(), string2->length(),
+                         string1->Characters16(), string2->Characters16());
+}
+
+static inline int CodeUnitCompare8To16(const StringImpl* string1,
+                                       const StringImpl* string2) {
+  return CodeUnitCompare(string1->length(), string2->length(),
+                         string1->Characters8(), string2->Characters16());
+}
+
+static inline int CodeUnitCompare(const StringImpl* string1,
+                                  const StringImpl* string2) {
   if (!string1)
     return (string2 && string2->length()) ? -1 : 0;
 
@@ -788,12 +807,12 @@ static inline int CodePointCompare(const StringImpl* string1,
   bool string2_is_8bit = string2->Is8Bit();
   if (string1_is_8bit) {
     if (string2_is_8bit)
-      return CodePointCompare8(string1, string2);
-    return CodePointCompare8To16(string1, string2);
+      return CodeUnitCompare8(string1, string2);
+    return CodeUnitCompare8To16(string1, string2);
   }
   if (string2_is_8bit)
-    return -CodePointCompare8To16(string2, string1);
-  return CodePointCompare16(string1, string2);
+    return -CodeUnitCompare8To16(string2, string1);
+  return CodeUnitCompare16(string1, string2);
 }
 
 static inline bool IsSpaceOrNewline(UChar c) {
@@ -835,10 +854,6 @@ inline void StringImpl::PrependTo(BufferType& result,
   else
     result.Prepend(Characters16() + start, number_of_characters_to_copy);
 }
-
-// TODO(rob.buis) possibly find a better place for this method.
-// Turns a UChar32 to uppercase based on localeIdentifier.
-WTF_EXPORT UChar32 ToUpper(UChar32, const AtomicString& locale_identifier);
 
 struct StringHash;
 

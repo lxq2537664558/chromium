@@ -44,19 +44,13 @@ class SVGAnimatedBoolean final : public ScriptWrappable,
   USING_GARBAGE_COLLECTED_MIXIN(SVGAnimatedBoolean);
 
  public:
-  static SVGAnimatedBoolean* Create(SVGElement* context_element,
-                                    const QualifiedName& attribute_name) {
-    return MakeGarbageCollected<SVGAnimatedBoolean>(context_element,
-                                                    attribute_name);
-  }
-
   SVGAnimatedBoolean(SVGElement* context_element,
                      const QualifiedName& attribute_name)
       : SVGAnimatedProperty<SVGBoolean>(context_element,
                                         attribute_name,
                                         MakeGarbageCollected<SVGBoolean>()) {}
 
-  void Trace(blink::Visitor* visitor) override {
+  void Trace(Visitor* visitor) override {
     SVGAnimatedProperty<SVGBoolean>::Trace(visitor);
     ScriptWrappable::Trace(visitor);
   }

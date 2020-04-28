@@ -9,7 +9,7 @@
 #include <vector>
 
 #include "base/macros.h"
-#include "chromecast/media/cma/backend/cma_backend.h"
+#include "chromecast/media/api/cma_backend.h"
 #include "chromecast/media/cma/pipeline/av_pipeline_client.h"
 #include "chromecast/media/cma/pipeline/av_pipeline_impl.h"
 #include "chromecast/public/media/stream_id.h"
@@ -49,7 +49,7 @@ class AudioPipelineImpl : public AvPipelineImpl {
 
   CmaBackend::AudioDecoder* const audio_decoder_;
 
-  AudioConfig audio_config_;
+  EncryptionScheme encryption_scheme_ = EncryptionScheme::kUnencrypted;
 
   DISALLOW_COPY_AND_ASSIGN(AudioPipelineImpl);
 };

@@ -68,6 +68,13 @@ class CHROMECAST_EXPORT RebootShlib {
 
     // A reboot caused by overheat.
     OVERHEAT = 11,
+
+    // The device got into a state such that it needs to regenerate the cloud
+    // device id.
+    REGENERATE_CLOUD_ID = 12,
+
+    // A reboot is triggered due to successive OOM events.
+    REPEATED_OOM = 13,
   };
 
   // Initializes any platform-specific reboot systems.

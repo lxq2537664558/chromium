@@ -4,6 +4,8 @@
 
 #include "cc/input/main_thread_scrolling_reason.h"
 #include "cc/layers/picture_layer.h"
+#include "cc/trees/property_tree.h"
+#include "cc/trees/scroll_node.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/platform/web_url_loader_mock_factory.h"
 #include "third_party/blink/renderer/core/frame/frame_test_helpers.h"
@@ -24,67 +26,64 @@
 
 namespace blink {
 
-class MainThreadScrollingReasonsTest
-    : public testing::Test,
-      public testing::WithParamInterface<bool>,
-      private ScopedBlinkGenPropertyTreesForTest {
+#define EXPECT_MAIN_THREAD_SCROLLING_REASON(expected, actual)             \
+  EXPECT_EQ(expected, actual)                                             \
+      << " expected: " << cc::MainThreadScrollingReason::AsText(expected) \
+      << " actual: " << cc::MainThreadScrollingReason::AsText(actual)
+
+#define EXPECT_NO_MAIN_THREAD_SCROLLING_REASON(actual) \
+  EXPECT_EQ(cc::MainThreadScrollingReason::kNotScrollingOnMain, actual)
+
+class MainThreadScrollingReasonsTest : public testing::Test {
  public:
-  MainThreadScrollingReasonsTest()
-      : ScopedBlinkGenPropertyTreesForTest(GetParam()),
-        base_url_("http://www.test.com/") {
+  MainThreadScrollingReasonsTest() : base_url_("http://www.test.com/") {
     helper_.InitializeWithSettings(&ConfigureSettings);
     GetWebView()->MainFrameWidget()->Resize(IntSize(320, 240));
-
-    // macOS attaches main frame scrollbars to the VisualViewport so the
-    // VisualViewport layers need to be initialized.
     GetWebView()->MainFrameWidget()->UpdateAllLifecyclePhases(
-        WebWidget::LifecycleUpdateReason::kTest);
-    WebFrameWidgetBase* main_frame_widget =
-        GetWebView()->MainFrameImpl()->FrameWidgetImpl();
-    main_frame_widget->SetRootGraphicsLayer(GetWebView()
-                                                ->MainFrameImpl()
-                                                ->GetFrame()
-                                                ->View()
-                                                ->GetLayoutView()
-                                                ->Compositor()
-                                                ->RootGraphicsLayer());
+        DocumentUpdateReason::kTest);
   }
 
   ~MainThreadScrollingReasonsTest() override {
-    Platform::Current()
-        ->GetURLLoaderMockFactory()
-        ->UnregisterAllURLsAndClearMemoryCache();
+    url_test_helpers::UnregisterAllURLsAndClearMemoryCache();
   }
 
-  void NavigateTo(const std::string& url) {
-    frame_test_helpers::LoadFrame(GetWebView()->MainFrameImpl(), url);
+  void NavigateTo(const String& url) {
+    frame_test_helpers::LoadFrame(GetWebView()->MainFrameImpl(), url.Utf8());
   }
 
-  void LoadHTML(const std::string& html) {
-    frame_test_helpers::LoadHTMLString(GetWebView()->MainFrameImpl(), html,
+  void LoadHTML(const String& html) {
+    frame_test_helpers::LoadHTMLString(GetWebView()->MainFrameImpl(),
+                                       html.Utf8(),
                                        url_test_helpers::ToKURL("about:blank"));
   }
 
   void ForceFullCompositingUpdate() {
     GetWebView()->MainFrameWidget()->UpdateAllLifecyclePhases(
-        WebWidget::LifecycleUpdateReason::kTest);
+        DocumentUpdateReason::kTest);
   }
 
-  void RegisterMockedHttpURLLoad(const std::string& file_name) {
+  void RegisterMockedHttpURLLoad(const String& file_name) {
+    // TODO(crbug.com/751425): We should use the mock functionality
+    // via |helper_|.
     url_test_helpers::RegisterMockedURLLoadFromBase(
-        WebString::FromUTF8(base_url_), test::CoreTestDataPath(),
-        WebString::FromUTF8(file_name));
+        WebString(base_url_), test::CoreTestDataPath(), WebString(file_name));
+  }
+
+  const cc::ScrollNode* GetScrollNode(const cc::Layer* layer) const {
+    return layer->layer_tree_host()
+        ->property_trees()
+        ->scroll_tree.FindNodeFromElementId(layer->element_id());
+  }
+
+  bool IsScrollable(const cc::Layer* layer) const {
+    return GetScrollNode(layer)->scrollable;
+  }
+
+  uint32_t GetMainThreadScrollingReasons(const cc::Layer* layer) const {
+    return GetScrollNode(layer)->main_thread_scrolling_reasons;
   }
 
   uint32_t GetViewMainThreadScrollingReasons() const {
-    // Pre-BlinkGenPropertyTrees, main thread scrolling reasons are set on
-    // cc::Layer in ScrollingCoordinator.
-    if (!RuntimeEnabledFeatures::BlinkGenPropertyTreesEnabled()) {
-      auto* layer = GetFrame()->View()->LayoutViewport()->LayerForScrolling();
-      return layer->CcLayer()->GetMainThreadScrollingReasons();
-    }
-    // With BlinkGenPropertyTrees, main thread scrolling reasons are calculated
-    // in the blink property tree builder and set on set on scroll nodes.
     const auto* scroll = GetFrame()
                              ->View()
                              ->GetLayoutView()
@@ -98,7 +97,7 @@ class MainThreadScrollingReasonsTest
   LocalFrame* GetFrame() const { return helper_.LocalMainFrame()->GetFrame(); }
 
  protected:
-  std::string base_url_;
+  String base_url_;
 
  private:
   static void ConfigureSettings(WebSettings* settings) {
@@ -108,14 +107,10 @@ class MainThreadScrollingReasonsTest
   frame_test_helpers::WebViewHelper helper_;
 };
 
-INSTANTIATE_TEST_SUITE_P(All, MainThreadScrollingReasonsTest, testing::Bool());
-
-TEST_P(MainThreadScrollingReasonsTest,
+// More cases are tested in LocalFrameViewTest
+// .RequiresMainThreadScrollingForBackgroundFixedAttachment.
+TEST_F(MainThreadScrollingReasonsTest,
        BackgroundAttachmentFixedShouldTriggerMainThreadScroll) {
-  // This test needs the |FastMobileScrolling| feature to be disabled
-  // although it is stable on Android.
-  ScopedFastMobileScrollingForTest fast_mobile_scrolling(false);
-
   RegisterMockedHttpURLLoad("iframe-background-attachment-fixed.html");
   RegisterMockedHttpURLLoad("iframe-background-attachment-fixed-inner.html");
   RegisterMockedHttpURLLoad("white-1x1.png");
@@ -143,19 +138,17 @@ TEST_P(MainThreadScrollingReasonsTest,
   PaintLayerCompositor* inner_compositor = inner_layout_view->Compositor();
   ASSERT_TRUE(inner_compositor->InCompositingMode());
 
-  GraphicsLayer* scroll_layer =
+  cc::Layer* cc_scroll_layer =
       inner_frame_view->LayoutViewport()->LayerForScrolling();
-  ASSERT_TRUE(scroll_layer);
-
-  cc::Layer* cc_scroll_layer = scroll_layer->CcLayer();
-  ASSERT_TRUE(cc_scroll_layer->scrollable());
-  ASSERT_TRUE(
-      cc_scroll_layer->GetMainThreadScrollingReasons() &
-      cc::MainThreadScrollingReason::kHasBackgroundAttachmentFixedObjects);
+  ASSERT_TRUE(cc_scroll_layer);
+  ASSERT_TRUE(IsScrollable(cc_scroll_layer));
+  EXPECT_MAIN_THREAD_SCROLLING_REASON(
+      cc::MainThreadScrollingReason::kHasBackgroundAttachmentFixedObjects,
+      GetMainThreadScrollingReasons(cc_scroll_layer));
 
   // Remove fixed background-attachment should make the iframe
   // scroll on cc.
-  auto* iframe_doc = ToHTMLIFrameElement(iframe)->contentDocument();
+  auto* iframe_doc = To<HTMLIFrameElement>(iframe)->contentDocument();
   iframe = iframe_doc->getElementById("scrollable");
   ASSERT_TRUE(iframe);
 
@@ -165,15 +158,12 @@ TEST_P(MainThreadScrollingReasonsTest,
   layout_object = iframe->GetLayoutObject();
   ASSERT_TRUE(layout_object);
 
-  scroll_layer =
+  cc_scroll_layer =
       layout_object->GetFrameView()->LayoutViewport()->LayerForScrolling();
-  ASSERT_TRUE(scroll_layer);
-
-  cc_scroll_layer = scroll_layer->CcLayer();
-  ASSERT_TRUE(cc_scroll_layer->scrollable());
-  ASSERT_FALSE(
-      cc_scroll_layer->GetMainThreadScrollingReasons() &
-      cc::MainThreadScrollingReason::kHasBackgroundAttachmentFixedObjects);
+  ASSERT_TRUE(cc_scroll_layer);
+  ASSERT_TRUE(IsScrollable(cc_scroll_layer));
+  EXPECT_NO_MAIN_THREAD_SCROLLING_REASON(
+      GetMainThreadScrollingReasons(cc_scroll_layer));
 
   // Force main frame to scroll on main thread. All its descendants
   // should scroll on main thread as well.
@@ -188,25 +178,19 @@ TEST_P(MainThreadScrollingReasonsTest,
   layout_object = iframe->GetLayoutObject();
   ASSERT_TRUE(layout_object);
 
-  scroll_layer =
+  cc_scroll_layer =
       layout_object->GetFrameView()->LayoutViewport()->LayerForScrolling();
-  ASSERT_TRUE(scroll_layer);
-
-  cc_scroll_layer = scroll_layer->CcLayer();
-  ASSERT_TRUE(cc_scroll_layer->scrollable());
-  ASSERT_TRUE(
-      cc_scroll_layer->GetMainThreadScrollingReasons() &
-      cc::MainThreadScrollingReason::kHasBackgroundAttachmentFixedObjects);
+  ASSERT_TRUE(cc_scroll_layer);
+  ASSERT_TRUE(IsScrollable(cc_scroll_layer));
+  EXPECT_MAIN_THREAD_SCROLLING_REASON(
+      cc::MainThreadScrollingReason::kHasBackgroundAttachmentFixedObjects,
+      GetMainThreadScrollingReasons(cc_scroll_layer));
 }
 
 // Upon resizing the content size, the main thread scrolling reason
 // kHasNonLayerViewportConstrainedObject should be updated on all frames
-TEST_P(MainThreadScrollingReasonsTest,
+TEST_F(MainThreadScrollingReasonsTest,
        RecalculateMainThreadScrollingReasonsUponResize) {
-  // This test needs the |FastMobileScrolling| feature to be disabled
-  // although it is stable on Android.
-  ScopedFastMobileScrollingForTest fast_mobile_scrolling(false);
-
   GetWebView()->GetSettings()->SetPreferCompositingToLCDTextEnabled(false);
   RegisterMockedHttpURLLoad("has-non-layer-viewport-constrained-objects.html");
   RegisterMockedHttpURLLoad("white-1x1.png");
@@ -225,9 +209,9 @@ TEST_P(MainThreadScrollingReasonsTest,
       ASSERT_NO_EXCEPTION);
   ForceFullCompositingUpdate();
 
-  EXPECT_TRUE(
-      GetViewMainThreadScrollingReasons() &
-      cc::MainThreadScrollingReason::kHasBackgroundAttachmentFixedObjects);
+  EXPECT_MAIN_THREAD_SCROLLING_REASON(
+      cc::MainThreadScrollingReason::kHasBackgroundAttachmentFixedObjects,
+      GetViewMainThreadScrollingReasons());
 
   // The main thread scrolling reason should be reset upon the following change.
   element->setAttribute("style", "", ASSERT_NO_EXCEPTION);
@@ -236,7 +220,7 @@ TEST_P(MainThreadScrollingReasonsTest,
   EXPECT_FALSE(GetViewMainThreadScrollingReasons());
 }
 
-TEST_P(MainThreadScrollingReasonsTest, FastScrollingCanBeDisabledWithSetting) {
+TEST_F(MainThreadScrollingReasonsTest, FastScrollingCanBeDisabledWithSetting) {
   GetWebView()->MainFrameWidget()->Resize(WebSize(800, 600));
   LoadHTML("<div id='spacer' style='height: 1000px'></div>");
   GetWebView()->GetSettings()->SetThreadedScrollingEnabled(false);
@@ -247,13 +231,13 @@ TEST_P(MainThreadScrollingReasonsTest, FastScrollingCanBeDisabledWithSetting) {
   EXPECT_TRUE(GetViewMainThreadScrollingReasons());
 
   // Main scrolling should also propagate to inner viewport layer.
-  cc::Layer* inner_viewport_scroll_layer =
-      GetFrame()->GetPage()->GetVisualViewport().ScrollLayer()->CcLayer();
-  ASSERT_TRUE(inner_viewport_scroll_layer->scrollable());
-  EXPECT_TRUE(inner_viewport_scroll_layer->GetMainThreadScrollingReasons());
+  const cc::Layer* visual_viewport_scroll_layer =
+      GetFrame()->GetPage()->GetVisualViewport().LayerForScrolling();
+  ASSERT_TRUE(IsScrollable(visual_viewport_scroll_layer));
+  EXPECT_TRUE(GetMainThreadScrollingReasons(visual_viewport_scroll_layer));
 }
 
-TEST_P(MainThreadScrollingReasonsTest, FastScrollingForFixedPosition) {
+TEST_F(MainThreadScrollingReasonsTest, FastScrollingForFixedPosition) {
   RegisterMockedHttpURLLoad("fixed-position.html");
   NavigateTo(base_url_ + "fixed-position.html");
   ForceFullCompositingUpdate();
@@ -262,7 +246,7 @@ TEST_P(MainThreadScrollingReasonsTest, FastScrollingForFixedPosition) {
   EXPECT_FALSE(GetViewMainThreadScrollingReasons());
 }
 
-TEST_P(MainThreadScrollingReasonsTest, FastScrollingForStickyPosition) {
+TEST_F(MainThreadScrollingReasonsTest, FastScrollingForStickyPosition) {
   RegisterMockedHttpURLLoad("sticky-position.html");
   NavigateTo(base_url_ + "sticky-position.html");
   ForceFullCompositingUpdate();
@@ -271,7 +255,7 @@ TEST_P(MainThreadScrollingReasonsTest, FastScrollingForStickyPosition) {
   EXPECT_FALSE(GetViewMainThreadScrollingReasons());
 }
 
-TEST_P(MainThreadScrollingReasonsTest, FastScrollingByDefault) {
+TEST_F(MainThreadScrollingReasonsTest, FastScrollingByDefault) {
   GetWebView()->MainFrameWidget()->Resize(WebSize(800, 600));
   LoadHTML("<div id='spacer' style='height: 1000px'></div>");
   ForceFullCompositingUpdate();
@@ -279,13 +263,13 @@ TEST_P(MainThreadScrollingReasonsTest, FastScrollingByDefault) {
   // Fast scrolling should be enabled by default.
   EXPECT_FALSE(GetViewMainThreadScrollingReasons());
 
-  cc::Layer* inner_viewport_scroll_layer =
-      GetFrame()->GetPage()->GetVisualViewport().ScrollLayer()->CcLayer();
-  ASSERT_TRUE(inner_viewport_scroll_layer->scrollable());
-  EXPECT_FALSE(inner_viewport_scroll_layer->GetMainThreadScrollingReasons());
+  const cc::Layer* visual_viewport_scroll_layer =
+      GetFrame()->GetPage()->GetVisualViewport().LayerForScrolling();
+  ASSERT_TRUE(IsScrollable(visual_viewport_scroll_layer));
+  EXPECT_FALSE(GetMainThreadScrollingReasons(visual_viewport_scroll_layer));
 }
 
-TEST_P(MainThreadScrollingReasonsTest,
+TEST_F(MainThreadScrollingReasonsTest,
        ScrollbarsForceMainThreadOrHaveCompositorScrollbarLayer) {
   RegisterMockedHttpURLLoad("trivial-scroller.html");
   NavigateTo(base_url_ + "trivial-scroller.html");
@@ -308,13 +292,12 @@ TEST_P(MainThreadScrollingReasonsTest,
   bool has_cc_scrollbar_layer = !scrollbar_graphics_layer->DrawsContent();
   EXPECT_TRUE(
       has_cc_scrollbar_layer ||
-      scrollbar_graphics_layer->CcLayer()->GetMainThreadScrollingReasons());
+      GetMainThreadScrollingReasons(scrollbar_graphics_layer->ContentsLayer()));
 }
 
 class NonCompositedMainThreadScrollingReasonsTest
     : public MainThreadScrollingReasonsTest {
   static const uint32_t kLCDTextRelatedReasons =
-      cc::MainThreadScrollingReason::kHasOpacityAndLCDText |
       cc::MainThreadScrollingReason::kHasTransformAndLCDText |
       cc::MainThreadScrollingReason::kBackgroundNotOpaqueInRectAndLCDText |
       cc::MainThreadScrollingReason::kIsNotStackingContextAndLCDText;
@@ -324,20 +307,27 @@ class NonCompositedMainThreadScrollingReasonsTest
     RegisterMockedHttpURLLoad("two_scrollable_area.html");
     NavigateTo(base_url_ + "two_scrollable_area.html");
   }
-  void TestNonCompositedReasons(const std::string& target,
+
+  void TestNonCompositedReasons(const AtomicString& style_class,
                                 const uint32_t reason) {
     GetWebView()->GetSettings()->SetPreferCompositingToLCDTextEnabled(false);
     Document* document = GetFrame()->GetDocument();
     Element* container = document->getElementById("scroller1");
-    container->setAttribute("class", target.c_str(), ASSERT_NO_EXCEPTION);
     ForceFullCompositingUpdate();
 
     PaintLayerScrollableArea* scrollable_area =
         ToLayoutBoxModelObject(container->GetLayoutObject())
             ->GetScrollableArea();
     ASSERT_TRUE(scrollable_area);
-    EXPECT_TRUE(scrollable_area->GetNonCompositedMainThreadScrollingReasons() &
-                reason);
+    EXPECT_NO_MAIN_THREAD_SCROLLING_REASON(
+        scrollable_area->GetNonCompositedMainThreadScrollingReasons());
+
+    container->classList().Add(style_class);
+    ForceFullCompositingUpdate();
+
+    ASSERT_TRUE(scrollable_area);
+    EXPECT_MAIN_THREAD_SCROLLING_REASON(
+        reason, scrollable_area->GetNonCompositedMainThreadScrollingReasons());
 
     Element* container2 = document->getElementById("scroller2");
     PaintLayerScrollableArea* scrollable_area2 =
@@ -345,152 +335,122 @@ class NonCompositedMainThreadScrollingReasonsTest
             ->GetScrollableArea();
     ASSERT_TRUE(scrollable_area2);
     // Different scrollable area should remain unaffected.
-    EXPECT_FALSE(
-        scrollable_area2->GetNonCompositedMainThreadScrollingReasons() &
-        reason);
+    EXPECT_NO_MAIN_THREAD_SCROLLING_REASON(
+        scrollable_area2->GetNonCompositedMainThreadScrollingReasons());
 
     LocalFrameView* frame_view = GetFrame()->View();
     ASSERT_TRUE(frame_view);
-    EXPECT_FALSE(frame_view->GetMainThreadScrollingReasons() & reason);
+    EXPECT_NO_MAIN_THREAD_SCROLLING_REASON(
+        frame_view->GetMainThreadScrollingReasons());
 
-    // Remove attribute from the scroller 1 would lead to scroll on impl.
-    container->removeAttribute("class");
+    // Remove class from the scroller 1 would lead to scroll on impl.
+
+    container->classList().Remove(style_class);
     ForceFullCompositingUpdate();
 
-    EXPECT_FALSE(scrollable_area->GetNonCompositedMainThreadScrollingReasons() &
-                 reason);
-    EXPECT_FALSE(frame_view->GetMainThreadScrollingReasons() & reason);
+    EXPECT_NO_MAIN_THREAD_SCROLLING_REASON(
+        scrollable_area->GetNonCompositedMainThreadScrollingReasons());
+    EXPECT_NO_MAIN_THREAD_SCROLLING_REASON(
+        frame_view->GetMainThreadScrollingReasons());
 
     // Add target attribute would again lead to scroll on main thread
-    container->setAttribute("class", target.c_str(), ASSERT_NO_EXCEPTION);
+    container->classList().Add(style_class);
     ForceFullCompositingUpdate();
 
-    EXPECT_TRUE(scrollable_area->GetNonCompositedMainThreadScrollingReasons() &
-                reason);
-    EXPECT_FALSE(frame_view->GetMainThreadScrollingReasons() & reason);
+    EXPECT_MAIN_THREAD_SCROLLING_REASON(
+        reason, scrollable_area->GetNonCompositedMainThreadScrollingReasons());
+    EXPECT_NO_MAIN_THREAD_SCROLLING_REASON(
+        frame_view->GetMainThreadScrollingReasons());
 
     if ((reason & kLCDTextRelatedReasons) &&
         !(reason & ~kLCDTextRelatedReasons)) {
       GetWebView()->GetSettings()->SetPreferCompositingToLCDTextEnabled(true);
       ForceFullCompositingUpdate();
-      EXPECT_FALSE(
+      EXPECT_NO_MAIN_THREAD_SCROLLING_REASON(
           scrollable_area->GetNonCompositedMainThreadScrollingReasons());
-      EXPECT_FALSE(frame_view->GetMainThreadScrollingReasons());
+      EXPECT_NO_MAIN_THREAD_SCROLLING_REASON(
+          frame_view->GetMainThreadScrollingReasons());
     }
   }
 };
 
-INSTANTIATE_TEST_SUITE_P(All,
-                         NonCompositedMainThreadScrollingReasonsTest,
-                         testing::Bool());
-
-TEST_P(NonCompositedMainThreadScrollingReasonsTest, TransparentTest) {
-  TestNonCompositedReasons(
-      "transparent", cc::MainThreadScrollingReason::kHasOpacityAndLCDText);
+TEST_F(NonCompositedMainThreadScrollingReasonsTest, TransparentTest) {
+  TestNonCompositedReasons("transparent",
+                           cc::MainThreadScrollingReason::kNotScrollingOnMain);
 }
 
-TEST_P(NonCompositedMainThreadScrollingReasonsTest, TransformTest) {
+TEST_F(NonCompositedMainThreadScrollingReasonsTest, TransformTest) {
   TestNonCompositedReasons(
       "transform", cc::MainThreadScrollingReason::kHasTransformAndLCDText);
 }
 
-TEST_P(NonCompositedMainThreadScrollingReasonsTest, BackgroundNotOpaqueTest) {
+TEST_F(NonCompositedMainThreadScrollingReasonsTest, BackgroundNotOpaqueTest) {
   TestNonCompositedReasons(
       "background-not-opaque",
       cc::MainThreadScrollingReason::kBackgroundNotOpaqueInRectAndLCDText);
 }
 
-TEST_P(NonCompositedMainThreadScrollingReasonsTest, ClipTest) {
+TEST_F(NonCompositedMainThreadScrollingReasonsTest, ClipTest) {
   TestNonCompositedReasons(
       "clip", cc::MainThreadScrollingReason::kHasClipRelatedProperty);
 }
 
-TEST_P(NonCompositedMainThreadScrollingReasonsTest, ClipPathTest) {
+TEST_F(NonCompositedMainThreadScrollingReasonsTest, ClipPathTest) {
   uint32_t clip_reason = cc::MainThreadScrollingReason::kHasClipRelatedProperty;
   GetWebView()->GetSettings()->SetPreferCompositingToLCDTextEnabled(false);
   Document* document = GetFrame()->GetDocument();
   // Test ancestor with ClipPath
   Element* element = document->body();
-  element->setAttribute(html_names::kStyleAttr,
-                        "clip-path:circle(115px at 20px 20px);");
+  element->classList().Add("clip-path");
   Element* container = document->getElementById("scroller1");
   ASSERT_TRUE(container);
   ForceFullCompositingUpdate();
 
   PaintLayerScrollableArea* scrollable_area =
       ToLayoutBoxModelObject(container->GetLayoutObject())->GetScrollableArea();
-  EXPECT_TRUE(scrollable_area->GetNonCompositedMainThreadScrollingReasons() &
-              clip_reason);
-
-  EXPECT_FALSE(GetViewMainThreadScrollingReasons() & clip_reason);
+  EXPECT_MAIN_THREAD_SCROLLING_REASON(
+      clip_reason,
+      scrollable_area->GetNonCompositedMainThreadScrollingReasons());
+  EXPECT_NO_MAIN_THREAD_SCROLLING_REASON(GetViewMainThreadScrollingReasons());
 
   // Remove clip path from ancestor.
-  element->removeAttribute(html_names::kStyleAttr);
+  element->classList().Remove("clip-path");
   ForceFullCompositingUpdate();
 
-  EXPECT_FALSE(scrollable_area->GetNonCompositedMainThreadScrollingReasons() &
-               clip_reason);
-  EXPECT_FALSE(GetViewMainThreadScrollingReasons() & clip_reason);
+  EXPECT_NO_MAIN_THREAD_SCROLLING_REASON(
+      scrollable_area->GetNonCompositedMainThreadScrollingReasons());
+  EXPECT_NO_MAIN_THREAD_SCROLLING_REASON(GetViewMainThreadScrollingReasons());
 
   // Test descendant with ClipPath
   element = document->getElementById("content1");
   ASSERT_TRUE(element);
-  element->setAttribute(html_names::kStyleAttr,
-                        "clip-path:circle(115px at 20px 20px);");
+  element->classList().Add("clip-path");
   ForceFullCompositingUpdate();
-  EXPECT_TRUE(scrollable_area->GetNonCompositedMainThreadScrollingReasons() &
-              clip_reason);
-  EXPECT_FALSE(GetViewMainThreadScrollingReasons() & clip_reason);
+  EXPECT_MAIN_THREAD_SCROLLING_REASON(
+      clip_reason,
+      scrollable_area->GetNonCompositedMainThreadScrollingReasons());
+  EXPECT_NO_MAIN_THREAD_SCROLLING_REASON(GetViewMainThreadScrollingReasons());
 
   // Remove clip path from descendant.
-  element->removeAttribute(html_names::kStyleAttr);
+  element->classList().Remove("clip-path");
   ForceFullCompositingUpdate();
-  EXPECT_FALSE(scrollable_area->GetNonCompositedMainThreadScrollingReasons() &
-               clip_reason);
-  EXPECT_FALSE(GetViewMainThreadScrollingReasons() & clip_reason);
+  EXPECT_NO_MAIN_THREAD_SCROLLING_REASON(
+      scrollable_area->GetNonCompositedMainThreadScrollingReasons());
+  EXPECT_NO_MAIN_THREAD_SCROLLING_REASON(GetViewMainThreadScrollingReasons());
 }
 
-TEST_P(NonCompositedMainThreadScrollingReasonsTest, LCDTextEnabledTest) {
+TEST_F(NonCompositedMainThreadScrollingReasonsTest, BoxShadowTest) {
+  TestNonCompositedReasons("box-shadow",
+                           cc::MainThreadScrollingReason::kNotScrollingOnMain);
+}
+
+TEST_F(NonCompositedMainThreadScrollingReasonsTest, StackingContextTest) {
   TestNonCompositedReasons(
-      "transparent", cc::MainThreadScrollingReason::kHasOpacityAndLCDText);
+      "non-stacking-context",
+      cc::MainThreadScrollingReason::kIsNotStackingContextAndLCDText);
 }
 
-TEST_P(NonCompositedMainThreadScrollingReasonsTest, BoxShadowTest) {
-  TestNonCompositedReasons(
-      "box-shadow",
-      cc::MainThreadScrollingReason::kHasBoxShadowFromNonRootLayer);
-}
-
-TEST_P(NonCompositedMainThreadScrollingReasonsTest, StackingContextTest) {
-  GetWebView()->GetSettings()->SetPreferCompositingToLCDTextEnabled(false);
-
-  Document* document = GetFrame()->GetDocument();
-  Element* container = document->getElementById("scroller1");
-  ASSERT_TRUE(container);
-
-  ForceFullCompositingUpdate();
-
-  // If a scroller contains all its children, it's not a stacking context.
-  PaintLayerScrollableArea* scrollable_area =
-      ToLayoutBoxModelObject(container->GetLayoutObject())->GetScrollableArea();
-  ASSERT_TRUE(scrollable_area);
-  EXPECT_TRUE(scrollable_area->GetNonCompositedMainThreadScrollingReasons() &
-              cc::MainThreadScrollingReason::kIsNotStackingContextAndLCDText);
-
-  GetWebView()->GetSettings()->SetPreferCompositingToLCDTextEnabled(true);
-  ForceFullCompositingUpdate();
-  EXPECT_FALSE(scrollable_area->GetNonCompositedMainThreadScrollingReasons() &
-               cc::MainThreadScrollingReason::kIsNotStackingContextAndLCDText);
-  GetWebView()->GetSettings()->SetPreferCompositingToLCDTextEnabled(false);
-
-  // Adding "contain: paint" to force a stacking context leads to promotion.
-  container->setAttribute("style", "contain: paint", ASSERT_NO_EXCEPTION);
-  ForceFullCompositingUpdate();
-
-  EXPECT_FALSE(scrollable_area->GetNonCompositedMainThreadScrollingReasons());
-}
-
-TEST_P(NonCompositedMainThreadScrollingReasonsTest,
+TEST_F(NonCompositedMainThreadScrollingReasonsTest,
        CompositedWithLCDTextRelatedReasonsTest) {
   // With "will-change:transform" we composite elements with
   // LCDTextRelatedReasons only. For elements with other
@@ -507,7 +467,8 @@ TEST_P(NonCompositedMainThreadScrollingReasonsTest,
   PaintLayerScrollableArea* scrollable_area =
       ToLayoutBoxModelObject(container->GetLayoutObject())->GetScrollableArea();
   ASSERT_TRUE(scrollable_area);
-  EXPECT_FALSE(scrollable_area->GetNonCompositedMainThreadScrollingReasons());
+  EXPECT_NO_MAIN_THREAD_SCROLLING_REASON(
+      scrollable_area->GetNonCompositedMainThreadScrollingReasons());
 
   Element* container2 = document->getElementById("scroller2");
   ASSERT_TRUE(container2);

@@ -8,33 +8,36 @@
 
 #include "base/bind.h"
 #include "base/location.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/single_thread_task_runner.h"
 #include "base/threading/thread_task_runner_handle.h"
 #include "base/time/time.h"
 #include "cc/paint/paint_flags.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_otr_state.h"
+#include "chrome/browser/ui/in_product_help/in_product_help.h"
 #include "chrome/browser/ui/layout_constants.h"
 #include "chrome/browser/ui/toolbar/app_menu_model.h"
+#include "chrome/browser/ui/ui_features.h"
 #include "chrome/browser/ui/views/chrome_layout_provider.h"
 #include "chrome/browser/ui/views/extensions/browser_action_drag_data.h"
+#include "chrome/browser/ui/views/feature_promos/feature_promo_colors.h"
 #include "chrome/browser/ui/views/toolbar/app_menu.h"
 #include "chrome/browser/ui/views/toolbar/toolbar_button.h"
 #include "chrome/browser/ui/views/toolbar/toolbar_ink_drop_util.h"
 #include "chrome/browser/ui/views/toolbar/toolbar_view.h"
 #include "chrome/grit/chromium_strings.h"
+#include "chrome/grit/generated_resources.h"
 #include "components/feature_engagement/public/feature_constants.h"
 #include "ui/base/l10n/l10n_util.h"
-#include "ui/base/material_design/material_design_controller.h"
 #include "ui/base/resource/resource_bundle.h"
 #include "ui/base/ui_base_features.h"
 #include "ui/compositor/paint_recorder.h"
-#include "ui/gfx/animation/animation_delegate.h"
 #include "ui/gfx/animation/throb_animation.h"
 #include "ui/gfx/canvas.h"
 #include "ui/gfx/color_palette.h"
 #include "ui/gfx/color_utils.h"
+#include "ui/gfx/paint_vector_icon.h"
+#include "ui/views/animation/animation_delegate_views.h"
 #include "ui/views/animation/ink_drop.h"
 #include "ui/views/animation/ink_drop_highlight.h"
 #include "ui/views/animation/ink_drop_mask.h"
@@ -48,18 +51,7 @@
 #include "chrome/browser/ui/ash/keyboard/chrome_keyboard_controller_client.h"
 #endif  // defined(OS_CHROMEOS)
 
-#if BUILDFLAG(ENABLE_DESKTOP_IN_PRODUCT_HELP)
-#include "chrome/browser/ui/in_product_help/in_product_help.h"
-
 namespace {
-
-// Button background and icon colors for in-product help promos. The first is
-// the preferred color, but the selected color depends on the
-// background. TODO(collinbaker): consider moving these into theme system.
-constexpr SkColor kFeaturePromoHighlightDarkColor = gfx::kGoogleBlue600;
-constexpr SkColor kFeaturePromoHighlightDarkExtremeColor = gfx::kGoogleBlue900;
-constexpr SkColor kFeaturePromoHighlightLightColor = gfx::kGoogleGrey100;
-constexpr SkColor kFeaturePromoHighlightLightExtremeColor = SK_ColorWHITE;
 
 // Cycle duration of ink drop pulsing animation used for in-product help.
 constexpr base::TimeDelta kFeaturePromoPulseDuration =
@@ -70,7 +62,7 @@ constexpr float kFeaturePromoPulseInsetDip = 3.0f;
 
 // An InkDropMask used to animate the size of the BrowserAppMenuButton's ink
 // drop. This is used when showing in-product help.
-class PulsingInkDropMask : public gfx::AnimationDelegate,
+class PulsingInkDropMask : public views::AnimationDelegateViews,
                            public views::InkDropMask {
  public:
   PulsingInkDropMask(views::View* layer_container,
@@ -78,14 +70,14 @@ class PulsingInkDropMask : public gfx::AnimationDelegate,
                      const gfx::Insets& margins,
                      float normal_corner_radius,
                      float max_inset)
-      : views::InkDropMask(layer_size),
+      : AnimationDelegateViews(layer_container),
+        views::InkDropMask(layer_size),
         layer_container_(layer_container),
         margins_(margins),
         normal_corner_radius_(normal_corner_radius),
         max_inset_(max_inset),
         throb_animation_(this) {
-    throb_animation_.SetThrobDuration(
-        kFeaturePromoPulseDuration.InMilliseconds());
+    throb_animation_.SetThrobDuration(kFeaturePromoPulseDuration);
     throb_animation_.StartThrobbing(-1);
   }
 
@@ -109,7 +101,7 @@ class PulsingInkDropMask : public gfx::AnimationDelegate,
     recorder.canvas()->DrawRoundRect(bounds, corner_radius, flags);
   }
 
-  // gfx::AnimationDelegate:
+  // views::AnimationDelegateViews:
   void AnimationProgressed(const gfx::Animation* animation) override {
     DCHECK_EQ(animation, &throb_animation_);
     layer()->SchedulePaint(gfx::Rect(layer()->size()));
@@ -141,7 +133,6 @@ class PulsingInkDropMask : public gfx::AnimationDelegate,
 };
 
 }  // namespace
-#endif
 
 // static
 bool BrowserAppMenuButton::g_open_app_immediately_for_testing = false;
@@ -149,13 +140,9 @@ bool BrowserAppMenuButton::g_open_app_immediately_for_testing = false;
 BrowserAppMenuButton::BrowserAppMenuButton(ToolbarView* toolbar_view)
     : AppMenuButton(toolbar_view), toolbar_view_(toolbar_view) {
   SetInkDropMode(InkDropMode::ON);
-  SetHorizontalAlignment(gfx::ALIGN_CENTER);
+  SetHorizontalAlignment(gfx::ALIGN_RIGHT);
 
   set_ink_drop_visible_opacity(kToolbarInkDropVisibleOpacity);
-
-  md_observer_.Add(ui::MaterialDesignController::GetInstance());
-
-  UpdateBorder();
 }
 
 BrowserAppMenuButton::~BrowserAppMenuButton() {}
@@ -165,19 +152,49 @@ void BrowserAppMenuButton::SetTypeAndSeverity(
   type_and_severity_ = type_and_severity;
 
   int message_id;
+  base::string16 text;
   if (type_and_severity.severity == AppMenuIconController::Severity::NONE) {
     message_id = IDS_APPMENU_TOOLTIP;
   } else if (type_and_severity.type ==
              AppMenuIconController::IconType::UPGRADE_NOTIFICATION) {
     message_id = IDS_APPMENU_TOOLTIP_UPDATE_AVAILABLE;
+    text = l10n_util::GetStringUTF16(IDS_APP_MENU_BUTTON_UPDATE);
   } else {
     message_id = IDS_APPMENU_TOOLTIP_ALERT;
+    text = l10n_util::GetStringUTF16(IDS_APP_MENU_BUTTON_ERROR);
   }
+
+  base::Optional<SkColor> color;
+  switch (type_and_severity.severity) {
+    case AppMenuIconController::Severity::NONE:
+      break;
+    case AppMenuIconController::Severity::LOW:
+      color = AdjustHighlightColorForContrast(
+          GetThemeProvider(), gfx::kGoogleGreen300, gfx::kGoogleGreen600,
+          gfx::kGoogleGreen050, gfx::kGoogleGreen900);
+
+      break;
+    case AppMenuIconController::Severity::MEDIUM:
+      color = AdjustHighlightColorForContrast(
+          GetThemeProvider(), gfx::kGoogleYellow300, gfx::kGoogleYellow600,
+          gfx::kGoogleYellow050, gfx::kGoogleYellow900);
+
+      break;
+    case AppMenuIconController::Severity::HIGH:
+      color = AdjustHighlightColorForContrast(
+          GetThemeProvider(), gfx::kGoogleRed300, gfx::kGoogleRed600,
+          gfx::kGoogleRed050, gfx::kGoogleRed900);
+
+      break;
+  }
+
+  if (base::FeatureList::IsEnabled(features::kUseTextForUpdateButton))
+    SetHighlight(text, color);
+
   SetTooltipText(l10n_util::GetStringUTF16(message_id));
   UpdateIcon();
 }
 
-#if BUILDFLAG(ENABLE_DESKTOP_IN_PRODUCT_HELP)
 void BrowserAppMenuButton::SetPromoFeature(
     base::Optional<InProductHelpFeature> promo_feature) {
   if (promo_feature_ == promo_feature)
@@ -212,7 +229,6 @@ void BrowserAppMenuButton::SetPromoFeature(
   UpdateIcon();
   SchedulePaint();
 }
-#endif
 
 void BrowserAppMenuButton::ShowMenu(int run_types) {
   if (IsMenuShowing())
@@ -221,94 +237,52 @@ void BrowserAppMenuButton::ShowMenu(int run_types) {
 #if defined(OS_CHROMEOS)
   auto* keyboard_client = ChromeKeyboardControllerClient::Get();
   if (keyboard_client->is_keyboard_visible())
-    keyboard_client->HideKeyboard(ash::mojom::HideReason::kSystem);
+    keyboard_client->HideKeyboard(ash::HideReason::kSystem);
 #endif
 
   Browser* browser = toolbar_view_->browser();
-  bool alert_reopen_tab_items = false;
-#if BUILDFLAG(ENABLE_DESKTOP_IN_PRODUCT_HELP)
-  alert_reopen_tab_items = promo_feature_ == InProductHelpFeature::kReopenTab;
-#endif
-  base::TimeTicks menu_open_time = base::TimeTicks::Now();
+
+  bool alert_reopen_tab_items =
+      promo_feature_ == InProductHelpFeature::kReopenTab;
 
   RunMenu(
       std::make_unique<AppMenuModel>(toolbar_view_, browser,
                                      toolbar_view_->app_menu_icon_controller()),
       browser, run_types, alert_reopen_tab_items);
-
-  if (!(run_types & views::MenuRunner::FOR_DROP)) {
-    // Record the time-to-action for the menu. We don't record in the case of a
-    // drag-and-drop command because menus opened for drag-and-drop don't block
-    // the message loop.
-    UMA_HISTOGRAM_TIMES("Toolbar.AppMenuTimeToAction",
-                        base::TimeTicks::Now() - menu_open_time);
-  }
 }
 
 void BrowserAppMenuButton::OnThemeChanged() {
+  AppMenuButton::OnThemeChanged();
   UpdateIcon();
 }
 
 void BrowserAppMenuButton::UpdateIcon() {
-  SetImage(
-      views::Button::STATE_NORMAL,
-      toolbar_view_->app_menu_icon_controller()->GetIconImage(
-          ui::MaterialDesignController::touch_ui(), GetPromoHighlightColor()));
-}
-
-void BrowserAppMenuButton::SetTrailingMargin(int margin) {
-  gfx::Insets* const internal_padding = GetProperty(views::kInternalPaddingKey);
-  if (internal_padding->right() == margin)
+  bool touch_ui = ui::TouchUiController::Get()->touch_ui();
+  if (base::FeatureList::IsEnabled(features::kUseTextForUpdateButton)) {
+    const gfx::VectorIcon& icon =
+        touch_ui ? kBrowserToolsTouchIcon : kBrowserToolsIcon;
+    for (auto state : kButtonStates) {
+      SkColor icon_color =
+          toolbar_view_->app_menu_icon_controller()->GetIconColor(
+              GetForegroundColor(state));
+      SetImage(state, gfx::CreateVectorIcon(icon, icon_color));
+    }
     return;
-  internal_padding->set_right(margin);
-  UpdateBorder();
-  InvalidateLayout();
-}
-
-void BrowserAppMenuButton::OnTouchUiChanged() {
-  UpdateIcon();
-  UpdateBorder();
-  PreferredSizeChanged();
+  }
+  for (auto state : kButtonStates) {
+    SetImage(state, toolbar_view_->app_menu_icon_controller()->GetIconImage(
+                        touch_ui, GetForegroundColor(state)));
+  }
 }
 
 const char* BrowserAppMenuButton::GetClassName() const {
   return "BrowserAppMenuButton";
 }
 
-void BrowserAppMenuButton::UpdateBorder() {
-  gfx::Insets new_insets = GetLayoutInsets(TOOLBAR_BUTTON) +
-                           *GetProperty(views::kInternalPaddingKey);
-  if (!border() || border()->GetInsets() != new_insets)
-    SetBorder(views::CreateEmptyBorder(new_insets));
-}
-
-base::Optional<SkColor> BrowserAppMenuButton::GetPromoHighlightColor() const {
-#if BUILDFLAG(ENABLE_DESKTOP_IN_PRODUCT_HELP)
-  if (promo_feature_) {
-    return ToolbarButton::AdjustHighlightColorForContrast(
-        GetThemeProvider(), kFeaturePromoHighlightDarkColor,
-        kFeaturePromoHighlightLightColor,
-        kFeaturePromoHighlightDarkExtremeColor,
-        kFeaturePromoHighlightLightExtremeColor);
-  }
-#endif
-  return base::nullopt;
-}
-
-gfx::Rect BrowserAppMenuButton::GetAnchorBoundsInScreen() const {
-  gfx::Rect bounds = GetBoundsInScreen();
-  gfx::Insets insets =
-      GetToolbarInkDropInsets(this, *GetProperty(views::kInternalPaddingKey));
-  // If the button is extended, don't inset the trailing edge. The anchored menu
-  // should extend to the screen edge as well so the menu is easier to hit
-  // (Fitts's law).
-  // TODO(pbos): Make sure the button is aware of that it is being extended or
-  // not (margin_trailing_ cannot be used as it can be 0 in fullscreen on
-  // Touch). When this is implemented, use 0 as a replacement for
-  // margin_trailing_ in fullscreen only. Always keep the rest.
-  insets.Set(insets.top(), 0, insets.bottom(), 0);
-  bounds.Inset(insets);
-  return bounds;
+SkColor BrowserAppMenuButton::GetForegroundColor(ButtonState state) const {
+  return promo_feature_
+             ? GetFeaturePromoHighlightColorForToolbar(GetThemeProvider())
+             : ToolbarButton::GetForegroundColor(state);
 }
 
 bool BrowserAppMenuButton::GetDropFormats(
@@ -322,6 +296,8 @@ bool BrowserAppMenuButton::AreDropTypesRequired() {
 }
 
 bool BrowserAppMenuButton::CanDrop(const ui::OSExchangeData& data) {
+  if (base::FeatureList::IsEnabled(features::kExtensionsToolbarMenu))
+    return false;
   return BrowserActionDragData::CanDrop(data,
                                         toolbar_view_->browser()->profile());
 }
@@ -362,36 +338,37 @@ BrowserAppMenuButton::CreateInkDropHighlight() const {
 
 std::unique_ptr<views::InkDropMask> BrowserAppMenuButton::CreateInkDropMask()
     const {
-#if BUILDFLAG(ENABLE_DESKTOP_IN_PRODUCT_HELP)
   if (promo_feature_) {
     // This gets the latest ink drop insets. |SetTrailingMargin()| is called
     // whenever our margins change (i.e. due to the window maximizing or
     // minimizing) and updates our internal padding property accordingly.
-    const gfx::Insets ink_drop_insets =
-        GetToolbarInkDropInsets(this, *GetProperty(views::kInternalPaddingKey));
+    const gfx::Insets ink_drop_insets = GetToolbarInkDropInsets(this);
     const float corner_radius =
         (height() - ink_drop_insets.top() - ink_drop_insets.bottom()) / 2.0f;
     return std::make_unique<PulsingInkDropMask>(ink_drop_container(), size(),
                                                 ink_drop_insets, corner_radius,
                                                 kFeaturePromoPulseInsetDip);
   }
-#endif
 
   return AppMenuButton::CreateInkDropMask();
 }
 
 SkColor BrowserAppMenuButton::GetInkDropBaseColor() const {
-  auto promo_highlight_color = GetPromoHighlightColor();
-  return promo_highlight_color ? promo_highlight_color.value()
-                               : AppMenuButton::GetInkDropBaseColor();
+  return promo_feature_
+             ? GetFeaturePromoHighlightColorForToolbar(GetThemeProvider())
+             : AppMenuButton::GetInkDropBaseColor();
 }
 
 base::string16 BrowserAppMenuButton::GetTooltipText(const gfx::Point& p) const {
-#if BUILDFLAG(ENABLE_DESKTOP_IN_PRODUCT_HELP)
   // Suppress tooltip when IPH is showing.
   if (promo_feature_)
     return base::string16();
-#endif  // BUILDFLAG(ENABLE_DESKTOP_IN_PRODUCT_HELP)
 
   return AppMenuButton::GetTooltipText(p);
+}
+
+void BrowserAppMenuButton::OnTouchUiChanged() {
+  UpdateIcon();
+  UpdateColorsAndInsets();
+  PreferredSizeChanged();
 }

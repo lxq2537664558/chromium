@@ -35,6 +35,7 @@
 #include "net/extras/sqlite/cookie_crypto_delegate.h"
 #include "net/extras/sqlite/sqlite_persistent_store_backend_base.h"
 #include "net/log/net_log.h"
+#include "net/log/net_log_values.h"
 #include "sql/error_delegate_util.h"
 #include "sql/meta_table.h"
 #include "sql/statement.h"
@@ -45,14 +46,13 @@ using base::Time;
 
 namespace {
 
-std::unique_ptr<base::Value> CookieKeyedLoadNetLogCallback(
-    const std::string& key,
-    net::NetLogCaptureMode capture_mode) {
-  if (!capture_mode.include_cookies_and_credentials())
-    return nullptr;
-  auto dict = std::make_unique<base::DictionaryValue>();
-  dict->SetString("key", key);
-  return dict;
+base::Value CookieKeyedLoadNetLogParams(const std::string& key,
+                                        net::NetLogCaptureMode capture_mode) {
+  if (!net::NetLogCaptureIncludesSensitive(capture_mode))
+    return base::Value();
+  base::DictionaryValue dict;
+  dict.SetString("key", key);
+  return std::move(dict);
 }
 
 // Used to populate a histogram for problems when loading cookies.
@@ -158,6 +158,8 @@ namespace {
 
 // Version number of the database.
 //
+// Version 12 - 2019/11/20 - https://crrev.com/c/1898301
+// Version 11 - 2019/04/17 - https://crrev.com/c/1570416
 // Version 10 - 2018/02/13 - https://crrev.com/c/906675
 // Version 9  - 2015/04/17 - https://codereview.chromium.org/1083623003
 //
@@ -167,6 +169,17 @@ namespace {
 // Version 6  - 2013/04/23 - https://codereview.chromium.org/14208017
 // Version 5  - 2011/12/05 - https://codereview.chromium.org/8533013
 // Version 4  - 2009/09/01 - https://codereview.chromium.org/183021
+//
+// Version 12 adds a column for "source_scheme" to store whether the
+// cookie was set from a URL with a cryptographic scheme.
+//
+// Version 11 renames the "firstpartyonly" column to "samesite", and changes any
+// stored values of kCookieSameSiteNoRestriction into
+// kCookieSameSiteUnspecified to reflect the fact that those cookies were set
+// without a SameSite attribute specified. Support for a value of
+// kCookieSameSiteExtended for "samesite" was added, however, that value is now
+// deprecated and is mapped to CookieSameSite::UNSPECIFIED when loading from the
+// database.
 //
 // Version 10 removes the uniqueness constraint on the creation time (which
 // was not propagated up the stack and caused problems in
@@ -208,8 +221,8 @@ namespace {
 // Version 3 updated the database to include the last access time, so we can
 // expire them in decreasing order of use when we've reached the maximum
 // number of cookies.
-const int kCurrentVersionNumber = 10;
-const int kCompatibleVersionNumber = 10;
+const int kCurrentVersionNumber = 12;
+const int kCompatibleVersionNumber = 12;
 
 }  // namespace
 
@@ -251,7 +264,6 @@ class SQLitePersistentCookieStore::Backend
                                          std::move(client_task_runner)),
         num_pending_(0),
         restore_old_session_cookies_(restore_old_session_cookies),
-        num_cookies_read_(0),
         num_priority_waiting_(0),
         total_priority_requests_(0),
         crypto_(crypto_delegate) {}
@@ -263,9 +275,9 @@ class SQLitePersistentCookieStore::Backend
   void LoadCookiesForKey(const std::string& domain,
                          LoadedCallback loaded_callback);
 
-  // Steps through all results of |smt|, makes a cookie from each, and adds the
-  // cookie to |cookies|. Returns true if everything loaded successfully.
-  // Always updates |num_cookies_read_|.
+  // Steps through all results of |statement|, makes a cookie from each, and
+  // adds the cookie to |cookies|. Returns true if everything loaded
+  // successfully.
   bool MakeCookiesFromSQLStatement(
       std::vector<std::unique_ptr<CanonicalCookie>>* cookies,
       sql::Statement* statement);
@@ -409,11 +421,6 @@ class SQLitePersistentCookieStore::Backend
   // Incremented and reported from the background runner.
   base::TimeDelta cookie_load_duration_;
 
-  // The total number of cookies read. Incremented and reported on the
-  // background runner.  Includes those that were malformed, not decrypted
-  // correctly, etc.
-  int num_cookies_read_;
-
   // Guards the following metrics-related properties (only accessed when
   // starting/completing priority loads or completing the total load).
   base::Lock metrics_lock_;
@@ -473,9 +480,12 @@ CookiePriority DBCookiePriorityToCookiePriority(DBCookiePriority value) {
 
 // Possible values for the 'samesite' column
 enum DBCookieSameSite {
+  kCookieSameSiteUnspecified = -1,
   kCookieSameSiteNoRestriction = 0,
   kCookieSameSiteLax = 1,
   kCookieSameSiteStrict = 2,
+  // Deprecated, mapped to kCookieSameSiteUnspecified.
+  kCookieSameSiteExtended = 3
 };
 
 DBCookieSameSite CookieSameSiteToDBCookieSameSite(CookieSameSite value) {
@@ -486,24 +496,43 @@ DBCookieSameSite CookieSameSiteToDBCookieSameSite(CookieSameSite value) {
       return kCookieSameSiteLax;
     case CookieSameSite::STRICT_MODE:
       return kCookieSameSiteStrict;
+    case CookieSameSite::UNSPECIFIED:
+      return kCookieSameSiteUnspecified;
   }
-
-  NOTREACHED();
-  return kCookieSameSiteNoRestriction;
 }
 
 CookieSameSite DBCookieSameSiteToCookieSameSite(DBCookieSameSite value) {
+  CookieSameSite samesite = CookieSameSite::UNSPECIFIED;
   switch (value) {
     case kCookieSameSiteNoRestriction:
-      return CookieSameSite::NO_RESTRICTION;
+      samesite = CookieSameSite::NO_RESTRICTION;
+      break;
     case kCookieSameSiteLax:
-      return CookieSameSite::LAX_MODE;
+      samesite = CookieSameSite::LAX_MODE;
+      break;
     case kCookieSameSiteStrict:
-      return CookieSameSite::STRICT_MODE;
+      samesite = CookieSameSite::STRICT_MODE;
+      break;
+    // SameSite=Extended is deprecated, so we map to UNSPECIFIED.
+    case kCookieSameSiteExtended:
+    case kCookieSameSiteUnspecified:
+      samesite = CookieSameSite::UNSPECIFIED;
+      break;
+  }
+  return samesite;
+}
+
+CookieSourceScheme DBToCookieSourceScheme(int value) {
+  int enum_max_value = static_cast<int>(CookieSourceScheme::kMaxValue);
+
+  if (value < 0 || value > enum_max_value) {
+    DLOG(WARNING) << "DB read of cookie's source scheme is invalid. Resetting "
+                     "value to unset.";
+    value = static_cast<int>(
+        CookieSourceScheme::kUnset);  // Reset value to a known, useful, state.
   }
 
-  NOTREACHED();
-  return CookieSameSite::DEFAULT_MODE;
+  return static_cast<CookieSourceScheme>(value);
 }
 
 // Increments a specified TimeDelta by the duration between this object's
@@ -533,7 +562,7 @@ bool CreateV10Schema(sql::Database* db) {
   DCHECK(!db->DoesTableExist("cookies"));
 
   std::string stmt(base::StringPrintf(
-      "CREATE TABLE cookies ("
+      "CREATE TABLE cookies("
       "creation_utc INTEGER NOT NULL,"
       "host_key TEXT NOT NULL,"
       "name TEXT NOT NULL,"
@@ -542,15 +571,77 @@ bool CreateV10Schema(sql::Database* db) {
       "expires_utc INTEGER NOT NULL,"
       "is_secure INTEGER NOT NULL,"
       "is_httponly INTEGER NOT NULL,"
-      "last_access_utc INTEGER NOT NULL, "
-      "has_expires INTEGER NOT NULL DEFAULT 1, "
+      "last_access_utc INTEGER NOT NULL,"
+      "has_expires INTEGER NOT NULL DEFAULT 1,"
       "is_persistent INTEGER NOT NULL DEFAULT 1,"
       "priority INTEGER NOT NULL DEFAULT %d,"
       "encrypted_value BLOB DEFAULT '',"
       "firstpartyonly INTEGER NOT NULL DEFAULT %d,"
       "UNIQUE (host_key, name, path))",
       CookiePriorityToDBCookiePriority(COOKIE_PRIORITY_DEFAULT),
-      CookieSameSiteToDBCookieSameSite(CookieSameSite::DEFAULT_MODE)));
+      CookieSameSiteToDBCookieSameSite(CookieSameSite::NO_RESTRICTION)));
+  if (!db->Execute(stmt.c_str()))
+    return false;
+
+  return true;
+}
+
+// Initializes the cookies table, returning true on success.
+// The table cannot exist when calling this function.
+bool CreateV11Schema(sql::Database* db) {
+  DCHECK(!db->DoesTableExist("cookies"));
+
+  std::string stmt(base::StringPrintf(
+      "CREATE TABLE cookies("
+      "creation_utc INTEGER NOT NULL,"
+      "host_key TEXT NOT NULL,"
+      "name TEXT NOT NULL,"
+      "value TEXT NOT NULL,"
+      "path TEXT NOT NULL,"
+      "expires_utc INTEGER NOT NULL,"
+      "is_secure INTEGER NOT NULL,"
+      "is_httponly INTEGER NOT NULL,"
+      "last_access_utc INTEGER NOT NULL,"
+      "has_expires INTEGER NOT NULL DEFAULT 1,"
+      "is_persistent INTEGER NOT NULL DEFAULT 1,"
+      "priority INTEGER NOT NULL DEFAULT %d,"
+      "encrypted_value BLOB DEFAULT '',"
+      "samesite INTEGER NOT NULL DEFAULT %d,"
+      "UNIQUE (host_key, name, path))",
+      CookiePriorityToDBCookiePriority(COOKIE_PRIORITY_DEFAULT),
+      CookieSameSiteToDBCookieSameSite(CookieSameSite::UNSPECIFIED)));
+  if (!db->Execute(stmt.c_str()))
+    return false;
+
+  return true;
+}
+
+// Initializes the cookies table, returning true on success.
+// The table cannot exist when calling this function.
+bool CreateV12Schema(sql::Database* db) {
+  DCHECK(!db->DoesTableExist("cookies"));
+
+  std::string stmt(base::StringPrintf(
+      "CREATE TABLE cookies("
+      "creation_utc INTEGER NOT NULL,"
+      "host_key TEXT NOT NULL,"
+      "name TEXT NOT NULL,"
+      "value TEXT NOT NULL,"
+      "path TEXT NOT NULL,"
+      "expires_utc INTEGER NOT NULL,"
+      "is_secure INTEGER NOT NULL,"
+      "is_httponly INTEGER NOT NULL,"
+      "last_access_utc INTEGER NOT NULL,"
+      "has_expires INTEGER NOT NULL DEFAULT 1,"
+      "is_persistent INTEGER NOT NULL DEFAULT 1,"
+      "priority INTEGER NOT NULL DEFAULT %d,"
+      "encrypted_value BLOB DEFAULT '',"
+      "samesite INTEGER NOT NULL DEFAULT %d,"
+      "source_scheme INTEGER NOT NULL DEFAULT %d,"
+      "UNIQUE (host_key, name, path))",
+      CookiePriorityToDBCookiePriority(COOKIE_PRIORITY_DEFAULT),
+      CookieSameSiteToDBCookieSameSite(CookieSameSite::UNSPECIFIED),
+      static_cast<int>(CookieSourceScheme::kUnset)));
   if (!db->Execute(stmt.c_str()))
     return false;
 
@@ -678,9 +769,6 @@ void SQLitePersistentCookieStore::Backend::ReportMetrics() {
 
     UMA_HISTOGRAM_COUNTS_100("Cookie.PriorityLoadCount",
                              total_priority_requests_);
-
-    UMA_HISTOGRAM_COUNTS_10000("Cookie.NumberOfLoadedCookies",
-                               num_cookies_read_);
   }
 }
 
@@ -713,13 +801,11 @@ bool SQLitePersistentCookieStore::Backend::CreateDatabaseSchema() {
   if (db()->DoesTableExist("cookies"))
     return true;
 
-  return CreateV10Schema(db());
+  return CreateV12Schema(db());
 }
 
 bool SQLitePersistentCookieStore::Backend::DoInitializeDatabase() {
   DCHECK(db());
-
-  base::Time start = base::Time::Now();
 
   // Retrieve all the domains
   sql::Statement smt(
@@ -734,29 +820,12 @@ bool SQLitePersistentCookieStore::Backend::DoInitializeDatabase() {
   while (smt.Step())
     host_keys.push_back(smt.ColumnString(0));
 
-  UMA_HISTOGRAM_CUSTOM_TIMES("Cookie.TimeLoadDomains",
-                             base::Time::Now() - start,
-                             base::TimeDelta::FromMilliseconds(1),
-                             base::TimeDelta::FromMinutes(1), 50);
-
-  base::Time start_parse = base::Time::Now();
-
   // Build a map of domain keys (always eTLD+1) to domains.
   for (size_t idx = 0; idx < host_keys.size(); ++idx) {
     const std::string& domain = host_keys[idx];
     std::string key = CookieMonster::GetKey(domain);
     keys_to_load_[key].insert(domain);
   }
-
-  UMA_HISTOGRAM_CUSTOM_TIMES("Cookie.TimeParseDomains",
-                             base::Time::Now() - start_parse,
-                             base::TimeDelta::FromMilliseconds(1),
-                             base::TimeDelta::FromMinutes(1), 50);
-
-  UMA_HISTOGRAM_CUSTOM_TIMES("Cookie.TimeInitializeDomainMap",
-                             base::Time::Now() - start,
-                             base::TimeDelta::FromMilliseconds(1),
-                             base::TimeDelta::FromMinutes(1), 50);
 
   if (!restore_old_session_cookies_)
     DeleteSessionCookiesOnStartup();
@@ -804,20 +873,23 @@ bool SQLitePersistentCookieStore::Backend::LoadCookiesForDomains(
   DCHECK(background_task_runner()->RunsTasksInCurrentSequence());
 
   sql::Statement smt, del_smt;
+  // TODO(chlily): These are out of order with respect to the schema
+  // declaration. Fix this.
   if (restore_old_session_cookies_) {
     smt.Assign(db()->GetCachedStatement(
         SQL_FROM_HERE,
         "SELECT creation_utc, host_key, name, value, encrypted_value, path, "
-        "expires_utc, is_secure, is_httponly, firstpartyonly, "
-        "last_access_utc, has_expires, is_persistent, priority "
+        "expires_utc, is_secure, is_httponly, samesite, "
+        "last_access_utc, has_expires, is_persistent, priority, "
+        "source_scheme "
         "FROM cookies WHERE host_key = ?"));
   } else {
     smt.Assign(db()->GetCachedStatement(
         SQL_FROM_HERE,
         "SELECT creation_utc, host_key, name, value, encrypted_value, path, "
-        "expires_utc, is_secure, is_httponly, firstpartyonly, last_access_utc, "
-        "has_expires, is_persistent, priority FROM cookies WHERE host_key = ? "
-        "AND is_persistent = 1"));
+        "expires_utc, is_secure, is_httponly, samesite, last_access_utc, "
+        "has_expires, is_persistent, priority, source_scheme "
+        "FROM cookies WHERE host_key = ? AND is_persistent = 1"));
   }
   del_smt.Assign(db()->GetCachedStatement(
       SQL_FROM_HERE, "DELETE FROM cookies WHERE host_key = ?"));
@@ -867,7 +939,6 @@ bool SQLitePersistentCookieStore::Backend::MakeCookiesFromSQLStatement(
   sql::Statement& smt = *statement;
   bool ok = true;
   while (smt.Step()) {
-    ++num_cookies_read_;
     std::string value;
     std::string encrypted_value = smt.ColumnString(4);
     if (!encrypted_value.empty() && crypto_) {
@@ -891,12 +962,13 @@ bool SQLitePersistentCookieStore::Backend::MakeCookiesFromSQLStatement(
         Time::FromInternalValue(smt.ColumnInt64(0)),   // creation_utc
         Time::FromInternalValue(smt.ColumnInt64(6)),   // expires_utc
         Time::FromInternalValue(smt.ColumnInt64(10)),  // last_access_utc
-        smt.ColumnInt(7) != 0,                         // secure
-        smt.ColumnInt(8) != 0,                         // http_only
+        smt.ColumnBool(7),                             // secure
+        smt.ColumnBool(8),                             // http_only
         DBCookieSameSiteToCookieSameSite(
             static_cast<DBCookieSameSite>(smt.ColumnInt(9))),  // samesite
         DBCookiePriorityToCookiePriority(
-            static_cast<DBCookiePriority>(smt.ColumnInt(13)))));  // priority
+            static_cast<DBCookiePriority>(smt.ColumnInt(13))),  // priority
+        DBToCookieSourceScheme(smt.ColumnInt(14))));            // source_scheme
     DLOG_IF(WARNING, cc->CreationDate() > Time::Now())
         << L"CreationDate too recent";
     if (cc->IsCanonical()) {
@@ -958,6 +1030,69 @@ SQLitePersistentCookieStore::Backend::DoMigrateDatabaseSchema() {
     transaction.Commit();
     UMA_HISTOGRAM_TIMES("Cookie.TimeDatabaseMigrationToV10",
                         base::TimeTicks::Now() - start_time);
+  }
+
+  if (cur_version == 10) {
+    SCOPED_UMA_HISTOGRAM_TIMER("Cookie.TimeDatabaseMigrationToV11");
+    sql::Transaction transaction(db());
+    if (!transaction.Begin())
+      return base::nullopt;
+
+    // Copy the data into a new table, renaming the firstpartyonly column to
+    // samesite.
+    if (!db()->Execute("DROP TABLE IF EXISTS cookies_old; "
+                       "ALTER TABLE cookies RENAME TO cookies_old"))
+      return base::nullopt;
+    if (!CreateV11Schema(db()))
+      return base::nullopt;
+    if (!db()->Execute(
+            "INSERT INTO cookies "
+            "(creation_utc, host_key, name, value, path, expires_utc, "
+            "is_secure, is_httponly, last_access_utc, has_expires, "
+            "is_persistent, priority, encrypted_value, samesite) "
+            "SELECT creation_utc, host_key, name, value, path, expires_utc, "
+            "       is_secure, is_httponly, last_access_utc, has_expires, "
+            "       is_persistent, priority, encrypted_value, firstpartyonly "
+            "FROM cookies_old")) {
+      return base::nullopt;
+    }
+    if (!db()->Execute("DROP TABLE cookies_old"))
+      return base::nullopt;
+
+    // Update stored SameSite values of kCookieSameSiteNoRestriction into
+    // kCookieSameSiteUnspecified.
+    std::string update_stmt(base::StringPrintf(
+        "UPDATE cookies SET samesite=%d WHERE samesite=%d",
+        CookieSameSiteToDBCookieSameSite(CookieSameSite::UNSPECIFIED),
+        CookieSameSiteToDBCookieSameSite(CookieSameSite::NO_RESTRICTION)));
+    if (!db()->Execute(update_stmt.c_str()))
+      return base::nullopt;
+
+    ++cur_version;
+    meta_table()->SetVersionNumber(cur_version);
+    meta_table()->SetCompatibleVersionNumber(
+        std::min(cur_version, kCompatibleVersionNumber));
+    transaction.Commit();
+  }
+
+  if (cur_version == 11) {
+    SCOPED_UMA_HISTOGRAM_TIMER("Cookie.TimeDatabaseMigrationToV12");
+    sql::Transaction transaction(db());
+    if (!transaction.Begin())
+      return base::nullopt;
+
+    std::string update_stmt(
+        base::StringPrintf("ALTER TABLE cookies ADD COLUMN source_scheme "
+                           "INTEGER NOT NULL DEFAULT %d;",
+                           static_cast<int>(CookieSourceScheme::kUnset)));
+    if (!db()->Execute(update_stmt.c_str()))
+      return base::nullopt;
+
+    ++cur_version;
+    meta_table()->SetVersionNumber(cur_version);
+    meta_table()->SetCompatibleVersionNumber(
+        std::min(cur_version, kCompatibleVersionNumber));
+    transaction.Commit();
   }
 
   // Put future migration cases here.
@@ -1058,10 +1193,13 @@ void SQLitePersistentCookieStore::Backend::DoCommit() {
 
   sql::Statement add_smt(db()->GetCachedStatement(
       SQL_FROM_HERE,
+      // TODO(chlily): These are out of order with respect to the schema
+      // declaration. Fix this.
       "INSERT INTO cookies (creation_utc, host_key, name, value, "
       "encrypted_value, path, expires_utc, is_secure, is_httponly, "
-      "firstpartyonly, last_access_utc, has_expires, is_persistent, priority) "
-      "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)"));
+      "samesite, last_access_utc, has_expires, is_persistent, priority,"
+      "source_scheme) "
+      "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"));
   if (!add_smt.is_valid())
     return;
 
@@ -1121,6 +1259,7 @@ void SQLitePersistentCookieStore::Backend::DoCommit() {
           add_smt.BindInt(12, po->cc().IsPersistent());
           add_smt.BindInt(
               13, CookiePriorityToDBCookiePriority(po->cc().Priority()));
+          add_smt.BindInt(14, static_cast<int>(po->cc().SourceScheme()));
           if (!add_smt.Run()) {
             DLOG(WARNING) << "Could not add a cookie to the DB.";
             RecordCookieCommitProblem(COOKIE_COMMIT_PROBLEM_ADD);
@@ -1295,7 +1434,9 @@ void SQLitePersistentCookieStore::LoadCookiesForKey(
     LoadedCallback loaded_callback) {
   DCHECK(!loaded_callback.is_null());
   net_log_.AddEvent(NetLogEventType::COOKIE_PERSISTENT_STORE_KEY_LOAD_STARTED,
-                    base::BindRepeating(CookieKeyedLoadNetLogCallback, key));
+                    [&](NetLogCaptureMode capture_mode) {
+                      return CookieKeyedLoadNetLogParams(key, capture_mode);
+                    });
   // Note that |backend_| keeps |this| alive by keeping a reference count.
   // If this class is ever converted over to a WeakPtr<> pattern (as TODO it
   // should be) this will need to be replaced by a more complex pattern that
@@ -1337,9 +1478,9 @@ size_t SQLitePersistentCookieStore::GetQueueLengthForTesting() {
 }
 
 SQLitePersistentCookieStore::~SQLitePersistentCookieStore() {
-  net_log_.AddEvent(
-      NetLogEventType::COOKIE_PERSISTENT_STORE_CLOSED,
-      NetLog::StringCallback("type", "SQLitePersistentCookieStore"));
+  net_log_.AddEventWithStringParams(
+      NetLogEventType::COOKIE_PERSISTENT_STORE_CLOSED, "type",
+      "SQLitePersistentCookieStore");
   backend_->Close();
 }
 
@@ -1354,8 +1495,9 @@ void SQLitePersistentCookieStore::CompleteKeyedLoad(
     const std::string& key,
     LoadedCallback callback,
     std::vector<std::unique_ptr<CanonicalCookie>> cookie_list) {
-  net_log_.AddEvent(NetLogEventType::COOKIE_PERSISTENT_STORE_KEY_LOAD_COMPLETED,
-                    NetLog::StringCallback("domain", &key));
+  net_log_.AddEventWithStringParams(
+      NetLogEventType::COOKIE_PERSISTENT_STORE_KEY_LOAD_COMPLETED, "domain",
+      key);
   std::move(callback).Run(std::move(cookie_list));
 }
 

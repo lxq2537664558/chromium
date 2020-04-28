@@ -33,7 +33,9 @@
 #include <utility>
 
 #include "base/macros.h"
+#include "base/optional.h"
 #include "third_party/blink/public/mojom/service_worker/service_worker_error_type.mojom-blink.h"
+#include "third_party/blink/public/platform/web_fetch_client_settings_object.h"
 #include "third_party/blink/public/platform/web_string.h"
 #include "third_party/blink/public/platform/web_url.h"
 #include "third_party/blink/renderer/bindings/core/v8/callback_promise_adapter.h"
@@ -51,23 +53,39 @@
 #include "third_party/blink/renderer/core/frame/local_dom_window.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
 #include "third_party/blink/renderer/core/frame/local_frame_client.h"
-#include "third_party/blink/renderer/core/frame/use_counter.h"
 #include "third_party/blink/renderer/core/inspector/console_message.h"
 #include "third_party/blink/renderer/core/messaging/blink_transferable_message.h"
 #include "third_party/blink/renderer/core/messaging/message_port.h"
+#include "third_party/blink/renderer/core/script/script.h"
 #include "third_party/blink/renderer/modules/event_target_modules.h"
 #include "third_party/blink/renderer/modules/service_worker/service_worker.h"
 #include "third_party/blink/renderer/modules/service_worker/service_worker_error.h"
 #include "third_party/blink/renderer/modules/service_worker/service_worker_registration.h"
+#include "third_party/blink/renderer/platform/bindings/exception_state.h"
 #include "third_party/blink/renderer/platform/bindings/script_state.h"
 #include "third_party/blink/renderer/platform/bindings/v8_throw_exception.h"
+#include "third_party/blink/renderer/platform/heap/heap.h"
+#include "third_party/blink/renderer/platform/instrumentation/use_counter.h"
+#include "third_party/blink/renderer/platform/loader/fetch/resource_fetcher.h"
+#include "third_party/blink/renderer/platform/loader/fetch/resource_fetcher_properties.h"
+#include "third_party/blink/renderer/platform/weborigin/reporting_disposition.h"
 #include "third_party/blink/renderer/platform/weborigin/scheme_registry.h"
-#include "third_party/blink/renderer/platform/weborigin/security_violation_reporting_policy.h"
 #include "third_party/blink/renderer/platform/wtf/functional.h"
 
 namespace blink {
 
 namespace {
+
+void MaybeRecordThirdPartyServiceWorkerUsage(
+    ExecutionContext* execution_context) {
+  DCHECK(execution_context);
+  // ServiceWorkerContainer is only supported on windows.
+  LocalDOMWindow* window = To<LocalDOMWindow>(execution_context);
+  DCHECK(window);
+
+  if (window->document()->IsCrossSiteSubframe())
+    UseCounter::Count(window, WebFeature::kThirdPartyServiceWorker);
+}
 
 bool HasFiredDomContentLoaded(const Document& document) {
   return !document.GetTiming().DomContentLoadedEventStart().is_null();
@@ -82,15 +100,6 @@ mojom::ServiceWorkerUpdateViaCache ParseUpdateViaCache(const String& value) {
     return mojom::ServiceWorkerUpdateViaCache::kNone;
   // Default value.
   return mojom::ServiceWorkerUpdateViaCache::kImports;
-}
-
-mojom::ScriptType ParseScriptType(const String& type) {
-  if (type == "classic")
-    return mojom::ScriptType::kClassic;
-  if (type == "module")
-    return mojom::ScriptType::kModule;
-  NOTREACHED() << "Invalid type: " << type;
-  return mojom::ScriptType::kClassic;
 }
 
 class GetRegistrationCallback : public WebServiceWorkerProvider::
@@ -134,7 +143,7 @@ class ServiceWorkerContainer::DomContentLoadedListener final
   void Invoke(ExecutionContext* execution_context, Event* event) override {
     DCHECK_EQ(event->type(), "DOMContentLoaded");
 
-    Document& document = *To<Document>(execution_context);
+    Document& document = *To<LocalDOMWindow>(execution_context)->document();
     DCHECK(HasFiredDomContentLoaded(document));
 
     auto* container =
@@ -187,7 +196,7 @@ ServiceWorkerContainer::~ServiceWorkerContainer() {
   DCHECK(!provider_);
 }
 
-void ServiceWorkerContainer::ContextDestroyed(ExecutionContext*) {
+void ServiceWorkerContainer::ContextDestroyed() {
   if (provider_) {
     provider_->SetClient(nullptr);
     provider_ = nullptr;
@@ -195,7 +204,7 @@ void ServiceWorkerContainer::ContextDestroyed(ExecutionContext*) {
   controller_ = nullptr;
 }
 
-void ServiceWorkerContainer::Trace(blink::Visitor* visitor) {
+void ServiceWorkerContainer::Trace(Visitor* visitor) {
   visitor->Trace(controller_);
   visitor->Trace(ready_);
   visitor->Trace(dom_content_loaded_observer_);
@@ -203,7 +212,7 @@ void ServiceWorkerContainer::Trace(blink::Visitor* visitor) {
   visitor->Trace(service_worker_objects_);
   EventTargetWithInlineData::Trace(visitor);
   Supplement<Document>::Trace(visitor);
-  ContextLifecycleObserver::Trace(visitor);
+  ExecutionContextLifecycleObserver::Trace(visitor);
 }
 
 ScriptPromise ServiceWorkerContainer::registerServiceWorker(
@@ -217,7 +226,7 @@ ScriptPromise ServiceWorkerContainer::registerServiceWorker(
   // ServiceWorker is enabled by default (https://crbug.com/824647).
   if (options->type() == "module" &&
       !RuntimeEnabledFeatures::ModuleServiceWorkerEnabled()) {
-    resolver->Reject(DOMException::Create(
+    resolver->Reject(MakeGarbageCollected<DOMException>(
         DOMExceptionCode::kNotSupportedError,
         "type 'module' in RegistrationOptions is not implemented yet."
         "See https://crbug.com/824647 for details."));
@@ -228,6 +237,7 @@ ScriptPromise ServiceWorkerContainer::registerServiceWorker(
       ServiceWorkerRegistration, ServiceWorkerErrorForUpdate>>(resolver);
 
   ExecutionContext* execution_context = ExecutionContext::From(script_state);
+  MaybeRecordThirdPartyServiceWorkerUsage(execution_context);
 
   // The IDL definition is expected to restrict service worker to secure
   // contexts.
@@ -303,10 +313,11 @@ ScriptPromise ServiceWorkerContainer::registerServiceWorker(
   }
 
   if (!provider_) {
-    resolver->Reject(DOMException::Create(DOMExceptionCode::kInvalidStateError,
-                                          "Failed to register a ServiceWorker: "
-                                          "The document is in an invalid "
-                                          "state."));
+    resolver->Reject(MakeGarbageCollected<DOMException>(
+        DOMExceptionCode::kInvalidStateError,
+        "Failed to register a ServiceWorker: "
+        "The document is in an invalid "
+        "state."));
     return promise;
   }
   WebString web_error_message;
@@ -336,10 +347,18 @@ ScriptPromise ServiceWorkerContainer::registerServiceWorker(
 
   mojom::ServiceWorkerUpdateViaCache update_via_cache =
       ParseUpdateViaCache(options->updateViaCache());
-  mojom::ScriptType type = ParseScriptType(options->type());
+  base::Optional<mojom::ScriptType> script_type =
+      Script::ParseScriptType(options->type());
+  DCHECK(script_type);
 
-  provider_->RegisterServiceWorker(scope_url, script_url, type,
-                                   update_via_cache, std::move(callbacks));
+  WebFetchClientSettingsObject fetch_client_settings_object(
+      execution_context->Fetcher()
+          ->GetProperties()
+          .GetFetchClientSettingsObject());
+
+  provider_->RegisterServiceWorker(
+      scope_url, script_url, *script_type, update_via_cache,
+      std::move(fetch_client_settings_object), std::move(callbacks));
   return promise;
 }
 
@@ -360,7 +379,7 @@ ScriptPromise ServiceWorkerContainer::getRegistration(
   KURL page_url = KURL(NullURL(), document_origin->ToString());
   if (!SchemeRegistry::ShouldTreatURLSchemeAsAllowingServiceWorkers(
           page_url.Protocol())) {
-    resolver->Reject(DOMException::Create(
+    resolver->Reject(MakeGarbageCollected<DOMException>(
         DOMExceptionCode::kSecurityError,
         "Failed to get a ServiceWorkerRegistration: The URL protocol of the "
         "current origin ('" +
@@ -373,21 +392,22 @@ ScriptPromise ServiceWorkerContainer::getRegistration(
   if (!document_origin->CanRequest(completed_url)) {
     scoped_refptr<const SecurityOrigin> document_url_origin =
         SecurityOrigin::Create(completed_url);
-    resolver->Reject(
-        DOMException::Create(DOMExceptionCode::kSecurityError,
-                             "Failed to get a ServiceWorkerRegistration: The "
-                             "origin of the provided documentURL ('" +
-                                 document_url_origin->ToString() +
-                                 "') does not match the current origin ('" +
-                                 document_origin->ToString() + "')."));
+    resolver->Reject(MakeGarbageCollected<DOMException>(
+        DOMExceptionCode::kSecurityError,
+        "Failed to get a ServiceWorkerRegistration: The "
+        "origin of the provided documentURL ('" +
+            document_url_origin->ToString() +
+            "') does not match the current origin ('" +
+            document_origin->ToString() + "')."));
     return promise;
   }
 
   if (!provider_) {
-    resolver->Reject(DOMException::Create(DOMExceptionCode::kInvalidStateError,
-                                          "Failed to get a "
-                                          "ServiceWorkerRegistration: The "
-                                          "document is in an invalid state."));
+    resolver->Reject(
+        MakeGarbageCollected<DOMException>(DOMExceptionCode::kInvalidStateError,
+                                           "Failed to get a "
+                                           "ServiceWorkerRegistration: The "
+                                           "document is in an invalid state."));
     return promise;
   }
   provider_->GetRegistration(
@@ -402,10 +422,10 @@ ScriptPromise ServiceWorkerContainer::getRegistrations(
   ScriptPromise promise = resolver->Promise();
 
   if (!provider_) {
-    resolver->Reject(
-        DOMException::Create(DOMExceptionCode::kInvalidStateError,
-                             "Failed to get ServiceWorkerRegistration objects: "
-                             "The document is in an invalid state."));
+    resolver->Reject(MakeGarbageCollected<DOMException>(
+        DOMExceptionCode::kInvalidStateError,
+        "Failed to get ServiceWorkerRegistration objects: "
+        "The document is in an invalid state."));
     return promise;
   }
 
@@ -420,7 +440,7 @@ ScriptPromise ServiceWorkerContainer::getRegistrations(
   KURL page_url = KURL(NullURL(), document_origin->ToString());
   if (!SchemeRegistry::ShouldTreatURLSchemeAsAllowingServiceWorkers(
           page_url.Protocol())) {
-    resolver->Reject(DOMException::Create(
+    resolver->Reject(MakeGarbageCollected<DOMException>(
         DOMExceptionCode::kSecurityError,
         "Failed to get ServiceWorkerRegistration objects: The URL protocol of "
         "the current origin ('" +
@@ -442,17 +462,17 @@ void ServiceWorkerContainer::startMessages() {
   EnableClientMessageQueue();
 }
 
-ScriptPromise ServiceWorkerContainer::ready(ScriptState* caller_state) {
+ScriptPromise ServiceWorkerContainer::ready(ScriptState* caller_state,
+                                            ExceptionState& exception_state) {
   if (!GetExecutionContext())
     return ScriptPromise();
 
   if (!caller_state->World().IsMainWorld()) {
     // FIXME: Support .ready from isolated worlds when
     // ScriptPromiseProperty can vend Promises in isolated worlds.
-    return ScriptPromise::RejectWithDOMException(
-        caller_state,
-        DOMException::Create(DOMExceptionCode::kNotSupportedError,
-                             "'ready' is only supported in pages."));
+    exception_state.ThrowDOMException(DOMExceptionCode::kNotSupportedError,
+                                      "'ready' is only supported in pages.");
+    return ScriptPromise();
   }
 
   if (!ready_) {
@@ -474,8 +494,12 @@ void ServiceWorkerContainer::SetController(
     return;
   controller_ = ServiceWorker::From(GetExecutionContext(), std::move(info));
   if (controller_) {
+    MaybeRecordThirdPartyServiceWorkerUsage(GetExecutionContext());
     UseCounter::Count(GetExecutionContext(),
                       WebFeature::kServiceWorkerControlledPage);
+    GetExecutionContext()->GetScheduler()->RegisterStickyFeature(
+        SchedulingPolicy::Feature::kServiceWorkerControlledPage,
+        {SchedulingPolicy::RecordMetricsForBackForwardCache()});
   }
   if (should_notify_controller_change)
     DispatchEvent(*Event::Create(event_type_names::kControllerchange));
@@ -483,11 +507,11 @@ void ServiceWorkerContainer::SetController(
 
 void ServiceWorkerContainer::ReceiveMessage(WebServiceWorkerObjectInfo source,
                                             TransferableMessage message) {
-  auto* context = GetExecutionContext();
-  if (!context || !context->ExecutingWindow())
+  auto* window = DynamicTo<LocalDOMWindow>(GetExecutionContext());
+  if (!window)
     return;
   // ServiceWorkerContainer is only supported on documents.
-  auto* document = DynamicTo<Document>(context);
+  auto* document = window->document();
   DCHECK(document);
 
   if (!is_client_message_queue_enabled_) {
@@ -531,7 +555,7 @@ void ServiceWorkerContainer::CountFeature(mojom::WebFeature feature) {
 }
 
 ExecutionContext* ServiceWorkerContainer::GetExecutionContext() const {
-  return GetSupplementable();
+  return GetSupplementable()->GetExecutionContext();
 }
 
 const AtomicString& ServiceWorkerContainer::InterfaceName() const {
@@ -564,7 +588,7 @@ ServiceWorkerContainer::GetOrCreateServiceWorkerRegistration(
   }
 
   registration = MakeGarbageCollected<ServiceWorkerRegistration>(
-      GetSupplementable(), std::move(info));
+      GetSupplementable()->GetExecutionContext(), std::move(info));
   service_worker_registration_objects_.Set(info.registration_id, registration);
   return registration;
 }
@@ -575,30 +599,30 @@ ServiceWorker* ServiceWorkerContainer::GetOrCreateServiceWorker(
     return nullptr;
   ServiceWorker* worker = service_worker_objects_.at(info.version_id);
   if (!worker) {
-    worker = MakeGarbageCollected<ServiceWorker>(GetSupplementable(),
-                                                 std::move(info));
+    worker = ServiceWorker::Create(GetSupplementable()->GetExecutionContext(),
+                                   std::move(info));
     service_worker_objects_.Set(info.version_id, worker);
   }
   return worker;
 }
 
 ServiceWorkerContainer::ServiceWorkerContainer(Document* document)
-    : Supplement<Document>(*document), ContextLifecycleObserver(document) {}
+    : Supplement<Document>(*document),
+      ExecutionContextLifecycleObserver(document->GetExecutionContext()) {}
 
 ServiceWorkerContainer::ReadyProperty*
 ServiceWorkerContainer::CreateReadyProperty() {
-  return MakeGarbageCollected<ReadyProperty>(GetExecutionContext(), this,
-                                             ReadyProperty::kReady);
+  return MakeGarbageCollected<ReadyProperty>(GetExecutionContext());
 }
 
 void ServiceWorkerContainer::EnableClientMessageQueue() {
   dom_content_loaded_observer_ = nullptr;
   if (is_client_message_queue_enabled_) {
-    DCHECK(queued_messages_.empty());
+    DCHECK(queued_messages_.IsEmpty());
     return;
   }
   is_client_message_queue_enabled_ = true;
-  std::vector<std::unique_ptr<MessageFromServiceWorker>> messages;
+  Vector<std::unique_ptr<MessageFromServiceWorker>> messages;
   messages.swap(queued_messages_);
   for (auto& message : messages) {
     DispatchMessageEvent(std::move(message->source),
@@ -616,16 +640,32 @@ void ServiceWorkerContainer::DispatchMessageEvent(
       MessagePort::EntanglePorts(*GetExecutionContext(), std::move(msg.ports));
   ServiceWorker* service_worker =
       ServiceWorker::From(GetExecutionContext(), std::move(source));
-  MessageEvent* event;
-  if (!msg.locked_agent_cluster_id ||
-      GetExecutionContext()->IsSameAgentCluster(*msg.locked_agent_cluster_id)) {
-    event = MessageEvent::Create(
-        ports, std::move(msg.message),
-        GetExecutionContext()->GetSecurityOrigin()->ToString(),
-        String() /* lastEventId */, service_worker);
-  } else {
-    event = MessageEvent::CreateError(
-        GetExecutionContext()->GetSecurityOrigin()->ToString(), service_worker);
+  Event* event = nullptr;
+  // TODO(crbug.com/1018092): Factor out these security checks so they aren't
+  // duplicated in so many places.
+  if (msg.message->IsOriginCheckRequired()) {
+    const SecurityOrigin* target_origin =
+        GetExecutionContext()->GetSecurityOrigin();
+    if (!msg.sender_origin ||
+        !msg.sender_origin->IsSameOriginWith(target_origin)) {
+      event = MessageEvent::CreateError(
+          GetExecutionContext()->GetSecurityOrigin()->ToString(),
+          service_worker);
+    }
+  }
+  if (!event) {
+    if (!msg.locked_agent_cluster_id ||
+        GetExecutionContext()->IsSameAgentCluster(
+            *msg.locked_agent_cluster_id)) {
+      event = MessageEvent::Create(
+          ports, std::move(msg.message),
+          GetExecutionContext()->GetSecurityOrigin()->ToString(),
+          String() /* lastEventId */, service_worker);
+    } else {
+      event = MessageEvent::CreateError(
+          GetExecutionContext()->GetSecurityOrigin()->ToString(),
+          service_worker);
+    }
   }
   // Schedule the event to be dispatched on the correct task source:
   // https://w3c.github.io/ServiceWorker/#dfn-client-message-queue
@@ -640,7 +680,7 @@ void ServiceWorkerContainer::OnGetRegistrationForReady(
       !ready_->GetExecutionContext()->IsContextDestroyed()) {
     ready_->Resolve(
         ServiceWorkerContainer::From(
-            To<Document>(ready_->GetExecutionContext()))
+            To<LocalDOMWindow>(ready_->GetExecutionContext())->document())
             ->GetOrCreateServiceWorkerRegistration(std::move(info)));
   }
 }

@@ -12,25 +12,26 @@
 #include "base/test/scoped_feature_list.h"
 #include "base/threading/thread_task_runner_handle.h"
 #include "build/build_config.h"
-#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/ui/exclusive_access/exclusive_access_bubble_type.h"
 #include "chrome/browser/ui/exclusive_access/exclusive_access_manager.h"
+#include "chrome/browser/ui/exclusive_access/fullscreen_controller_test.h"
+#include "chrome/browser/ui/views/exclusive_access_bubble_views.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/fullscreen_control/fullscreen_control_host.h"
 #include "chrome/browser/ui/views/fullscreen_control/fullscreen_control_view.h"
 #include "chrome/common/chrome_features.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
-#include "content/public/browser/notification_service.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/content_features.h"
 #include "content/public/test/browser_test_utils.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/blink/public/web/web_fullscreen_options.h"
+#include "third_party/blink/public/mojom/frame/fullscreen.mojom.h"
 #include "ui/base/ui_base_features.h"
 #include "ui/events/base_event_utils.h"
 #include "ui/events/event.h"
 #include "ui/events/keycodes/dom/dom_code.h"
+#include "ui/gfx/animation/animation_test_api.h"
 #include "ui/views/controls/button/button.h"
 #include "ui/views/view.h"
 #include "url/gurl.h"
@@ -43,19 +44,6 @@
 namespace {
 
 constexpr base::TimeDelta kPopupEventTimeout = base::TimeDelta::FromSeconds(5);
-
-// Observer for NOTIFICATION_FULLSCREEN_CHANGED notifications.
-class FullscreenNotificationObserver
-    : public content::WindowedNotificationObserver {
- public:
-  FullscreenNotificationObserver()
-      : WindowedNotificationObserver(
-            chrome::NOTIFICATION_FULLSCREEN_CHANGED,
-            content::NotificationService::AllSources()) {}
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(FullscreenNotificationObserver);
-};
 
 }  // namespace
 
@@ -109,6 +97,12 @@ class FullscreenControlViewTest : public InProcessBrowserTest {
     return browser()->exclusive_access_manager();
   }
 
+  ExclusiveAccessBubbleViews* GetExclusiveAccessBubble() {
+    BrowserView* browser_view =
+        BrowserView::GetBrowserViewForBrowser(browser());
+    return browser_view->exclusive_access_bubble();
+  }
+
   KeyboardLockController* GetKeyboardLockController() {
     return GetExclusiveAccessManager()->keyboard_lock_controller();
   }
@@ -120,14 +114,27 @@ class FullscreenControlViewTest : public InProcessBrowserTest {
   bool IsPopupCreated() { return GetFullscreenControlHost()->IsPopupCreated(); }
 
   void EnterActiveTabFullscreen() {
-    FullscreenNotificationObserver fullscreen_observer;
+    FullscreenNotificationObserver fullscreen_observer(browser());
     content::WebContentsDelegate* delegate =
         static_cast<content::WebContentsDelegate*>(browser());
     delegate->EnterFullscreenModeForTab(GetActiveWebContents(),
                                         GURL("about:blank"),
-                                        blink::WebFullscreenOptions());
+                                        blink::mojom::FullscreenOptions());
     fullscreen_observer.Wait();
     ASSERT_TRUE(delegate->IsFullscreenForTabOrPending(GetActiveWebContents()));
+  }
+
+  void EnterActiveTabFullscreenAndFinishPromptAnimation() {
+    EnterActiveTabFullscreen();
+    FinishPromptAnimation();
+  }
+
+  void FinishPromptAnimation() {
+    gfx::AnimationTestApi animation_api(
+        GetExclusiveAccessBubble()->animation_for_test());
+    base::TimeTicks far_future =
+        base::TimeTicks::Now() + base::TimeDelta::FromDays(1);
+    animation_api.Step(far_future);
   }
 
   bool EnableKeyboardLock() {
@@ -168,7 +175,7 @@ class FullscreenControlViewTest : public InProcessBrowserTest {
 // immediately created when FullscreenControlHost is created.
 IN_PROC_BROWSER_TEST_F(FullscreenControlViewTest,
                        NoFullscreenPopupOnBrowserFullscreen) {
-  EnterActiveTabFullscreen();
+  EnterActiveTabFullscreenAndFinishPromptAnimation();
   BrowserView* browser_view = BrowserView::GetBrowserViewForBrowser(browser());
   DCHECK(browser_view);
   ASSERT_TRUE(browser_view->IsFullscreen());
@@ -181,7 +188,7 @@ IN_PROC_BROWSER_TEST_F(FullscreenControlViewTest,
 #if !defined(OS_MACOSX)
 
 IN_PROC_BROWSER_TEST_F(FullscreenControlViewTest, MouseExitFullscreen) {
-  EnterActiveTabFullscreen();
+  EnterActiveTabFullscreenAndFinishPromptAnimation();
   BrowserView* browser_view = BrowserView::GetBrowserViewForBrowser(browser());
   ASSERT_TRUE(browser_view->IsFullscreen());
 
@@ -210,7 +217,7 @@ IN_PROC_BROWSER_TEST_F(FullscreenControlViewTest, MouseExitFullscreen) {
 
 IN_PROC_BROWSER_TEST_F(FullscreenControlViewTest,
                        MouseExitFullscreen_TimeoutAndRetrigger) {
-  EnterActiveTabFullscreen();
+  EnterActiveTabFullscreenAndFinishPromptAnimation();
   BrowserView* browser_view = BrowserView::GetBrowserViewForBrowser(browser());
   ASSERT_TRUE(browser_view->IsFullscreen());
 
@@ -262,8 +269,53 @@ IN_PROC_BROWSER_TEST_F(FullscreenControlViewTest,
   ASSERT_TRUE(browser_view->IsFullscreen());
 }
 
-IN_PROC_BROWSER_TEST_F(FullscreenControlViewTest, TouchPopupInteraction) {
+IN_PROC_BROWSER_TEST_F(
+    FullscreenControlViewTest,
+    MouseOnTopWhenPromptIsShowing_ButtonNotShownUntilMouseLeavesBufferArea) {
   EnterActiveTabFullscreen();
+  BrowserView* browser_view = BrowserView::GetBrowserViewForBrowser(browser());
+  ASSERT_TRUE(browser_view->IsFullscreen());
+
+  FullscreenControlHost* host = GetFullscreenControlHost();
+  host->Hide(false);
+  ASSERT_FALSE(host->IsVisible());
+
+  // Simulate moving the mouse to the top of the screen, which will not trigger
+  // the fullscreen exit UI yet since the prompt is still showing.
+  ui::MouseEvent mouse_move(ui::ET_MOUSE_MOVED, gfx::Point(1, 1), gfx::Point(),
+                            base::TimeTicks(), 0, 0);
+  host->OnMouseEvent(mouse_move);
+  ASSERT_FALSE(host->IsVisible());
+
+  // This still doesn't trigger the UI since the prompt is still showing.
+  mouse_move = ui::MouseEvent(ui::ET_MOUSE_MOVED, gfx::Point(2, 1),
+                              gfx::Point(), base::TimeTicks(), 0, 0);
+  host->OnMouseEvent(mouse_move);
+  ASSERT_FALSE(host->IsVisible());
+
+  FinishPromptAnimation();
+
+  // This still doesn't trigger the UI since it's in cooldown mode.
+  mouse_move = ui::MouseEvent(ui::ET_MOUSE_MOVED, gfx::Point(3, 1),
+                              gfx::Point(), base::TimeTicks(), 0, 0);
+  host->OnMouseEvent(mouse_move);
+  ASSERT_FALSE(host->IsVisible());
+
+  // Move the cursor out of the buffer area, which will have no effect.
+  mouse_move = ui::MouseEvent(ui::ET_MOUSE_MOVED, gfx::Point(2, 1000),
+                              gfx::Point(), base::TimeTicks(), 0, 0);
+  host->OnMouseEvent(mouse_move);
+  ASSERT_FALSE(host->IsVisible());
+
+  // The UI should be triggered now.
+  mouse_move = ui::MouseEvent(ui::ET_MOUSE_MOVED, gfx::Point(1, 1),
+                              gfx::Point(), base::TimeTicks(), 0, 0);
+  host->OnMouseEvent(mouse_move);
+  ASSERT_TRUE(host->IsVisible());
+}
+
+IN_PROC_BROWSER_TEST_F(FullscreenControlViewTest, TouchPopupInteraction) {
+  EnterActiveTabFullscreenAndFinishPromptAnimation();
   BrowserView* browser_view = BrowserView::GetBrowserViewForBrowser(browser());
   ASSERT_TRUE(browser_view->IsFullscreen());
 
@@ -343,7 +395,7 @@ IN_PROC_BROWSER_TEST_F(FullscreenControlViewTest, TouchPopupInteraction) {
 
 IN_PROC_BROWSER_TEST_F(FullscreenControlViewTest,
                        MouseAndTouchInteraction_NoInterference) {
-  EnterActiveTabFullscreen();
+  EnterActiveTabFullscreenAndFinishPromptAnimation();
   BrowserView* browser_view = BrowserView::GetBrowserViewForBrowser(browser());
   ASSERT_TRUE(browser_view->IsFullscreen());
 
@@ -418,7 +470,7 @@ IN_PROC_BROWSER_TEST_F(FullscreenControlViewTest,
 #endif
 
 IN_PROC_BROWSER_TEST_F(FullscreenControlViewTest, KeyboardPopupInteraction) {
-  EnterActiveTabFullscreen();
+  EnterActiveTabFullscreenAndFinishPromptAnimation();
   BrowserView* browser_view = BrowserView::GetBrowserViewForBrowser(browser());
   ASSERT_TRUE(browser_view->IsFullscreen());
 

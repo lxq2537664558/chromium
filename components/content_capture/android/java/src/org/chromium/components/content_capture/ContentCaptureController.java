@@ -6,6 +6,7 @@ package org.chromium.components.content_capture;
 
 import org.chromium.base.annotations.CalledByNative;
 import org.chromium.base.annotations.JNINamespace;
+import org.chromium.base.annotations.NativeMethods;
 
 /**
  * The abstract class to provide the whitelist and the runtime control of if ContentCapture should
@@ -25,13 +26,23 @@ public abstract class ContentCaptureController {
     }
 
     protected ContentCaptureController() {
-        mNativeContentCaptureController = nativeInit(this);
+        mNativeContentCaptureController = ContentCaptureControllerJni.get().init(this);
     }
 
     /**
      * @return if ContentCapture should be started for this app at all.
      */
     public abstract boolean shouldStartCapture();
+
+    /**
+     * Clear all ContentCapture data associated with Chrome.
+     */
+    public void clearAllContentCaptureData() {}
+
+    /**
+     * Clear ContentCapture data for specific URLs.
+     */
+    public void clearContentCaptureDataForURLs(String[] urlsToDelete) {}
 
     /**
      * Invoked by native side to pull the whitelist, the subclass should implement this and set
@@ -49,10 +60,14 @@ public abstract class ContentCaptureController {
      * @param isRegex to indicate that the corresponding whitelist is the regex or not.
      */
     protected void setWhitelist(String[] whitelist, boolean[] isRegex) {
-        nativeSetWhitelist(mNativeContentCaptureController, whitelist, isRegex);
+        ContentCaptureControllerJni.get().setWhitelist(
+                mNativeContentCaptureController, ContentCaptureController.this, whitelist, isRegex);
     }
 
-    private static native long nativeInit(Object contentCaptureController);
-    private native void nativeSetWhitelist(
-            long nativeContentCaptureController, String[] whitelist, boolean[] isRegex);
+    @NativeMethods
+    interface Natives {
+        long init(Object contentCaptureController);
+        void setWhitelist(long nativeContentCaptureController, ContentCaptureController caller,
+                String[] whitelist, boolean[] isRegex);
+    }
 }

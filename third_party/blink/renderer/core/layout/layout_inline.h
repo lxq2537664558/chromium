@@ -34,7 +34,9 @@
 namespace blink {
 
 class LayoutBlockFlow;
+class NGInlineCursor;
 class NGPaintFragment;
+
 // LayoutInline is the LayoutObject associated with display: inline.
 // This is called an "inline box" in CSS 2.1.
 // http://www.w3.org/TR/CSS2/visuren.html#inline-boxes
@@ -119,10 +121,6 @@ class CORE_EXPORT LayoutInline : public LayoutBoxModelObject {
 
   static LayoutInline* CreateAnonymous(Document*);
 
-  // Create an anonymous inline box for ::first-line. The instance created by
-  // this function has IsFirstLineAnonymous() == true.
-  static LayoutInline* CreateAnonymousForFirstLine(Document*);
-
   LayoutObject* FirstChild() const {
     DCHECK_EQ(Children(), VirtualChildren());
     return Children()->FirstChild();
@@ -140,25 +138,19 @@ class CORE_EXPORT LayoutInline : public LayoutBoxModelObject {
                 LayoutObject* before_child = nullptr) override;
 
   Element* GetNode() const {
-    return ToElement(LayoutBoxModelObject::GetNode());
+    return To<Element>(LayoutBoxModelObject::GetNode());
   }
-
-  // True if this is an anonymous inline box for ::first-line that wraps the
-  // whole inline formatting context.
-  virtual bool IsFirstLineAnonymous() const;
 
   LayoutUnit MarginLeft() const final;
   LayoutUnit MarginRight() const final;
   LayoutUnit MarginTop() const final;
   LayoutUnit MarginBottom() const final;
 
-  void AbsoluteRects(Vector<IntRect>&,
-                     const LayoutPoint& accumulated_offset) const final;
   FloatRect LocalBoundingBoxRectForAccessibility() const final;
 
-  LayoutRect LinesBoundingBox() const;
-  LayoutRect VisualOverflowRect() const final;
-  LayoutRect ReferenceBoxForClipPath() const;
+  PhysicalRect PhysicalLinesBoundingBox() const;
+  PhysicalRect PhysicalVisualOverflowRect() const final;
+  PhysicalRect ReferenceBoxForClipPath() const;
 
   InlineFlowBox* CreateAndAppendInlineFlowBox();
 
@@ -182,31 +174,31 @@ class CORE_EXPORT LayoutInline : public LayoutBoxModelObject {
     return AlwaysCreateLineBoxes() ? LastLineBox() : CulledInlineLastLineBox();
   }
 
+  bool HasInlineFragments() const final;
   NGPaintFragment* FirstInlineFragment() const final;
   void SetFirstInlineFragment(NGPaintFragment*) final;
-
-  // Return true if this inline doesn't occur on any lines, i.e. when it creates
-  // no fragments.
-  bool IsEmpty() const { return !FirstLineBox() && !FirstInlineFragment(); }
+  wtf_size_t FirstInlineFragmentItemIndex() const final;
+  void ClearFirstInlineFragmentItemIndex() final;
+  void SetFirstInlineFragmentItemIndex(wtf_size_t) final;
 
   LayoutBoxModelObject* VirtualContinuation() const final {
     return Continuation();
   }
   LayoutInline* InlineElementContinuation() const;
 
-  LayoutSize OffsetForInFlowPositionedInline(const LayoutBox& child) const;
+  PhysicalOffset OffsetForInFlowPositionedInline(const LayoutBox& child) const;
 
-  void AddOutlineRects(Vector<LayoutRect>&,
-                       const LayoutPoint& additional_offset,
+  void AddOutlineRects(Vector<PhysicalRect>&,
+                       const PhysicalOffset& additional_offset,
                        NGOutlineType) const final;
   // The following methods are called from the container if it has already added
   // outline rects for line boxes and/or children of this LayoutInline.
   void AddOutlineRectsForChildrenAndContinuations(
-      Vector<LayoutRect>&,
-      const LayoutPoint& additional_offset,
+      Vector<PhysicalRect>&,
+      const PhysicalOffset& additional_offset,
       NGOutlineType) const;
-  void AddOutlineRectsForContinuations(Vector<LayoutRect>&,
-                                       const LayoutPoint& additional_offset,
+  void AddOutlineRectsForContinuations(Vector<PhysicalRect>&,
+                                       const PhysicalOffset& additional_offset,
                                        NGOutlineType) const;
 
   using LayoutBoxModelObject::Continuation;
@@ -243,19 +235,26 @@ class CORE_EXPORT LayoutInline : public LayoutBoxModelObject {
   // rects to be from descendant fragments of |parent_fragment|.
   // In legacy, |parent_fragment| is always null, and all rects are regenerated.
   bool HitTestCulledInline(HitTestResult&,
-                           const HitTestLocation& location_in_container,
-                           const LayoutPoint& accumulated_offset,
-                           const NGPaintFragment* parent_fragment = nullptr);
+                           const HitTestLocation&,
+                           const PhysicalOffset& accumulated_offset,
+                           const NGInlineCursor* parent_cursor = nullptr);
 
-  LayoutPoint FirstLineBoxTopLeft() const;
+  PhysicalOffset FirstLineBoxTopLeft() const {
+    return FirstLineBoxTopLeftInternal().value_or(PhysicalOffset());
+  }
 
   void MapLocalToAncestor(const LayoutBoxModelObject* ancestor,
                           TransformState&,
                           MapCoordinatesFlags mode) const override;
 
+  PhysicalRect AbsoluteBoundingBoxRectHandlingEmptyInline() const final;
+
+  PhysicalRect VisualRectInDocument(
+      VisualRectFlags = kDefaultVisualRectFlags) const override;
+
   const char* GetName() const override { return "LayoutInline"; }
 
-  LayoutRect DebugRect() const override;
+  PhysicalRect DebugRect() const override;
 
  protected:
   void WillBeDestroyed() override;
@@ -271,12 +270,11 @@ class CORE_EXPORT LayoutInline : public LayoutBoxModelObject {
   void AbsoluteQuadsForSelf(Vector<FloatQuad>& quads,
                             MapCoordinatesFlags mode = 0) const override;
 
-  LayoutSize OffsetFromContainerInternal(const LayoutObject*,
-                                         bool ignore_scroll_offset) const final;
+  PhysicalOffset OffsetFromContainerInternal(
+      const LayoutObject*,
+      bool ignore_scroll_offset) const final;
 
  private:
-  FRIEND_TEST_ALL_PREFIXES(ParameterizedLayoutInlineTest, VisualRectInDocument);
-
   LayoutObjectChildList* VirtualChildren() final { return Children(); }
   const LayoutObjectChildList* VirtualChildren() const final {
     return Children();
@@ -291,19 +289,27 @@ class CORE_EXPORT LayoutInline : public LayoutBoxModelObject {
   bool ComputeInitialShouldCreateBoxFragment() const;
   bool ComputeInitialShouldCreateBoxFragment(const ComputedStyle& style) const;
 
-  LayoutRect CulledInlineVisualOverflowBoundingBox() const;
+  PhysicalRect CulledInlineVisualOverflowBoundingBox() const;
   InlineBox* CulledInlineFirstLineBox() const;
   InlineBox* CulledInlineLastLineBox() const;
 
-  // For visualOverflowRect() only, to get bounding box of visual overflow of
-  // line boxes.
-  LayoutRect LinesVisualOverflowBoundingBox() const;
+  // For PhysicalVisualOverflowRect() only, to get bounding box of visual
+  // overflow of line boxes.
+  PhysicalRect LinesVisualOverflowBoundingBox() const;
 
-  template <typename GeneratorContext>
-  void GenerateLineBoxRects(GeneratorContext& yield) const;
-  template <typename GeneratorContext>
-  void GenerateCulledLineBoxRects(GeneratorContext& yield,
-                                  const LayoutInline* container) const;
+  // PhysicalRectCollector should be like a function:
+  // void (const PhysicalRect&).
+  template <typename PhysicalRectCollector>
+  void CollectLineBoxRects(const PhysicalRectCollector&) const;
+  template <typename PhysicalRectCollector>
+  void CollectCulledLineBoxRects(const PhysicalRectCollector&) const;
+
+  // FlippedRectCollector should be like a function:
+  // void (const LayoutRect&);
+  template <typename FlippedRectCollector>
+  void CollectCulledLineBoxRectsInFlippedBlocksDirection(
+      const FlippedRectCollector&,
+      const LayoutInline* container) const;
 
   void AddChildToContinuation(LayoutObject* new_child,
                               LayoutObject* before_child);
@@ -323,39 +329,44 @@ class CORE_EXPORT LayoutInline : public LayoutBoxModelObject {
                  LayoutObject* new_child,
                  LayoutBoxModelObject* old_cont);
 
+  // Create an anoymous block for block children of this inline.
+  LayoutBlockFlow* CreateAnonymousContainerForBlockChildren();
+
   void UpdateLayout() final { NOTREACHED(); }  // Do nothing for layout()
 
   void Paint(const PaintInfo&) const final;
 
   bool NodeAtPoint(HitTestResult&,
-                   const HitTestLocation& location_in_container,
-                   const LayoutPoint& accumulated_offset,
+                   const HitTestLocation&,
+                   const PhysicalOffset& accumulated_offset,
                    HitTestAction) final;
 
   PaintLayerType LayerTypeRequired() const override;
 
   LayoutUnit OffsetLeft(const Element*) const final;
   LayoutUnit OffsetTop(const Element*) const final;
-  LayoutUnit OffsetWidth() const final { return LinesBoundingBox().Width(); }
-  LayoutUnit OffsetHeight() const final { return LinesBoundingBox().Height(); }
+  LayoutUnit OffsetWidth() const final {
+    return PhysicalLinesBoundingBox().Width();
+  }
+  LayoutUnit OffsetHeight() const final {
+    return PhysicalLinesBoundingBox().Height();
+  }
 
-  LayoutRect VisualRectInDocument(
-      VisualRectFlags = kDefaultVisualRectFlags) const override;
-
-  // This method differs from visualOverflowRect in that it doesn't include the
-  // rects for culled inline boxes, which aren't necessary for paint
-  // invalidation.
-  LayoutRect LocalVisualRectIgnoringVisibility() const override;
+  // This method differs from VisualOverflowRect() in that
+  // 1. it doesn't include the rects for culled inline boxes, which aren't
+  //    necessary for paint invalidation;
+  // 2. it is in physical coordinates.
+  PhysicalRect LocalVisualRectIgnoringVisibility() const override;
 
   bool MapToVisualRectInAncestorSpaceInternal(
       const LayoutBoxModelObject* ancestor,
       TransformState&,
       VisualRectFlags = kDefaultVisualRectFlags) const final;
 
-  PositionWithAffinity PositionForPoint(const LayoutPoint&) const final;
+  PositionWithAffinity PositionForPoint(const PhysicalOffset&) const override;
 
   IntRect BorderBoundingBox() const final {
-    IntRect bounding_box = EnclosingIntRect(LinesBoundingBox());
+    IntRect bounding_box = EnclosingIntRect(PhysicalLinesBoundingBox());
     return IntRect(0, 0, bounding_box.Width(), bounding_box.Height());
   }
 
@@ -377,7 +388,7 @@ class CORE_EXPORT LayoutInline : public LayoutBoxModelObject {
 
   void ChildBecameNonInline(LayoutObject* child) final;
 
-  void UpdateHitTestResult(HitTestResult&, const LayoutPoint&) const final;
+  void UpdateHitTestResult(HitTestResult&, const PhysicalOffset&) const final;
 
   void ImageChanged(WrappedImagePtr, CanDeferInvalidation) final;
 
@@ -390,6 +401,9 @@ class CORE_EXPORT LayoutInline : public LayoutBoxModelObject {
 
   LayoutBoxModelObject* ContinuationBefore(LayoutObject* before_child);
 
+  base::Optional<PhysicalOffset> FirstLineBoxTopLeftInternal() const;
+  PhysicalOffset AnchorPhysicalLocation() const;
+
   LayoutObjectChildList children_;
 
   union {
@@ -400,6 +414,10 @@ class CORE_EXPORT LayoutInline : public LayoutBoxModelObject {
     // The first fragment of inline boxes associated with this object.
     // Valid only when IsInLayoutNGInlineFormattingContext().
     NGPaintFragment* first_paint_fragment_;
+    // The index of the first fragment item associated with this object in
+    // |NGFragmentItems::Items()|. Zero means there are no such item.
+    // Valid only when IsInLayoutNGInlineFormattingContext().
+    wtf_size_t first_fragment_item_index_;
   };
 };
 
@@ -409,8 +427,21 @@ inline LineBoxList* LayoutInline::MutableLineBoxes() {
 }
 
 inline NGPaintFragment* LayoutInline::FirstInlineFragment() const {
-  return IsInLayoutNGInlineFormattingContext() ? first_paint_fragment_
-                                               : nullptr;
+  if (!IsInLayoutNGInlineFormattingContext())
+    return nullptr;
+  // TODO(yosin): Once we replace all usage of |FirstInlineFragment()| to
+  // |NGInlineCursor|, we should change this to |DCHECK()|.
+  DCHECK(!RuntimeEnabledFeatures::LayoutNGFragmentItemEnabled());
+  if (RuntimeEnabledFeatures::LayoutNGFragmentItemEnabled())
+    return nullptr;
+  return first_paint_fragment_;
+}
+
+inline wtf_size_t LayoutInline::FirstInlineFragmentItemIndex() const {
+  if (!IsInLayoutNGInlineFormattingContext())
+    return 0u;
+  DCHECK(RuntimeEnabledFeatures::LayoutNGFragmentItemEnabled());
+  return first_fragment_item_index_;
 }
 
 DEFINE_LAYOUT_OBJECT_TYPE_CASTS(LayoutInline, IsLayoutInline());

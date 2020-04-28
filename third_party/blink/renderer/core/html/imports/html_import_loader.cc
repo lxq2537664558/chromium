@@ -30,7 +30,6 @@
 
 #include "third_party/blink/renderer/core/html/imports/html_import_loader.h"
 
-#include <memory>
 #include "third_party/blink/renderer/core/css/style_engine.h"
 #include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/dom/document_init.h"
@@ -39,6 +38,7 @@
 #include "third_party/blink/renderer/core/html/html_document.h"
 #include "third_party/blink/renderer/core/html/imports/html_import_child.h"
 #include "third_party/blink/renderer/core/html/imports/html_imports_controller.h"
+#include "third_party/blink/renderer/platform/heap/heap.h"
 #include "third_party/blink/renderer/platform/network/content_security_policy_response_headers.h"
 
 namespace blink {
@@ -96,8 +96,13 @@ HTMLImportLoader::State HTMLImportLoader::StartWritingAndParsing(
     const ResourceResponse& response) {
   DCHECK(controller_);
   DCHECK(!imports_.IsEmpty());
-  document_ = HTMLDocument::Create(
-      DocumentInit::CreateWithImportsController(controller_)
+  Document* master = controller_->Master();
+  document_ = MakeGarbageCollected<HTMLDocument>(
+      DocumentInit::Create()
+          .WithImportsController(controller_)
+          .WithContextDocument(master->ContextDocument())
+          .WithRegistrationContext(master->RegistrationContext())
+          .WithContentSecurityPolicy(master->GetContentSecurityPolicy())
           .WithURL(response.CurrentRequestUrl()));
   document_->OpenForNavigation(kAllowAsynchronousParsing, response.MimeType(),
                                "UTF-8");
@@ -151,7 +156,7 @@ void HTMLImportLoader::NotifyParserStopped() {
   parser->RemoveClient(this);
 }
 
-void HTMLImportLoader::DidRemoveAllPendingStylesheet() {
+void HTMLImportLoader::DidRemoveAllPendingStylesheets() {
   if (state_ == kStateParsed)
     SetState(FinishLoading());
 }

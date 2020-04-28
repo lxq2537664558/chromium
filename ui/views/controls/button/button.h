@@ -7,14 +7,16 @@
 
 #include <memory>
 
+#include "base/bind.h"
 #include "base/macros.h"
 #include "build/build_config.h"
 #include "ui/events/event_constants.h"
-#include "ui/gfx/animation/animation_delegate.h"
 #include "ui/gfx/animation/throb_animation.h"
 #include "ui/native_theme/native_theme.h"
+#include "ui/views/animation/animation_delegate_views.h"
 #include "ui/views/animation/ink_drop_host_view.h"
 #include "ui/views/animation/ink_drop_state.h"
+#include "ui/views/controls/button/button_controller_delegate.h"
 #include "ui/views/controls/focus_ring.h"
 #include "ui/views/painter.h"
 #include "ui/views/widget/widget_observer.h"
@@ -26,7 +28,7 @@ class ButtonTestApi;
 
 class Button;
 class ButtonController;
-class ButtonControllerDelegate;
+class ButtonObserver;
 class Event;
 
 // An interface implemented by an object to let it know that a button was
@@ -43,8 +45,10 @@ class VIEWS_EXPORT ButtonListener {
 // not be part of the focus chain, unless in accessibility mode (see
 // SetFocusForPlatform()).
 class VIEWS_EXPORT Button : public InkDropHostView,
-                            public gfx::AnimationDelegate {
+                            public AnimationDelegateViews {
  public:
+  METADATA_HEADER(Button);
+
   ~Button() override;
 
   // Button states for various button sub-types.
@@ -56,30 +60,39 @@ class VIEWS_EXPORT Button : public InkDropHostView,
     STATE_COUNT,
   };
 
-  // Button styles with associated images and border painters.
-  // TODO(msw): Add Menu, ComboBox, etc.
-  enum ButtonStyle {
-    STYLE_BUTTON = 0,
-    STYLE_TEXTBUTTON,
-    STYLE_COUNT,
-  };
-
-  // An enum describing the events on which a button should notify its listener.
-  enum NotifyAction {
-    NOTIFY_ON_PRESS,
-    NOTIFY_ON_RELEASE,
-  };
+  static constexpr ButtonState kButtonStates[STATE_COUNT] = {
+      ButtonState::STATE_NORMAL, ButtonState::STATE_HOVERED,
+      ButtonState::STATE_PRESSED, ButtonState::STATE_DISABLED};
 
   // An enum describing the events on which a button should be clicked for a
   // given key event.
-  enum KeyClickAction {
-    CLICK_ON_KEY_PRESS,
-    CLICK_ON_KEY_RELEASE,
-    CLICK_NONE,
+  enum class KeyClickAction {
+    kOnKeyPress,
+    kOnKeyRelease,
+    kNone,
   };
 
-  // The menu button's class name.
-  static const char kViewClassName[];
+  // TODO(cyan): Consider having Button implement ButtonControllerDelegate.
+  class VIEWS_EXPORT DefaultButtonControllerDelegate
+      : public ButtonControllerDelegate {
+   public:
+    explicit DefaultButtonControllerDelegate(Button* button);
+    ~DefaultButtonControllerDelegate() override;
+
+    // views::ButtonControllerDelegate:
+    void RequestFocusFromEvent() override;
+    void NotifyClick(const ui::Event& event) override;
+    void OnClickCanceled(const ui::Event& event) override;
+    bool IsTriggerableEvent(const ui::Event& event) override;
+    bool ShouldEnterPushedState(const ui::Event& event) override;
+    bool ShouldEnterHoveredState() override;
+    InkDrop* GetInkDrop() override;
+    int GetDragOperations(const gfx::Point& press_pt) override;
+    bool InDrag() override;
+
+   private:
+    DISALLOW_COPY_AND_ASSIGN(DefaultButtonControllerDelegate);
+  };
 
   static const Button* AsButton(const View* view);
   static Button* AsButton(View* view);
@@ -116,7 +129,7 @@ class VIEWS_EXPORT Button : public InkDropHostView,
   void StopThrobbing();
 
   // Set how long the hover animation will last for.
-  void SetAnimationDuration(int duration);
+  void SetAnimationDuration(base::TimeDelta duration);
 
   void set_triggerable_event_flags(int triggerable_event_flags) {
     triggerable_event_flags_ = triggerable_event_flags;
@@ -140,17 +153,17 @@ class VIEWS_EXPORT Button : public InkDropHostView,
     animate_on_state_change_ = value;
   }
 
-  // Sets the event on which the button should notify its listener.
-  void set_notify_action(NotifyAction notify_action) {
-    notify_action_ = notify_action;
+  bool hide_ink_drop_when_showing_context_menu() const {
+    return hide_ink_drop_when_showing_context_menu_;
   }
-
-  NotifyAction notify_action() const { return notify_action_; }
-
   void set_hide_ink_drop_when_showing_context_menu(
       bool hide_ink_drop_when_showing_context_menu) {
     hide_ink_drop_when_showing_context_menu_ =
         hide_ink_drop_when_showing_context_menu;
+  }
+
+  void set_show_ink_drop_when_hot_tracked(bool show_ink_drop_when_hot_tracked) {
+    show_ink_drop_when_hot_tracked_ = show_ink_drop_when_hot_tracked;
   }
 
   void set_ink_drop_base_color(SkColor color) { ink_drop_base_color_ = color; }
@@ -167,9 +180,10 @@ class VIEWS_EXPORT Button : public InkDropHostView,
   // Highlights the ink drop for the button.
   void SetHighlighted(bool bubble_visible);
 
+  void AddButtonObserver(ButtonObserver* observer);
+  void RemoveButtonObserver(ButtonObserver* observer);
+
   // Overridden from View:
-  void OnEnabledChanged() override;
-  const char* GetClassName() const override;
   bool OnMousePressed(const ui::MouseEvent& event) override;
   bool OnMouseDragged(const ui::MouseEvent& event) override;
   void OnMouseReleased(const ui::MouseEvent& event) override;
@@ -202,7 +216,7 @@ class VIEWS_EXPORT Button : public InkDropHostView,
   std::unique_ptr<InkDrop> CreateInkDrop() override;
   SkColor GetInkDropBaseColor() const override;
 
-  // Overridden from gfx::AnimationDelegate:
+  // Overridden from views::AnimationDelegateViews:
   void AnimationProgressed(const gfx::Animation* animation) override;
 
   // Returns the click action for the given key event.
@@ -215,12 +229,11 @@ class VIEWS_EXPORT Button : public InkDropHostView,
     return button_controller_.get();
   }
 
+  void SetButtonController(std::unique_ptr<ButtonController> button_controller);
+
+  gfx::Point GetMenuPosition() const;
+
  protected:
-  // TODO(cyan): Consider having Button implement ButtonControllerDelegate.
-  class DefaultButtonControllerDelegate;
-
-  std::unique_ptr<ButtonControllerDelegate> CreateButtonControllerDelegate();
-
   // Construct the Button with a Listener. The listener can be null. This can be
   // true of buttons that don't have a listener - e.g. menubuttons where there's
   // no default action and checkboxes.
@@ -281,8 +294,6 @@ class VIEWS_EXPORT Button : public InkDropHostView,
 
   FocusRing* focus_ring() { return focus_ring_.get(); }
 
-  void SetButtonController(std::unique_ptr<ButtonController> button_controller);
-
   // The button's listener. Notified when clicked.
   ButtonListener* listener_;
 
@@ -301,7 +312,8 @@ class VIEWS_EXPORT Button : public InkDropHostView,
     ~WidgetObserverButtonBridge() override;
 
     // WidgetObserver:
-    void OnWidgetActivationChanged(Widget* widget, bool active) override;
+    void OnWidgetPaintAsActiveChanged(Widget* widget,
+                                      bool paint_as_active) override;
     void OnWidgetDestroying(Widget* widget) override;
 
    private:
@@ -310,7 +322,9 @@ class VIEWS_EXPORT Button : public InkDropHostView,
     DISALLOW_COPY_AND_ASSIGN(WidgetObserverButtonBridge);
   };
 
-  void WidgetActivationChanged(Widget* widget, bool active);
+  void OnEnabledChanged();
+
+  void WidgetPaintAsActiveChanged(Widget* widget, bool active);
 
   // The text shown in a tooltip.
   base::string16 tooltip_text_;
@@ -338,9 +352,6 @@ class VIEWS_EXPORT Button : public InkDropHostView,
   // See description above setter.
   bool request_focus_on_press_ = false;
 
-  // The event on which the button should notify its listener.
-  NotifyAction notify_action_ = NOTIFY_ON_RELEASE;
-
   // True when a button click should trigger an animation action on
   // ink_drop_delegate().
   bool has_ink_drop_action_on_click_ = false;
@@ -348,6 +359,10 @@ class VIEWS_EXPORT Button : public InkDropHostView,
   // When true, the ink drop ripple and hover will be hidden prior to showing
   // the context menu.
   bool hide_ink_drop_when_showing_context_menu_ = true;
+
+  // When true, the ink drop ripple will be shown when setting state to hot
+  // tracked with SetHotTracked().
+  bool show_ink_drop_when_hot_tracked_ = false;
 
   // The color of the ripple and hover.
   SkColor ink_drop_base_color_;
@@ -364,6 +379,12 @@ class VIEWS_EXPORT Button : public InkDropHostView,
   // TODO(cyan): Make sure all state changes are handled within
   // ButtonController.
   std::unique_ptr<ButtonController> button_controller_;
+
+  PropertyChangedSubscription enabled_changed_subscription_{
+      AddEnabledChangedCallback(base::BindRepeating(&Button::OnEnabledChanged,
+                                                    base::Unretained(this)))};
+
+  base::ObserverList<ButtonObserver> button_observers_;
 
   DISALLOW_COPY_AND_ASSIGN(Button);
 };

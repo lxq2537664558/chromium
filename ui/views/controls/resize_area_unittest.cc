@@ -5,17 +5,21 @@
 #include "ui/views/controls/resize_area.h"
 
 #include <memory>
+#include <utility>
 
 #include "base/bind.h"
 #include "build/build_config.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "ui/aura/window.h"
 #include "ui/events/test/event_generator.h"
 #include "ui/views/controls/resize_area_delegate.h"
 #include "ui/views/test/views_test_base.h"
 #include "ui/views/view.h"
 #include "ui/views/widget/widget.h"
 #include "ui/views/widget/widget_utils.h"
+
+#if !defined(OS_MACOSX)
+#include "ui/aura/window.h"
+#endif
 
 namespace {
 // Constants used by the ResizeAreaTest.SuccessfulGestureDrag test to simulate
@@ -25,7 +29,7 @@ const int kGestureScrollDistance = 100;
 const int kGestureScrollSteps = 4;
 const int kDistancePerGestureScrollUpdate =
     kGestureScrollDistance / kGestureScrollSteps;
-}
+}  // namespace
 
 namespace views {
 
@@ -128,7 +132,7 @@ void ResizeAreaTest::SetUp() {
   init_params.bounds = gfx::Rect(size);
 
   widget_ = new views::Widget();
-  widget_->Init(init_params);
+  widget_->Init(std::move(init_params));
   widget_->SetContentsView(resize_area_);
   widget_->Show();
 

@@ -106,6 +106,10 @@ class DriveSearchContentScanner extends ContentScanner {
       }
       chrome.fileManagerPrivate.searchDrive(
           {query: this.query_, nextFeed: ''}, (entries, nextFeed) => {
+            if (chrome.runtime.lastError) {
+              console.error(chrome.runtime.lastError.message);
+            }
+
             if (this.cancelled_) {
               errorCallback(util.createDOMError(util.FileError.ABORT_ERR));
               return;
@@ -202,6 +206,9 @@ class DriveMetadataSearchContentScanner extends ContentScanner {
   scan(entriesCallback, successCallback, errorCallback) {
     chrome.fileManagerPrivate.searchDriveMetadata(
         {query: '', types: this.searchType_, maxResults: 100}, results => {
+          if (chrome.runtime.lastError) {
+            console.error(chrome.runtime.lastError.message);
+          }
           if (this.cancelled_) {
             errorCallback(util.createDOMError(util.FileError.ABORT_ERR));
             return;
@@ -227,13 +234,13 @@ class DriveMetadataSearchContentScanner extends ContentScanner {
 
 /**
  * The search types on the Drive File System.
- * @enum {string}
+ * @enum {!chrome.fileManagerPrivate.SearchType}
  */
 DriveMetadataSearchContentScanner.SearchType = {
-  SEARCH_ALL: 'ALL',
-  SEARCH_SHARED_WITH_ME: 'SHARED_WITH_ME',
-  SEARCH_RECENT_FILES: 'EXCLUDE_DIRECTORIES',
-  SEARCH_OFFLINE: 'OFFLINE'
+  SEARCH_ALL: chrome.fileManagerPrivate.SearchType.ALL,
+  SEARCH_SHARED_WITH_ME: chrome.fileManagerPrivate.SearchType.SHARED_WITH_ME,
+  SEARCH_RECENT_FILES: chrome.fileManagerPrivate.SearchType.EXCLUDE_DIRECTORIES,
+  SEARCH_OFFLINE: chrome.fileManagerPrivate.SearchType.OFFLINE,
 };
 Object.freeze(DriveMetadataSearchContentScanner.SearchType);
 
@@ -241,8 +248,9 @@ class RecentContentScanner extends ContentScanner {
   /**
    * @param {string} query Search query.
    * @param {string=} opt_sourceRestriction
+   * @param {string=} opt_recentFileType
    */
-  constructor(query, opt_sourceRestriction) {
+  constructor(query, opt_sourceRestriction, opt_recentFileType) {
     super();
 
     /**
@@ -255,6 +263,12 @@ class RecentContentScanner extends ContentScanner {
      */
     this.sourceRestriction_ = opt_sourceRestriction ||
         chrome.fileManagerPrivate.SourceRestriction.ANY_SOURCE;
+
+    /**
+     * @private {string}
+     */
+    this.recentFileType_ =
+        opt_recentFileType || chrome.fileManagerPrivate.RecentFileType.ALL;
   }
 
   /**
@@ -262,7 +276,7 @@ class RecentContentScanner extends ContentScanner {
    */
   scan(entriesCallback, successCallback, errorCallback) {
     chrome.fileManagerPrivate.getRecentFiles(
-        this.sourceRestriction_, entries => {
+        this.sourceRestriction_, this.recentFileType_, entries => {
           if (chrome.runtime.lastError) {
             console.error(chrome.runtime.lastError.message);
             errorCallback(
@@ -789,7 +803,7 @@ class DirectoryContents extends cr.EventTarget {
     }
 
     const addedList = [];
-    for (let url in updatedMap) {
+    for (const url in updatedMap) {
       addedList.push(updatedMap[url]);
     }
 
@@ -1055,7 +1069,9 @@ class DirectoryContents extends cr.EventTarget {
    */
   static createForRecent(context, recentRootEntry, query) {
     return new DirectoryContents(context, true, recentRootEntry, () => {
-      return new RecentContentScanner(query, recentRootEntry.sourceRestriction);
+      return new RecentContentScanner(
+          query, recentRootEntry.sourceRestriction,
+          recentRootEntry.recentFileType);
     });
   }
 

@@ -18,16 +18,19 @@
 #include "components/autofill/core/common/autofill_util.h"
 #include "components/autofill/core/common/form_data.h"
 #include "components/autofill/core/common/form_field_data.h"
-#import "ios/web/public/navigation_item.h"
-#import "ios/web/public/navigation_manager.h"
-#include "ios/web/public/ssl_status.h"
-#import "ios/web/public/web_state/js/crw_js_injection_receiver.h"
+#import "ios/web/public/deprecated/crw_js_injection_receiver.h"
+#import "ios/web/public/navigation/navigation_item.h"
+#import "ios/web/public/navigation/navigation_manager.h"
+#include "ios/web/public/security/ssl_status.h"
+#import "ios/web/public/web_state.h"
 #include "url/gurl.h"
 #include "url/origin.h"
 
 namespace {
 // The timeout for any JavaScript call in this file.
 const int64_t kJavaScriptExecutionTimeoutInSeconds = 5;
+
+constexpr int kNotSetRendererID = -1;
 }
 
 namespace autofill {
@@ -44,8 +47,7 @@ bool IsContextSecureForWebState(web::WebState* web_state) {
 
   const web::SSLStatus& ssl = nav_item->GetSSL();
   return nav_item->GetURL().SchemeIsCryptographic() && ssl.certificate &&
-         (!net::IsCertStatusError(ssl.cert_status) ||
-          net::IsCertStatusMinorError(ssl.cert_status));
+         !net::IsCertStatusError(ssl.cert_status);
 }
 
 std::unique_ptr<base::Value> ParseJson(NSString* json_string) {
@@ -113,12 +115,19 @@ bool ExtractFormData(const base::Value& form_value,
     return false;
 
   // Use GURL object to verify origin of host frame URL.
-  form_data->origin = GURL(origin);
-  if (form_data->origin.GetOrigin() != form_frame_origin)
+  form_data->url = GURL(origin);
+  if (form_data->url.GetOrigin() != form_frame_origin)
     return false;
 
   // main_frame_origin is used for logging UKM.
   form_data->main_frame_origin = url::Origin::Create(main_frame_url);
+
+  int unique_renderer_id = kNotSetRendererID;
+  form_dictionary->GetInteger("unique_renderer_id", &unique_renderer_id);
+  form_data->unique_renderer_id =
+      (unique_renderer_id != kNotSetRendererID
+           ? FormRendererId(static_cast<uint32_t>(unique_renderer_id))
+           : FormRendererId());
 
   // Action is optional.
   base::string16 action;
@@ -157,6 +166,13 @@ bool ExtractFormFieldData(const base::DictionaryValue& field,
     return false;
   }
 
+  int unique_renderer_id = kNotSetRendererID;
+  field.GetInteger("unique_renderer_id", &unique_renderer_id);
+  field_data->unique_renderer_id =
+      (unique_renderer_id != kNotSetRendererID
+           ? FieldRendererId(static_cast<uint32_t>(unique_renderer_id))
+           : FieldRendererId());
+
   // Optional fields.
   field.GetString("name_attribute", &field_data->name_attribute);
   field.GetString("id_attribute", &field_data->id_attribute);
@@ -178,12 +194,12 @@ bool ExtractFormFieldData(const base::DictionaryValue& field,
   field.GetBoolean("is_focusable", &field_data->is_focusable);
   field.GetBoolean("should_autocomplete", &field_data->should_autocomplete);
 
-  // ROLE_ATTRIBUTE_OTHER is the default value. The only other value as of this
-  // writing is ROLE_ATTRIBUTE_PRESENTATION.
+  // RoleAttribute::kOther is the default value. The only other value as of this
+  // writing is RoleAttribute::kPresentation.
   int role = 0;
   if (field.GetInteger("role", &role) &&
-      role == autofill::AutofillField::ROLE_ATTRIBUTE_PRESENTATION) {
-    field_data->role = autofill::AutofillField::ROLE_ATTRIBUTE_PRESENTATION;
+      role == static_cast<int>(FormFieldData::RoleAttribute::kPresentation)) {
+    field_data->role = FormFieldData::RoleAttribute::kPresentation;
   }
 
   // TODO(crbug.com/427614): Extract |text_direction|.

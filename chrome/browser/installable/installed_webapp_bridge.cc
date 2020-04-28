@@ -8,31 +8,31 @@
 
 #include "base/android/jni_string.h"
 #include "base/android/jni_utils.h"
+#include "chrome/android/chrome_jni_headers/InstalledWebappBridge_jni.h"
 #include "components/content_settings/core/common/content_settings.h"
-#include "jni/InstalledWebappBridge_jni.h"
 
 using base::android::ConvertJavaStringToUTF8;
 using base::android::ScopedJavaLocalRef;
 
 static void JNI_InstalledWebappBridge_NotifyPermissionsChange(JNIEnv* env,
-    jlong j_provider) {
+                                                              jlong j_provider,
+                                                              int type) {
+  DCHECK_LT(type, static_cast<int32_t>(ContentSettingsType::NUM_TYPES));
   InstalledWebappProvider* provider =
     reinterpret_cast<InstalledWebappProvider*>(j_provider);
-  provider->Notify();
+  provider->Notify(static_cast<ContentSettingsType>(type));
 }
 
 InstalledWebappProvider::RuleList
-InstalledWebappBridge::GetInstalledWebappNotificationPermissions() {
+InstalledWebappBridge::GetInstalledWebappPermissions(
+    ContentSettingsType content_type) {
   JNIEnv* env = base::android::AttachCurrentThread();
   ScopedJavaLocalRef<jobjectArray> j_permissions =
-      Java_InstalledWebappBridge_getNotificationPermissions(env);
-  jsize size = env->GetArrayLength(j_permissions.obj());
+      Java_InstalledWebappBridge_getPermissions(env,
+                                                static_cast<int>(content_type));
 
   InstalledWebappProvider::RuleList rules;
-  for (jsize i = 0; i < size; i++) {
-    ScopedJavaLocalRef<jobject> j_permission(
-        env, env->GetObjectArrayElement(j_permissions.obj(), i));
-
+  for (auto j_permission : j_permissions.ReadElements<jobject>()) {
     GURL origin(ConvertJavaStringToUTF8(
         Java_InstalledWebappBridge_getOriginFromPermission(env, j_permission)));
     ContentSetting setting = IntToContentSetting(

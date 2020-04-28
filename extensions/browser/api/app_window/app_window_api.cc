@@ -190,8 +190,7 @@ ExtensionFunction::ResponseAction AppWindowCreateFunction::Run() {
           content::RenderFrameHost* existing_frame =
               existing_window->web_contents()->GetMainFrame();
           int frame_id = MSG_ROUTING_NONE;
-          if (render_frame_host()->GetProcess()->GetID() ==
-              existing_frame->GetProcess()->GetID()) {
+          if (source_process_id() == existing_frame->GetProcess()->GetID()) {
             frame_id = existing_frame->GetRoutingID();
           }
 
@@ -207,14 +206,24 @@ ExtensionFunction::ResponseAction AppWindowCreateFunction::Run() {
           result->SetInteger("frameId", frame_id);
           existing_window->GetSerializedState(result.get());
           result->SetBoolean("existingWindow", true);
-          return RespondNow(OneArgument(std::move(result)));
+          // We should not return the window until that window is properly
+          // initialized. Hence, adding a callback for window first navigation
+          // completion.
+          if (existing_window->DidFinishFirstNavigation())
+            return RespondNow(OneArgument(std::move(result)));
+
+          existing_window->AddOnDidFinishFirstNavigationCallback(
+            base::BindOnce(&AppWindowCreateFunction::
+                           OnAppWindowFinishedFirstNavigationOrClosed,
+                           this, OneArgument(std::move(result))));
+          return RespondLater();
         }
       }
     }
 
     std::string error;
     if (!GetBoundsSpec(*options, &create_params, &error))
-      return RespondNow(Error(error));
+      return RespondNow(Error(std::move(error)));
 
     if (options->type == app_window::WINDOW_TYPE_PANEL) {
       WriteToConsole(blink::mojom::ConsoleMessageLevel::kWarning,
@@ -222,7 +231,7 @@ ExtensionFunction::ResponseAction AppWindowCreateFunction::Run() {
     }
 
     if (!GetFrameOptions(*options, &create_params, &error))
-      return RespondNow(Error(error));
+      return RespondNow(Error(std::move(error)));
 
     if (extension()->GetType() == Manifest::TYPE_EXTENSION) {
       // Whitelisted IME extensions are allowed to use this API to create IME
@@ -374,8 +383,7 @@ ExtensionFunction::ResponseAction AppWindowCreateFunction::Run() {
     create_params.show_on_lock_screen = true;
   }
 
-  create_params.creator_process_id =
-      render_frame_host()->GetProcess()->GetID();
+  create_params.creator_process_id = source_process_id();
 
   AppWindow* app_window = nullptr;
   if (action_type == api::app_runtime::ACTION_TYPE_NONE) {
@@ -416,27 +424,27 @@ ExtensionFunction::ResponseAction AppWindowCreateFunction::Run() {
           ->HadDevToolsAttached(app_window->web_contents())) {
     AppWindowClient::Get()->OpenDevToolsWindow(
         app_window->web_contents(),
-        base::Bind(&AppWindowCreateFunction::Respond, this,
-                   base::Passed(&result_arg)));
+        base::BindOnce(&AppWindowCreateFunction::Respond, this,
+                       std::move(result_arg)));
     // OpenDevToolsWindow might have already responded.
     return did_respond() ? AlreadyResponded() : RespondLater();
   }
 
-  // Delay sending the response until the newly created window has been told to
-  // navigate, and blink has been correctly initialized in the renderer.
-  // SetOnFirstCommitOrWindowClosedCallback() will respond asynchronously.
-  app_window->SetOnFirstCommitOrWindowClosedCallback(base::Bind(
-      &AppWindowCreateFunction::OnAppWindowReadyToCommitFirstNavigationOrClosed,
-      this, base::Passed(&result_arg)));
+  // Delay sending the response until the newly created window has finished its
+  // navigation or was closed during that process.
+  // AddOnDidFinishFirstNavigationCallback() will respond asynchronously.
+  app_window->AddOnDidFinishFirstNavigationCallback(base::BindOnce(
+      &AppWindowCreateFunction::OnAppWindowFinishedFirstNavigationOrClosed,
+      this, std::move(result_arg)));
   return RespondLater();
 }
 
-void AppWindowCreateFunction::OnAppWindowReadyToCommitFirstNavigationOrClosed(
+void AppWindowCreateFunction::OnAppWindowFinishedFirstNavigationOrClosed(
     ResponseValue result_arg,
-    bool ready_to_commit) {
+    bool did_finish) {
   DCHECK(!did_respond());
 
-  if (!ready_to_commit) {
+  if (!did_finish) {
     Respond(Error(app_window_constants::kPrematureWindowClose));
     return;
   }

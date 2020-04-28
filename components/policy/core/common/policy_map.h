@@ -22,6 +22,8 @@
 
 namespace policy {
 
+class PolicyMerger;
+
 class PolicyMapTest;
 FORWARD_DECLARE_TEST(PolicyMapTest, BlockedEntry);
 FORWARD_DECLARE_TEST(PolicyMapTest, MergeFrom);
@@ -67,12 +69,26 @@ class POLICY_EXPORT PolicyMap {
     // Add a localized error given its l10n message ID.
     void AddError(int message_id);
 
+    // Add a localized error given its l10n message ID.
+    void AddWarning(int message_id);
+
     // Adds a conflicting policy.
-    void AddConflictingPolicy(const Entry& conflict);
+    void AddConflictingPolicy(Entry&& conflict);
 
-    bool IsBlocked() const;
+    // Removes all the conflicts.
+    void ClearConflicts();
 
+    // Returns true if the policy is either blocked or ignored.
+    bool IsBlockedOrIgnored() const;
+
+    // Marks the policy as blocked because it is not supported in the current
+    // environment.
     void SetBlocked();
+
+    // Marks the policy as ignored because it does not share the priority of
+    // its policy atomic group.
+    void SetIgnoredByPolicyAtomicGroup();
+    bool IsIgnoredByAtomicGroup() const;
 
     // Callback used to look up a localized string given its l10n message ID. It
     // should return a UTF-16 string.
@@ -83,9 +99,14 @@ class POLICY_EXPORT PolicyMap {
     // separated with LF characters.
     base::string16 GetLocalizedErrors(L10nLookupFunction lookup) const;
 
+    // Returns localized warnings added through AddWarning(), as UTF-16, and
+    // separated with LF characters.
+    base::string16 GetLocalizedWarnings(L10nLookupFunction lookup) const;
+
    private:
     std::string error_strings_;
     std::set<int> error_message_ids_;
+    std::set<int> warning_message_ids_;
   };
 
   typedef std::map<std::string, Entry> PolicyMapType;
@@ -104,10 +125,6 @@ class POLICY_EXPORT PolicyMap {
   // This is equivalent to Get(policy)->value, when it doesn't return NULL.
   const base::Value* GetValue(const std::string& policy) const;
   base::Value* GetMutableValue(const std::string& policy);
-
-  // Merges the values coming from different sources and clears the conflict
-  // state.
-  void MergeListValues(const std::string& policy);
 
   // Overwrites any existing information stored in the map for the key |policy|.
   // Resets the error for that policy to the empty string.
@@ -130,6 +147,11 @@ class POLICY_EXPORT PolicyMap {
   // should only be called for policies that are already stored in the map.
   void AddError(const std::string& policy, int message_id);
 
+  // Return True if the policy is set but its value is ignored because it does
+  // not share the highest priority from its atomic group. Returns False if the
+  // policy is active or not set.
+  bool IsPolicyIgnoredByAtomicGroup(const std::string& policy) const;
+
   // For all policies, overwrite the PolicySource with |source|.
   void SetSourceForAll(PolicySource source);
 
@@ -137,11 +159,12 @@ class POLICY_EXPORT PolicyMap {
   void Erase(const std::string& policy);
 
   // Erase all entries for which |filter| returns true.
-  void EraseMatching(const base::Callback<bool(const const_iterator)>& filter);
+  void EraseMatching(
+      const base::RepeatingCallback<bool(const const_iterator)>& filter);
 
   // Erase all entries for which |filter| returns false.
   void EraseNonmatching(
-      const base::Callback<bool(const const_iterator)>& filter);
+      const base::RepeatingCallback<bool(const const_iterator)>& filter);
 
   // Swaps the internal representation of |this| with |other|.
   void Swap(PolicyMap* other);
@@ -157,6 +180,9 @@ class POLICY_EXPORT PolicyMap {
   // by Entry::has_higher_priority_than(). If a policy is contained in both
   // maps with the same priority, the current value in |this| is preserved.
   void MergeFrom(const PolicyMap& other);
+
+  // Merge the policy values that are coming from different sources.
+  void MergeValues(const std::vector<PolicyMerger*>& mergers);
 
   // Loads the values in |policies| into this PolicyMap. All policies loaded
   // will have |level|, |scope| and |source| in their entries. Existing entries
@@ -195,8 +221,9 @@ class POLICY_EXPORT PolicyMap {
                              const PolicyMapType::value_type& b);
 
   // Erase all entries for which |filter| returns |deletion_value|.
-  void FilterErase(const base::Callback<bool(const const_iterator)>& filter,
-                   bool deletion_value);
+  void FilterErase(
+      const base::RepeatingCallback<bool(const const_iterator)>& filter,
+      bool deletion_value);
 
   PolicyMapType map_;
 

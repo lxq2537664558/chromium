@@ -15,8 +15,8 @@
 #include "base/export_template.h"
 #include "base/no_destructor.h"
 #include "base/optional.h"
+#include "net/third_party/quiche/src/common/platform/api/quiche_string_piece.h"
 #include "net/third_party/quiche/src/quic/platform/api/quic_export.h"
-#include "net/third_party/quiche/src/quic/platform/api/quic_string_piece.h"
 
 #define QUIC_FLAG(type, flag, value) QUIC_EXPORT_PRIVATE extern type flag;
 #include "net/quic/quic_flags_list.h"
@@ -46,27 +46,13 @@ inline std::string GetQuicFlagImpl(const std::string& flag) {
   return flag;
 }
 
-inline void SetQuicFlagImpl(bool* f, bool v) {
-  *f = v;
-}
-inline void SetQuicFlagImpl(int32_t* f, int32_t v) {
-  *f = v;
-}
-inline void SetQuicFlagImpl(uint32_t* f, uint32_t v) {
-  *f = v;
-}
-inline void SetQuicFlagImpl(int64_t* f, int64_t v) {
-  *f = v;
-}
-inline void SetQuicFlagImpl(uint64_t* f, uint64_t v) {
-  *f = v;
-}
-inline void SetQuicFlagImpl(double* f, double v) {
-  *f = v;
-}
-inline void SetQuicFlagImpl(std::string* f, const std::string& v) {
-  *f = v;
-}
+#define SetQuicFlagImpl(flag, value) ((flag) = (value))
+
+// Sets the flag named |flag_name| to the value of |value| after converting
+// it from a string to the appropriate type. If |value| is invalid or out of
+// range, the flag will be unchanged.
+QUIC_EXPORT_PRIVATE void SetQuicFlagByName(const std::string& flag_name,
+                                           const std::string& value);
 
 namespace quic {
 
@@ -207,10 +193,10 @@ QUIC_EXPORT_PRIVATE void QuicPrintCommandLineFlagHelpImpl(const char* usage);
 
 #define GetQuicReloadableFlagImpl(flag) GetQuicFlag(RELOADABLE_FLAG(flag))
 #define SetQuicReloadableFlagImpl(flag, value) \
-  SetQuicFlag(&RELOADABLE_FLAG(flag), value)
+  SetQuicFlag(RELOADABLE_FLAG(flag), value)
 #define GetQuicRestartFlagImpl(flag) GetQuicFlag(RESTART_FLAG(flag))
 #define SetQuicRestartFlagImpl(flag, value) \
-  SetQuicFlag(&RESTART_FLAG(flag), value)
+  SetQuicFlag(RESTART_FLAG(flag), value)
 
 }  // namespace quic
 #endif  // NET_QUIC_PLATFORM_IMPL_QUIC_FLAGS_IMPL_H_

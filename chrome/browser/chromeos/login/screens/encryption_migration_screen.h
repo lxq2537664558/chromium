@@ -8,15 +8,13 @@
 #include "base/callback_forward.h"
 #include "chrome/browser/chromeos/login/screens/base_screen.h"
 #include "chrome/browser/chromeos/login/screens/encryption_migration_mode.h"
-#include "chrome/browser/chromeos/login/screens/encryption_migration_screen_view.h"
 
 namespace chromeos {
 
+class EncryptionMigrationScreenView;
 class UserContext;
 
-class EncryptionMigrationScreen
-    : public BaseScreen,
-      public EncryptionMigrationScreenView::Delegate {
+class EncryptionMigrationScreen : public BaseScreen {
  public:
   using ContinueLoginCallback = base::OnceCallback<void(const UserContext&)>;
   using RestartLoginCallback = base::OnceCallback<void(const UserContext&)>;
@@ -24,12 +22,9 @@ class EncryptionMigrationScreen
   explicit EncryptionMigrationScreen(EncryptionMigrationScreenView* view);
   ~EncryptionMigrationScreen() override;
 
-  // BaseScreen implementation:
-  void Show() override;
-  void Hide() override;
-
-  // EncryptionMigrationScreenView::Delegate implementation:
-  void OnViewDestroyed(EncryptionMigrationScreenView* view) override;
+  // This method is called, when view is being destroyed. Note, if Delegate is
+  // destroyed earlier then it has to call SetDelegate(NULL).
+  void OnViewDestroyed(EncryptionMigrationScreenView* view);
 
   // Sets the UserContext for a user whose cryptohome should be migrated.
   void SetUserContext(const UserContext& user_context);
@@ -50,6 +45,10 @@ class EncryptionMigrationScreen
   void SetupInitialView();
 
  private:
+  // BaseScreen:
+  void ShowImpl() override;
+  void HideImpl() override;
+
   EncryptionMigrationScreenView* view_;
 
   DISALLOW_COPY_AND_ASSIGN(EncryptionMigrationScreen);

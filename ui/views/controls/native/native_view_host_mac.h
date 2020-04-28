@@ -5,6 +5,8 @@
 #ifndef UI_VIEWS_CONTROLS_NATIVE_NATIVE_VIEW_HOST_MAC_H_
 #define UI_VIEWS_CONTROLS_NATIVE_NATIVE_VIEW_HOST_MAC_H_
 
+#include <memory>
+
 #include "base/mac/scoped_nsobject.h"
 #include "base/macros.h"
 #include "ui/base/cocoa/views_hostable.h"
@@ -18,7 +20,7 @@ class ViewsHostableView;
 
 namespace views {
 
-class BridgedNativeWidgetHostImpl;
+class NativeWidgetMacNSWindowHost;
 class NativeViewHost;
 
 // Mac implementation of NativeViewHostWrapper.
@@ -30,7 +32,7 @@ class NativeViewHostMac : public NativeViewHostWrapper,
 
   // ViewsHostableView::Host:
   ui::Layer* GetUiLayer() const override;
-  uint64_t GetViewsFactoryHostId() const override;
+  remote_cocoa::mojom::Application* GetRemoteCocoaApplication() const override;
   uint64_t GetNSViewId() const override;
   void OnHostableViewDestroying() override;
 
@@ -56,8 +58,8 @@ class NativeViewHostMac : public NativeViewHostWrapper,
   void SetParentAccessible(gfx::NativeViewAccessible) override;
 
  private:
-  // Return the BridgedNativeWidgetHostImpl for this hosted view.
-  BridgedNativeWidgetHostImpl* GetBridgedNativeWidgetHost() const;
+  // Return the NativeWidgetMacNSWindowHost for this hosted view.
+  NativeWidgetMacNSWindowHost* GetNSWindowHost() const;
 
   // Our associated NativeViewHost. Owns this.
   NativeViewHost* host_;

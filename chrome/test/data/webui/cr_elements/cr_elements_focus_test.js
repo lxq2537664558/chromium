@@ -4,19 +4,13 @@
 
 /** @fileoverview Tests for shared Polymer elements which rely on focus. */
 
-/** @const {string} Path to source root. */
-const ROOT_PATH = '../../../../../';
-
 // Polymer BrowserTest fixture.
-GEN_INCLUDE(
-    [ROOT_PATH + 'chrome/test/data/webui/polymer_interactive_ui_test.js']);
+GEN_INCLUDE(['//chrome/test/data/webui/polymer_interactive_ui_test.js']);
 
 function CrElementsFocusTest() {}
 
 CrElementsFocusTest.prototype = {
   __proto__: PolymerInteractiveUITest.prototype,
-
-  extraLibraries: PolymerTest.getLibraries(ROOT_PATH),
 };
 
 function CrElementsActionMenuTest() {}
@@ -29,24 +23,18 @@ CrElementsActionMenuTest.prototype = {
       'chrome://resources/cr_elements/cr_action_menu/cr_action_menu.html',
 
   extraLibraries: CrElementsFocusTest.prototype.extraLibraries.concat([
-    '../settings/test_util.js',
+    '../test_util.js',
     'cr_action_menu_test.js',
   ]),
 };
 
-// Web UI interactive tests are flaky on Win10, see https://crbug.com/711256
-GEN('#if defined(OS_WIN)');
-GEN('#define MAYBE_All DISABLED_All');
-GEN('#else');
-GEN('#define MAYBE_All All');
-GEN('#endif');
-TEST_F('CrElementsActionMenuTest', 'MAYBE_All', function() {
+TEST_F('CrElementsActionMenuTest', 'All', function() {
   mocha.run();
 });
 
-function CrElementsProfileAvatarSelectorFocusTest() {}
+function CrElementsProfileAvatarSelectorTest() {}
 
-CrElementsProfileAvatarSelectorFocusTest.prototype = {
+CrElementsProfileAvatarSelectorTest.prototype = {
   __proto__: CrElementsFocusTest.prototype,
 
   /** @override */
@@ -58,15 +46,8 @@ CrElementsProfileAvatarSelectorFocusTest.prototype = {
   ]),
 };
 
-// Web UI interactive tests are flaky on Win10, see https://crbug.com/711256
-GEN('#if defined(OS_WIN)');
-GEN('#define MAYBE_All DISABLED_All');
-GEN('#else');
-GEN('#define MAYBE_All All');
-GEN('#endif');
-TEST_F('CrElementsProfileAvatarSelectorFocusTest', 'MAYBE_All', function() {
-  cr_profile_avatar_selector.registerTests();
-  mocha.grep(cr_profile_avatar_selector.TestNames.Focus).run();
+TEST_F('CrElementsProfileAvatarSelectorTest', 'All', function() {
+  mocha.run();
 });
 
 /**
@@ -83,18 +64,12 @@ CrElementsToggleTest.prototype = {
 
   /** @override */
   extraLibraries: CrElementsFocusTest.prototype.extraLibraries.concat([
-    '../settings/test_util.js',
+    '../test_util.js',
     'cr_toggle_test.js',
   ]),
 };
 
-// Web UI interactive tests are flaky on Win10, see https://crbug.com/711256
-GEN('#if defined(OS_WIN)');
-GEN('#define MAYBE_All DISABLED_All');
-GEN('#else');
-GEN('#define MAYBE_All All');
-GEN('#endif');
-TEST_F('CrElementsToggleTest', 'MAYBE_All', function() {
+TEST_F('CrElementsToggleTest', 'All', function() {
   mocha.run();
 });
 
@@ -113,18 +88,13 @@ CrElementsCheckboxTest.prototype = {
 
   /** @override */
   extraLibraries: CrElementsFocusTest.prototype.extraLibraries.concat([
-    '../settings/test_util.js',
+    '../test_util.js',
     'cr_checkbox_test.js',
   ]),
 };
 
-// Web UI interactive tests are flaky on Win10, see https://crbug.com/711256
-GEN('#if defined(OS_WIN)');
-GEN('#define MAYBE_All DISABLED_All');
-GEN('#else');
-GEN('#define MAYBE_All All');
-GEN('#endif');
-TEST_F('CrElementsCheckboxTest', 'MAYBE_All', function() {
+// crbug.com/997943.
+TEST_F('CrElementsCheckboxTest', 'DISABLED_All', function() {
   mocha.run();
 });
 
@@ -142,13 +112,13 @@ CrElementsInputTest.prototype = {
 
   /** @override */
   extraLibraries: CrElementsFocusTest.prototype.extraLibraries.concat([
-    '../settings/test_util.js',
+    '../test_util.js',
     'cr_input_test.js',
   ]),
 };
 
-// Web UI interactive tests are flaky on Win10, see https://crbug.com/711256
-GEN('#if defined(OS_WIN)');
+// https://crbug.com/997943: Flaky on Mac
+GEN('#if defined(OS_MACOSX)');
 GEN('#define MAYBE_All DISABLED_All');
 GEN('#else');
 GEN('#define MAYBE_All All');
@@ -172,17 +142,12 @@ CrElementsIconButtonFocusTest.prototype = {
 
   /** @override */
   extraLibraries: CrElementsFocusTest.prototype.extraLibraries.concat([
+    '../test_util.js',
     'cr_icon_button_focus_tests.js',
   ]),
 };
 
-// Web UI interactive tests are flaky on Win10, see https://crbug.com/711256
-GEN('#if defined(OS_WIN)');
-GEN('#define MAYBE_All DISABLED_All');
-GEN('#else');
-GEN('#define MAYBE_All All');
-GEN('#endif');
-TEST_F('CrElementsIconButtonFocusTest', 'MAYBE_All', function() {
+TEST_F('CrElementsIconButtonFocusTest', 'All', function() {
   mocha.run();
 });
 
@@ -202,18 +167,57 @@ CrElementsExpandButtonTest.prototype = {
 
   /** @override */
   extraLibraries: CrElementsFocusTest.prototype.extraLibraries.concat([
-    ROOT_PATH + 'ui/webui/resources/js/util.js',
-    '../settings/test_util.js',
+    '//ui/webui/resources/js/util.js',
+    '../test_util.js',
     'cr_expand_button_focus_tests.js',
   ]),
 };
 
-// Web UI interactive tests are flaky on Win10, see https://crbug.com/711256
-GEN('#if defined(OS_WIN)');
-GEN('#define MAYBE_All DISABLED_All');
-GEN('#else');
-GEN('#define MAYBE_All All');
-GEN('#endif');
-TEST_F('CrElementsExpandButtonTest', 'MAYBE_All', function() {
+TEST_F('CrElementsExpandButtonTest', 'All', function() {
+  mocha.run();
+});
+
+/**
+ * @constructor
+ * @extends {CrElementsBrowserTest}
+ */
+function CrElementsTabsTest() {}
+
+CrElementsTabsTest.prototype = {
+  __proto__: CrElementsFocusTest.prototype,
+
+  /** @override */
+  browsePreload: 'chrome://resources/cr_elements/cr_tabs/cr_tabs.html',
+
+  /** @override */
+  extraLibraries: CrElementsFocusTest.prototype.extraLibraries.concat([
+    '//ui/webui/resources/js/util.js',
+    '../test_util.js',
+    'cr_tabs_test.js',
+  ]),
+};
+
+TEST_F('CrElementsTabsTest', 'All', function() {
+  mocha.run();
+});
+
+// eslint-disable-next-line no-var
+var IronListFocusTest = class extends CrElementsFocusTest {
+  /** @override */
+  get browsePreload() {
+    return 'chrome://resources/polymer/v1_0/iron-list/iron-list.html';
+  }
+
+  /** @override */
+  get extraLibraries() {
+    return [
+      ...PolymerTest.prototype.extraLibraries,
+      '../test_util.js',
+      'iron_list_focus_test.js',
+    ];
+  }
+};
+
+TEST_F('IronListFocusTest', 'All', function() {
   mocha.run();
 });

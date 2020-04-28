@@ -23,16 +23,13 @@ class Action {
    * @return {?string}
    */
   getTitle() {}
-}
 
-/**
- * @typedef {{
- *  alertDialog: FilesAlertDialog,
- *  errorDialog: ErrorDialog,
- *  listContainer: ListContainer,
- * }}
- */
-let ActionModelUI;
+  /**
+   * Entries that this Action will execute upon.
+   * @return {!Array<!Entry|!FileEntry>}
+   */
+  getEntries() {}
+}
 
 /** @implements {Action} */
 class DriveShareAction {
@@ -115,9 +112,7 @@ class DriveShareAction {
     assert(metadata.length === 1);
     const canShareItem = metadata[0].canShare !== false;
     return this.volumeManager_.getDriveConnectionState().type !==
-        VolumeManagerCommon.DriveConnectionType.OFFLINE &&
-        (loadTimeData.getBoolean('DRIVE_FS_ENABLED') ||
-         !util.isTeamDriveRoot(this.entry_)) &&
+        chrome.fileManagerPrivate.DriveConnectionStateType.OFFLINE &&
         canShareItem;
   }
 
@@ -126,6 +121,11 @@ class DriveShareAction {
    */
   getTitle() {
     return null;
+  }
+
+  /** @override */
+  getEntries() {
+    return [this.entry_];
   }
 }
 
@@ -189,16 +189,7 @@ class DriveToggleOfflineAction {
    */
   static create(
       entries, metadataModel, driveSyncHandler, ui, value, onExecute) {
-    if (!loadTimeData.getBoolean('DRIVE_FS_ENABLED')) {
-      if (entries.some((entry) => entry.isDirectory)) {
-        return null;
-      }
-    }
-
     const actionableEntries = entries.filter(entry => {
-      if (entry.isDirectory && !loadTimeData.getBoolean('DRIVE_FS_ENABLED')) {
-        return false;
-      }
       const metadata = metadataModel.getCache([entry], ['hosted', 'pinned'])[0];
       if (metadata.hosted) {
         return false;
@@ -235,7 +226,6 @@ class DriveToggleOfflineAction {
       start: () => {
         // Check if all the entries are pinned or not.
         if (entries.length === 0) {
-          this.onExecute_();
           return;
         }
         currentEntry = entries.shift();
@@ -259,6 +249,11 @@ class DriveToggleOfflineAction {
 
       // Update the user interface according to the cache state.
       updateUI: () => {
+        // After execution of last entry call "onExecute_" to invalidate the
+        // model.
+        if (entries.length === 0) {
+          this.onExecute_();
+        }
         this.ui_.listContainer.currentView.updateListItemsMetadata(
             'external', [currentEntry]);
         if (!error) {
@@ -295,6 +290,11 @@ class DriveToggleOfflineAction {
    */
   getTitle() {
     return null;
+  }
+
+  /** @override */
+  getEntries() {
+    return this.entries_;
   }
 }
 
@@ -367,6 +367,11 @@ class DriveCreateFolderShortcutAction {
   getTitle() {
     return null;
   }
+
+  /** @override */
+  getEntries() {
+    return [this.entry_];
+  }
 }
 
 
@@ -432,6 +437,11 @@ class DriveRemoveFolderShortcutAction {
    */
   getTitle() {
     return null;
+  }
+
+  /** @override */
+  getEntries() {
+    return [this.entry_];
   }
 }
 
@@ -515,9 +525,7 @@ class DriveManageAction {
    */
   canExecute() {
     return this.volumeManager_.getDriveConnectionState().type !==
-        VolumeManagerCommon.DriveConnectionType.OFFLINE &&
-        (loadTimeData.getBoolean('DRIVE_FS_ENABLED') ||
-         !util.isTeamDriveRoot(this.entry_));
+        chrome.fileManagerPrivate.DriveConnectionStateType.OFFLINE;
   }
 
   /**
@@ -525,6 +533,11 @@ class DriveManageAction {
    */
   getTitle() {
     return null;
+  }
+
+  /** @override */
+  getEntries() {
+    return [this.entry_];
   }
 }
 
@@ -594,6 +607,11 @@ class CustomAction {
    */
   getTitle() {
     return this.title_;
+  }
+
+  /** @override */
+  getEntries() {
+    return this.entries_;
   }
 }
 
@@ -692,21 +710,12 @@ class ActionsModel extends cr.EventTarget {
 
           const volumeInfo = this.entries_.length >= 1 &&
               this.volumeManager_.getVolumeInfo(this.entries_[0]);
-          if (!volumeInfo) {
-            fulfill({});
-            return;
-          }
           // All entries need to be on the same volume to execute ActionsModel
           // commands.
-          // TODO(sashab): Move this to util.js.
-          for (let i = 1; i < this.entries_.length; i++) {
-            const volumeInfoToCompare =
-                this.volumeManager_.getVolumeInfo(this.entries_[i]);
-            if (!volumeInfoToCompare ||
-                volumeInfoToCompare.volumeId != volumeInfo.volumeId) {
-              fulfill({});
-              return;
-            }
+          if (!volumeInfo ||
+              !util.isSameVolume(this.entries_, this.volumeManager_)) {
+            fulfill({});
+            return;
           }
 
           const actions = {};
@@ -837,6 +846,14 @@ class ActionsModel extends cr.EventTarget {
     }
     cr.dispatchSimpleEvent(this, 'invalidated', true);
   }
+
+  /**
+   * @return {!Array<!Entry>}
+   * @public
+   */
+  getEntries() {
+    return this.entries_;
+  }
 }
 
 /**
@@ -854,7 +871,7 @@ ActionsModel.CommonActionId = {
  * @enum {string}
  */
 ActionsModel.InternalActionId = {
-  CREATE_FOLDER_SHORTCUT: 'create-folder-shortcut',
-  REMOVE_FOLDER_SHORTCUT: 'remove-folder-shortcut',
+  CREATE_FOLDER_SHORTCUT: 'pin-folder',
+  REMOVE_FOLDER_SHORTCUT: 'unpin-folder',
   MANAGE_IN_DRIVE: 'manage-in-drive'
 };

@@ -9,10 +9,10 @@
 #include "base/bind.h"
 #include "base/bind_helpers.h"
 #include "base/run_loop.h"
-#include "base/test/scoped_task_environment.h"
+#include "base/test/bind_test_util.h"
+#include "base/test/task_environment.h"
 #include "device/bluetooth/bluetooth_adapter.h"
 #include "device/bluetooth/bluetooth_adapter_factory.h"
-#include "device/bluetooth/bluetooth_uuid.h"
 #include "device/bluetooth/bluez/bluetooth_adapter_bluez.h"
 #include "device/bluetooth/dbus/bluetooth_profile_service_provider.h"
 #include "device/bluetooth/dbus/bluez_dbus_manager.h"
@@ -20,6 +20,7 @@
 #include "device/bluetooth/dbus/fake_bluetooth_agent_manager_client.h"
 #include "device/bluetooth/dbus/fake_bluetooth_device_client.h"
 #include "device/bluetooth/dbus/fake_bluetooth_profile_manager_client.h"
+#include "device/bluetooth/public/cpp/bluetooth_uuid.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 using device::BluetoothAdapter;
@@ -57,11 +58,15 @@ class BluetoothAdapterProfileBlueZTest : public testing::Test {
             new bluez::FakeBluetoothProfileManagerClient));
 
     // Grab a pointer to the adapter.
-    device::BluetoothAdapterFactory::GetAdapter(
-        base::BindOnce(&BluetoothAdapterProfileBlueZTest::AdapterCallback,
-                       base::Unretained(this)));
-    base::RunLoop().Run();
-    ASSERT_TRUE(adapter_.get() != nullptr);
+    base::RunLoop run_loop;
+    device::BluetoothAdapterFactory::Get()->GetAdapter(
+        base::BindLambdaForTesting(
+            [&](scoped_refptr<BluetoothAdapter> adapter) {
+              adapter_ = std::move(adapter);
+              run_loop.Quit();
+            }));
+    run_loop.Run();
+    ASSERT_TRUE(adapter_);
     ASSERT_TRUE(adapter_->IsInitialized());
     ASSERT_TRUE(adapter_->IsPresent());
 
@@ -74,12 +79,6 @@ class BluetoothAdapterProfileBlueZTest : public testing::Test {
     profile_.reset();
     adapter_ = nullptr;
     bluez::BluezDBusManager::Shutdown();
-  }
-
-  void AdapterCallback(scoped_refptr<BluetoothAdapter> adapter) {
-    adapter_ = adapter;
-    if (base::RunLoop::IsRunningOnCurrentThread())
-      base::RunLoop::QuitCurrentWhenIdleDeprecated();
   }
 
   class FakeDelegate : public bluez::BluetoothProfileServiceProvider::Delegate {
@@ -98,16 +97,16 @@ class BluetoothAdapterProfileBlueZTest : public testing::Test {
         base::ScopedFD fd,
         const bluez::BluetoothProfileServiceProvider::Delegate::Options&
             options,
-        const ConfirmationCallback& callback) override {
+        ConfirmationCallback callback) override {
       ++connections_;
       fd.reset();
-      callback.Run(SUCCESS);
+      std::move(callback).Run(SUCCESS);
       if (device_path_.value() != "")
         ASSERT_EQ(device_path_, device_path);
     }
 
     void RequestDisconnection(const dbus::ObjectPath& device_path,
-                              const ConfirmationCallback& callback) override {
+                              ConfirmationCallback callback) override {
       ++disconnections_;
     }
 
@@ -148,7 +147,7 @@ class BluetoothAdapterProfileBlueZTest : public testing::Test {
   }
 
  protected:
-  base::test::ScopedTaskEnvironment scoped_task_environment_;
+  base::test::TaskEnvironment task_environment_;
 
   scoped_refptr<BluetoothAdapter> adapter_;
 
@@ -225,10 +224,11 @@ TEST_F(BluetoothAdapterProfileBlueZTest, BlackHole) {
   bluez::BluezDBusManager::Get()->GetBluetoothDeviceClient()->ConnectProfile(
       dbus::ObjectPath(bluez::FakeBluetoothDeviceClient::kPairedDevicePath),
       bluez::FakeBluetoothProfileManagerClient::kRfcommUuid,
-      base::Bind(&BluetoothAdapterProfileBlueZTest::DBusConnectSuccessCallback,
-                 base::Unretained(this)),
-      base::Bind(&BluetoothAdapterProfileBlueZTest::DBusErrorCallback,
-                 base::Unretained(this)));
+      base::BindOnce(
+          &BluetoothAdapterProfileBlueZTest::DBusConnectSuccessCallback,
+          base::Unretained(this)),
+      base::BindOnce(&BluetoothAdapterProfileBlueZTest::DBusErrorCallback,
+                     base::Unretained(this)));
 
   base::RunLoop().RunUntilIdle();
 
@@ -267,10 +267,11 @@ TEST_F(BluetoothAdapterProfileBlueZTest, Routing) {
   bluez::BluezDBusManager::Get()->GetBluetoothDeviceClient()->ConnectProfile(
       dbus::ObjectPath(bluez::FakeBluetoothDeviceClient::kPairedDevicePath),
       bluez::FakeBluetoothProfileManagerClient::kRfcommUuid,
-      base::Bind(&BluetoothAdapterProfileBlueZTest::DBusConnectSuccessCallback,
-                 base::Unretained(this)),
-      base::Bind(&BluetoothAdapterProfileBlueZTest::DBusErrorCallback,
-                 base::Unretained(this)));
+      base::BindOnce(
+          &BluetoothAdapterProfileBlueZTest::DBusConnectSuccessCallback,
+          base::Unretained(this)),
+      base::BindOnce(&BluetoothAdapterProfileBlueZTest::DBusErrorCallback,
+                     base::Unretained(this)));
 
   base::RunLoop().RunUntilIdle();
 
@@ -282,10 +283,11 @@ TEST_F(BluetoothAdapterProfileBlueZTest, Routing) {
   bluez::BluezDBusManager::Get()->GetBluetoothDeviceClient()->ConnectProfile(
       dbus::ObjectPath(bluez::FakeBluetoothDeviceClient::kLegacyAutopairPath),
       bluez::FakeBluetoothProfileManagerClient::kRfcommUuid,
-      base::Bind(&BluetoothAdapterProfileBlueZTest::DBusConnectSuccessCallback,
-                 base::Unretained(this)),
-      base::Bind(&BluetoothAdapterProfileBlueZTest::DBusErrorCallback,
-                 base::Unretained(this)));
+      base::BindOnce(
+          &BluetoothAdapterProfileBlueZTest::DBusConnectSuccessCallback,
+          base::Unretained(this)),
+      base::BindOnce(&BluetoothAdapterProfileBlueZTest::DBusErrorCallback,
+                     base::Unretained(this)));
 
   base::RunLoop().RunUntilIdle();
 
@@ -298,10 +300,11 @@ TEST_F(BluetoothAdapterProfileBlueZTest, Routing) {
   bluez::BluezDBusManager::Get()->GetBluetoothDeviceClient()->ConnectProfile(
       dbus::ObjectPath(bluez::FakeBluetoothDeviceClient::kDisplayPinCodePath),
       bluez::FakeBluetoothProfileManagerClient::kRfcommUuid,
-      base::Bind(&BluetoothAdapterProfileBlueZTest::DBusConnectSuccessCallback,
-                 base::Unretained(this)),
-      base::Bind(&BluetoothAdapterProfileBlueZTest::DBusErrorCallback,
-                 base::Unretained(this)));
+      base::BindOnce(
+          &BluetoothAdapterProfileBlueZTest::DBusConnectSuccessCallback,
+          base::Unretained(this)),
+      base::BindOnce(&BluetoothAdapterProfileBlueZTest::DBusErrorCallback,
+                     base::Unretained(this)));
 
   base::RunLoop().RunUntilIdle();
 

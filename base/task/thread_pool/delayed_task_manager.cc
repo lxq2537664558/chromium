@@ -7,7 +7,8 @@
 #include <algorithm>
 
 #include "base/bind.h"
-#include "base/logging.h"
+#include "base/check.h"
+#include "base/sequenced_task_runner.h"
 #include "base/task/post_task.h"
 #include "base/task/thread_pool/task.h"
 #include "base/task_runner.h"
@@ -35,7 +36,10 @@ DelayedTaskManager::DelayedTask& DelayedTaskManager::DelayedTask::operator=(
 
 bool DelayedTaskManager::DelayedTask::operator<=(
     const DelayedTask& other) const {
-  return task.delayed_run_time <= other.task.delayed_run_time;
+  if (task.delayed_run_time == other.task.delayed_run_time) {
+    return task.sequence_num <= other.task.sequence_num;
+  }
+  return task.delayed_run_time < other.task.delayed_run_time;
 }
 
 bool DelayedTaskManager::DelayedTask::IsScheduled() const {
@@ -46,24 +50,23 @@ void DelayedTaskManager::DelayedTask::SetScheduled() {
   scheduled_ = true;
 }
 
-DelayedTaskManager::DelayedTaskManager(
-    std::unique_ptr<const TickClock> tick_clock)
+DelayedTaskManager::DelayedTaskManager(const TickClock* tick_clock)
     : process_ripe_tasks_closure_(
           BindRepeating(&DelayedTaskManager::ProcessRipeTasks,
                         Unretained(this))),
-      tick_clock_(std::move(tick_clock)) {
+      tick_clock_(tick_clock) {
   DCHECK(tick_clock_);
 }
 
 DelayedTaskManager::~DelayedTaskManager() = default;
 
 void DelayedTaskManager::Start(
-    scoped_refptr<TaskRunner> service_thread_task_runner) {
+    scoped_refptr<SequencedTaskRunner> service_thread_task_runner) {
   DCHECK(service_thread_task_runner);
 
   TimeTicks process_ripe_tasks_time;
   {
-    AutoSchedulerLock auto_lock(queue_lock_);
+    CheckedAutoLock auto_lock(queue_lock_);
     DCHECK(!service_thread_task_runner_);
     service_thread_task_runner_ = std::move(service_thread_task_runner);
     process_ripe_tasks_time = GetTimeToScheduleProcessRipeTasksLockRequired();
@@ -83,7 +86,7 @@ void DelayedTaskManager::AddDelayedTask(
   CHECK(task.task);
   TimeTicks process_ripe_tasks_time;
   {
-    AutoSchedulerLock auto_lock(queue_lock_);
+    CheckedAutoLock auto_lock(queue_lock_);
     delayed_task_queue_.insert(DelayedTask(std::move(task),
                                            std::move(post_task_now_callback),
                                            std::move(task_runner)));
@@ -100,7 +103,7 @@ void DelayedTaskManager::ProcessRipeTasks() {
   TimeTicks process_ripe_tasks_time;
 
   {
-    AutoSchedulerLock auto_lock(queue_lock_);
+    CheckedAutoLock auto_lock(queue_lock_);
     const TimeTicks now = tick_clock_->NowTicks();
     while (!delayed_task_queue_.empty() &&
            delayed_task_queue_.Min().task.delayed_run_time <= now) {
@@ -118,6 +121,13 @@ void DelayedTaskManager::ProcessRipeTasks() {
   for (auto& delayed_task : ripe_delayed_tasks) {
     std::move(delayed_task.callback).Run(std::move(delayed_task.task));
   }
+}
+
+Optional<TimeTicks> DelayedTaskManager::NextScheduledRunTime() const {
+  CheckedAutoLock auto_lock(queue_lock_);
+  if (delayed_task_queue_.empty())
+    return nullopt;
+  return delayed_task_queue_.Min().task.delayed_run_time;
 }
 
 TimeTicks DelayedTaskManager::GetTimeToScheduleProcessRipeTasksLockRequired() {

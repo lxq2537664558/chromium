@@ -12,7 +12,7 @@
 #include "base/memory/scoped_refptr.h"
 #include "cc/animation/animation_timeline.h"
 #include "third_party/blink/renderer/platform/platform_export.h"
-#include "third_party/blink/renderer/platform/wtf/allocator.h"
+#include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
 
 namespace blink {
 
@@ -24,6 +24,7 @@ class PLATFORM_EXPORT CompositorAnimationTimeline {
 
  public:
   CompositorAnimationTimeline();
+  explicit CompositorAnimationTimeline(scoped_refptr<cc::AnimationTimeline>);
   ~CompositorAnimationTimeline();
 
   cc::AnimationTimeline* GetAnimationTimeline() const;

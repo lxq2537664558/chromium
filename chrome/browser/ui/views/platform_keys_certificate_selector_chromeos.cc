@@ -8,7 +8,6 @@
 #include <memory>
 #include <utility>
 
-#include "base/callback_helpers.h"
 #include "base/memory/ref_counted.h"
 #include "base/strings/string16.h"
 #include "base/strings/utf_string_conversions.h"
@@ -64,6 +63,11 @@ PlatformKeysCertificateSelector::PlatformKeysCertificateSelector(
       extension_name_(extension_name),
       callback_(callback) {
   DCHECK(!callback_.is_null());
+  DialogDelegate::SetCancelCallback(base::BindOnce(
+      [](PlatformKeysCertificateSelector* dialog) {
+        std::move(dialog->callback_).Run(nullptr);
+      },
+      base::Unretained(this)));
   chrome::RecordDialogCreation(
       chrome::DialogIdentifier::PLATFORM_KEYS_CERTIFICATE_SELECTOR);
 }
@@ -72,7 +76,7 @@ PlatformKeysCertificateSelector::~PlatformKeysCertificateSelector() {
   // Ensure to call back even if the dialog was closed because of the views
   // hierarchy being destroyed.
   if (!callback_.is_null())
-    base::ResetAndReturn(&callback_).Run(nullptr);
+    std::move(callback_).Run(nullptr);
 }
 
 void PlatformKeysCertificateSelector::Init() {
@@ -91,17 +95,10 @@ void PlatformKeysCertificateSelector::Init() {
   CertificateSelector::InitWithText(std::move(label));
 }
 
-bool PlatformKeysCertificateSelector::Cancel() {
-  DCHECK(!callback_.is_null());
-  base::ResetAndReturn(&callback_).Run(nullptr);
-  return true;
-}
-
 void PlatformKeysCertificateSelector::AcceptCertificate(
     std::unique_ptr<net::ClientCertIdentity> identity) {
   DCHECK(!callback_.is_null());
-  base::ResetAndReturn(&callback_)
-      .Run(base::WrapRefCounted(identity->certificate()));
+  std::move(callback_).Run(base::WrapRefCounted(identity->certificate()));
 }
 
 void ShowPlatformKeysCertificateSelector(

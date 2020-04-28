@@ -114,8 +114,8 @@ InfolistEntryView::InfolistEntryView(const ui::InfolistEntry& entry,
                                      const gfx::FontList& title_font_list,
                                      const gfx::FontList& description_font_list)
     : entry_(entry) {
-  SetLayoutManager(
-      std::make_unique<views::BoxLayout>(views::BoxLayout::kVertical));
+  SetLayoutManager(std::make_unique<views::BoxLayout>(
+      views::BoxLayout::Orientation::kVertical));
 
   title_label_ = new views::Label(entry.title, {title_font_list});
   title_label_->SetPosition(gfx::Point(0, 0));
@@ -173,6 +173,7 @@ InfolistWindow::InfolistWindow(views::View* candidate_window,
       title_font_list_(gfx::Font(kJapaneseFontName, kFontSizeDelta + 15)),
       description_font_list_(
           gfx::Font(kJapaneseFontName, kFontSizeDelta + 11)) {
+  DialogDelegate::SetButtons(ui::DIALOG_BUTTON_NONE);
   SetCanActivate(false);
   set_accept_events(false);
   set_margins(gfx::Insets());
@@ -183,8 +184,8 @@ InfolistWindow::InfolistWindow(views::View* candidate_window,
       1, GetNativeTheme()->GetSystemColor(
              ui::NativeTheme::kColorId_MenuBorderColor)));
 
-  SetLayoutManager(
-      std::make_unique<views::BoxLayout>(views::BoxLayout::kVertical));
+  SetLayoutManager(std::make_unique<views::BoxLayout>(
+      views::BoxLayout::Orientation::kVertical));
 
   views::Label* caption_label = new views::Label(
       l10n_util::GetStringUTF16(IDS_CHROMEOS_IME_INFOLIST_WINDOW_TITLE));
@@ -242,7 +243,6 @@ void InfolistWindow::Relayout(const std::vector<ui::InfolistEntry>& entries) {
   }
 
   Layout();
-  GetBubbleFrameView()->bubble_border()->set_arrow_offset(0);
   SizeToContents();
 }
 
@@ -274,10 +274,6 @@ void InfolistWindow::HideImmediately() {
 
 const char* InfolistWindow::GetClassName() const {
   return "InfolistWindow";
-}
-
-int InfolistWindow::GetDialogButtons() const {
-  return ui::DIALOG_BUTTON_NONE;
 }
 
 void InfolistWindow::WindowClosing() {

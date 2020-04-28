@@ -8,7 +8,6 @@
 
 #include "base/memory/ptr_util.h"
 #include "base/metrics/histogram_macros.h"
-#include "base/no_destructor.h"
 #include "base/stl_util.h"
 #include "chromeos/components/multidevice/logging/logging.h"
 #include "chromeos/services/secure_channel/authenticated_channel_impl.h"
@@ -22,7 +21,7 @@
 #include "chromeos/services/secure_channel/latency_metrics_logger.h"
 #include "chromeos/services/secure_channel/public/mojom/secure_channel.mojom.h"
 #include "chromeos/services/secure_channel/secure_channel_disconnector_impl.h"
-#include "device/bluetooth/bluetooth_uuid.h"
+#include "device/bluetooth/public/cpp/bluetooth_uuid.h"
 
 namespace chromeos {
 
@@ -57,12 +56,18 @@ BleConnectionManagerImpl::Factory*
     BleConnectionManagerImpl::Factory::test_factory_ = nullptr;
 
 // static
-BleConnectionManagerImpl::Factory* BleConnectionManagerImpl::Factory::Get() {
-  if (test_factory_)
-    return test_factory_;
+std::unique_ptr<BleConnectionManager> BleConnectionManagerImpl::Factory::Create(
+    scoped_refptr<device::BluetoothAdapter> bluetooth_adapter,
+    BleServiceDataHelper* ble_service_data_helper,
+    TimerFactory* timer_factory,
+    base::Clock* clock) {
+  if (test_factory_) {
+    return test_factory_->CreateInstance(
+        bluetooth_adapter, ble_service_data_helper, timer_factory, clock);
+  }
 
-  static base::NoDestructor<Factory> factory;
-  return factory.get();
+  return base::WrapUnique(new BleConnectionManagerImpl(
+      bluetooth_adapter, ble_service_data_helper, timer_factory, clock));
 }
 
 // static
@@ -72,16 +77,6 @@ void BleConnectionManagerImpl::Factory::SetFactoryForTesting(
 }
 
 BleConnectionManagerImpl::Factory::~Factory() = default;
-
-std::unique_ptr<BleConnectionManager>
-BleConnectionManagerImpl::Factory::BuildInstance(
-    scoped_refptr<device::BluetoothAdapter> bluetooth_adapter,
-    BleServiceDataHelper* ble_service_data_helper,
-    TimerFactory* timer_factory,
-    base::Clock* clock) {
-  return base::WrapUnique(new BleConnectionManagerImpl(
-      bluetooth_adapter, ble_service_data_helper, timer_factory, clock));
-}
 
 BleConnectionManagerImpl::ConnectionAttemptTimestamps::
     ConnectionAttemptTimestamps(ConnectionRole connection_role,
@@ -214,20 +209,18 @@ BleConnectionManagerImpl::BleConnectionManagerImpl(
     : bluetooth_adapter_(bluetooth_adapter),
       ble_service_data_helper_(ble_service_data_helper),
       clock_(clock),
-      ble_synchronizer_(
-          BleSynchronizer::Factory::Get()->BuildInstance(bluetooth_adapter)),
-      ble_advertiser_(BleAdvertiserImpl::Factory::Get()->BuildInstance(
-          this /* delegate */,
-          ble_service_data_helper_,
-          ble_synchronizer_.get(),
-          timer_factory)),
-      ble_scanner_(BleScannerImpl::Factory::Get()->BuildInstance(
-          this /* delegate */,
-          ble_service_data_helper_,
-          ble_synchronizer_.get(),
-          bluetooth_adapter)),
+      ble_synchronizer_(BleSynchronizer::Factory::Create(bluetooth_adapter)),
+      ble_advertiser_(
+          BleAdvertiserImpl::Factory::Create(this /* delegate */,
+                                             ble_service_data_helper_,
+                                             ble_synchronizer_.get(),
+                                             timer_factory)),
+      ble_scanner_(BleScannerImpl::Factory::Create(this /* delegate */,
+                                                   ble_service_data_helper_,
+                                                   ble_synchronizer_.get(),
+                                                   bluetooth_adapter)),
       secure_channel_disconnector_(
-          SecureChannelDisconnectorImpl::Factory::Get()->BuildInstance()) {}
+          SecureChannelDisconnectorImpl::Factory::Create()) {}
 
 BleConnectionManagerImpl::~BleConnectionManagerImpl() = default;
 
@@ -343,15 +336,15 @@ void BleConnectionManagerImpl::OnReceivedAdvertisement(
 
   // Create a connection to the device.
   std::unique_ptr<Connection> connection =
-      weave::BluetoothLowEnergyWeaveClientConnection::Factory::NewInstance(
+      weave::BluetoothLowEnergyWeaveClientConnection::Factory::Create(
           remote_device, bluetooth_adapter_,
-          device::BluetoothUUID(kGattServerUuid), bluetooth_device,
+          device::BluetoothUUID(kGattServerUuid),
+          bluetooth_device->GetAddress(),
           true /* should_set_low_connection_latency */);
 
   SetAuthenticatingChannel(
       remote_device.GetDeviceId(),
-      SecureChannel::Factory::NewInstance(std::move(connection)),
-      connection_role);
+      SecureChannel::Factory::Create(std::move(connection)), connection_role);
 }
 
 void BleConnectionManagerImpl::OnSecureChannelStatusChanged(
@@ -381,8 +374,8 @@ void BleConnectionManagerImpl::OnSecureChannelStatusChanged(
 
 bool BleConnectionManagerImpl::DoesAuthenticatingChannelExist(
     const std::string& remote_device_id) {
-  return base::ContainsKey(remote_device_id_to_secure_channel_map_,
-                           remote_device_id);
+  return base::Contains(remote_device_id_to_secure_channel_map_,
+                        remote_device_id);
 }
 
 void BleConnectionManagerImpl::SetAuthenticatingChannel(
@@ -396,7 +389,7 @@ void BleConnectionManagerImpl::SetAuthenticatingChannel(
   PauseConnectionAttemptsToDevice(remote_device_id);
 
   if (DoesAuthenticatingChannelExist(remote_device_id)) {
-    PA_LOG(ERROR) << "BleConnectionManager::OnReceivedAdvertisement(): A new "
+    PA_LOG(ERROR) << "BleConnectionManager::SetAuthenticatingChannel(): A new "
                   << "channel was created, one already exists for the same "
                   << "remote device ID. ID: "
                   << multidevice::RemoteDeviceRef::TruncateDeviceIdForLogs(
@@ -406,9 +399,9 @@ void BleConnectionManagerImpl::SetAuthenticatingChannel(
 
   SecureChannel* secure_channel_raw = secure_channel.get();
 
-  PA_LOG(INFO) << "BleConnectionManager::OnReceivedAdvertisement(): Connection "
-               << "established; starting authentication process. Remote device "
-               << "ID: "
+  PA_LOG(INFO) << "BleConnectionManager::SetAuthenticatingChannel(): "
+               << "Advertisement received; establishing connection. "
+               << "Remote device ID: "
                << multidevice::RemoteDeviceRef::TruncateDeviceIdForLogs(
                       remote_device_id)
                << ", Connection role: " << connection_role;
@@ -576,11 +569,11 @@ void BleConnectionManagerImpl::HandleChannelAuthenticated(
   // that the PerformCancel*() functions can check to see whether requests need
   // to be removed from BleScanner/BleAdvertiser.
   notifying_remote_device_id_ = remote_device_id;
-  NotifyConnectionSuccess(
-      channel_to_receive.device_id_pair(), channel_to_receive.connection_role(),
-      AuthenticatedChannelImpl::Factory::Get()->BuildInstance(
-          CreateConnectionDetails(channel_with_role.second),
-          std::move(channel_with_role.first)));
+  NotifyConnectionSuccess(channel_to_receive.device_id_pair(),
+                          channel_to_receive.connection_role(),
+                          AuthenticatedChannelImpl::Factory::Create(
+                              CreateConnectionDetails(channel_with_role.second),
+                              std::move(channel_with_role.first)));
   notifying_remote_device_id_.reset();
 
   // Restart any attempts which still exist.
@@ -623,7 +616,7 @@ void BleConnectionManagerImpl::StartConnectionAttemptTimerMetricsIfNecessary(
     ConnectionRole connection_role) {
   // If an entry already exists, there is nothing to do. This is expected if
   // more than one client is attempting a connection to the same device.
-  if (base::ContainsKey(remote_device_id_to_timestamps_map_, remote_device_id))
+  if (base::Contains(remote_device_id_to_timestamps_map_, remote_device_id))
     return;
 
   remote_device_id_to_timestamps_map_[remote_device_id] =

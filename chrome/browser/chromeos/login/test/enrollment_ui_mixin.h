@@ -8,7 +8,9 @@
 #include <string>
 
 #include "base/macros.h"
-#include "chrome/browser/chromeos/login/mixin_based_in_process_browser_test.h"
+#include "base/optional.h"
+#include "chrome/browser/chromeos/login/enrollment/enrollment_screen.h"
+#include "chrome/test/base/mixin_based_in_process_browser_test.h"
 
 namespace chromeos {
 namespace test {
@@ -18,6 +20,7 @@ namespace ui {
 //  WaitForStep(...) constants.
 
 extern const char kEnrollmentStepSignin[];
+extern const char kEnrollmentStepWorking[];
 extern const char kEnrollmentStepLicenses[];
 extern const char kEnrollmentStepDeviceAttributes[];
 extern const char kEnrollmentStepSuccess[];
@@ -51,7 +54,7 @@ class EnrollmentUIMixin : public InProcessBrowserTestMixin {
 
   // Waits until specific enrollment step is displayed.
   void WaitForStep(const std::string& step);
-  bool IsStepDisplayed(const std::string& step);
+  void ExpectStepVisibility(bool visibility, const std::string& step);
 
   void ExpectErrorMessage(int error_message_id, bool can_retry);
   void RetryAfterError();
@@ -62,13 +65,26 @@ class EnrollmentUIMixin : public InProcessBrowserTestMixin {
 
   void LeaveDeviceAttributeErrorScreen();
 
+  void LeaveSuccessScreen();
+
   // Selects enrollment license.
   void SelectEnrollmentLicense(const std::string& license_type);
 
   // Proceeds with selected license.
   void UseSelectedLicense();
 
+  void SetExitHandler();
+  // Runs loop until the enrollment screen reports exit. It will return the
+  // last result returned by the enrollment screen.
+  // NOTE: Please call SetExitHandler above before cancelling the screen.
+  EnrollmentScreen::Result WaitForScreenExit();
+
  private:
+  base::Optional<EnrollmentScreen::Result> screen_result_;
+  base::Optional<base::RunLoop> screen_exit_waiter_;
+
+  void HandleScreenExit(EnrollmentScreen::Result result);
+
   DISALLOW_COPY_AND_ASSIGN(EnrollmentUIMixin);
 };
 

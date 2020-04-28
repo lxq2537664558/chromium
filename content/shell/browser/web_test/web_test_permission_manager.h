@@ -12,30 +12,34 @@
 #include "base/macros.h"
 #include "base/synchronization/lock.h"
 #include "content/public/browser/permission_controller_delegate.h"
+#include "mojo/public/cpp/bindings/receiver_set.h"
+#include "third_party/blink/public/mojom/permissions/permission.mojom.h"
+#include "third_party/blink/public/mojom/permissions/permission_automation.mojom.h"
 #include "url/gurl.h"
 
 namespace content {
 
-class WebTestPermissionManager : public PermissionControllerDelegate {
+class WebTestPermissionManager
+    : public PermissionControllerDelegate,
+      public blink::test::mojom::PermissionAutomation {
  public:
   WebTestPermissionManager();
   ~WebTestPermissionManager() override;
 
   // PermissionManager overrides.
-  int RequestPermission(
-      PermissionType permission,
-      RenderFrameHost* render_frame_host,
-      const GURL& requesting_origin,
-      bool user_gesture,
-      const base::Callback<void(blink::mojom::PermissionStatus)>& callback)
-      override;
+  int RequestPermission(PermissionType permission,
+                        RenderFrameHost* render_frame_host,
+                        const GURL& requesting_origin,
+                        bool user_gesture,
+                        base::OnceCallback<void(blink::mojom::PermissionStatus)>
+                            callback) override;
   int RequestPermissions(
       const std::vector<PermissionType>& permission,
       RenderFrameHost* render_frame_host,
       const GURL& requesting_origin,
       bool user_gesture,
-      const base::Callback<
-          void(const std::vector<blink::mojom::PermissionStatus>&)>& callback)
+      base::OnceCallback<
+          void(const std::vector<blink::mojom::PermissionStatus>&)> callback)
       override;
   void ResetPermission(PermissionType permission,
                        const GURL& requesting_origin,
@@ -52,7 +56,7 @@ class WebTestPermissionManager : public PermissionControllerDelegate {
       PermissionType permission,
       RenderFrameHost* render_frame_host,
       const GURL& requesting_origin,
-      const base::Callback<void(blink::mojom::PermissionStatus)>& callback)
+      base::RepeatingCallback<void(blink::mojom::PermissionStatus)> callback)
       override;
   void UnsubscribePermissionStatusChange(int subscription_id) override;
 
@@ -61,6 +65,17 @@ class WebTestPermissionManager : public PermissionControllerDelegate {
                      const GURL& url,
                      const GURL& embedding_url);
   void ResetPermissions();
+
+  // blink::test::mojom::PermissionAutomation
+  void SetPermission(
+      blink::mojom::PermissionDescriptorPtr descriptor,
+      blink::mojom::PermissionStatus status,
+      const GURL& url,
+      const GURL& embedding_url,
+      blink::test::mojom::PermissionAutomation::SetPermissionCallback) override;
+
+  void Bind(
+      mojo::PendingReceiver<blink::test::mojom::PermissionAutomation> receiver);
 
  private:
   // Representation of a permission for the WebTestPermissionManager.
@@ -101,6 +116,8 @@ class WebTestPermissionManager : public PermissionControllerDelegate {
 
   // List of subscribers currently listening to permission changes.
   SubscriptionsMap subscriptions_;
+
+  mojo::ReceiverSet<blink::test::mojom::PermissionAutomation> receivers_;
 
   DISALLOW_COPY_AND_ASSIGN(WebTestPermissionManager);
 };

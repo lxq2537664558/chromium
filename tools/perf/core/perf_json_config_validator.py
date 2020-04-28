@@ -11,10 +11,27 @@ from core import bot_platforms
 
 _VALID_SWARMING_DIMENSIONS = {
     'gpu', 'device_ids', 'os', 'pool', 'perf_tests', 'perf_tests_with_args',
-    'device_os', 'device_type', 'device_os_flavor', 'id'}
+    'device_os', 'device_type', 'device_os_flavor', 'id',
+    'synthetic_product_name'}
+# TODO(crbug.com/812428): Remove the template versions once the pools
+# get merged back in.
+_DEFAULT_VALID_PERF_POOLS = {
+    'chrome.tests.perf',
+    'chrome.tests.perf-webview',
+    'chrome.tests.perf-weblayer',
+    'chrome.tests.perf-fyi',
+    'chrome.tests.perf-webview-fyi',
+    'chrome.tests.perf.template',
+    'chrome.tests.perf-webview.template',
+    'chrome.tests.perf-weblayer.template',
+    'chrome.tests.perf-fyi.template',
+    'chrome.tests.perf-webview-fyi.template',
+}
 _VALID_PERF_POOLS = {
-    'chrome.tests.perf', 'chrome.tests.perf-webview',
-    'chrome.tests.perf-fyi', 'chrome.tests.perf-webview-fyi'}
+    'android-builder-perf': {'chrome.tests', 'chrome.tests.template'},
+    'android_arm64-builder-perf': {'chrome.tests', 'chrome.tests.template'},
+    'chromeos-kevin-perf-fyi': {'luci.chrome.cros-dut'},
+}
 
 
 def _ValidateSwarmingDimension(builder_name, swarming_dimensions):
@@ -23,7 +40,8 @@ def _ValidateSwarmingDimension(builder_name, swarming_dimensions):
       if k not in _VALID_SWARMING_DIMENSIONS:
         raise ValueError('Invalid swarming dimension in %s: %s' % (
             builder_name, k))
-      if k == 'pool' and v not in _VALID_PERF_POOLS:
+      if k == 'pool' and v not in _VALID_PERF_POOLS.get(
+          builder_name, _DEFAULT_VALID_PERF_POOLS):
         raise ValueError('Invalid perf pool %s in %s' % (v, builder_name))
       if k == 'os' and v == 'Android':
         if (not 'device_type' in dimension.keys() or
@@ -43,7 +61,7 @@ def _ParseShardMapFileName(args):
 def _ParseBrowserFlags(args):
   parser = argparse.ArgumentParser()
   parser.add_argument('--browser')
-  parser.add_argument('--webview-embedder-apk')
+  parser.add_argument('--webview-embedder-apk', action='append')
   options, _ = parser.parse_known_args(args)
   return options
 
@@ -83,16 +101,24 @@ def _ValidateBrowserType(builder_name, test_config):
     if browser_options.browser not in (
         'android-webview', 'android-webview-google'):
       raise ValueError(
-          "%s must use 'android-webview' or 'android-webview-google' browser" %
-          builder_name)
-    if not browser_options.webview_embedder_apk:
-      raise ValueError('%s must set --webview-embedder-apk flag' % builder_name)
+          "%s must use 'android-webview' or 'android-webview-google' "
+          "browser" % builder_name)
   elif 'Android' in builder_name or 'android' in builder_name:
-    if browser_options.browser not in ('android-chromium', 'android-chrome'):
-      raise ValueError(
-          "%s must use 'android-chromium' or 'android-chrome' browser" %
-          builder_name)
-  elif builder_name in ('win-10-perf', 'Win 7 Nvidia GPU Perf'):
+    android_browsers = (
+        'android-chromium',
+        'android-chrome',
+        'android-chrome-bundle',
+        'exact')
+    if browser_options.browser not in android_browsers:
+      raise ValueError( 'The browser type for %s must be one of %s' % (
+          builder_name, ', '.join(android_browsers)))
+  elif 'chromeos' in builder_name:
+    if browser_options.browser != 'cros-chrome':
+      raise ValueError("%s must use 'cros-chrome' browser type" %
+                       builder_name)
+  elif builder_name in ('win-10-perf', 'Win 7 Nvidia GPU Perf',
+                        'win-10_laptop_low_end-perf_HP-Candidate',
+                        'win-10_laptop_low_end-perf'):
     if browser_options.browser != 'release_x64':
       raise ValueError("%s must use 'release_x64' browser type" %
                        builder_name)
@@ -131,11 +157,6 @@ def _IsBuilderName(name):
   return not name.startswith('AAA')
 
 
-def _IsCompilingBuilder(builder_name, builder_data):
-  del builder_name  # unused
-  return 'isolated_scripts' not in builder_data
-
-
 def _IsTestingBuilder(builder_name, builder_data):
   del builder_name  # unused
   return 'isolated_scripts' in builder_data
@@ -147,22 +168,24 @@ def ValidatePerfConfigFile(file_handle, is_main_perf_waterfall):
   for key, value in perf_data.iteritems():
     if not _IsBuilderName(key):
       continue
-    if _IsCompilingBuilder(builder_name=key, builder_data=value):
-      pass
-    elif _IsTestingBuilder(builder_name=key, builder_data=value):
+    if _IsTestingBuilder(builder_name=key, builder_data=value):
       ValidateTestingBuilder(builder_name=key, builder_data=value)
-      perf_testing_builder_names.add(key)
-    else:
-      raise ValueError('%s has unrecognizable type: %s' % key)
+      try:
+        trigger_script = value['isolated_scripts'][-1]['trigger_script'][
+            'script']
+      except KeyError:
+        continue
+      if trigger_script ==  '//testing/trigger_scripts/perf_device_trigger.py':
+        perf_testing_builder_names.add(key)
   if (is_main_perf_waterfall and
-      perf_testing_builder_names != bot_platforms.ALL_PERF_PLATFORM_NAMES):
+      perf_testing_builder_names != bot_platforms.OFFICIAL_PLATFORM_NAMES):
     raise ValueError(
         'Found mismatches between actual perf waterfall builders and platforms '
         'in core.bot_platforms. Please update the platforms in '
-        'bot_platforms.py.\nPlatforms should be aded to core.bot_platforms:%s'
+        'bot_platforms.py.\nPlatforms should be added to core.bot_platforms:%s'
         '\nPlatforms should be removed from core.bot_platforms:%s' % (
-          perf_testing_builder_names - bot_platforms.ALL_PLATFORM_NAMES,
-          bot_platforms.ALL_PLATFORM_NAMES - perf_testing_builder_names))
+          perf_testing_builder_names - bot_platforms.OFFICIAL_PLATFORM_NAMES,
+          bot_platforms.OFFICIAL_PLATFORM_NAMES - perf_testing_builder_names))
 
 
 def main(args):

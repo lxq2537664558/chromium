@@ -74,6 +74,9 @@ void LayoutSVGRect::UpdateShapeFromElement() {
     }
   }
 
+  if (!use_path_fallback_)
+    ClearPath();
+
   fill_bounding_box_ = FloatRect(
       length_context.ResolveLengthPair(svg_style.X(), svg_style.Y(), style),
       bounding_box_size);
@@ -134,7 +137,7 @@ bool LayoutSVGRect::DefinitelyHasSimpleStroke() const {
   // miterlimits, the join style used might not be correct (e.g. a miterlimit
   // of 1.4142135 should result in bevel joins, but may be drawn using miter
   // joins).
-  return svg_style.StrokeDashArray()->IsEmpty() &&
+  return svg_style.StrokeDashArray()->data.IsEmpty() &&
          svg_style.JoinStyle() == kMiterJoin &&
          svg_style.StrokeMiterLimit() >= 1.5;
 }

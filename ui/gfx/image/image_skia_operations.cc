@@ -15,6 +15,7 @@
 #include "third_party/skia/include/core/SkClipOp.h"
 #include "third_party/skia/include/core/SkDrawLooper.h"
 #include "ui/gfx/canvas.h"
+#include "ui/gfx/color_palette.h"
 #include "ui/gfx/geometry/insets.h"
 #include "ui/gfx/geometry/point.h"
 #include "ui/gfx/geometry/point_conversions.h"
@@ -47,7 +48,7 @@ gfx::Rect DIPToPixelBounds(gfx::Rect dip_bounds, float scale) {
 ImageSkiaRep GetErrorImageRep(float scale, const gfx::Size& pixel_size) {
   SkBitmap bitmap;
   bitmap.allocN32Pixels(pixel_size.width(), pixel_size.height());
-  bitmap.eraseColor(SK_ColorRED);
+  bitmap.eraseColor(kPlaceholderColor);
   return gfx::ImageSkiaRep(bitmap, scale);
 }
 
@@ -132,12 +133,8 @@ class BlendingImageSource : public BinaryImageSource {
 
 class SuperimposedImageSource : public gfx::CanvasImageSource {
  public:
-  SuperimposedImageSource(const ImageSkia& first,
-                          const ImageSkia& second)
-      : gfx::CanvasImageSource(first.size(), false /* is opaque */),
-        first_(first),
-        second_(second) {
-  }
+  SuperimposedImageSource(const ImageSkia& first, const ImageSkia& second)
+      : gfx::CanvasImageSource(first.size()), first_(first), second_(second) {}
 
   ~SuperimposedImageSource() override {}
 
@@ -172,7 +169,7 @@ class TransparentImageSource : public gfx::ImageSkiaSource {
     SkBitmap alpha;
     alpha.allocN32Pixels(image_rep.pixel_width(),
                          image_rep.pixel_height());
-    alpha.eraseColor(SkColorSetARGB(alpha_ * 255, 0, 0, 0));
+    alpha.eraseColor(SkColorSetA(SK_ColorBLACK, SK_AlphaOPAQUE * alpha_));
     return ImageSkiaRep(
         SkBitmapOperations::CreateMaskedBitmap(image_rep.GetBitmap(), alpha),
         image_rep.scale());
@@ -400,7 +397,7 @@ class HorizontalShadowSource : public CanvasImageSource {
  public:
   HorizontalShadowSource(const std::vector<ShadowValue>& shadows,
                          bool fades_down)
-      : CanvasImageSource(Size(1, GetHeightForShadows(shadows)), false),
+      : CanvasImageSource(Size(1, GetHeightForShadows(shadows))),
         shadows_(shadows),
         fades_down_(fades_down) {}
   ~HorizontalShadowSource() override {}
@@ -458,9 +455,7 @@ class RotatedSource : public ImageSkiaSource {
 class IconWithBadgeSource : public gfx::CanvasImageSource {
  public:
   IconWithBadgeSource(const ImageSkia& icon, const ImageSkia& badge)
-      : gfx::CanvasImageSource(icon.size(), false /* is opaque */),
-        icon_(icon),
-        badge_(badge) {}
+      : gfx::CanvasImageSource(icon.size()), icon_(icon), badge_(badge) {}
 
   ~IconWithBadgeSource() override {}
 

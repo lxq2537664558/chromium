@@ -17,7 +17,6 @@
 #include "base/stl_util.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
-#include "components/data_use_measurement/core/data_use_user_data.h"
 #include "components/omnibox/browser/autocomplete_provider_client.h"
 #include "components/omnibox/browser/autocomplete_provider_listener.h"
 #include "components/omnibox/browser/omnibox_field_trial.h"
@@ -32,6 +31,7 @@
 #include "services/network/public/cpp/simple_url_loader.h"
 #include "third_party/metrics_proto/omnibox_input_type.pb.h"
 #include "url/gurl.h"
+#include "url/origin.h"
 
 // SuggestionDeletionHandler -------------------------------------------------
 
@@ -39,12 +39,12 @@
 // personalized suggestions.
 class SuggestionDeletionHandler {
  public:
-  typedef base::Callback<void(bool, SuggestionDeletionHandler*)>
+  typedef base::OnceCallback<void(bool, SuggestionDeletionHandler*)>
       DeletionCompletedCallback;
 
   SuggestionDeletionHandler(AutocompleteProviderClient* client,
                             const std::string& deletion_url,
-                            const DeletionCompletedCallback& callback);
+                            DeletionCompletedCallback callback);
 
   ~SuggestionDeletionHandler();
 
@@ -62,8 +62,8 @@ class SuggestionDeletionHandler {
 SuggestionDeletionHandler::SuggestionDeletionHandler(
     AutocompleteProviderClient* client,
     const std::string& deletion_url,
-    const DeletionCompletedCallback& callback)
-    : callback_(callback) {
+    DeletionCompletedCallback callback)
+    : callback_(std::move(callback)) {
   GURL url(deletion_url);
   DCHECK(url.is_valid());
 
@@ -109,9 +109,6 @@ SuggestionDeletionHandler::SuggestionDeletionHandler(
       client->IsOffTheRecord() ? variations::InIncognito::kYes
                                : variations::InIncognito::kNo,
       request.get());
-  // TODO(https://crbug.com/808498) re-add data use measurement once
-  // SimpleURLLoader supports it.
-  // data_use_measurement::DataUseUserData::OMNIBOX
   deletion_fetcher_ =
       network::SimpleURLLoader::Create(std::move(request), traffic_annotation);
   deletion_fetcher_->DownloadToStringOfUnboundedSizeUntilCrashAndDie(
@@ -130,7 +127,7 @@ void SuggestionDeletionHandler::OnURLLoadComplete(
   const bool ok = source->NetError() == net::OK &&
                   (source->ResponseInfo() && source->ResponseInfo()->headers &&
                    source->ResponseInfo()->headers->response_code() == 200);
-  callback_.Run(ok, this);
+  std::move(callback_).Run(ok, this);
 }
 
 // BaseSearchProvider ---------------------------------------------------------
@@ -183,8 +180,8 @@ AutocompleteMatch BaseSearchProvider::CreateOnDeviceSearchSuggestion(
       /*subtype_identifier=*/271, /*from_keyword_provider=*/false, relevance,
       /*relevance_from_server=*/false,
       base::CollapseWhitespace(input.text(), false));
-  // On device providers are synchronous.
-  suggest_result.set_received_after_last_keystroke(false);
+  // On device providers are asynchronous.
+  suggest_result.set_received_after_last_keystroke(true);
   return CreateSearchSuggestion(
       autocomplete_provider, input, /*in_keyword_mode=*/false, suggest_result,
       template_url, search_terms_data, accepted_suggestion,
@@ -208,13 +205,24 @@ void BaseSearchProvider::AppendSuggestClientToAdditionalQueryParams(
   }
 }
 
+// static
+bool BaseSearchProvider::IsNTPPage(
+    metrics::OmniboxEventProto::PageClassification classification) {
+  using OEP = metrics::OmniboxEventProto;
+  return (classification == OEP::NTP) ||
+         (classification == OEP::OBSOLETE_INSTANT_NTP) ||
+         (classification == OEP::INSTANT_NTP_WITH_FAKEBOX_AS_STARTING_FOCUS) ||
+         (classification == OEP::INSTANT_NTP_WITH_OMNIBOX_AS_STARTING_FOCUS) ||
+         (classification == OEP::NTP_REALBOX);
+}
+
 void BaseSearchProvider::DeleteMatch(const AutocompleteMatch& match) {
   DCHECK(match.deletable);
   if (!match.GetAdditionalInfo(BaseSearchProvider::kDeletionUrlKey).empty()) {
     deletion_handlers_.push_back(std::make_unique<SuggestionDeletionHandler>(
         client(), match.GetAdditionalInfo(BaseSearchProvider::kDeletionUrlKey),
-        base::BindRepeating(&BaseSearchProvider::OnDeletionComplete,
-                            base::Unretained(this))));
+        base::BindOnce(&BaseSearchProvider::OnDeletionComplete,
+                       base::Unretained(this))));
   }
 
   const TemplateURL* template_url =
@@ -260,16 +268,6 @@ const char BaseSearchProvider::kFalse[] = "false";
 BaseSearchProvider::~BaseSearchProvider() {}
 
 // static
-bool BaseSearchProvider::IsNTPPage(
-    metrics::OmniboxEventProto::PageClassification classification) {
-  using OEP = metrics::OmniboxEventProto;
-  return (classification == OEP::NTP) ||
-         (classification == OEP::OBSOLETE_INSTANT_NTP) ||
-         (classification == OEP::INSTANT_NTP_WITH_FAKEBOX_AS_STARTING_FOCUS) ||
-         (classification == OEP::INSTANT_NTP_WITH_OMNIBOX_AS_STARTING_FOCUS);
-}
-
-// static
 AutocompleteMatch BaseSearchProvider::CreateSearchSuggestion(
     AutocompleteProvider* autocomplete_provider,
     const AutocompleteInput& input,
@@ -289,6 +287,7 @@ AutocompleteMatch BaseSearchProvider::CreateSearchSuggestion(
   match.image_url = suggestion.image_url();
   match.contents = suggestion.match_contents();
   match.contents_class = suggestion.match_contents_class();
+  match.suggestion_group_id = suggestion.suggestion_group_id();
   match.answer = suggestion.answer();
   match.subtype_identifier = suggestion.subtype_identifier();
   if (suggestion.type() == AutocompleteMatchType::SEARCH_SUGGEST_TAIL) {
@@ -383,7 +382,8 @@ bool BaseSearchProvider::CanSendURL(
     const TemplateURL* template_url,
     metrics::OmniboxEventProto::PageClassification page_classification,
     const SearchTermsData& search_terms_data,
-    AutocompleteProviderClient* client) {
+    AutocompleteProviderClient* client,
+    bool sending_search_terms) {
   // Make sure we are sending the suggest request through a cryptographically
   // secure channel to prevent exposing the current page URL or personalized
   // results without encryption.
@@ -420,8 +420,22 @@ bool BaseSearchProvider::CanSendURL(
   if (!scheme_allowed)
     return false;
 
-  if (!client->IsPersonalizedUrlDataCollectionActive())
-    return false;
+  // If URL data collection is off, forbid sending the current page URL to the
+  // suggest endpoint - unless both of these hold:
+  //  * The suggest endpoint and current page must be same-origin. In that
+  //    case, the suggest endpoint could have already logged the current URL
+  //    when the user accessed it from the server.
+  //  * The search terms must be empty. When the user is typing new search
+  //    terms, Chrome should not leak to the endpoint which tab the user is
+  //    looking at. On-focus suggest requests don't contain a query.
+  if (!client->IsPersonalizedUrlDataCollectionActive()) {
+    bool safe_to_send_url_without_data_collection_active =
+        url::IsSameOriginWith(current_page_url, suggest_url) &&
+        !sending_search_terms;
+
+    if (!safe_to_send_url_without_data_collection_active)
+      return false;
+  }
 
   return true;
 }
@@ -432,7 +446,8 @@ void BaseSearchProvider::SetDeletionURL(const std::string& deletion_url,
     return;
 
   TemplateURLService* template_url_service = client_->GetTemplateURLService();
-  if (!template_url_service)
+  if (!template_url_service ||
+      !template_url_service->GetDefaultSearchProvider())
     return;
   GURL url =
       template_url_service->GetDefaultSearchProvider()->GenerateSearchURL(

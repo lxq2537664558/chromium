@@ -26,6 +26,12 @@
 // Opens the manage sync settings view.
 - (void)openManageSyncSettings;
 
+// Opens the "Manage Your Google Account" web page
+- (void)openManageGoogleAccountWebPage;
+
+// Opens the trusted vault reauthentication dialog.
+- (void)openTrustedVaultReauth;
+
 @end
 
 #endif  // IOS_CHROME_BROWSER_UI_SETTINGS_GOOGLE_SERVICES_GOOGLE_SERVICES_SETTINGS_COMMAND_HANDLER_H_

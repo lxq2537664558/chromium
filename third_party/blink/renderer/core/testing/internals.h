@@ -42,7 +42,6 @@ namespace blink {
 
 class Animation;
 class CallbackFunctionTest;
-class CanvasRenderingContext;
 class DOMArrayBuffer;
 class DOMPoint;
 class DOMRect;
@@ -74,15 +73,16 @@ class OriginTrialsTest;
 class Page;
 class Range;
 class RecordTest;
+class ScriptPromiseResolver;
 class ScrollState;
 class SequenceTest;
-class SerializedScriptValue;
 class ShadowRoot;
-template <typename NodeType>
-class StaticNodeTypeList;
 class StaticSelection;
 class TypeConversions;
 class UnionTypesTest;
+
+template <typename NodeType>
+class StaticNodeTypeList;
 
 using StaticNodeList = StaticNodeTypeList<Node>;
 
@@ -102,7 +102,8 @@ class Internals final : public ScriptWrappable {
   bool isPreloadedBy(const String& url, Document*);
   bool isLoading(const String& url);
   bool isLoadingFromMemoryCache(const String& url);
-  int getResourcePriority(const String& url, Document*);
+
+  ScriptPromise getResourcePriority(ScriptState*, const String& url, Document*);
   String getResourceHeader(const String& url, const String& header, Document*);
 
   bool doesWindowHaveUrlFragment(DOMWindow*);
@@ -112,7 +113,7 @@ class Internals final : public ScriptWrappable {
   void setBrowserControlsState(float top_height,
                                float bottom_height,
                                bool shrinks_layout);
-  void setBrowserControlsShownRatio(float);
+  void setBrowserControlsShownRatio(float top_ratio, float bottom_ratio);
 
   Node* effectiveRootScroller(Document*);
 
@@ -202,6 +203,8 @@ class Internals final : public ScriptWrappable {
   void addCompositionMarker(const Range*,
                             const String& underline_color_value,
                             const String& thickness_value,
+                            const String& underline_style_value,
+                            const String& text_color_value,
                             const String& background_color_value,
                             ExceptionState&);
   void addActiveSuggestionMarker(const Range*,
@@ -275,10 +278,10 @@ class Internals final : public ScriptWrappable {
 
   Vector<AtomicString> userPreferredLanguages() const;
   void setUserPreferredLanguages(const Vector<String>&);
+  void setSystemTimeZone(const String&);
 
   unsigned mediaKeysCount();
   unsigned mediaKeySessionCount();
-  unsigned contextLifecycleStateObserverObjectCount(Document*);
   unsigned wheelEventHandlerCount(Document*) const;
   unsigned scrollEventHandlerCount(Document*) const;
   unsigned touchStartOrMoveEventHandlerCount(Document*) const;
@@ -291,6 +294,8 @@ class Internals final : public ScriptWrappable {
                       const String& name,
                       const String& value,
                       ExceptionState&);
+
+  void triggerTestInspectorIssue(Document*);
 
   AtomicString htmlNamespace();
   Vector<AtomicString> htmlTags();
@@ -326,10 +331,14 @@ class Internals final : public ScriptWrappable {
   InternalRuntimeFlags* runtimeFlags() const;
   unsigned workerThreadCount() const;
 
+  bool isFormControlsRefreshEnabled() const;
+
   String resolveModuleSpecifier(const String& specifier,
                                 const String& base_url_string,
                                 Document*,
                                 ExceptionState&);
+
+  String getParsedImportMap(Document*, ExceptionState&);
 
   void SetDeviceProximity(Document*,
                           const String& event_type,
@@ -340,10 +349,6 @@ class Internals final : public ScriptWrappable {
 
   String layerTreeAsText(Document*, unsigned flags, ExceptionState&) const;
   String layerTreeAsText(Document*, ExceptionState&) const;
-  String elementLayerTreeAsText(Element*,
-                                unsigned flags,
-                                ExceptionState&) const;
-  String elementLayerTreeAsText(Element*, ExceptionState&) const;
 
   bool scrollsWithRespectTo(Element*, Element*, ExceptionState&);
 
@@ -423,18 +428,14 @@ class Internals final : public ScriptWrappable {
   DOMRectList* draggableRegions(Document*, ExceptionState&);
   DOMRectList* nonDraggableRegions(Document*, ExceptionState&);
 
-  DOMArrayBuffer* serializeObject(scoped_refptr<SerializedScriptValue>) const;
-  scoped_refptr<SerializedScriptValue> deserializeBuffer(DOMArrayBuffer*) const;
-
-  DOMArrayBuffer* serializeWithInlineWasm(ScriptValue) const;
-  ScriptValue deserializeBufferContainingWasm(ScriptState*,
-                                              DOMArrayBuffer*) const;
+  DOMArrayBuffer* serializeObject(v8::Isolate* isolate,
+                                  const ScriptValue&,
+                                  ExceptionState& exception_state) const;
+  ScriptValue deserializeBuffer(v8::Isolate* isolate, DOMArrayBuffer*) const;
 
   String getCurrentCursorInfo();
 
   bool cursorUpdatePending() const;
-
-  bool fakeMouseMovePending() const;
 
   String markerTextForListItem(Element*);
 
@@ -462,8 +463,6 @@ class Internals final : public ScriptWrappable {
 
   void forceCompositingUpdate(Document*, ExceptionState&);
 
-  void setZoomFactor(float);
-
   void setShouldRevealPassword(Element*, bool, ExceptionState&);
 
   ScriptPromise createResolvedPromise(ScriptState*, ScriptValue);
@@ -485,7 +484,7 @@ class Internals final : public ScriptWrappable {
   ScriptPromise promiseCheckOverload(ScriptState*, Document*);
   ScriptPromise promiseCheckOverload(ScriptState*, Location*, int32_t, int32_t);
 
-  void Trace(blink::Visitor*) override;
+  void Trace(Visitor*) override;
 
   void setValueForUser(HTMLInputElement*, const String&);
 
@@ -493,8 +492,6 @@ class Internals final : public ScriptWrappable {
   void setInitialFocus(bool);
 
   Element* interestedElement();
-
-  unsigned countHitRegions(CanvasRenderingContext*);
 
   bool isInCanvasFontCache(Document*, const String&);
   unsigned canvasFontCacheMaxFonts();
@@ -508,6 +505,8 @@ class Internals final : public ScriptWrappable {
   //       explicitly measure only Blink GC time.  Normal web tests should use
   //       gc() instead as it would trigger both Blink GC and V8 GC.
   void scheduleBlinkGC();
+
+  void revealSelection();
 
   String selectedHTMLForClipboard();
   String selectedTextForClipboard();
@@ -538,6 +537,10 @@ class Internals final : public ScriptWrappable {
   String unscopableMethod();
 
   void setCapsLockState(bool enabled);
+  void setPseudoClassState(Element* element,
+                           const String& pseudo,
+                           bool enabled,
+                           ExceptionState& exception_state);
 
   bool setScrollbarVisibilityInScrollableArea(Node*, bool visible);
 
@@ -579,8 +582,6 @@ class Internals final : public ScriptWrappable {
 
   void simulateRasterUnderInvalidations(bool enable);
 
-  void BypassLongCompileThresholdOnce(ExceptionState&);
-
   // The number of calls to update the blink lifecycle (see:
   // LocalFrameView::UpdateLifecyclePhasesInternal).
   unsigned LifecycleUpdateCount() const;
@@ -594,6 +595,13 @@ class Internals final : public ScriptWrappable {
   LocalFrame* GetFrame() const;
 
   void setDeviceEmulationScale(float scale, ExceptionState&);
+
+  String getAgentId(DOMWindow*);
+
+  void useMockOverlayScrollbars();
+  bool overlayScrollbarsEnabled() const;
+
+  void generateTestReport(const String& message);
 
  private:
   Document* ContextDocument() const;
@@ -611,6 +619,8 @@ class Internals final : public ScriptWrappable {
                            const String& marker_type,
                            unsigned index,
                            ExceptionState&);
+  void ResolveResourcePriority(ScriptPromiseResolver*,
+                               int resource_load_priority);
   Member<InternalRuntimeFlags> runtime_flags_;
   Member<Document> document_;
 };

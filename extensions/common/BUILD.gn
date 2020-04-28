@@ -7,14 +7,11 @@ import("//build/config/jumbo.gni")
 import("//components/nacl/features.gni")
 import("//extensions/buildflags/buildflags.gni")
 import("//mojo/public/tools/bindings/mojom.gni")
+import("//testing/libfuzzer/fuzzer_test.gni")
 
 # TODO(crbug.com/731689): Assert that extensions are enabled.
 
 source_set("common_constants") {
-  if (is_chromecast) {
-    defines = [ "IS_CHROMECAST" ]
-  }
-
   sources = [
     "constants.cc",
     "constants.h",
@@ -22,6 +19,9 @@ source_set("common_constants") {
 
   deps = [
     "//base",
+    "//build:chromecast_buildflags",
+    "//components/services/app_service/public/mojom",
+    "//components/version_info:channel",
     "//ui/base",
   ]
 
@@ -33,14 +33,14 @@ source_set("common_constants") {
 }
 
 if (enable_extensions) {
-  mojom("mojo") {
+  mojom("mojom") {
     # We don't want Blink variants of bindings to be generated.
     disable_variants = true
 
     sources = [
-      "mojo/app_window.mojom",
-      "mojo/guest_view.mojom",
-      "mojo/keep_alive.mojom",
+      "mojom/app_window.mojom",
+      "mojom/guest_view.mojom",
+      "mojom/keep_alive.mojom",
     ]
 
     if (proprietary_codecs && enable_wifi_display) {
@@ -51,7 +51,7 @@ if (enable_extensions) {
       "//content/public/common:interfaces",
       "//extensions/common/api:mojom",
       "//mojo/public/mojom/base",
-      "//ui/gfx/geometry/mojo",
+      "//ui/gfx/geometry/mojom",
       "//url/mojom:url_mojom_gurl",
     ]
 
@@ -65,6 +65,7 @@ if (enable_extensions) {
   # in. TODO(brettw): This reverse dependency should be fixed.
   jumbo_static_library("common") {
     sources = [
+      "activation_sequence.h",
       "alias.h",
       "api/bluetooth/bluetooth_manifest_data.cc",
       "api/bluetooth/bluetooth_manifest_data.h",
@@ -86,6 +87,8 @@ if (enable_extensions) {
       "api/declarative_net_request/dnr_manifest_handler.h",
       "api/declarative_net_request/utils.cc",
       "api/declarative_net_request/utils.h",
+      "api/extension_action/action_info.cc",
+      "api/extension_action/action_info.h",
       "api/messaging/message.h",
       "api/messaging/messaging_endpoint.cc",
       "api/messaging/messaging_endpoint.h",
@@ -164,8 +167,6 @@ if (enable_extensions) {
       "features/feature_provider.h",
       "features/feature_session_type.cc",
       "features/feature_session_type.h",
-      "features/feature_util.cc",
-      "features/feature_util.h",
       "features/json_feature_provider_source.cc",
       "features/json_feature_provider_source.h",
       "features/manifest_feature.cc",
@@ -229,8 +230,8 @@ if (enable_extensions) {
       "manifest_handlers/options_page_info.h",
       "manifest_handlers/permissions_parser.cc",
       "manifest_handlers/permissions_parser.h",
-      "manifest_handlers/replacement_web_app.cc",
-      "manifest_handlers/replacement_web_app.h",
+      "manifest_handlers/replacement_apps.cc",
+      "manifest_handlers/replacement_apps.h",
       "manifest_handlers/requirements_info.cc",
       "manifest_handlers/requirements_info.h",
       "manifest_handlers/sandboxed_page_info.cc",
@@ -239,6 +240,8 @@ if (enable_extensions) {
       "manifest_handlers/shared_module_info.h",
       "manifest_handlers/web_accessible_resources_info.cc",
       "manifest_handlers/web_accessible_resources_info.h",
+      "manifest_handlers/web_app_file_handler.cc",
+      "manifest_handlers/web_app_file_handler.h",
       "manifest_handlers/webview_info.cc",
       "manifest_handlers/webview_info.h",
       "manifest_url_handlers.cc",
@@ -311,7 +314,8 @@ if (enable_extensions) {
 
     public_deps = [
       ":common_constants",
-      ":mojo",
+      ":mojom",
+      "//components/services/app_service/public/cpp:app_file_handling",
       "//content/public/common",
       "//ipc",
       "//skia",
@@ -319,6 +323,7 @@ if (enable_extensions) {
 
     deps = [
       "//base",
+      "//build:branding_buildflags",
       "//components/crx_file",
       "//components/nacl/common:buildflags",
       "//components/url_formatter",
@@ -326,18 +331,19 @@ if (enable_extensions) {
       "//components/version_info",
       "//crypto",
       "//device/bluetooth",
-      "//device/usb",
-      "//device/usb/mojo",
-      "//device/usb/public/cpp",
-      "//device/usb/public/mojom",
+      "//device/bluetooth/public/cpp",
       "//extensions:extensions_resources",
       "//extensions/common/api",
       "//extensions/strings",
       "//net",
+      "//services/device/public/cpp/usb",
+      "//services/device/public/mojom:usb",
       "//services/network/public/mojom",
       "//third_party/boringssl",
       "//third_party/icu",
       "//third_party/re2",
+      "//third_party/zlib/google:compression_utils",
+      "//tools/json_schema_compiler:generated_api_util",
       "//ui/base",
       "//ui/gfx/geometry",
       "//ui/gfx/ipc",
@@ -385,11 +391,16 @@ if (enable_extensions) {
     sources = [
       "api/declarative_net_request/test_utils.cc",
       "api/declarative_net_request/test_utils.h",
+      "file_test_util.cc",
+      "file_test_util.h",
+      "scoped_worker_based_extensions_channel.cc",
+      "scoped_worker_based_extensions_channel.h",
     ]
 
     deps = [
       ":common",
       "//base",
+      "//extensions/common/api",
     ]
   }
 
@@ -412,6 +423,7 @@ if (enable_extensions) {
       "extension_resource_unittest.cc",
       "extension_set_unittest.cc",
       "extension_unittest.cc",
+      "feature_switch_unittest.cc",
       "features/complex_feature_unittest.cc",
       "features/feature_provider_unittest.cc",
       "features/simple_feature_unittest.cc",
@@ -428,9 +440,12 @@ if (enable_extensions) {
       "manifest_handlers/icons_handler_unittest.cc",
       "manifest_handlers/incognito_manifest_unittest.cc",
       "manifest_handlers/kiosk_mode_info_unittest.cc",
+      "manifest_handlers/manifest_v3_permissions_unittest.cc",
       "manifest_handlers/oauth2_manifest_unittest.cc",
-      "manifest_handlers/replacement_web_app_unittest.cc",
+      "manifest_handlers/replacement_apps_unittest.cc",
       "manifest_handlers/shared_module_manifest_unittest.cc",
+      "manifest_handlers/web_app_file_handler_manifest_unittest.cc",
+      "manifest_unittest.cc",
       "message_bundle_unittest.cc",
       "permissions/api_permission_set_unittest.cc",
       "permissions/api_permission_unittest.cc",
@@ -454,18 +469,19 @@ if (enable_extensions) {
       "//base/test:test_support",
       "//components/crx_file",
       "//components/version_info:version_info",
-      "//device/usb",
-      "//device/usb/mojo",
-      "//device/usb/public/cpp:test_support",
+      "//content/test:test_support",
       "//extensions:extensions_resources",
+      "//extensions/common/api",
 
       # TODO(brettw) these tests should not be including headers from browser.
       "//extensions:test_support",
       "//extensions/browser",
       "//extensions/strings",
       "//ipc",
+      "//services/device/public/cpp:test_support",
       "//testing/gmock",
       "//testing/gtest",
+      "//third_party/zlib/google:compression_utils",
       "//ui/base",
       "//ui/gfx",
       "//url",
@@ -478,6 +494,14 @@ if (enable_extensions) {
     data = [
       "//extensions/common/permissions/api_permission.h",
       "//tools/metrics/histograms/enums.xml",
+    ]
+  }
+
+  fuzzer_test("extension_fuzzer") {
+    sources = [ "extension_fuzzer.cc" ]
+    deps = [
+      ":common",
+      "//base",
     ]
   }
 }  # enable_extensions

@@ -4,6 +4,7 @@
 
 #import "ios/chrome/browser/ui/content_suggestions/content_suggestions_header_view_controller.h"
 
+#include "base/feature_list.h"
 #include "base/ios/ios_util.h"
 #include "base/logging.h"
 #include "base/mac/foundation_util.h"
@@ -12,21 +13,22 @@
 #import "ios/chrome/browser/ntp/new_tab_page_tab_helper.h"
 #import "ios/chrome/browser/ui/commands/application_commands.h"
 #import "ios/chrome/browser/ui/commands/browser_commands.h"
+#import "ios/chrome/browser/ui/commands/omnibox_commands.h"
 #import "ios/chrome/browser/ui/content_suggestions/content_suggestions_collection_synchronizing.h"
 #import "ios/chrome/browser/ui/content_suggestions/content_suggestions_collection_utils.h"
 #import "ios/chrome/browser/ui/content_suggestions/content_suggestions_commands.h"
 #import "ios/chrome/browser/ui/content_suggestions/content_suggestions_header_view.h"
 #import "ios/chrome/browser/ui/content_suggestions/content_suggestions_header_view_controller_delegate.h"
 #import "ios/chrome/browser/ui/content_suggestions/ntp_home_constant.h"
+#import "ios/chrome/browser/ui/content_suggestions/user_account_image_update_delegate.h"
 #import "ios/chrome/browser/ui/ntp/new_tab_page_controller_delegate.h"
 #import "ios/chrome/browser/ui/ntp/new_tab_page_header_constants.h"
 #import "ios/chrome/browser/ui/toolbar/public/fakebox_focuser.h"
-#import "ios/chrome/browser/ui/toolbar/public/omnibox_focuser.h"
 #import "ios/chrome/browser/ui/toolbar/public/toolbar_utils.h"
 #import "ios/chrome/browser/ui/util/named_guide.h"
 #include "ios/chrome/browser/ui/util/ui_util.h"
 #import "ios/chrome/browser/ui/util/uikit_ui_util.h"
-#import "ios/chrome/common/ui_util/constraints_ui_util.h"
+#import "ios/chrome/common/ui/util/constraints_ui_util.h"
 #include "ios/chrome/grit/ios_strings.h"
 #include "ios/public/provider/chrome/browser/ui/logo_vendor.h"
 #include "ui/base/l10n/l10n_util.h"
@@ -37,7 +39,8 @@
 
 using base::UserMetricsAction;
 
-@interface ContentSuggestionsHeaderViewController ()
+@interface ContentSuggestionsHeaderViewController () <
+    UserAccountImageUpdateDelegate>
 
 // If YES the animations of the fake omnibox triggered when the collection is
 // scrolled (expansion) are disabled. This is used for the fake omnibox focus
@@ -51,22 +54,13 @@ using base::UserMetricsAction;
 @property(nonatomic, assign) BOOL voiceSearchIsEnabled;
 
 // Exposes view and methods to drive the doodle.
-@property(nonatomic, weak) id<LogoVendor> logoVendor;
-
-// |YES| if the google landing toolbar can show the forward arrow, cached and
-// pushed into the header view.
-@property(nonatomic, assign) BOOL canGoForward;
-
-// |YES| if the google landing toolbar can show the back arrow, cached and
-// pushed into the header view.
-@property(nonatomic, assign) BOOL canGoBack;
-
-// The number of tabs to show in the google landing fake toolbar.
-@property(nonatomic, assign) int tabCount;
+@property(nonatomic, weak, readonly) id<LogoVendor> logoVendor;
 
 @property(nonatomic, strong) ContentSuggestionsHeaderView* headerView;
 @property(nonatomic, strong) UIButton* fakeOmnibox;
 @property(nonatomic, strong) UIButton* accessibilityButton;
+@property(nonatomic, strong) UIButton* identityDiscButton;
+@property(nonatomic, strong) UIButton* fakeTapButton;
 @property(nonatomic, strong) NSLayoutConstraint* doodleHeightConstraint;
 @property(nonatomic, strong) NSLayoutConstraint* doodleTopMarginConstraint;
 @property(nonatomic, strong) NSLayoutConstraint* fakeOmniboxWidthConstraint;
@@ -78,20 +72,10 @@ using base::UserMetricsAction;
 
 @implementation ContentSuggestionsHeaderViewController
 
-@synthesize dispatcher = _dispatcher;
-@synthesize delegate = _delegate;
-@synthesize commandHandler = _commandHandler;
 @synthesize collectionSynchronizer = _collectionSynchronizer;
-@synthesize readingListModel = _readingListModel;
-@synthesize toolbarDelegate = _toolbarDelegate;
-@synthesize logoVendor = _logoVendor;
 @synthesize promoCanShow = _promoCanShow;
-@synthesize canGoForward = _canGoForward;
-@synthesize canGoBack = _canGoBack;
 @synthesize showing = _showing;
 @synthesize omniboxFocused = _omniboxFocused;
-@synthesize tabCount = _tabCount;
-
 @synthesize headerView = _headerView;
 @synthesize fakeOmnibox = _fakeOmnibox;
 @synthesize accessibilityButton = _accessibilityButton;
@@ -104,15 +88,11 @@ using base::UserMetricsAction;
 @synthesize logoIsShowing = _logoIsShowing;
 @synthesize logoFetched = _logoFetched;
 
-#pragma mark - Public
-
-- (instancetype)initWithVoiceSearchEnabled:(BOOL)voiceSearchIsEnabled {
-  self = [super initWithNibName:nil bundle:nil];
-  if (self) {
-    _voiceSearchIsEnabled = voiceSearchIsEnabled;
-  }
-  return self;
+- (instancetype)init {
+  return [super initWithNibName:nil bundle:nil];
 }
+
+#pragma mark - Public
 
 - (UIView*)toolBarView {
   return self.headerView.toolBarView;
@@ -129,6 +109,10 @@ using base::UserMetricsAction;
         if (IsSplitToolbarMode()) {
           [self.toolbarDelegate setScrollProgressForTabletOmnibox:1];
         }
+        // Fake Tap button only needs to work in portrait. Disable the button
+        // in landscape because in landscape the button covers logoView (which
+        // need to handle taps).
+        self.fakeTapButton.userInteractionEnabled = IsSplitToolbarMode();
       };
 
   [coordinator animateAlongsideTransition:transition completion:nil];
@@ -190,6 +174,7 @@ using base::UserMetricsAction;
 - (void)updateConstraints {
   self.doodleTopMarginConstraint.constant =
       content_suggestions::doodleTopMargin(YES, [self topInset]);
+  [self.headerView updateForTopSafeAreaInset:[self topInset]];
 }
 
 - (CGFloat)pinnedOffsetY {
@@ -198,7 +183,7 @@ using base::UserMetricsAction;
 
   CGFloat offsetY =
       headerHeight - ntp_header::kScrolledToTopOmniboxBottomMargin;
-  if (!IsRegularXRegularSizeClass(self)) {
+  if (IsSplitToolbarMode(self)) {
     offsetY -= ToolbarExpandedHeight(
                    self.traitCollection.preferredContentSizeCategory) +
                [self topInset];
@@ -209,6 +194,12 @@ using base::UserMetricsAction;
 
 - (void)loadView {
   self.view = [[ContentSuggestionsHeaderView alloc] init];
+}
+
+- (void)viewDidAppear:(BOOL)animated {
+  [super viewDidAppear:animated];
+  UIAccessibilityPostNotification(UIAccessibilityScreenChangedNotification,
+                                  self.fakeOmnibox);
 }
 
 - (CGFloat)headerHeight {
@@ -222,13 +213,20 @@ using base::UserMetricsAction;
   if (!self.headerView) {
     self.headerView =
         base::mac::ObjCCastStrict<ContentSuggestionsHeaderView>(self.view);
-    [self addFakeTapView];
     [self addFakeOmnibox];
 
     [self.headerView addSubview:self.logoVendor.view];
+    // Fake Tap View has identity disc, which should render above the doodle.
+    [self addFakeTapView];
     [self.headerView addSubview:self.fakeOmnibox];
     self.logoVendor.view.translatesAutoresizingMaskIntoConstraints = NO;
     self.fakeOmnibox.translatesAutoresizingMaskIntoConstraints = NO;
+
+    [self.headerView addSeparatorToSearchField:self.fakeOmnibox];
+
+    // Identity disc needs to be added after the Google logo/doodle since it
+    // needs to respond to user taps first.
+    [self addIdentityDisc];
 
     // -headerForView is regularly called before self.headerView has been added
     // to the view hierarchy, so there's no simple way to get the correct
@@ -292,27 +290,53 @@ using base::UserMetricsAction;
 
   [self.headerView addViewsToSearchField:self.fakeOmnibox];
 
-  if (self.voiceSearchIsEnabled) {
-    [self.headerView.voiceSearchButton addTarget:self
-                                          action:@selector(loadVoiceSearch:)
-                                forControlEvents:UIControlEventTouchUpInside];
-    [self.headerView.voiceSearchButton addTarget:self
-                                          action:@selector(preloadVoiceSearch:)
-                                forControlEvents:UIControlEventTouchDown];
-  } else {
-    [self.headerView.voiceSearchButton setEnabled:NO];
-  }
+  [self.headerView.voiceSearchButton addTarget:self
+                                        action:@selector(loadVoiceSearch:)
+                              forControlEvents:UIControlEventTouchUpInside];
+  [self.headerView.voiceSearchButton addTarget:self
+                                        action:@selector(preloadVoiceSearch:)
+                              forControlEvents:UIControlEventTouchDown];
+  self.headerView.voiceSearchButton.enabled = self.voiceSearchIsEnabled;
 }
 
+// On NTP in split toolbar mode the omnibox has different location (in the
+// middle of the screen), but the users have muscle memory and still tap on area
+// where omnibox is normally placed (the top area of NTP). Fake Tap Button is
+// located in the same position where omnibox is normally placed and focuses the
+// omnibox when tapped. Fake Tap Button user interactions are only enabled in
+// split toolbar mode.
 - (void)addFakeTapView {
-  UIButton* fakeTapButton = [[UIButton alloc] init];
-  fakeTapButton.translatesAutoresizingMaskIntoConstraints = NO;
-  fakeTapButton.accessibilityLabel =
-      l10n_util::GetNSString(IDS_ACCNAME_LOCATION);
-  [self.headerView addToolbarView:fakeTapButton];
-  [fakeTapButton addTarget:self
-                    action:@selector(fakeboxTapped)
-          forControlEvents:UIControlEventTouchUpInside];
+  UIView* toolbar = [[UIView alloc] init];
+  toolbar.translatesAutoresizingMaskIntoConstraints = NO;
+  self.fakeTapButton = [[UIButton alloc] init];
+  self.fakeTapButton.userInteractionEnabled = IsSplitToolbarMode();
+  self.fakeTapButton.isAccessibilityElement = NO;
+  self.fakeTapButton.translatesAutoresizingMaskIntoConstraints = NO;
+  [toolbar addSubview:self.fakeTapButton];
+  [self.headerView addToolbarView:toolbar];
+  [self.fakeTapButton addTarget:self
+                         action:@selector(fakeboxTapped)
+               forControlEvents:UIControlEventTouchUpInside];
+  AddSameConstraints(self.fakeTapButton, toolbar);
+}
+
+- (void)addIdentityDisc {
+  // Set up a button. Details for the button will be set through delegate
+  // implementation of UserAccountImageUpdateDelegate.
+  self.identityDiscButton = [UIButton buttonWithType:UIButtonTypeCustom];
+  self.identityDiscButton.accessibilityLabel =
+      l10n_util::GetNSString(IDS_ACCNAME_PARTICLE_DISC);
+  self.identityDiscButton.imageEdgeInsets = UIEdgeInsetsMake(
+      ntp_home::kIdentityAvatarMargin, ntp_home::kIdentityAvatarMargin,
+      ntp_home::kIdentityAvatarMargin, ntp_home::kIdentityAvatarMargin);
+  [self.identityDiscButton addTarget:self
+                              action:@selector(identityDiscTapped)
+                    forControlEvents:UIControlEventTouchUpInside];
+  // TODO(crbug.com/965958): Set action on button to launch into Settings.
+  [self.headerView setIdentityDiscView:self.identityDiscButton];
+
+  // Register to receive the avatar of the currently signed in user.
+  [self.delegate registerImageUpdater:self];
 }
 
 - (void)loadVoiceSearch:(id)sender {
@@ -323,20 +347,8 @@ using base::UserMetricsAction;
   DCHECK(self.voiceSearchIsEnabled);
   base::RecordAction(UserMetricsAction("MobileNTPMostVisitedVoiceSearch"));
   UIView* voiceSearchButton = base::mac::ObjCCastStrict<UIView>(sender);
-  if (base::ios::IsRunningOnIOS12OrLater()) {
-    [NamedGuide guideWithName:kVoiceSearchButtonGuide view:voiceSearchButton]
-        .constrainedView = voiceSearchButton;
-  } else {
-    // On iOS 11 and below, constraining the layout guide to a view instead of
-    // using frame freeze the app. The root cause wasn't found. See
-    // https://crbug.com/874017.
-    NamedGuide* voiceSearchGuide =
-        [NamedGuide guideWithName:kVoiceSearchButtonGuide
-                             view:voiceSearchButton];
-    voiceSearchGuide.constrainedFrame =
-        [voiceSearchGuide.owningView convertRect:voiceSearchButton.bounds
-                                        fromView:voiceSearchButton];
-  }
+  [NamedGuide guideWithName:kVoiceSearchButtonGuide view:voiceSearchButton]
+      .constrainedView = voiceSearchButton;
   [self.dispatcher startVoiceSearch];
 }
 
@@ -359,6 +371,11 @@ using base::UserMetricsAction;
   if ([self.delegate ignoreLoadRequests])
     return;
   [self shiftTilesUp];
+}
+
+- (void)identityDiscTapped {
+  base::RecordAction(base::UserMetricsAction("MobileNTPIdentityDiscTapped"));
+  [self.dispatcher showGoogleServicesSettingsFromViewController:nil];
 }
 
 // TODO(crbug.com/807330) The fakebox is currently a collection of views spread
@@ -519,6 +536,10 @@ using base::UserMetricsAction;
   [self updateLogoAndFakeboxDisplay];
 }
 
+- (void)setLogoVendor:(id<LogoVendor>)logoVendor {
+  _logoVendor = logoVendor;
+}
+
 - (void)locationBarBecomesFirstResponder {
   if (!self.isShowing)
     return;
@@ -538,6 +559,21 @@ using base::UserMetricsAction;
   }
 
   [self shiftTilesDown];
+}
+
+- (void)setVoiceSearchIsEnabled:(BOOL)voiceSearchIsEnabled {
+  if (_voiceSearchIsEnabled == voiceSearchIsEnabled)
+    return;
+  _voiceSearchIsEnabled = voiceSearchIsEnabled;
+  self.headerView.voiceSearchButton.enabled = _voiceSearchIsEnabled;
+}
+
+#pragma mark - UserAccountImageUpdateDelegate
+
+- (void)updateAccountImage:(UIImage*)image {
+  [self.identityDiscButton setImage:image forState:UIControlStateNormal];
+  self.identityDiscButton.imageView.layer.cornerRadius = image.size.width / 2;
+  self.identityDiscButton.imageView.layer.masksToBounds = YES;
 }
 
 @end

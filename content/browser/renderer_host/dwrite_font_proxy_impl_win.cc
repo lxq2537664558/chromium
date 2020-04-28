@@ -4,12 +4,12 @@
 
 #include "content/browser/renderer_host/dwrite_font_proxy_impl_win.h"
 
-#include <dwrite.h>
 #include <shlobj.h>
 #include <stddef.h>
 #include <stdint.h>
 
 #include <algorithm>
+#include <memory>
 #include <set>
 #include <utility>
 
@@ -24,25 +24,24 @@
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/post_task.h"
+#include "base/threading/platform_thread.h"
 #include "base/time/time.h"
 #include "content/browser/renderer_host/dwrite_font_file_util_win.h"
 #include "content/browser/renderer_host/dwrite_font_uma_logging_win.h"
 #include "content/public/common/content_features.h"
 #include "mojo/public/cpp/bindings/callback_helpers.h"
-#include "mojo/public/cpp/bindings/strong_binding.h"
+#include "mojo/public/cpp/bindings/self_owned_receiver.h"
 #include "third_party/blink/public/common/font_unique_name_lookup/font_unique_name_table.pb.h"
 #include "third_party/blink/public/common/font_unique_name_lookup/icu_fold_case_util.h"
+#include "third_party/skia/include/core/SkFontMgr.h"
+#include "third_party/skia/include/core/SkTypeface.h"
+#include "third_party/skia/include/ports/SkTypeface_win.h"
 #include "ui/gfx/win/direct_write.h"
 #include "ui/gfx/win/text_analysis_source.h"
-
-#include "base/threading/platform_thread.h"
 
 namespace mswr = Microsoft::WRL;
 
 namespace content {
-
-using namespace dwrite_font_uma_logging;
-using namespace dwrite_font_file_util;
 
 namespace {
 
@@ -121,10 +120,9 @@ DWriteFontProxyImpl::~DWriteFontProxyImpl() = default;
 
 // static
 void DWriteFontProxyImpl::Create(
-    blink::mojom::DWriteFontProxyRequest request,
-    const service_manager::BindSourceInfo& source_info) {
-  mojo::MakeStrongBinding(std::make_unique<DWriteFontProxyImpl>(),
-                          std::move(request));
+    mojo::PendingReceiver<blink::mojom::DWriteFontProxy> receiver) {
+  mojo::MakeSelfOwnedReceiver(std::make_unique<DWriteFontProxyImpl>(),
+                              std::move(receiver));
 }
 
 void DWriteFontProxyImpl::SetWindowsFontsPathForTesting(base::string16 path) {
@@ -395,12 +393,10 @@ void DWriteFontProxyImpl::MapCharacters(
 void DWriteFontProxyImpl::GetUniqueNameLookupTableIfAvailable(
     GetUniqueNameLookupTableIfAvailableCallback callback) {
   DCHECK(base::FeatureList::IsEnabled(features::kFontSrcLocalMatching));
-  base::ReadOnlySharedMemoryRegion invalid_region;
-  callback = mojo::WrapCallbackWithDefaultInvokeIfNotRun(
-      std::move(callback), false, std::move(invalid_region));
-
+  /* Table is not synchronously available, return immediately. */
   if (!DWriteFontLookupTableBuilder::GetInstance()
            ->FontUniqueNameTableReady()) {
+    std::move(callback).Run(false, base::ReadOnlySharedMemoryRegion());
     return;
   }
 
@@ -427,7 +423,7 @@ void DWriteFontProxyImpl::MatchUniqueFont(
   if (FAILED(hr))
     return;
 
-  DCHECK(system_font_set->GetFontCount() > 0);
+  DCHECK_GT(system_font_set->GetFontCount(), 0U);
 
   mswr::ComPtr<IDWriteFontSet> filtered_set;
 
@@ -435,8 +431,7 @@ void DWriteFontProxyImpl::MatchUniqueFont(
                      &unique_font_name](DWRITE_FONT_PROPERTY_ID property_id) {
     TRACE_EVENT0("dwrite,fonts",
                  "DWriteFontProxyImpl::MatchUniqueFont::filter_set");
-    std::wstring unique_font_name_wide =
-        base::UTF16ToWide(unique_font_name).c_str();
+    std::wstring unique_font_name_wide = base::UTF16ToWide(unique_font_name);
     DWRITE_FONT_PROPERTY search_property = {property_id,
                                             unique_font_name_wide.c_str(), L""};
     // GetMatchingFonts() matches all languages according to:
@@ -476,10 +471,10 @@ void DWriteFontProxyImpl::MatchUniqueFont(
 
   base::string16 font_file_pathname;
   uint32_t ttc_index;
-  bool result = FontFilePathAndTtcIndex(first_font_face.Get(),
-                                        font_file_pathname, ttc_index);
-  if (!result)
+  if (FAILED(FontFilePathAndTtcIndex(first_font_face.Get(), font_file_pathname,
+                                     ttc_index))) {
     return;
+  }
 
   base::FilePath path(base::UTF16ToWide(font_file_pathname));
   std::move(callback).Run(path, ttc_index);
@@ -500,17 +495,52 @@ void DWriteFontProxyImpl::GetUniqueFontLookupMode(
 void DWriteFontProxyImpl::GetUniqueNameLookupTable(
     GetUniqueNameLookupTableCallback callback) {
   DCHECK(base::FeatureList::IsEnabled(features::kFontSrcLocalMatching));
-  callback = mojo::WrapCallbackWithDefaultInvokeIfNotRun(
-      std::move(callback), base::ReadOnlySharedMemoryRegion());
+  DWriteFontLookupTableBuilder::GetInstance()->QueueShareMemoryRegionWhenReady(
+      base::SequencedTaskRunnerHandle::Get(), std::move(callback));
+}
 
-  // ScheduleBuildFontUniqueNameTable() is called early in browser startup
-  // before EnsureFontUniqueNameTable() can be called. See
-  // BrowserMainLoop::BrowserThreadsStarted().
-  if (!DWriteFontLookupTableBuilder::GetInstance()->EnsureFontUniqueNameTable())
+void DWriteFontProxyImpl::FallbackFamilyAndStyleForCodepoint(
+    const std::string& base_family_name,
+    const std::string& locale_name,
+    uint32_t codepoint,
+    FallbackFamilyAndStyleForCodepointCallback callback) {
+  InitializeDirectWrite();
+  callback = mojo::WrapCallbackWithDefaultInvokeIfNotRun(
+      std::move(callback),
+      blink::mojom::FallbackFamilyAndStyle::New("",
+                                                /* weight */ 0,
+                                                /* width */ 0,
+                                                /* slant */ 0));
+
+  if (!codepoint || !collection_ || !factory_)
     return;
 
-  std::move(callback).Run(
-      DWriteFontLookupTableBuilder::GetInstance()->DuplicateMemoryRegion());
+  sk_sp<SkFontMgr> font_mgr(
+      SkFontMgr_New_DirectWrite(factory_.Get(), collection_.Get()));
+
+  if (!font_mgr)
+    return;
+
+  const char* bcp47_locales[] = {locale_name.c_str()};
+  int num_locales = locale_name.empty() ? 0 : 1;
+  const char** locales = locale_name.empty() ? nullptr : bcp47_locales;
+
+  sk_sp<SkTypeface> typeface(font_mgr->matchFamilyStyleCharacter(
+      base_family_name.c_str(), SkFontStyle(), locales, num_locales,
+      codepoint));
+
+  if (!typeface)
+    return;
+
+  SkString family_name;
+  typeface->getFamilyName(&family_name);
+
+  SkFontStyle font_style = typeface->fontStyle();
+
+  auto result_fallback_and_style = blink::mojom::FallbackFamilyAndStyle::New(
+      family_name.c_str(), font_style.weight(), font_style.width(),
+      font_style.slant());
+  std::move(callback).Run(std::move(result_fallback_and_style));
 }
 
 void DWriteFontProxyImpl::InitializeDirectWrite() {
@@ -520,9 +550,8 @@ void DWriteFontProxyImpl::InitializeDirectWrite() {
 
   TRACE_EVENT0("dwrite,fonts", "DWriteFontProxyImpl::InitializeDirectWrite");
 
-  mswr::ComPtr<IDWriteFactory> factory;
-  gfx::win::CreateDWriteFactory(&factory);
-  if (factory == nullptr) {
+  gfx::win::CreateDWriteFactory(&factory_);
+  if (factory_ == nullptr) {
     // We won't be able to load fonts, but we should still return messages so
     // renderers don't hang if they for some reason send us a font message.
     return;
@@ -530,14 +559,14 @@ void DWriteFontProxyImpl::InitializeDirectWrite() {
 
   // QueryInterface for IDWriteFactory2. It's ok for this to fail if we are
   // running an older version of DirectWrite (earlier than Win8.1).
-  factory.As<IDWriteFactory2>(&factory2_);
+  factory_.As<IDWriteFactory2>(&factory2_);
 
   // QueryInterface for IDwriteFactory3, needed for MatchUniqueFont on Windows
   // 10. May fail on older versions, in which case, unique font matching must be
   // done through indexing system fonts using DWriteFontLookupTableBuilder.
-  factory.As<IDWriteFactory3>(&factory3_);
+  factory_.As<IDWriteFactory3>(&factory3_);
 
-  HRESULT hr = factory->GetSystemFontCollection(&collection_);
+  HRESULT hr = factory_->GetSystemFontCollection(&collection_);
   DCHECK(SUCCEEDED(hr));
 
   if (!collection_) {

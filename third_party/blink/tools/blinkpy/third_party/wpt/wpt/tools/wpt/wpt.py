@@ -4,7 +4,7 @@ import logging
 import os
 import sys
 
-from tools import localpaths  # noqa: flake8
+from tools import localpaths  # noqa: F401
 
 from six import iteritems
 from . import virtualenv
@@ -40,13 +40,14 @@ def load_commands():
     return rv
 
 
-def parse_args(argv, commands):
+def parse_args(argv, commands = load_commands()):
     parser = argparse.ArgumentParser()
     parser.add_argument("--venv", action="store", help="Path to an existing virtualenv to use")
     parser.add_argument("--skip-venv-setup", action="store_true",
                         dest="skip_venv_setup",
                         help="Whether to use the virtualenv as-is. Must set --venv as well")
     parser.add_argument("--debug", action="store_true", help="Run the debugger in case of an exception")
+    parser.add_argument("--py3", action="store_true", help="Run with python3")
     subparsers = parser.add_subparsers(dest="command")
     for command, props in iteritems(commands):
         subparsers.add_parser(command, help=props["help"], add_help=False)
@@ -78,6 +79,34 @@ def import_command(prog, command, props):
         parser = None
 
     return script, parser
+
+
+def create_complete_parser():
+    """Eagerly load all subparsers. This involves more work than is required
+    for typical command-line usage. It is maintained for the purposes of
+    documentation generation as implemented in WPT's top-level `/docs`
+    directory."""
+
+    commands = load_commands()
+    parser = argparse.ArgumentParser()
+    subparsers = parser.add_subparsers()
+
+    for command in commands:
+        props = commands[command]
+
+        if props["virtualenv"]:
+            setup_virtualenv(None, False, props)
+
+        subparser = import_command('wpt', command, props)[1]
+        if not subparser:
+            continue
+
+        subparsers.add_parser(command,
+                              help=props["help"],
+                              add_help=False,
+                              parents=[subparser])
+
+    return parser
 
 
 def setup_virtualenv(path, skip_venv_setup, props):

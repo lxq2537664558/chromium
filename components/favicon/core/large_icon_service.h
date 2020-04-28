@@ -20,8 +20,6 @@ class GURL;
 
 namespace favicon {
 
-class FaviconServerFetcherParams;
-
 // The large icon service provides methods to access large icons.
 class LargeIconService : public KeyedService {
  public:
@@ -45,7 +43,7 @@ class LargeIconService : public KeyedService {
       const GURL& page_url,
       int min_source_size_in_pixel,
       int desired_size_in_pixel,
-      const favicon_base::LargeIconCallback& callback,
+      favicon_base::LargeIconCallback callback,
       base::CancelableTaskTracker* tracker) = 0;
 
   // Behaves the same as GetLargeIconRawBitmapOrFallbackStyleForPageUrl(), only
@@ -55,7 +53,7 @@ class LargeIconService : public KeyedService {
       const GURL& page_url,
       int min_source_size_in_pixel,
       int desired_size_in_pixel,
-      const favicon_base::LargeIconImageCallback& callback,
+      favicon_base::LargeIconImageCallback callback,
       base::CancelableTaskTracker* tracker) = 0;
 
   // Behaves the same as GetLargeIconRawBitmapOrFallbackStyleForPageUrl, except
@@ -65,7 +63,17 @@ class LargeIconService : public KeyedService {
       const GURL& icon_url,
       int min_source_size_in_pixel,
       int desired_size_in_pixel,
-      const favicon_base::LargeIconCallback& callback,
+      favicon_base::LargeIconCallback callback,
+      base::CancelableTaskTracker* tracker) = 0;
+
+  // Requests the best icon for the page at |page_url|. Fallbacks to the host's
+  // favicon, and resizes the most similar bitmat to |desired_size_in_pizel| if
+  // no exact match is found.
+  virtual base::CancelableTaskTracker::TaskId
+  GetIconRawBitmapOrFallbackStyleForPageUrl(
+      const GURL& page_url,
+      int desired_size_in_pixel,
+      favicon_base::LargeIconCallback callback,
       base::CancelableTaskTracker* tracker) = 0;
 
   // Fetches the best large icon for the page at |page_url| from a Google
@@ -74,14 +82,19 @@ class LargeIconService : public KeyedService {
   // favicon database contains an icon for |page_url|, so clients are
   // encouraged to use GetLargeIconOrFallbackStyle() first.
   //
-  // A minimum size |min_source_size_in_pixel| can be specified as a constraint.
-  // |desired_size_in_pixel| serves only as a hint to the service, no guarantees
-  // on the fetched size are provided.
+  // A parameter in the server request representing the desired favicon size is
+  // set according solely to the device and scale factor. However, it serves
+  // only as a hint to the service, no guarantees on the fetched size are
+  // provided.
   //
   // Unless you are sure |page_url| is a public URL (known to Google Search),
   // set |may_page_url_be_private| to true. This slighty increases the chance of
   // a failure (e.g. if the URL _is_ private) but it makes sure Google servers
   // do not crawl a private URL as a result of this call.
+  //
+  // If |should_trim_page_url_path| is set to true, the path will be removed
+  // from the URL used to query the server but the result will be stored under
+  // the full URL provided to the API.
   //
   // The callback is triggered when the operation finishes, where |success|
   // tells whether the fetch actually managed to database a new icon in the
@@ -93,11 +106,14 @@ class LargeIconService : public KeyedService {
   // TODO(crbug.com/903826): It is not clear from the name of this function,
   // that it actually adds the icon to the local cache. Maybe
   // "StoreLargeIcon..."?
+  // TODO(victorvianna): Consider moving |may_page_url_be_private| and/or
+  // |should_trim_page_url_path| inside the parameters struct.
   virtual void GetLargeIconOrFallbackStyleFromGoogleServerSkippingLocalCache(
-      std::unique_ptr<FaviconServerFetcherParams> params,
+      const GURL& page_url,
       bool may_page_url_be_private,
+      bool should_trim_page_url_path,
       const net::NetworkTrafficAnnotationTag& traffic_annotation,
-      const favicon_base::GoogleFaviconServerCallback& callback) = 0;
+      favicon_base::GoogleFaviconServerCallback callback) = 0;
 
   // Update the time that the icon at |icon_url| was requested. This should be
   // called after obtaining the icon by GetLargeIcon*OrFallbackStyle() for any

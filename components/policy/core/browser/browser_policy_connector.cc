@@ -37,6 +37,10 @@ namespace {
 const char kDefaultDeviceManagementServerUrl[] =
     "https://m.google.com/devicemanagement/data/api";
 
+// The URL for the realtime reporting server.
+const char kDefaultRealtimeReportingServerUrl[] =
+    "https://chromereporting-pa.googleapis.com/v1/events";
+
 // Regexes that match many of the larger public email providers as we know
 // these users are not from hosted enterprise domains.
 const wchar_t* const kNonManagedDomainPatterns[] = {
@@ -102,7 +106,7 @@ void BrowserPolicyConnector::InitInternal(
   device_management_service_ = std::move(device_management_service);
 
   policy_statistics_collector_.reset(new policy::PolicyStatisticsCollector(
-      base::Bind(&GetChromePolicyDetails), GetChromeSchema(),
+      base::BindRepeating(&GetChromePolicyDetails), GetChromeSchema(),
       GetPolicyService(), local_state, base::ThreadTaskRunnerHandle::Get()));
   policy_statistics_collector_->Initialize();
 }
@@ -118,6 +122,17 @@ void BrowserPolicyConnector::ScheduleServiceInitialization(
   // initialized (unit tests).
   if (device_management_service_)
     device_management_service_->ScheduleInitialization(delay_milliseconds);
+}
+
+bool BrowserPolicyConnector::ProviderHasPolicies(
+    const ConfigurationPolicyProvider* provider) const {
+  if (!provider)
+    return false;
+  for (const auto& pair : provider->policies()) {
+    if (!pair.second->empty())
+      return true;
+  }
+  return false;
 }
 
 // static
@@ -160,12 +175,19 @@ std::string BrowserPolicyConnector::GetDeviceManagementUrl() {
 }
 
 // static
+std::string BrowserPolicyConnector::GetRealtimeReportingUrl() {
+  base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
+  if (command_line->HasSwitch(switches::kRealtimeReportingUrl))
+    return command_line->GetSwitchValueASCII(switches::kRealtimeReportingUrl);
+  else
+    return kDefaultRealtimeReportingServerUrl;
+}
+
+// static
 void BrowserPolicyConnector::RegisterPrefs(PrefRegistrySimple* registry) {
   registry->RegisterIntegerPref(
       policy_prefs::kUserPolicyRefreshRate,
       CloudPolicyRefreshScheduler::kDefaultRefreshDelayMs);
-  registry->RegisterStringPref(
-      policy_prefs::kMachineLevelUserCloudPolicyEnrollmentToken, std::string());
   registry->RegisterBooleanPref(
       policy_prefs::kCloudManagementEnrollmentMandatory, false);
   registry->RegisterBooleanPref(

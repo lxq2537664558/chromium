@@ -11,11 +11,6 @@
 #include "base/sequenced_task_runner.h"
 #include "services/device/generic_sensor/linux/sensor_device_manager.h"
 
-namespace base {
-template <typename T>
-struct DefaultSingletonTraits;
-}  // namespace base
-
 namespace device {
 
 struct SensorInfoLinux;
@@ -23,24 +18,21 @@ struct SensorInfoLinux;
 class PlatformSensorProviderLinux : public PlatformSensorProvider,
                                     public SensorDeviceManager::Delegate {
  public:
-  static PlatformSensorProviderLinux* GetInstance();
+  PlatformSensorProviderLinux();
+  ~PlatformSensorProviderLinux() override;
 
   // Sets another service provided by tests.
   void SetSensorDeviceManagerForTesting(
       std::unique_ptr<SensorDeviceManager> sensor_device_manager);
 
  protected:
-  ~PlatformSensorProviderLinux() override;
-
   void CreateSensorInternal(mojom::SensorType type,
                             SensorReadingSharedBuffer* reading_buffer,
-                            const CreateSensorCallback& callback) override;
+                            CreateSensorCallback callback) override;
 
   void FreeResources() override;
 
  private:
-  friend struct base::DefaultSingletonTraits<PlatformSensorProviderLinux>;
-
   friend class PlatformSensorAndProviderLinuxTest;
 
   // This is also needed for testing, as we create one provider per test, and
@@ -50,12 +42,10 @@ class PlatformSensorProviderLinux : public PlatformSensorProvider,
   using SensorDeviceMap =
       std::unordered_map<mojom::SensorType, std::unique_ptr<SensorInfoLinux>>;
 
-  PlatformSensorProviderLinux();
-
   void SensorDeviceFound(
       mojom::SensorType type,
       SensorReadingSharedBuffer* reading_buffer,
-      const PlatformSensorProviderBase::CreateSensorCallback& callback,
+      PlatformSensorProviderBase::CreateSensorCallback callback,
       const SensorInfoLinux* sensor_device);
 
   // Returns SensorInfoLinux structure of a requested type.
@@ -83,7 +73,7 @@ class PlatformSensorProviderLinux : public PlatformSensorProvider,
 
   void CreateFusionSensor(mojom::SensorType type,
                           SensorReadingSharedBuffer* reading_buffer,
-                          const CreateSensorCallback& callback);
+                          CreateSensorCallback callback);
 
   // Set to true when enumeration is ready.
   bool sensor_nodes_enumerated_;
@@ -103,7 +93,7 @@ class PlatformSensorProviderLinux : public PlatformSensorProvider,
   std::unique_ptr<SensorDeviceManager, base::OnTaskRunnerDeleter>
       sensor_device_manager_;
 
-  base::WeakPtrFactory<PlatformSensorProviderLinux> weak_ptr_factory_;
+  base::WeakPtrFactory<PlatformSensorProviderLinux> weak_ptr_factory_{this};
 
   DISALLOW_COPY_AND_ASSIGN(PlatformSensorProviderLinux);
 };

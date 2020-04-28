@@ -51,11 +51,13 @@ class ChromeViewsDelegate : public views::ViewsDelegate {
 
   void AddRef() override;
   void ReleaseRef() override;
+  bool IsShuttingDown() const override;
   void OnBeforeWidgetInit(
       views::Widget::InitParams* params,
       views::internal::NativeWidgetDelegate* delegate) override;
+#if defined(OS_MACOSX)
   ui::ContextFactory* GetContextFactory() override;
-  ui::ContextFactoryPrivate* GetContextFactoryPrivate() override;
+#endif
   std::string GetApplicationName() override;
 
  private:
@@ -75,11 +77,6 @@ class ChromeViewsDelegate : public views::ViewsDelegate {
   void AdjustSavedWindowPlacementChromeOS(const views::Widget* widget,
                                           gfx::Rect* bounds) const;
 #endif
-
-  // Function to retrieve default opacity value mainly based on platform
-  // and desktop context.
-  views::Widget::InitParams::WindowOpacity GetOpacityForInitParams(
-      const views::Widget::InitParams& params);
 
   views::NativeWidget* CreateNativeWidget(
       views::Widget::InitParams* params,

@@ -12,6 +12,10 @@
 
 class GURL;
 
+namespace tab_groups {
+class TabGroupId;
+}
+
 namespace chrome {
 
 class BrowserTabStripModelDelegate : public TabStripModelDelegate {
@@ -24,7 +28,7 @@ class BrowserTabStripModelDelegate : public TabStripModelDelegate {
   void AddTabAt(const GURL& url,
                 int index,
                 bool foreground,
-                const TabGroupData* group) override;
+                base::Optional<tab_groups::TabGroupId> group) override;
   Browser* CreateNewStripWithContents(std::vector<NewStripContents> contentses,
                                       const gfx::Rect& window_bounds,
                                       bool maximize) override;
@@ -32,21 +36,24 @@ class BrowserTabStripModelDelegate : public TabStripModelDelegate {
   int GetDragActions() const override;
   bool CanDuplicateContentsAt(int index) override;
   void DuplicateContentsAt(int index) override;
+  void MoveToExistingWindow(const std::vector<int>& indices,
+                            int browser_index) override;
+  std::vector<base::string16> GetExistingWindowsForMoveMenu() const override;
+  bool CanMoveTabsToWindow(const std::vector<int>& indices) override;
+  void MoveTabsToNewWindow(const std::vector<int>& indices) override;
+  void MoveGroupToNewWindow(const tab_groups::TabGroupId& group) override;
   void CreateHistoricalTab(content::WebContents* contents) override;
   bool RunUnloadListenerBeforeClosing(content::WebContents* contents) override;
   bool ShouldRunUnloadListenerBeforeClosing(
       content::WebContents* contents) override;
-  bool CanBookmarkAllTabs() const override;
-  void BookmarkAllTabs() override;
-  RestoreTabType GetRestoreTabType() override;
-  void RestoreTab() override;
+  bool ShouldDisplayFavicon(content::WebContents* contents) const override;
 
   void CloseFrame();
 
   Browser* const browser_;
 
   // The following factory is used to close the frame at a later time.
-  base::WeakPtrFactory<BrowserTabStripModelDelegate> weak_factory_;
+  base::WeakPtrFactory<BrowserTabStripModelDelegate> weak_factory_{this};
 
   DISALLOW_COPY_AND_ASSIGN(BrowserTabStripModelDelegate);
 };

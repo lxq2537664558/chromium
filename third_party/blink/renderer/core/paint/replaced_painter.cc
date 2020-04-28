@@ -97,7 +97,7 @@ void ReplacedPainter::Paint(const PaintInfo& paint_info) {
 
   const auto& local_paint_info = paint_state.GetPaintInfo();
   auto paint_offset = paint_state.PaintOffset();
-  LayoutRect border_rect(paint_offset, layout_replaced_.Size());
+  PhysicalRect border_rect(paint_offset, layout_replaced_.Size());
 
   if (ShouldPaintBoxDecorationBackground(local_paint_info)) {
     bool should_paint_background = false;
@@ -141,11 +141,11 @@ void ReplacedPainter::Paint(const PaintInfo& paint_info) {
   }
 
   if (local_paint_info.phase != PaintPhase::kForeground &&
-      local_paint_info.phase != PaintPhase::kSelection &&
+      local_paint_info.phase != PaintPhase::kSelectionDragImage &&
       !layout_replaced_.CanHaveChildren())
     return;
 
-  if (local_paint_info.phase == PaintPhase::kSelection &&
+  if (local_paint_info.phase == PaintPhase::kSelectionDragImage &&
       !layout_replaced_.IsSelected())
     return;
 
@@ -179,8 +179,9 @@ void ReplacedPainter::Paint(const PaintInfo& paint_info) {
   if (draw_selection_tint && !DrawingRecorder::UseCachedDrawingIfPossible(
                                  local_paint_info.context, layout_replaced_,
                                  DisplayItem::kSelectionTint)) {
-    LayoutRect selection_painting_rect = layout_replaced_.LocalSelectionRect();
-    selection_painting_rect.MoveBy(paint_offset);
+    PhysicalRect selection_painting_rect =
+        layout_replaced_.LocalSelectionVisualRect();
+    selection_painting_rect.Move(paint_offset);
     IntRect selection_painting_int_rect =
         PixelSnappedIntRect(selection_painting_rect);
 
@@ -197,8 +198,9 @@ void ReplacedPainter::Paint(const PaintInfo& paint_info) {
 bool ReplacedPainter::ShouldPaint(const ScopedPaintState& paint_state) const {
   const auto& paint_info = paint_state.GetPaintInfo();
   if (paint_info.phase != PaintPhase::kForeground &&
+      paint_info.phase != PaintPhase::kForcedColorsModeBackplate &&
       !ShouldPaintSelfOutline(paint_info.phase) &&
-      paint_info.phase != PaintPhase::kSelection &&
+      paint_info.phase != PaintPhase::kSelectionDragImage &&
       paint_info.phase != PaintPhase::kMask &&
       !ShouldPaintSelfBlockBackground(paint_info.phase))
     return false;
@@ -213,9 +215,8 @@ bool ReplacedPainter::ShouldPaint(const ScopedPaintState& paint_state) const {
       layout_replaced_.StyleRef().Visibility() != EVisibility::kVisible)
     return false;
 
-  LayoutRect local_rect(layout_replaced_.VisualOverflowRect());
-  local_rect.Unite(layout_replaced_.LocalSelectionRect());
-  layout_replaced_.FlipForWritingMode(local_rect);
+  PhysicalRect local_rect = layout_replaced_.PhysicalVisualOverflowRect();
+  local_rect.Unite(layout_replaced_.LocalSelectionVisualRect());
   if (!paint_state.LocalRectIntersectsCullRect(local_rect))
     return false;
 

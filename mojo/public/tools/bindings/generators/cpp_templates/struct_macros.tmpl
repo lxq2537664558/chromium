@@ -25,10 +25,6 @@
 {%-   set kind = pf.field.kind %}
 {%-   set serializer_type = kind|unmapped_type_for_serializer %}
 
-{%-   if pf.field|share_message_order %}
-      ({{context}})->set_share_message_order_for_new_handles(true);
-{%-   endif %}
-
 {%-   if kind|is_object_kind or kind|is_any_handle_or_interface_kind %}
 {%-     set original_input_field = input_field_pattern|format(name) %}
 {%-     set input_field = "in_%s"|format(name) if input_may_be_temp
@@ -90,11 +86,6 @@
 {%-   else %}
   {{writer}}->{{name}} = {{input_field}};
 {%-   endif %}
-
-{%-   if pf.field|share_message_order %}
-      ({{context}})->set_share_message_order_for_new_handles(false);
-{%-   endif %}
-
 {%- endfor %}
 {%- endmacro -%}
 
@@ -118,15 +109,19 @@
 {%-     set name = pf.field.name %}
 {%-     set kind = pf.field.kind %}
 {%-     if kind|is_object_kind or kind|is_enum_kind %}
-  if (!{{input}}.Read{{name|under_to_camel}}(&{{output_field}}))
+  if ({{success}} && !{{input}}.Read{{name|under_to_camel}}(&{{output_field}}))
     {{success}} = false;
 {%-     elif kind|is_any_handle_kind %}
-  {{output_field}} = {{input}}.Take{{name|under_to_camel}}();
+  if ({{success}})
+    {{output_field}} = {{input}}.Take{{name|under_to_camel}}();
 {%-     elif kind|is_any_interface_kind %}
-  {{output_field}} =
-      {{input}}.Take{{name|under_to_camel}}<decltype({{output_field}})>();
+  if ({{success}}) {
+    {{output_field}} =
+        {{input}}.Take{{name|under_to_camel}}<decltype({{output_field}})>();
+  }
 {%-     else %}
-  {{output_field}} = {{input}}.{{name}}();
+  if ({{success}})
+    {{output_field}} = {{input}}.{{name}}();
 {%-     endif %}
 {%-   endfor %}
 {%- endmacro %}

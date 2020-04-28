@@ -8,10 +8,9 @@
 #include <utility>
 
 #include "ash/public/cpp/app_list/internal_app_id_constants.h"
-#include "ash/public/cpp/app_types.h"
+#include "ash/public/cpp/multi_user_window_manager.h"
 #include "ash/public/cpp/shelf_model.h"
 #include "ash/public/cpp/window_properties.h"
-#include "ash/shell.h"
 #include "base/bind.h"
 #include "chrome/browser/chromeos/arc/arc_optin_uma.h"
 #include "chrome/browser/chromeos/arc/arc_util.h"
@@ -22,12 +21,11 @@
 #include "chrome/browser/ui/ash/launcher/arc_app_window_launcher_item_controller.h"
 #include "chrome/browser/ui/ash/launcher/chrome_launcher_controller.h"
 #include "chrome/browser/ui/ash/launcher/chrome_launcher_controller_util.h"
-#include "chrome/browser/ui/ash/multi_user/multi_user_window_manager_client.h"
+#include "chrome/browser/ui/ash/multi_user/multi_user_window_manager_helper.h"
 #include "components/account_id/account_id.h"
 #include "components/arc/arc_util.h"
 #include "components/arc/session/arc_bridge_service.h"
 #include "components/user_manager/user_manager.h"
-#include "ui/aura/client/aura_constants.h"
 #include "ui/aura/env.h"
 #include "ui/base/base_window.h"
 #include "ui/base/ui_base_features.h"
@@ -36,13 +34,6 @@
 namespace {
 
 constexpr size_t kMaxIconPngSize = 64 * 1024;  // 64 kb
-
-// Map any ARC Camera app to internal Camera app.
-ash::ShelfID MaybeMapShelfId(const arc::ArcAppShelfId& arc_app_shelf_id) {
-  if (IsCameraApp(arc_app_shelf_id.app_id()))
-    return ash::ShelfID(app_list::kInternalAppIdCamera);
-  return ash::ShelfID(arc_app_shelf_id.ToString());
-}
 
 }  // namespace
 
@@ -178,7 +169,7 @@ void ArcAppWindowLauncherController::OnWindowVisibilityChanged(
   // Attach window to multi-user manager now to let it manage visibility state
   // of the ARC window correctly.
   if (task_id != arc::kSystemWindowTaskId) {
-    MultiUserWindowManagerClient::GetInstance()->SetWindowOwner(
+    MultiUserWindowManagerHelper::GetWindowManager()->SetWindowOwner(
         window,
         user_manager::UserManager::Get()->GetPrimaryUser()->GetAccountId());
   }
@@ -235,10 +226,6 @@ void ArcAppWindowLauncherController::AttachControllerToWindowIfNeeded(
   if (task_id == arc::kNoTaskId)
     return;
 
-  // System windows are also arc apps.
-  window->SetProperty(aura::client::kAppType,
-                      static_cast<int>(ash::AppType::ARC_APP));
-
   if (task_id == arc::kSystemWindowTaskId)
     return;
 
@@ -247,7 +234,6 @@ void ArcAppWindowLauncherController::AttachControllerToWindowIfNeeded(
     return;
 
   // TODO(msw): Set shelf item types earlier to avoid ShelfWindowWatcher races.
-  // (maybe use Widget::InitParams::mus_properties in cash too crbug.com/750334)
   window->SetProperty<int>(ash::kShelfItemTypeKey, ash::TYPE_APP);
 
   // Create controller if we have task info.
@@ -266,9 +252,10 @@ void ArcAppWindowLauncherController::AttachControllerToWindowIfNeeded(
   RegisterApp(info);
   DCHECK(info->app_window()->controller());
   const ash::ShelfID shelf_id(info->app_window()->shelf_id());
-  window->SetProperty(ash::kShelfIDKey, new std::string(shelf_id.Serialize()));
+  window->SetProperty(ash::kShelfIDKey, shelf_id.Serialize());
   window->SetProperty(ash::kArcPackageNameKey,
                       new std::string(info->package_name()));
+  window->SetProperty(ash::kAppIDKey, new std::string(shelf_id.app_id));
 }
 
 void ArcAppWindowLauncherController::OnAppStatesChanged(
@@ -346,13 +333,15 @@ void ArcAppWindowLauncherController::OnTaskDestroyed(int task_id) {
 
   // Check if we may close controller now, at this point we can safely remove
   // controllers without window.
-  auto it_controller =
-      app_shelf_group_to_controller_map_.find(it->second->app_shelf_id());
+  const auto& app_shelf_id = it->second->app_shelf_id();
+  auto it_controller = app_shelf_group_to_controller_map_.find(app_shelf_id);
   if (it_controller != app_shelf_group_to_controller_map_.end()) {
-    it_controller->second->RemoveTaskId(task_id);
-    if (!it_controller->second->HasAnyTasks()) {
-      owner()->CloseLauncherItem(it_controller->second->shelf_id());
+    ArcAppWindowLauncherItemController* const controller =
+        it_controller->second;
+    controller->RemoveTaskId(task_id);
+    if (!controller->HasAnyTasks()) {
       app_shelf_group_to_controller_map_.erase(it_controller);
+      owner()->CloseLauncherItem(controller->shelf_id());
     }
   }
 
@@ -372,8 +361,8 @@ void ArcAppWindowLauncherController::OnTaskSetActive(int32_t task_id) {
     previous_app_window->SetFullscreenMode(
         previous_app_window->widget() &&
                 previous_app_window->widget()->IsFullscreen()
-            ? ArcAppWindow::FullScreenMode::ACTIVE
-            : ArcAppWindow::FullScreenMode::NON_ACTIVE);
+            ? ArcAppWindow::FullScreenMode::kActive
+            : ArcAppWindow::FullScreenMode::kNonActive);
   }
 
   active_task_id_ = task_id;
@@ -390,9 +379,13 @@ void ArcAppWindowLauncherController::OnTaskSetActive(int32_t task_id) {
     // if (new_active_app_it->second->widget()) {
     //   new_active_app_it->second->widget()->SetFullscreen(
     //       new_active_app_it->second->fullscreen_mode() ==
-    //       ArcAppWindow::FullScreenMode::ACTIVE);
+    //       ArcAppWindow::FullScreenMode::kActive);
     // }
   }
+}
+
+int ArcAppWindowLauncherController::GetActiveTaskId() const {
+  return active_task_id_;
 }
 
 AppWindowLauncherItemController*
@@ -456,10 +449,7 @@ void ArcAppWindowLauncherController::OnWindowActivated(
 }
 
 void ArcAppWindowLauncherController::StartObserving(Profile* profile) {
-  // TODO(mash): Find another way to observe for ARC++ window creation.
-  // https://crbug.com/887156
-  if (!features::IsMultiProcessMash())
-    ash::Shell::Get()->aura_env()->AddObserver(this);
+  aura::Env::GetInstance()->AddObserver(this);
   ArcAppListPrefs* prefs = ArcAppListPrefs::Get(profile);
   DCHECK(prefs);
   prefs->AddObserver(this);
@@ -470,8 +460,7 @@ void ArcAppWindowLauncherController::StopObserving(Profile* profile) {
     window->RemoveObserver(this);
   ArcAppListPrefs* prefs = ArcAppListPrefs::Get(profile);
   prefs->RemoveObserver(this);
-  if (!features::IsMultiProcessMash())
-    ash::Shell::Get()->aura_env()->RemoveObserver(this);
+  aura::Env::GetInstance()->RemoveObserver(this);
 }
 
 ArcAppWindowLauncherItemController*
@@ -481,13 +470,12 @@ ArcAppWindowLauncherController::AttachControllerToTask(
   const arc::ArcAppShelfId& app_shelf_id = app_window_info.app_shelf_id();
   const auto it = app_shelf_group_to_controller_map_.find(app_shelf_id);
   if (it != app_shelf_group_to_controller_map_.end()) {
-    DCHECK(IsCameraApp(app_shelf_id.ToString()) ||
-           it->second->app_id() == app_shelf_id.ToString());
+    DCHECK(it->second->app_id() == app_shelf_id.ToString());
     it->second->AddTaskId(task_id);
     return it->second;
   }
 
-  const ash::ShelfID shelf_id = MaybeMapShelfId(app_shelf_id);
+  const ash::ShelfID shelf_id = ash::ShelfID(app_shelf_id.ToString());
   std::unique_ptr<ArcAppWindowLauncherItemController> controller =
       std::make_unique<ArcAppWindowLauncherItemController>(shelf_id);
   ArcAppWindowLauncherItemController* item_controller = controller.get();
@@ -517,19 +505,8 @@ void ArcAppWindowLauncherController::RegisterApp(
   app_window->SetController(controller);
   app_window->set_shelf_id(shelf_id);
 
-  if (!opt_in_management_check_start_time_.is_null() &&
-      app_window_info->app_shelf_id().app_id() == arc::kPlayStoreAppId) {
-    arc::Intent intent;
-    if (arc::ParseIntent(app_window_info->launch_intent(), &intent) &&
-        intent.HasExtraParam(arc::kInitialStartParam)) {
-      DCHECK(!arc::IsRobotOrOfflineDemoAccountMode());
-      arc::UpdatePlayStoreShowTime(
-          base::Time::Now() - opt_in_management_check_start_time_,
-          owner()->profile());
-      VLOG(1) << "Play Store is initially shown.";
-    }
-    opt_in_management_check_start_time_ = base::Time();
-  }
+  if (app_window_info->app_shelf_id().app_id() == arc::kPlayStoreAppId)
+    HandlePlayStoreLaunch(app_window_info);
 }
 
 void ArcAppWindowLauncherController::UnregisterApp(
@@ -543,4 +520,35 @@ void ArcAppWindowLauncherController::UnregisterApp(
     controller->RemoveWindow(app_window);
   app_window->SetController(nullptr);
   app_window_info->set_app_window(nullptr);
+}
+
+void ArcAppWindowLauncherController::HandlePlayStoreLaunch(
+    AppWindowInfo* app_window_info) {
+  arc::Intent intent;
+  if (!arc::ParseIntent(app_window_info->launch_intent(), &intent))
+    return;
+
+  if (!opt_in_management_check_start_time_.is_null()) {
+    if (intent.HasExtraParam(arc::kInitialStartParam)) {
+      DCHECK(!arc::IsRobotOrOfflineDemoAccountMode());
+      arc::UpdatePlayStoreShownTimeDeprecated(
+          base::Time::Now() - opt_in_management_check_start_time_,
+          owner()->profile());
+      VLOG(1) << "Play Store is initially shown.";
+    }
+    opt_in_management_check_start_time_ = base::Time();
+    return;
+  }
+
+  for (const auto& param : intent.extra_params()) {
+    int64_t start_request_ms;
+    if (sscanf(param.c_str(), arc::kRequestStartTimeParamTemplate,
+               &start_request_ms) != 1)
+      continue;
+    const base::TimeDelta launch_time =
+        base::TimeTicks::Now() - base::TimeTicks() -
+        base::TimeDelta::FromMilliseconds(start_request_ms);
+    DCHECK_GE(launch_time, base::TimeDelta());
+    arc::UpdatePlayStoreLaunchTime(launch_time);
+  }
 }

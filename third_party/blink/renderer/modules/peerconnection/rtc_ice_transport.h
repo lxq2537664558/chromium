@@ -10,11 +10,10 @@
 
 #include "third_party/blink/renderer/bindings/core/v8/active_script_wrappable.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_rtc_ice_candidate_pair.h"
-#include "third_party/blink/renderer/core/execution_context/context_lifecycle_observer.h"
+#include "third_party/blink/renderer/bindings/modules/v8/v8_rtc_ice_parameters.h"
+#include "third_party/blink/renderer/core/execution_context/execution_context_lifecycle_observer.h"
 #include "third_party/blink/renderer/modules/event_target_modules.h"
 #include "third_party/blink/renderer/modules/peerconnection/adapters/ice_transport_proxy.h"
-#include "third_party/blink/renderer/modules/peerconnection/rtc_ice_candidate_pair.h"
-#include "third_party/blink/renderer/modules/peerconnection/rtc_ice_parameters.h"
 #include "third_party/blink/renderer/platform/scheduler/public/frame_scheduler.h"
 #include "third_party/webrtc/api/transport/enums.h"
 
@@ -29,6 +28,7 @@ class RTCIceCandidate;
 class RTCIceGatherOptions;
 class IceTransportAdapterCrossThreadFactory;
 class RTCQuicTransport;
+class RTCPeerConnection;
 
 // Blink bindings for the RTCIceTransport JavaScript object.
 //
@@ -42,10 +42,11 @@ class RTCQuicTransport;
 class MODULES_EXPORT RTCIceTransport final
     : public EventTargetWithInlineData,
       public ActiveScriptWrappable<RTCIceTransport>,
-      public ContextLifecycleObserver,
+      public ExecutionContextLifecycleObserver,
       public IceTransportProxy::Delegate {
   DEFINE_WRAPPERTYPEINFO();
   USING_GARBAGE_COLLECTED_MIXIN(RTCIceTransport);
+  USING_PRE_FINALIZER(RTCIceTransport, Dispose);
 
  public:
   enum class CloseReason {
@@ -53,19 +54,28 @@ class MODULES_EXPORT RTCIceTransport final
     kStopped,
     // The ExecutionContext is being destroyed.
     kContextDestroyed,
+    // The object is being garbage collected.
+    kDisposed,
   };
 
   static RTCIceTransport* Create(ExecutionContext* context);
   static RTCIceTransport* Create(
       ExecutionContext* context,
-      rtc::scoped_refptr<webrtc::IceTransportInterface> ice_transport_channel);
+      rtc::scoped_refptr<webrtc::IceTransportInterface> ice_transport_channel,
+      RTCPeerConnection* peer_connection);
   static RTCIceTransport* Create(
       ExecutionContext* context,
       scoped_refptr<base::SingleThreadTaskRunner> proxy_thread,
       scoped_refptr<base::SingleThreadTaskRunner> host_thread,
       std::unique_ptr<IceTransportAdapterCrossThreadFactory> adapter_factory);
 
-  explicit RTCIceTransport(
+  RTCIceTransport(
+      ExecutionContext* context,
+      scoped_refptr<base::SingleThreadTaskRunner> proxy_thread,
+      scoped_refptr<base::SingleThreadTaskRunner> host_thread,
+      std::unique_ptr<IceTransportAdapterCrossThreadFactory> adapter_factory,
+      RTCPeerConnection* peer_connection);
+  RTCIceTransport(
       ExecutionContext* context,
       scoped_refptr<base::SingleThreadTaskRunner> proxy_thread,
       scoped_refptr<base::SingleThreadTaskRunner> host_thread,
@@ -78,6 +88,8 @@ class MODULES_EXPORT RTCIceTransport final
   // Returns the role specified in start().
   cricket::IceRole GetRole() const { return role_; }
 
+  webrtc::IceTransportState GetState() const { return state_; }
+
   // Returns true if the RTCIceTransport is in a terminal state.
   bool IsClosed() const { return state_ == webrtc::IceTransportState::kClosed; }
 
@@ -89,6 +101,21 @@ class MODULES_EXPORT RTCIceTransport final
   // a QuicTransportProxy. It may be called repeatedly with the same
   // RTCQuicTransport.
   bool HasConsumer() const;
+  // If |this| was created from an RTCPeerConnection.
+  //
+  // Background: This is because we don't reuse an RTCIceTransport that has been
+  // created from an RTCPeerConnection for an RTCQuicTransport (see
+  // bugs.webrtc.org/10591). The core issue here is that the source of truth for
+  // connecting a consumer to ICE is at the P2PTransportChannel. In the case of
+  // RTCPeerConnection, the P2PTransportChannel is already connected and given
+  // to the RTCIceTransport. In the case of the RTCQuicTransport it uses the
+  // RTCIceTransport as the source of truth for enforcing just one connected
+  // consumer. Possible fixes to this issue could include: -Use the
+  // P2PTransportChannel as the source of truth directly (calling this
+  // synchronously from the main thread)
+  // -Asynchronously connect to the P2PTransport - if the count of connected
+  // transports to the P2PTransportChannel is > 1, then throw an exception.
+  bool IsFromPeerConnection() const;
   IceTransportProxy* ConnectConsumer(RTCQuicTransport* consumer);
   void DisconnectConsumer(RTCQuicTransport* consumer);
 
@@ -102,7 +129,7 @@ class MODULES_EXPORT RTCIceTransport final
   RTCIceParameters* getLocalParameters() const;
   RTCIceParameters* getRemoteParameters() const;
   void gather(RTCIceGatherOptions* options, ExceptionState& exception_state);
-  void start(RTCIceParameters* remote_parameters,
+  void start(RTCIceParameters* raw_remote_parameters,
              const String& role,
              ExceptionState& exception_state);
   void stop();
@@ -118,14 +145,14 @@ class MODULES_EXPORT RTCIceTransport final
   const AtomicString& InterfaceName() const override;
   ExecutionContext* GetExecutionContext() const override;
 
-  // ContextLifecycleObserver overrides.
-  void ContextDestroyed(ExecutionContext*) override;
+  // ExecutionContextLifecycleObserver overrides.
+  void ContextDestroyed() override;
 
   // ActiveScriptWrappable overrides.
-  bool HasPendingActivity() const override;
+  bool HasPendingActivity() const final;
 
   // For garbage collection.
-  void Trace(blink::Visitor* visitor) override;
+  void Trace(Visitor* visitor) override;
 
  private:
   // IceTransportProxy::Delegate overrides.
@@ -146,6 +173,7 @@ class MODULES_EXPORT RTCIceTransport final
   void Close(CloseReason reason);
 
   bool RaiseExceptionIfClosed(ExceptionState& exception_state) const;
+  void Dispose();
 
   cricket::IceRole role_ = cricket::ICEROLE_UNKNOWN;
   webrtc::IceTransportState state_ = webrtc::IceTransportState::kNew;
@@ -159,6 +187,7 @@ class MODULES_EXPORT RTCIceTransport final
   Member<RTCIceCandidatePair> selected_candidate_pair_;
 
   Member<RTCQuicTransport> consumer_;
+  const WeakMember<RTCPeerConnection> peer_connection_;
 
   // Handle to the WebRTC ICE transport. Created when this binding is
   // constructed and deleted once network traffic should be stopped.

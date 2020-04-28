@@ -9,11 +9,14 @@
 #include <string>
 
 #include "base/callback_forward.h"
-#include "chromeos/printing/printer_configuration.h"
+#include "base/macros.h"
+#include "url/gurl.h"
 
 class Profile;
 
 namespace chromeos {
+
+class Printer;
 
 // These values are written to logs.  New enum values can be added, but existing
 // enums must never be renumbered or deleted and reused.
@@ -42,6 +45,27 @@ enum PrinterSetupResult {
   kMaxValue           // Maximum value for histograms
 };
 
+// These values are written to logs.  New enum values can be added, but existing
+// enums must never be renumbered or deleted and reused.
+// Records the source of a successful USB printer setup.
+enum class UsbPrinterSetupSource {
+  kSettings = 0,        // USB printer installed via Settings.
+  kPrintPreview = 1,    // USB printer installed via Print Preview.
+  kAutoconfigured = 2,  // USB printer installed automatically.
+  kMaxValue = kAutoconfigured,
+};
+
+// These values are persisted to logs. Entries should not be renumbered and
+// numeric values should never be reused.
+enum class PrinterSetupSource {
+  kPrintPreview = 0,       // Printer was setup from Print Preview.
+  kSettings = 1,           // Printer was setup from Settings.
+  kAutoUsbConfigurer = 2,  // Printer was setup by automatic USB configurer.
+  kArcPrintService = 3,    // Printer was setup by arc print service.
+  kExtensionApi = 4,       // Printer was setup via Extensions API.
+  kMaxValue = kExtensionApi,
+};
+
 using PrinterSetupCallback = base::OnceCallback<void(PrinterSetupResult)>;
 
 // Configures printers by retrieving PPDs and registering the printer with CUPS.
@@ -49,9 +73,6 @@ using PrinterSetupCallback = base::OnceCallback<void(PrinterSetupResult)>;
 class PrinterConfigurer {
  public:
   static std::unique_ptr<PrinterConfigurer> Create(Profile* profile);
-
-  PrinterConfigurer(const PrinterConfigurer&) = delete;
-  PrinterConfigurer& operator=(const PrinterConfigurer&) = delete;
 
   virtual ~PrinterConfigurer() = default;
 
@@ -68,8 +89,21 @@ class PrinterConfigurer {
   // across reboots.
   static std::string SetupFingerprint(const Printer& printer);
 
+  // Records UMA metrics for USB printer setup.
+  static void RecordUsbPrinterSetupSource(UsbPrinterSetupSource source);
+
+  // Test method to override the printer configurer for testing.
+  static void SetPrinterConfigurerForTesting(
+      std::unique_ptr<PrinterConfigurer> printer_configurer);
+
+  // Returns a generated EULA GURL for the provided |license|. |license| is the
+  // identifier tag of the printer's license information.
+  static GURL GeneratePrinterEulaUrl(const std::string& license);
+
  protected:
   PrinterConfigurer() = default;
+
+  DISALLOW_COPY_AND_ASSIGN(PrinterConfigurer);
 };
 
 // Stream operator for ease of logging |result|.

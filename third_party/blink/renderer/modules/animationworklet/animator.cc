@@ -5,9 +5,9 @@
 #include "third_party/blink/renderer/modules/animationworklet/animator.h"
 
 #include "base/stl_util.h"
-#include "third_party/blink/renderer/bindings/modules/v8/effect_proxy_or_worklet_group_effect_proxy.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_animate_callback.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_state_callback.h"
+#include "third_party/blink/renderer/bindings/modules/v8/worklet_animation_effect_or_worklet_group_effect.h"
 #include "third_party/blink/renderer/modules/animationworklet/animator_definition.h"
 #include "third_party/blink/renderer/platform/bindings/exception_state.h"
 #include "v8/include/v8.h"
@@ -19,19 +19,20 @@ Animator::Animator(v8::Isolate* isolate,
                    v8::Local<v8::Value> instance,
                    const String& name,
                    WorkletAnimationOptions options,
-                   const std::vector<base::Optional<TimeDelta>>& local_times)
+                   const Vector<base::Optional<base::TimeDelta>>& local_times,
+                   const Vector<Timing>& timings)
     : definition_(definition),
       instance_(isolate, instance),
       name_(name),
       options_(options),
       group_effect_(
-          MakeGarbageCollected<WorkletGroupEffectProxy>(local_times)) {
+          MakeGarbageCollected<WorkletGroupEffect>(local_times, timings)) {
   DCHECK_GE(local_times.size(), 1u);
 }
 
 Animator::~Animator() = default;
 
-void Animator::Trace(blink::Visitor* visitor) {
+void Animator::Trace(Visitor* visitor) {
   visitor->Trace(definition_);
   visitor->Trace(instance_);
   visitor->Trace(group_effect_);
@@ -41,15 +42,17 @@ bool Animator::Animate(
     v8::Isolate* isolate,
     double current_time,
     AnimationWorkletDispatcherOutput::AnimationState* output) {
+  DCHECK(!std::isnan(current_time));
+
   v8::Local<v8::Value> instance = instance_.NewLocal(isolate);
   if (IsUndefinedOrNull(instance))
     return false;
 
-  EffectProxyOrWorkletGroupEffectProxy effect;
+  WorkletAnimationEffectOrWorkletGroupEffect effect;
   if (group_effect_->getChildren().size() == 1) {
-    effect.SetEffectProxy(group_effect_->getChildren()[0]);
+    effect.SetWorkletAnimationEffect(group_effect_->getChildren()[0]);
   } else {
-    effect.SetWorkletGroupEffectProxy(group_effect_);
+    effect.SetWorkletGroupEffect(group_effect_);
   }
 
   v8::TryCatch try_catch(isolate);
@@ -60,17 +63,17 @@ bool Animator::Animate(
     return false;
   }
 
-  output->local_times = GetLocalTimes();
+  GetLocalTimes(output->local_times);
   return true;
 }
 
-std::vector<base::Optional<TimeDelta>> Animator::GetLocalTimes() const {
-  std::vector<base::Optional<TimeDelta>> local_times;
-  local_times.reserve(group_effect_->getChildren().size());
+Vector<Timing> Animator::GetTimings() const {
+  Vector<Timing> timings;
+  timings.ReserveInitialCapacity(group_effect_->getChildren().size());
   for (const auto& effect : group_effect_->getChildren()) {
-    local_times.push_back(effect->local_time());
+    timings.push_back(effect->SpecifiedTiming());
   }
-  return local_times;
+  return timings;
 }
 
 bool Animator::IsStateful() const {

@@ -21,6 +21,8 @@
 namespace chromecast {
 namespace shell {
 
+// TODO(crbug.com/1057860): Move relevant tests to components/browsertests so
+// there is common coverage of MediaBlocker across platforms.
 class CastMediaBlockerBrowserTest : public CastBrowserTest {
  public:
   CastMediaBlockerBrowserTest() {}
@@ -45,8 +47,7 @@ class CastMediaBlockerBrowserTest : public CastBrowserTest {
     web_contents_ = NavigateToURL(gurl);
     WaitForLoadStop(web_contents_);
 
-    blocker_ = std::make_unique<CastMediaBlocker>(
-        content::MediaSession::Get(web_contents_));
+    blocker_ = std::make_unique<CastMediaBlocker>(web_contents_);
   }
 
   void BlockAndTestPlayerState(const std::string& media_type, bool blocked) {

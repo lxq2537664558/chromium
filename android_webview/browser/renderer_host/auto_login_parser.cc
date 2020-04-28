@@ -7,7 +7,7 @@
 #include <utility>
 #include <vector>
 
-#include "base/logging.h"
+#include "base/notreached.h"
 #include "base/strings/string_split.h"
 #include "net/base/escape.h"
 #include "net/url_request/url_request.h"
@@ -54,10 +54,7 @@ bool ParseHeader(const std::string& header,
        ++it) {
     const std::string& key = it->first;
     const std::string& value = it->second;
-    std::string unescaped_value(net::UnescapeURLComponent(
-        value,
-        net::UnescapeRule::PATH_SEPARATORS |
-            net::UnescapeRule::URL_SPECIAL_CHARS_EXCEPT_PATH_SEPARATORS));
+    std::string unescaped_value = net::UnescapeBinaryURLComponent(value);
     if (key == "realm") {
       if (!MatchRealm(unescaped_value, realm_restriction))
         return false;

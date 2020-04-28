@@ -10,27 +10,32 @@
  */
 
 // All testing functions in namespace 'test'.
+// eslint-disable-next-line
 var test = test || {};
 
-/** @constructor */
-test.Event = function() {
-  this.listeners_ = [];
-};
-/** @param {function()} callback */
-test.Event.prototype.addListener = function(callback) {
-  this.listeners_.push(callback);
-};
-/** @param {function()} callback */
-test.Event.prototype.removeListener = function(callback) {
-  this.listeners_ = this.listeners_.filter(l => l !== callback);
-};
-/** @param {...*} args */
-test.Event.prototype.dispatchEvent = function(...args) {
-  setTimeout(() => {
-    for (let listener of this.listeners_) {
-      listener(...args);
-    }
-  }, 0);
+test.Event = class {
+  constructor() {
+    this.listeners_ = [];
+  }
+
+  /** @param {function()} callback */
+  addListener(callback) {
+    this.listeners_.push(callback);
+  }
+
+  /** @param {function()} callback */
+  removeListener(callback) {
+    this.listeners_ = this.listeners_.filter(l => l !== callback);
+  }
+
+  /** @param {...*} args */
+  dispatchEvent(...args) {
+    setTimeout(() => {
+      for (const listener of this.listeners_) {
+        listener(...args);
+      }
+    }, 0);
+  }
 };
 
 /**
@@ -145,9 +150,9 @@ chrome = {
     state_: {},
     local: {
       get: (keys, callback) => {
-        var keys = keys instanceof Array ? keys : [keys];
-        var result = {};
-        keys.forEach(key => {
+        const inKeys = keys instanceof Array ? keys : [keys];
+        const result = {};
+        inKeys.forEach(key => {
           if (key in chrome.storage.state_) {
             result[key] = chrome.storage.state_[key];
           }
@@ -155,7 +160,7 @@ chrome = {
         setTimeout(callback, 0, result);
       },
       set: (items, opt_callback) => {
-        for (var key in items) {
+        for (const key in items) {
           chrome.storage.state_[key] = items[key];
         }
         if (opt_callback) {
@@ -181,17 +186,17 @@ HTMLElement.prototype.request = {
 // cws_widget_container.js also calls WebView.stop.
 HTMLElement.prototype.stop = () => {};
 
-// domAutomationController is provided in tests, but is
-// useful for debugging tests in browser.
-
 /**
- * @constructor
+ * domAutomationController is provided in tests, but is useful for debugging
+ * tests in a browser.  We use jsdoc extends rather than 'class ... extends ...'
+ * since DomAutomationController does not exist at runtime in a browser.
  * @extends {DomAutomationController}
  */
-function ConsoleDomAutomationController() {}
-ConsoleDomAutomationController.prototype.send = (json) => {
-  console.debug('domAutomationController.send', json);
-};
+class ConsoleDomAutomationController {
+  send(json) {
+    console.debug('domAutomationController.send', json);
+  }
+}
 
 window.domAutomationController =
     window.domAutomationController || new ConsoleDomAutomationController();

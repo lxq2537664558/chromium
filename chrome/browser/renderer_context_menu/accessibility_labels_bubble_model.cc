@@ -43,7 +43,7 @@ AccessibilityLabelsBubbleModel::~AccessibilityLabelsBubbleModel() {}
 
 base::string16 AccessibilityLabelsBubbleModel::GetTitle() const {
   return l10n_util::GetStringUTF16(
-      IDS_CONTENT_CONTEXT_ACCESSIBILITY_LABELS_MENU_OPTION);
+      IDS_CONTENT_CONTEXT_ACCESSIBILITY_LABELS_DIALOG_TITLE);
 }
 
 base::string16 AccessibilityLabelsBubbleModel::GetMessageText() const {
@@ -54,9 +54,9 @@ base::string16 AccessibilityLabelsBubbleModel::GetMessageText() const {
 }
 
 base::string16 AccessibilityLabelsBubbleModel::GetButtonLabel(
-    BubbleButton button) const {
+    ui::DialogButton button) const {
   return l10n_util::GetStringUTF16(
-      button == BUTTON_OK
+      button == ui::DIALOG_BUTTON_OK
           ? IDS_CONTENT_CONTEXT_ACCESSIBILITY_LABELS_BUBBLE_ENABLE
           : IDS_CONTENT_CONTEXT_ACCESSIBILITY_LABELS_BUBBLE_DISABLE);
 }
@@ -87,7 +87,7 @@ base::string16 AccessibilityLabelsBubbleModel::GetLinkText() const {
 }
 
 GURL AccessibilityLabelsBubbleModel::GetHelpPageURL() const {
-  return GURL(chrome::kPrivacyLearnMoreURL);
+  return GURL(chrome::kAccessibilityLabelsLearnMoreURL);
 }
 
 void AccessibilityLabelsBubbleModel::OpenHelpPage() {

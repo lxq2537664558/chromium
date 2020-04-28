@@ -15,8 +15,7 @@ namespace autofill {
 TestAutofillClient::TestAutofillClient()
     : form_origin_(GURL("https://example.test")), source_id_(-1) {}
 
-TestAutofillClient::~TestAutofillClient() {
-}
+TestAutofillClient::~TestAutofillClient() {}
 
 PersonalDataManager* TestAutofillClient::GetPersonalDataManager() {
   return &test_personal_data_manager_;
@@ -35,7 +34,7 @@ syncer::SyncService* TestAutofillClient::GetSyncService() {
   return test_sync_service_;
 }
 
-identity::IdentityManager* TestAutofillClient::GetIdentityManager() {
+signin::IdentityManager* TestAutofillClient::GetIdentityManager() {
   return identity_test_env_.identity_manager();
 }
 
@@ -47,22 +46,18 @@ payments::PaymentsClient* TestAutofillClient::GetPaymentsClient() {
   return payments_client_.get();
 }
 
-LegacyStrikeDatabase* TestAutofillClient::GetLegacyStrikeDatabase() {
-  return test_legacy_strike_database_.get();
-}
-
 StrikeDatabase* TestAutofillClient::GetStrikeDatabase() {
   return test_strike_database_.get();
 }
 
 ukm::UkmRecorder* TestAutofillClient::GetUkmRecorder() {
-  return ukm::UkmRecorder::Get();
+  return &test_ukm_recorder_;
 }
 
 ukm::SourceId TestAutofillClient::GetUkmSourceId() {
   if (source_id_ == -1) {
     source_id_ = ukm::UkmRecorder::GetNewSourceID();
-    UpdateSourceURL(GetUkmRecorder(), source_id_, form_origin_);
+    test_ukm_recorder_.UpdateSourceURL(source_id_, form_origin_);
   }
   return source_id_;
 }
@@ -76,16 +71,26 @@ TestAutofillClient::GetSecurityLevelForUmaHistograms() {
   return security_level_;
 }
 
+#if !defined(OS_ANDROID) && !defined(OS_IOS)
+std::vector<std::string>
+TestAutofillClient::GetMerchantWhitelistForVirtualCards() {
+  return merchant_whitelist_;
+}
+
+std::vector<std::string>
+TestAutofillClient::GetBinRangeWhitelistForVirtualCards() {
+  return bin_range_whitelist_;
+}
+#endif
+
 void TestAutofillClient::ShowAutofillSettings(bool show_credit_card_settings) {}
 
 void TestAutofillClient::ShowUnmaskPrompt(
     const CreditCard& card,
     UnmaskCardReason reason,
-    base::WeakPtr<CardUnmaskDelegate> delegate) {
-}
+    base::WeakPtr<CardUnmaskDelegate> delegate) {}
 
-void TestAutofillClient::OnUnmaskVerificationResult(PaymentsRpcResult result) {
-}
+void TestAutofillClient::OnUnmaskVerificationResult(PaymentsRpcResult result) {}
 
 void TestAutofillClient::ShowLocalCardMigrationDialog(
     base::OnceClosure show_migration_dialog_closure) {
@@ -93,7 +98,7 @@ void TestAutofillClient::ShowLocalCardMigrationDialog(
 }
 
 void TestAutofillClient::ConfirmMigrateLocalCardToCloud(
-    std::unique_ptr<base::DictionaryValue> legal_message,
+    const LegalMessageLines& legal_message_lines,
     const std::string& user_email,
     const std::vector<MigratableCreditCard>& migratable_credit_cards,
     LocalCardMigrationCallback start_migrating_cards_callback) {
@@ -112,13 +117,27 @@ void TestAutofillClient::ShowLocalCardMigrationResults(
     const std::vector<MigratableCreditCard>& migratable_credit_cards,
     MigrationDeleteCardCallback delete_local_card_callback) {}
 
-void TestAutofillClient::ConfirmSaveAutofillProfile(
-    const AutofillProfile& profile,
-    base::OnceClosure callback) {
-  // Since there is no confirmation needed to save an Autofill Profile,
-  // running |callback| will proceed with saving |profile|.
-  std::move(callback).Run();
+#if !defined(OS_ANDROID) && !defined(OS_IOS)
+void TestAutofillClient::ShowWebauthnOfferDialog(
+    WebauthnDialogCallback offer_dialog_callback) {}
+
+void TestAutofillClient::ShowWebauthnVerifyPendingDialog(
+    WebauthnDialogCallback verify_pending_dialog_callback) {}
+
+void TestAutofillClient::UpdateWebauthnOfferDialogWithError() {}
+
+bool TestAutofillClient::CloseWebauthnDialog() {
+  return true;
 }
+
+void TestAutofillClient::ConfirmSaveUpiIdLocally(
+    const std::string& upi_id,
+    base::OnceCallback<void(bool accept)> callback) {}
+
+void TestAutofillClient::OfferVirtualCardOptions(
+    const std::vector<CreditCard*>& candidates,
+    base::OnceCallback<void(const std::string&)> callback) {}
+#endif
 
 void TestAutofillClient::ConfirmSaveCreditCardLocally(
     const CreditCard& card,
@@ -126,10 +145,11 @@ void TestAutofillClient::ConfirmSaveCreditCardLocally(
     LocalSaveCardPromptCallback callback) {
   confirm_save_credit_card_locally_called_ = true;
   offer_to_save_credit_card_bubble_was_shown_ = options.show_prompt;
+  save_credit_card_options_ = options;
   std::move(callback).Run(AutofillClient::ACCEPTED);
 }
 
-#if defined(OS_ANDROID)
+#if defined(OS_ANDROID) || defined(OS_IOS)
 void TestAutofillClient::ConfirmAccountNameFixFlow(
     base::OnceCallback<void(const base::string16&)> callback) {
   credit_card_name_fix_flow_bubble_was_shown_ = true;
@@ -145,16 +165,19 @@ void TestAutofillClient::ConfirmExpirationDateFixFlow(
       base::string16(base::ASCIIToUTF16("03")),
       base::string16(base::ASCIIToUTF16(test::NextYear().c_str())));
 }
-#endif  // defined(OS_ANDROID)
+#endif  // defined(OS_ANDROID) || defined(OS_IOS)
 
 void TestAutofillClient::ConfirmSaveCreditCardToCloud(
     const CreditCard& card,
-    std::unique_ptr<base::DictionaryValue> legal_message,
+    const LegalMessageLines& legal_message_lines,
     SaveCreditCardOptions options,
     UploadSaveCardPromptCallback callback) {
   offer_to_save_credit_card_bubble_was_shown_ = options.show_prompt;
+  save_credit_card_options_ = options;
   std::move(callback).Run(AutofillClient::ACCEPTED, {});
 }
+
+void TestAutofillClient::CreditCardUploadCompleted(bool card_saved) {}
 
 void TestAutofillClient::ConfirmCreditCardFillAssist(
     const CreditCard& card,
@@ -166,24 +189,30 @@ bool TestAutofillClient::HasCreditCardScanFeature() {
   return false;
 }
 
-void TestAutofillClient::ScanCreditCard(
-    const CreditCardScanCallback& callback) {
-}
+void TestAutofillClient::ScanCreditCard(CreditCardScanCallback callback) {}
 
 void TestAutofillClient::ShowAutofillPopup(
     const gfx::RectF& element_bounds,
     base::i18n::TextDirection text_direction,
     const std::vector<Suggestion>& suggestions,
     bool autoselect_first_suggestion,
+    PopupType popup_type,
     base::WeakPtr<AutofillPopupDelegate> delegate) {}
 
 void TestAutofillClient::UpdateAutofillPopupDataListValues(
     const std::vector<base::string16>& values,
-    const std::vector<base::string16>& labels) {
+    const std::vector<base::string16>& labels) {}
+
+base::span<const Suggestion> TestAutofillClient::GetPopupSuggestions() const {
+  return base::span<const Suggestion>();
 }
 
-void TestAutofillClient::HideAutofillPopup() {
-}
+void TestAutofillClient::PinPopupView() {}
+
+void TestAutofillClient::UpdatePopup(const std::vector<Suggestion>& suggestions,
+                                     autofill::PopupType popup_type) {}
+
+void TestAutofillClient::HideAutofillPopup(PopupHidingReason reason) {}
 
 bool TestAutofillClient::IsAutocompleteEnabled() {
   return true;
@@ -191,13 +220,11 @@ bool TestAutofillClient::IsAutocompleteEnabled() {
 
 void TestAutofillClient::PropagateAutofillPredictions(
     content::RenderFrameHost* rfh,
-    const std::vector<FormStructure*>& forms) {
-}
+    const std::vector<FormStructure*>& forms) {}
 
 void TestAutofillClient::DidFillOrPreviewField(
     const base::string16& autofilled_value,
-    const base::string16& profile_full_name) {
-}
+    const base::string16& profile_full_name) {}
 
 bool TestAutofillClient::IsContextSecure() {
   // Simplified secure context check for tests.
@@ -220,23 +247,18 @@ void TestAutofillClient::LoadRiskData(
 }
 
 void TestAutofillClient::InitializeUKMSources() {
-  UpdateSourceURL(GetUkmRecorder(), source_id_, form_origin_);
+  test_ukm_recorder_.UpdateSourceURL(source_id_, form_origin_);
 }
 
 void TestAutofillClient::set_form_origin(const GURL& url) {
   form_origin_ = url;
   // Also reset source_id_.
   source_id_ = ukm::UkmRecorder::GetNewSourceID();
-  UpdateSourceURL(GetUkmRecorder(), source_id_, form_origin_);
+  test_ukm_recorder_.UpdateSourceURL(source_id_, form_origin_);
 }
 
-// static
-void TestAutofillClient::UpdateSourceURL(ukm::UkmRecorder* ukm_recorder,
-                                         ukm::SourceId source_id,
-                                         GURL url) {
-  if (ukm_recorder) {
-    ukm_recorder->UpdateSourceURL(source_id, url);
-  }
+ukm::TestUkmRecorder* TestAutofillClient::GetTestUkmRecorder() {
+  return &test_ukm_recorder_;
 }
 
 }  // namespace autofill

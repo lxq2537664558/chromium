@@ -94,8 +94,53 @@ OobeTypes.TimezoneDsc;
  *   eulaAutoAccept: (boolean|undefined),
  *   eulaSendStatistics: (boolean|undefined),
  *   networkUseConnected: (boolean|undefined),
- *   updateSkipNonCritical: (boolean|undefined),
  *   arcTosAutoAccept: (boolean|undefined),
  * }}
  */
 OobeTypes.OobeConfiguration;
+
+/**
+ * Specifies the type of the information that is requested by the security token
+ * PIN dialog.
+ * Must be kept in sync with chromeos/constants/security_token_pin_types.h.
+ * @enum {number}
+ */
+OobeTypes.SecurityTokenPinDialogType = {
+  PIN: 0,
+  PUK: 1,
+};
+
+/**
+ * Specifies the type of the error that is displayed in the security token PIN
+ * dialog.
+ * Must be kept in sync with chromeos/constants/security_token_pin_types.h.
+ * @enum {number}
+ */
+OobeTypes.SecurityTokenPinDialogErrorType = {
+  NONE: 0,
+  UNKNOWN: 1,
+  INVALID_PIN: 2,
+  INVALID_PUK: 3,
+  MAX_ATTEMPTS_EXCEEDED: 4,
+};
+
+/**
+ * Configuration of the security token PIN dialog.
+ * @typedef {{
+ *   codeType: OobeTypes.SecurityTokenPinDialogType,
+ *   enableUserInput: boolean,
+ *   errorLabel: OobeTypes.SecurityTokenPinDialogErrorType,
+ *   attemptsLeft: number,
+ * }}
+ */
+OobeTypes.SecurityTokenPinDialogParameters;
+
+/**
+ * Specifies the mechanism for calculating oobe-dialog inner padding.
+ * @enum {string}
+ */
+OobeTypes.DialogPaddingMode = {
+  AUTO: 'auto',
+  NARROW: 'narrow',
+  WIDE: 'wide',
+};

@@ -19,7 +19,6 @@
 #include "components/keyed_service/core/keyed_service.h"
 #include "components/nacl/common/buildflags.h"
 #include "components/offline_pages/core/offline_page_model.h"
-#include "components/search_engines/template_url_service.h"
 #include "content/public/browser/browsing_data_remover.h"
 #include "content/public/browser/browsing_data_remover_delegate.h"
 #include "extensions/buildflags/buildflags.h"
@@ -78,6 +77,7 @@ class ChromeBrowsingDataRemoverDelegate
     DATA_TYPE_HOSTED_APP_DATA_TEST_ONLY = DATA_TYPE_EMBEDDER_BEGIN << 8,
     DATA_TYPE_CONTENT_SETTINGS = DATA_TYPE_EMBEDDER_BEGIN << 9,
     DATA_TYPE_BOOKMARKS = DATA_TYPE_EMBEDDER_BEGIN << 10,
+    DATA_TYPE_ISOLATED_ORIGINS = DATA_TYPE_EMBEDDER_BEGIN << 11,
 
     // Group datatypes.
 
@@ -92,7 +92,9 @@ class ChromeBrowsingDataRemoverDelegate
         DATA_TYPE_WEB_APP_DATA |
 #endif
         DATA_TYPE_SITE_USAGE_DATA | DATA_TYPE_DURABLE_PERMISSION |
-        DATA_TYPE_EXTERNAL_PROTOCOL_DATA,
+        DATA_TYPE_EXTERNAL_PROTOCOL_DATA | DATA_TYPE_ISOLATED_ORIGINS |
+        content::BrowsingDataRemover::DATA_TYPE_TRUST_TOKENS |
+        content::BrowsingDataRemover::DATA_TYPE_CONVERSIONS,
 
     // Datatypes protected by Important Sites.
     IMPORTANT_SITES_DATA_TYPES =
@@ -160,15 +162,14 @@ class ChromeBrowsingDataRemoverDelegate
 
   // BrowsingDataRemoverDelegate:
   content::BrowsingDataRemoverDelegate::EmbedderOriginTypeMatcher
-  GetOriginTypeMatcher() const override;
-  bool MayRemoveDownloadHistory() const override;
-  void RemoveEmbedderData(
-      const base::Time& delete_begin,
-      const base::Time& delete_end,
-      int remove_mask,
-      const content::BrowsingDataFilterBuilder& filter_builder,
-      int origin_type_mask,
-      base::OnceClosure callback) override;
+  GetOriginTypeMatcher() override;
+  bool MayRemoveDownloadHistory() override;
+  void RemoveEmbedderData(const base::Time& delete_begin,
+                          const base::Time& delete_end,
+                          int remove_mask,
+                          content::BrowsingDataFilterBuilder* filter_builder,
+                          int origin_type_mask,
+                          base::OnceClosure callback) override;
 
 #if defined(OS_ANDROID)
   void OverrideWebappRegistryForTesting(
@@ -182,7 +183,7 @@ class ChromeBrowsingDataRemoverDelegate
 #endif
 
   using DomainReliabilityClearer = base::RepeatingCallback<void(
-      const content::BrowsingDataFilterBuilder& filter_builder,
+      content::BrowsingDataFilterBuilder* filter_builder,
       network::mojom::NetworkContext_DomainReliabilityClearMode,
       network::mojom::NetworkContext::ClearDomainReliabilityCallback)>;
   void OverrideDomainReliabilityClearerForTesting(
@@ -226,7 +227,11 @@ class ChromeBrowsingDataRemoverDelegate
     kHostCache = 29,
     kTpmAttestationKeys = 30,
     kStrikes = 31,
-    kMaxValue = kStrikes,
+    kLeakedCredentials = 32,  // deprecated
+    kFieldInfo = 33,
+    kCompromisedCredentials = 34,
+    kUserDataSnapshot = 35,
+    kMaxValue = kUserDataSnapshot,
   };
 
   // Called by CreateTaskCompletionClosure().
@@ -250,11 +255,6 @@ class ChromeBrowsingDataRemoverDelegate
   // Records unfinished tasks from |pending_sub_tasks_| after a delay.
   void RecordUnfinishedSubTasks();
 
-  // Callback for when TemplateURLService has finished loading. Clears the data,
-  // clears the respective waiting flag, and invokes NotifyIfDone.
-  void OnKeywordsLoaded(base::RepeatingCallback<bool(const GURL&)> url_filter,
-                        base::OnceClosure done);
-
   // A helper method that checks if time period is for "all time".
   bool IsForAllTime() const;
 
@@ -272,9 +272,6 @@ class ChromeBrowsingDataRemoverDelegate
       base::RepeatingCallback<bool(const std::string&)> plugin_filter,
       base::OnceClosure done,
       const std::vector<std::string>& sites);
-
-  // Indicates that LSO cookies for one website have been deleted.
-  void OnFlashDataDeleted();
 
   // PepperFlashSettingsManager::Client implementation.
   void OnDeauthorizeFlashContentLicensesCompleted(uint32_t request_id,
@@ -319,15 +316,14 @@ class ChromeBrowsingDataRemoverDelegate
   // Used if we need to clear history.
   base::CancelableTaskTracker history_task_tracker_;
 
-  std::unique_ptr<TemplateURLService::Subscription> template_url_sub_;
-
 #if defined(OS_ANDROID)
   // WebappRegistry makes calls across the JNI. In unit tests, the Java side is
   // not initialised, so the registry must be mocked out.
   std::unique_ptr<WebappRegistry> webapp_registry_;
 #endif
 
-  base::WeakPtrFactory<ChromeBrowsingDataRemoverDelegate> weak_ptr_factory_;
+  base::WeakPtrFactory<ChromeBrowsingDataRemoverDelegate> weak_ptr_factory_{
+      this};
 
   DISALLOW_COPY_AND_ASSIGN(ChromeBrowsingDataRemoverDelegate);
 };

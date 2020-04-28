@@ -7,14 +7,14 @@
 #include <memory>
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/renderer/platform/image-decoders/image_frame.h"
-#include "third_party/blink/renderer/platform/shared_buffer.h"
 #include "third_party/blink/renderer/platform/testing/unit_test_helpers.h"
+#include "third_party/blink/renderer/platform/wtf/shared_buffer.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_builder.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_hasher.h"
 
 namespace blink {
 
-scoped_refptr<SharedBuffer> ReadFile(const char* file_name) {
+scoped_refptr<SharedBuffer> ReadFile(StringView file_name) {
   StringBuilder file_path;
   file_path.Append(test::BlinkWebTestsDir());
   file_path.Append(file_name);
@@ -377,6 +377,7 @@ void TestByteByByteDecode(DecoderCreator create_decoder,
                           const char* file,
                           size_t expected_frame_count,
                           int expected_repetition_count) {
+  SCOPED_TRACE(file);
   scoped_refptr<SharedBuffer> data = ReadFile(file);
   ASSERT_TRUE(data.get());
   TestByteByByteDecode(create_decoder, data.get(), expected_frame_count,
@@ -387,6 +388,7 @@ void TestByteByByteDecode(DecoderCreator create_decoder,
                           const char* file,
                           size_t expected_frame_count,
                           int expected_repetition_count) {
+  SCOPED_TRACE(file);
   scoped_refptr<SharedBuffer> data = ReadFile(dir, file);
   ASSERT_TRUE(data.get());
   TestByteByByteDecode(create_decoder, data.get(), expected_frame_count,

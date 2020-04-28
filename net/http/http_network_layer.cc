@@ -4,14 +4,14 @@
 
 #include "net/http/http_network_layer.h"
 
-#include "base/logging.h"
+#include "base/check_op.h"
 #include "base/power_monitor/power_monitor.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
 #include "net/http/http_network_session.h"
 #include "net/http/http_network_transaction.h"
-#include "net/http/http_server_properties_impl.h"
+#include "net/http/http_server_properties.h"
 #include "net/http/http_stream_factory_job.h"
 #include "net/spdy/spdy_session.h"
 #include "net/spdy/spdy_session_pool.h"
@@ -24,18 +24,14 @@ HttpNetworkLayer::HttpNetworkLayer(HttpNetworkSession* session)
       suspended_(false) {
   DCHECK(session_);
 #if defined(OS_WIN)
-  base::PowerMonitor* power_monitor = base::PowerMonitor::Get();
-  if (power_monitor)
-    power_monitor->AddObserver(this);
+  base::PowerMonitor::AddObserver(this);
 #endif
 }
 
 HttpNetworkLayer::~HttpNetworkLayer() {
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
 #if defined(OS_WIN)
-  base::PowerMonitor* power_monitor = base::PowerMonitor::Get();
-  if (power_monitor)
-    power_monitor->RemoveObserver(this);
+  base::PowerMonitor::RemoveObserver(this);
 #endif
 }
 
@@ -59,7 +55,7 @@ HttpNetworkSession* HttpNetworkLayer::GetSession() {
 
 void HttpNetworkLayer::OnSuspend() {
   suspended_ = true;
-  session_->CloseIdleConnections();
+  session_->CloseIdleConnections("Entering suspend mode");
 }
 
 void HttpNetworkLayer::OnResume() {

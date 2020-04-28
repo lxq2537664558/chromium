@@ -34,7 +34,6 @@
 #include "third_party/blink/renderer/core/frame/local_frame.h"
 #include "third_party/blink/renderer/core/frame/local_frame_client.h"
 #include "third_party/blink/renderer/core/frame/local_frame_view.h"
-#include "third_party/blink/renderer/core/frame/use_counter.h"
 #include "third_party/blink/renderer/core/html/html_body_element.h"
 #include "third_party/blink/renderer/core/html/html_embed_element.h"
 #include "third_party/blink/renderer/core/html/html_html_element.h"
@@ -44,20 +43,15 @@
 #include "third_party/blink/renderer/core/loader/document_loader.h"
 #include "third_party/blink/renderer/core/loader/frame_loader.h"
 #include "third_party/blink/renderer/platform/bindings/exception_state.h"
+#include "third_party/blink/renderer/platform/heap/heap.h"
+#include "third_party/blink/renderer/platform/instrumentation/use_counter.h"
+#include "third_party/blink/renderer/platform/scheduler/public/scheduling_policy.h"
 
 namespace blink {
-
-using namespace html_names;
 
 // FIXME: Share more code with MediaDocumentParser.
 class PluginDocumentParser : public RawDataDocumentParser {
  public:
-  static PluginDocumentParser* Create(PluginDocument* document,
-                                      Color background_color) {
-    return MakeGarbageCollected<PluginDocumentParser>(document,
-                                                      background_color);
-  }
-
   PluginDocumentParser(Document* document, Color background_color)
       : RawDataDocumentParser(document),
         embed_element_(nullptr),
@@ -104,14 +98,14 @@ void PluginDocumentParser::CreateDocumentStructure() {
       !frame->Loader().AllowPlugins(kNotAboutToInstantiatePlugin))
     return;
 
-  HTMLHtmlElement* root_element = HTMLHtmlElement::Create(*GetDocument());
+  auto* root_element = MakeGarbageCollected<HTMLHtmlElement>(*GetDocument());
   GetDocument()->AppendChild(root_element);
   root_element->InsertedByParser();
   if (IsStopped())
     return;  // runScriptsAtDocumentElementAvailable can detach the frame.
 
-  HTMLBodyElement* body = HTMLBodyElement::Create(*GetDocument());
-  body->setAttribute(kStyleAttr,
+  auto* body = MakeGarbageCollected<HTMLBodyElement>(*GetDocument());
+  body->setAttribute(html_names::kStyleAttr,
                      "height: 100%; width: 100%; overflow: hidden; margin: 0");
   body->SetInlineStyleProperty(
       CSSPropertyID::kBackgroundColor,
@@ -123,14 +117,15 @@ void PluginDocumentParser::CreateDocumentStructure() {
     return;
   }
 
-  embed_element_ = HTMLEmbedElement::Create(*GetDocument());
-  embed_element_->setAttribute(kWidthAttr, "100%");
-  embed_element_->setAttribute(kHeightAttr, "100%");
-  embed_element_->setAttribute(kNameAttr, "plugin");
-  embed_element_->setAttribute(kIdAttr, "plugin");
-  embed_element_->setAttribute(kSrcAttr,
+  embed_element_ = MakeGarbageCollected<HTMLEmbedElement>(*GetDocument());
+  embed_element_->setAttribute(html_names::kWidthAttr, "100%");
+  embed_element_->setAttribute(html_names::kHeightAttr, "100%");
+  embed_element_->setAttribute(html_names::kNameAttr, "plugin");
+  embed_element_->setAttribute(html_names::kIdAttr, "plugin");
+  embed_element_->setAttribute(html_names::kSrcAttr,
                                AtomicString(GetDocument()->Url().GetString()));
-  embed_element_->setAttribute(kTypeAttr, GetDocument()->Loader()->MimeType());
+  embed_element_->setAttribute(html_names::kTypeAttr,
+                               GetDocument()->Loader()->MimeType());
   body->AppendChild(embed_element_);
   if (IsStopped()) {
     // Possibly detached by a mutation event listener installed in
@@ -138,9 +133,9 @@ void PluginDocumentParser::CreateDocumentStructure() {
     return;
   }
 
-  ToPluginDocument(GetDocument())->SetPluginNode(embed_element_);
+  To<PluginDocument>(GetDocument())->SetPluginNode(embed_element_);
 
-  GetDocument()->UpdateStyleAndLayout();
+  GetDocument()->UpdateStyleAndLayout(DocumentUpdateReason::kPlugin);
 
   // We need the plugin to load synchronously so we can get the
   // WebPluginContainerImpl below so flush the layout tasks now instead of
@@ -182,19 +177,23 @@ void PluginDocumentParser::StopParsing() {
 }
 
 WebPluginContainerImpl* PluginDocumentParser::GetPluginView() const {
-  return ToPluginDocument(GetDocument())->GetPluginView();
+  return To<PluginDocument>(GetDocument())->GetPluginView();
 }
 
-PluginDocument::PluginDocument(const DocumentInit& initializer,
-                               Color background_color)
+PluginDocument::PluginDocument(const DocumentInit& initializer)
     : HTMLDocument(initializer, kPluginDocumentClass),
-      background_color_(background_color) {
+      background_color_(initializer.GetPluginBackgroundColor()) {
   SetCompatibilityMode(kQuirksMode);
   LockCompatibilityMode();
+  if (GetScheduler()) {
+    GetScheduler()->RegisterStickyFeature(
+        SchedulingPolicy::Feature::kContainsPlugins,
+        {SchedulingPolicy::RecordMetricsForBackForwardCache()});
+  }
 }
 
 DocumentParser* PluginDocument::CreateParser() {
-  return PluginDocumentParser::Create(this, background_color_);
+  return MakeGarbageCollected<PluginDocumentParser>(this, background_color_);
 }
 
 WebPluginContainerImpl* PluginDocument::GetPluginView() {

@@ -17,7 +17,6 @@
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "components/prefs/pref_service.h"
-#include "components/signin/core/browser/account_consistency_method.h"
 #include "components/zoom/test/zoom_test_utils.h"
 #include "content/public/browser/host_zoom_map.h"
 #include "content/public/browser/navigation_entry.h"
@@ -149,7 +148,7 @@ IN_PROC_BROWSER_TEST_F(ZoomControllerBrowserTest,
 
   ui_test_utils::NavigateToURLWithDisposition(
       browser(), url, WindowOpenDisposition::NEW_FOREGROUND_TAB,
-      ui_test_utils::BROWSER_TEST_WAIT_FOR_NAVIGATION);
+      ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP);
   {
     content::WebContents* web_contents = tab_strip->GetActiveWebContents();
 
@@ -255,7 +254,7 @@ IN_PROC_BROWSER_TEST_F(ZoomControllerBrowserTest,
   // ZoomController correctly detects this.
   ui_test_utils::NavigateToURLWithDisposition(
       browser(), signin_url, WindowOpenDisposition::NEW_FOREGROUND_TAB,
-      ui_test_utils::BROWSER_TEST_WAIT_FOR_NAVIGATION);
+      ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP);
   login_ui_test_utils::WaitUntilUIReady(browser());
   content::WebContents* web_contents =
       browser()->tab_strip_model()->GetActiveWebContents();

@@ -18,7 +18,6 @@
 #include "base/time/time.h"
 #include "chrome/browser/extensions/extension_message_bubble_controller.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/sessions/session_tab_helper.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/extensions/extension_action_view_controller.h"
@@ -109,16 +108,13 @@ ToolbarActionsBar::ToolbarActionsBar(ToolbarActionsBarDelegate* delegate,
       should_check_extension_bubble_(!main_bar),
       popped_out_action_(nullptr),
       is_popped_out_sticky_(false),
-      is_showing_bubble_(false),
-      tab_strip_observer_(this),
-      weak_ptr_factory_(this) {
+      is_showing_bubble_(false) {
   if (model_)  // |model_| can be null in unittests.
     model_observer_.Add(model_);
 
-  if (base::FeatureList::IsEnabled(features::kExtensionsToolbarMenu))
-    DCHECK(!in_overflow_mode());
+  DCHECK(!base::FeatureList::IsEnabled(features::kExtensionsToolbarMenu));
 
-  tab_strip_observer_.Add(browser_->tab_strip_model());
+  browser_->tab_strip_model()->AddObserver(this);
 }
 
 ToolbarActionsBar::~ToolbarActionsBar() {
@@ -126,8 +122,21 @@ ToolbarActionsBar::~ToolbarActionsBar() {
   // the order of deletion between the views and the ToolbarActionsBar.
   DCHECK(toolbar_actions_.empty())
       << "Must call DeleteActions() before destruction.";
+
+  // Make sure we don't listen to any more model changes during
+  // ToolbarActionsBar destruction.
+  model_observer_.RemoveAll();
+
   for (ToolbarActionsBarObserver& observer : observers_)
     observer.OnToolbarActionsBarDestroyed();
+}
+
+// static
+ToolbarActionsBar* ToolbarActionsBar::FromBrowserWindow(BrowserWindow* window) {
+  DCHECK(!base::FeatureList::IsEnabled(features::kExtensionsToolbarMenu));
+  // The ToolbarActionsBar is the only implementation of the ExtensionsContainer
+  // if the ExtensionsMenu feature is disabled.
+  return static_cast<ToolbarActionsBar*>(window->GetExtensionsContainer());
 }
 
 // static
@@ -374,14 +383,19 @@ void ToolbarActionsBar::Update() {
   ReorderActions();  // Also triggers a draw.
 }
 
-bool ToolbarActionsBar::ShowToolbarActionPopup(const std::string& action_id,
-                                               bool grant_active_tab) {
+bool ToolbarActionsBar::ShowToolbarActionPopupForAPICall(
+    const std::string& action_id) {
   // Don't override another popup, and only show in the active window.
   if (popup_owner() || !browser_->window()->IsActive())
     return false;
 
   ToolbarActionViewController* action = GetActionForId(action_id);
-  return action && action->ExecuteAction(grant_active_tab);
+  // Since this was triggered by an API call, we never want to grant activeTab
+  // to the extension.
+  constexpr bool kGrantActiveTab = false;
+  return action && action->ExecuteAction(
+                       kGrantActiveTab,
+                       ToolbarActionViewController::InvocationSource::kApi);
 }
 
 void ToolbarActionsBar::SetOverflowRowWidth(int width) {
@@ -469,10 +483,10 @@ void ToolbarActionsBar::OnBubbleClosed() {
   is_showing_bubble_ = false;
 }
 
-bool ToolbarActionsBar::IsActionVisibleOnMainBar(
+bool ToolbarActionsBar::IsActionVisibleOnToolbar(
     const ToolbarActionViewController* action) const {
   if (in_overflow_mode())
-    return main_bar_->IsActionVisibleOnMainBar(action);
+    return main_bar_->IsActionVisibleOnToolbar(action);
 
   if (action == popped_out_action_)
     return true;
@@ -485,12 +499,26 @@ bool ToolbarActionsBar::IsActionVisibleOnMainBar(
   return false;
 }
 
+extensions::ExtensionContextMenuModel::ButtonVisibility
+ToolbarActionsBar::GetActionVisibility(
+    const ToolbarActionViewController* action) const {
+  extensions::ExtensionContextMenuModel::ButtonVisibility visibility =
+      extensions::ExtensionContextMenuModel::VISIBLE;
+
+  if (GetPoppedOutAction() == action) {
+    visibility = extensions::ExtensionContextMenuModel::TRANSITIVELY_VISIBLE;
+  } else if (!IsActionVisibleOnToolbar(action)) {
+    visibility = extensions::ExtensionContextMenuModel::OVERFLOWED;
+  }
+  return visibility;
+}
+
 void ToolbarActionsBar::PopOutAction(ToolbarActionViewController* controller,
                                      bool is_sticky,
                                      const base::Closure& closure) {
   DCHECK(!in_overflow_mode()) << "Only the main bar can pop out actions.";
   DCHECK(!popped_out_action_) << "Only one action can be popped out at a time!";
-  bool needs_redraw = !IsActionVisibleOnMainBar(controller);
+  bool needs_redraw = !IsActionVisibleOnToolbar(controller);
   popped_out_action_ = controller;
   is_popped_out_sticky_ = is_sticky;
   if (needs_redraw) {
@@ -509,6 +537,10 @@ void ToolbarActionsBar::PopOutAction(ToolbarActionViewController* controller,
   }
 }
 
+ToolbarActionViewController* ToolbarActionsBar::GetPoppedOutAction() const {
+  return popped_out_action_;
+}
+
 void ToolbarActionsBar::UndoPopOut() {
   DCHECK(!in_overflow_mode()) << "Only the main bar can pop out actions.";
   DCHECK(popped_out_action_);
@@ -516,7 +548,7 @@ void ToolbarActionsBar::UndoPopOut() {
   popped_out_action_ = nullptr;
   is_popped_out_sticky_ = false;
   popped_out_closure_.Reset();
-  if (!IsActionVisibleOnMainBar(controller))
+  if (!IsActionVisibleOnToolbar(controller))
     delegate_->Redraw(true);
   ResizeDelegate(gfx::Tween::LINEAR);
 }
@@ -558,7 +590,7 @@ void ToolbarActionsBar::ShowToolbarActionBubble(
     ToolbarActionViewController* controller =
         GetActionForId(bubble->GetAnchorActionId());
     bool close_overflow_menu =
-        controller && !IsActionVisibleOnMainBar(controller);
+        controller && !IsActionVisibleOnToolbar(controller);
     if (close_overflow_menu)
       delegate_->CloseOverflowMenuIfOpen();
 
@@ -788,6 +820,10 @@ void ToolbarActionsBar::OnToolbarModelInitialized() {
   CHECK(toolbar_actions_.empty());
   CreateActions();
   ResizeDelegate(gfx::Tween::EASE_OUT);
+}
+
+void ToolbarActionsBar::OnToolbarPinnedActionsChanged() {
+  NOTREACHED();
 }
 
 void ToolbarActionsBar::OnTabStripModelChanged(

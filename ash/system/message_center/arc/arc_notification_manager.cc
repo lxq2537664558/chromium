@@ -7,6 +7,7 @@
 #include <memory>
 #include <utility>
 
+#include "ash/public/cpp/arc_app_id_provider.h"
 #include "ash/public/cpp/ash_features.h"
 #include "ash/system/message_center/arc/arc_notification_constants.h"
 #include "ash/system/message_center/arc/arc_notification_delegate.h"
@@ -73,15 +74,16 @@ class ArcNotificationManager::InstanceOwner {
   InstanceOwner() = default;
   ~InstanceOwner() = default;
 
-  void SetInstancePtr(NotificationsInstancePtr instance_ptr) {
+  void SetInstanceRemote(
+      mojo::PendingRemote<arc::mojom::NotificationsInstance> instance_remote) {
     DCHECK(!channel_);
 
     channel_ =
         std::make_unique<MojoChannel<NotificationsInstance, NotificationsHost>>(
-            &holder_, std::move(instance_ptr));
+            &holder_, std::move(instance_remote));
 
     // Using base::Unretained because |this| owns |channel_|.
-    channel_->set_connection_error_handler(
+    channel_->set_disconnect_handler(
         base::BindOnce(&InstanceOwner::OnDisconnected, base::Unretained(this)));
     channel_->QueryVersion();
   }
@@ -138,8 +140,9 @@ ArcNotificationManager::~ArcNotificationManager() {
   instance_owner_.reset();
 }
 
-void ArcNotificationManager::SetInstance(NotificationsInstancePtr instance) {
-  instance_owner_->SetInstancePtr(std::move(instance));
+void ArcNotificationManager::SetInstance(
+    mojo::PendingRemote<arc::mojom::NotificationsInstance> instance_remote) {
+  instance_owner_->SetInstanceRemote(std::move(instance_remote));
 }
 
 ConnectionHolder<NotificationsInstance, NotificationsHost>*
@@ -191,10 +194,11 @@ void ArcNotificationManager::OnNotificationPosted(ArcNotificationDataPtr data) {
     it = result.first;
   }
 
-  delegate_->GetAppIdByPackageName(
-      data->package_name.value_or(std::string()),
-      base::BindOnce(&ArcNotificationManager::OnGotAppId,
-                     weak_ptr_factory_.GetWeakPtr(), std::move(data)));
+  std::string app_id =
+      data->package_name
+          ? ArcAppIdProvider::Get()->GetAppIdByPackageName(*data->package_name)
+          : std::string();
+  it->second->OnUpdatedFromAndroid(std::move(data), app_id);
 }
 
 void ArcNotificationManager::OnNotificationUpdated(
@@ -235,10 +239,11 @@ void ArcNotificationManager::OnNotificationUpdated(
     previously_focused_notification_key_.clear();
   }
 
-  delegate_->GetAppIdByPackageName(
-      data->package_name.value_or(std::string()),
-      base::BindOnce(&ArcNotificationManager::OnGotAppId,
-                     weak_ptr_factory_.GetWeakPtr(), std::move(data)));
+  std::string app_id =
+      data->package_name
+          ? ArcAppIdProvider::Get()->GetAppIdByPackageName(*data->package_name)
+          : std::string();
+  it->second->OnUpdatedFromAndroid(std::move(data), app_id);
 }
 
 void ArcNotificationManager::OpenMessageCenter() {
@@ -373,6 +378,31 @@ void ArcNotificationManager::SendNotificationClickedOnChrome(
       key, ArcNotificationEvent::BODY_CLICKED);
 }
 
+void ArcNotificationManager::SendNotificationActivatedInChrome(
+    const std::string& key,
+    bool activated) {
+  if (items_.find(key) == items_.end()) {
+    VLOG(3)
+        << "Chrome requests to fire an activation event on notification (key: "
+        << key << "), but it is gone.";
+    return;
+  }
+
+  auto* notifications_instance = ARC_GET_INSTANCE_FOR_METHOD(
+      instance_owner_->holder(), SendNotificationEventToAndroid);
+
+  // On shutdown, the ARC channel may quit earlier than notifications.
+  if (!notifications_instance) {
+    VLOG(2) << "ARC Notification (key: " << key
+            << ") is (de)activated, but the ARC channel has already gone.";
+    return;
+  }
+
+  notifications_instance->SendNotificationEventToAndroid(
+      key, activated ? ArcNotificationEvent::ACTIVATED
+                     : ArcNotificationEvent::DEACTIVATED);
+}
+
 void ArcNotificationManager::CreateNotificationWindow(const std::string& key) {
   if (items_.find(key) == items_.end()) {
     VLOG(3) << "Chrome requests to create window on notification (key: " << key
@@ -422,7 +452,7 @@ void ArcNotificationManager::OpenNotificationSettings(const std::string& key) {
 
 void ArcNotificationManager::OpenNotificationSnoozeSettings(
     const std::string& key) {
-  if (!base::ContainsKey(items_, key)) {
+  if (!base::Contains(items_, key)) {
     DVLOG(3) << "Chrome requests to show a snooze setting gut on the"
              << "notification (key: " << key << "), but it is gone.";
     return;
@@ -489,16 +519,6 @@ bool ArcNotificationManager::ShouldIgnoreNotification(
   return false;
 }
 
-void ArcNotificationManager::OnGotAppId(ArcNotificationDataPtr data,
-                                        const std::string& app_id) {
-  const std::string& key = data->key;
-  auto it = items_.find(key);
-  if (it == items_.end())
-    return;
-
-  it->second->OnUpdatedFromAndroid(std::move(data), app_id);
-}
-
 void ArcNotificationManager::OnDoNotDisturbStatusUpdated(
     ArcDoNotDisturbStatusPtr status) {
   // Remove the observer to prevent from sending the command to Android since
@@ -555,7 +575,7 @@ void ArcNotificationManager::SetNotificationConfiguration() {
 
   NotificationConfigurationPtr configuration = NotificationConfiguration::New();
   configuration->expansion_animation =
-      ash::features::IsNotificationExpansionAnimationEnabled();
+      features::IsNotificationExpansionAnimationEnabled();
 
   notifications_instance->SetNotificationConfiguration(
       std::move(configuration));

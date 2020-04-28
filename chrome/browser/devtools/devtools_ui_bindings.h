@@ -80,10 +80,11 @@ class DevToolsUIBindings : public DevToolsEmbedderMessageDispatcher::Delegate,
 
   // Takes ownership over the |delegate|.
   void SetDelegate(Delegate* delegate);
-  void CallClientFunction(const std::string& function_name,
-                          const base::Value* arg1,
-                          const base::Value* arg2,
-                          const base::Value* arg3);
+  void CallClientMethod(const std::string& object_name,
+                        const std::string& method_name,
+                        const base::Value& arg1 = {},
+                        const base::Value& arg2 = {},
+                        const base::Value& arg3 = {});
   void AttachTo(const scoped_refptr<content::DevToolsAgentHost>& agent_host);
   void Detach();
   bool IsAttachedTo(content::DevToolsAgentHost* agent_host);
@@ -93,7 +94,7 @@ class DevToolsUIBindings : public DevToolsEmbedderMessageDispatcher::Delegate,
 
   // content::DevToolsAgentHostClient implementation.
   void DispatchProtocolMessage(content::DevToolsAgentHost* agent_host,
-                               const std::string& message) override;
+                               base::span<const uint8_t> message) override;
   void AgentHostClosed(content::DevToolsAgentHost* agent_host) override;
 
   // DevToolsEmbedderMessageDispatcher::Delegate implementation.
@@ -152,6 +153,7 @@ class DevToolsUIBindings : public DevToolsEmbedderMessageDispatcher::Delegate,
                                  int boundary_value) override;
   void RecordPerformanceHistogram(const std::string& name,
                                   double duration) override;
+  void RecordUserMetricsAction(const std::string& name) override;
   void SendJsonRequest(const DispatchCallback& callback,
                        const std::string& browser_id,
                        const std::string& url) override;
@@ -253,7 +255,7 @@ class DevToolsUIBindings : public DevToolsEmbedderMessageDispatcher::Delegate,
   using ExtensionsAPIs = std::map<std::string, std::string>;
   ExtensionsAPIs extensions_api_;
 
-  base::WeakPtrFactory<DevToolsUIBindings> weak_factory_;
+  base::WeakPtrFactory<DevToolsUIBindings> weak_factory_{this};
 
   DISALLOW_COPY_AND_ASSIGN(DevToolsUIBindings);
 };

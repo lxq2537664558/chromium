@@ -9,9 +9,10 @@
 #include <utility>
 
 #include "base/bind.h"
+#include "base/check_op.h"
 #include "base/compiler_specific.h"
 #include "base/location.h"
-#include "base/logging.h"
+#include "base/notreached.h"
 #include "base/single_thread_task_runner.h"
 #include "base/threading/thread_task_runner_handle.h"
 #include "net/base/completion_once_callback.h"
@@ -54,7 +55,6 @@ class FailingHttpTransaction : public HttpTransaction {
            int buf_len,
            CompletionOnceCallback callback) override;
   void StopCaching() override;
-  bool GetFullRequestHeaders(HttpRequestHeaders* headers) const override;
   int64_t GetTotalReceivedBytes() const override;
   int64_t GetTotalSentBytes() const override;
   void DoneReading() override;
@@ -69,8 +69,6 @@ class FailingHttpTransaction : public HttpTransaction {
       WebSocketHandshakeStreamBase::CreateHelper* create_helper) override;
   void SetBeforeNetworkStartCallback(
       const BeforeNetworkStartCallback& callback) override;
-  void SetBeforeHeadersSentCallback(
-      const BeforeHeadersSentCallback& callback) override;
   int ResumeNetworkStart() override;
   void GetConnectionAttempts(ConnectionAttempts* out) const override;
   void SetRequestHeadersCallback(RequestHeadersCallback) override {}
@@ -125,11 +123,6 @@ int FailingHttpTransaction::Read(IOBuffer* buf,
 
 void FailingHttpTransaction::StopCaching()  {}
 
-bool FailingHttpTransaction::GetFullRequestHeaders(
-    HttpRequestHeaders* headers) const  {
-  return false;
-}
-
 int64_t FailingHttpTransaction::GetTotalReceivedBytes() const {
   return 0;
 }
@@ -178,9 +171,6 @@ void FailingHttpTransaction::SetWebSocketHandshakeStreamCreateHelper(
 void FailingHttpTransaction::SetBeforeNetworkStartCallback(
     const BeforeNetworkStartCallback& callback)  {
 }
-
-void FailingHttpTransaction::SetBeforeHeadersSentCallback(
-    const BeforeHeadersSentCallback& callback) {}
 
 int FailingHttpTransaction::ResumeNetworkStart()  {
   NOTREACHED();

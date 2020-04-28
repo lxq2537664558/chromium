@@ -6,7 +6,6 @@
 
 #include <memory>
 
-#include "ash/public/interfaces/login_screen.mojom.h"
 #include "ash/wm/window_state.h"
 #include "base/bind.h"
 #include "base/macros.h"
@@ -29,30 +28,12 @@
 #include "components/user_manager/user_names.h"
 #include "content/public/test/test_utils.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "ui/base/ui_base_features.h"
 #include "ui/compositor/scoped_animation_duration_scale_mode.h"
 
 namespace chromeos {
 namespace {
 
 constexpr char kFingerprint[] = "pinky";
-
-class FullscreenWaiter {
- public:
-  explicit FullscreenWaiter(Browser* browser) : browser_(browser) {}
-  ~FullscreenWaiter() = default;
-
-  void WaitForState(bool fullscreen) {
-    if (browser_->window()->IsFullscreen() != fullscreen)
-      observer_.Wait();
-  }
-
- private:
-  FullscreenNotificationObserver observer_;
-  Browser* browser_;
-
-  DISALLOW_COPY_AND_ASSIGN(FullscreenWaiter);
-};
 
 class ScreenLockerTest : public InProcessBrowserTest {
  public:
@@ -77,8 +58,8 @@ class ScreenLockerTest : public InProcessBrowserTest {
 
     FakeBiodClient::Get()->StartEnrollSession(
         "test-user", std::string(),
-        base::BindRepeating(&ScreenLockerTest::OnStartSession,
-                            base::Unretained(this)));
+        base::BindOnce(&ScreenLockerTest::OnStartSession,
+                       base::Unretained(this)));
     base::RunLoop().RunUntilIdle();
 
     FakeBiodClient::Get()->SendEnrollScanDone(
@@ -137,75 +118,59 @@ IN_PROC_BROWSER_TEST_F(ScreenLockerTest, LockScreenWhileAddingUser) {
 
 // Test how locking the screen affects an active fullscreen window.
 IN_PROC_BROWSER_TEST_F(ScreenLockerTest, TestFullscreenExit) {
-  // WebUiScreenLockerTest fails with Mash because of unexpected window
-  // structure. Fortunately we will deprecate the WebUI-based screen locker
-  // soon, so it is okay to skip it.  See https://crbug.com/888779
-  if (features::IsUsingWindowService())
-    return;
   // 1) If the active browser window is in fullscreen and the fullscreen window
   // does not have all the pixels (e.g. the shelf is auto hidden instead of
-  // hidden), locking the screen should not exit fullscreen. The shelf is
+  // hidden), locking the screen should exit fullscreen. The shelf is
   // auto hidden when in immersive fullscreen.
   ScreenLockerTester tester;
   BrowserWindow* browser_window = browser()->window();
-  ash::wm::WindowState* window_state =
-      ash::wm::GetWindowState(browser_window->GetNativeWindow());
+  ash::WindowState* window_state =
+      ash::WindowState::Get(browser_window->GetNativeWindow());
   {
-    FullscreenWaiter fullscreen_waiter(browser());
+    FullscreenNotificationObserver fullscreen_waiter(browser());
     browser()
         ->exclusive_access_manager()
         ->fullscreen_controller()
         ->ToggleBrowserFullscreenMode();
-    fullscreen_waiter.WaitForState(true);
+    fullscreen_waiter.Wait();
     EXPECT_TRUE(browser_window->IsFullscreen());
     EXPECT_FALSE(window_state->GetHideShelfWhenFullscreen());
     EXPECT_FALSE(tester.IsLocked());
   }
   {
-    FullscreenWaiter fullscreen_waiter(browser());
     tester.Lock();
-    fullscreen_waiter.WaitForState(true);
-    EXPECT_TRUE(browser_window->IsFullscreen());
-    EXPECT_FALSE(window_state->GetHideShelfWhenFullscreen());
+    EXPECT_FALSE(browser_window->IsFullscreen());
+    EXPECT_TRUE(window_state->GetHideShelfWhenFullscreen());
     EXPECT_TRUE(tester.IsLocked());
   }
   tester.SetUnlockPassword(user_manager::StubAccountId(), "pass");
   tester.UnlockWithPassword(user_manager::StubAccountId(), "pass");
   EXPECT_FALSE(tester.IsLocked());
-  {
-    FullscreenWaiter fullscreen_waiter(browser());
-    browser()
-        ->exclusive_access_manager()
-        ->fullscreen_controller()
-        ->ToggleBrowserFullscreenMode();
-    fullscreen_waiter.WaitForState(false);
-    EXPECT_FALSE(browser_window->IsFullscreen());
-  }
+  EXPECT_FALSE(browser_window->IsFullscreen());
 
   // Browser window should be activated after screen locker is gone. Otherwise,
   // the rest of the test would fail.
-  ASSERT_EQ(window_state, ash::wm::GetActiveWindowState());
+  ASSERT_EQ(window_state, ash::WindowState::ForActiveWindow());
 
-  // 2) If the active browser window is in fullscreen and the fullscreen window
-  // has all of the pixels, locking the screen should exit fullscreen. The
-  // fullscreen window has all of the pixels when in tab fullscreen.
+  // 2) Similar to 1) if the active browser window is in fullscreen and the
+  // fullscreen window has all of the pixels, locking the screen should exit
+  // fullscreen. The fullscreen window has all of the pixels when in tab
+  // fullscreen.
   {
-    FullscreenWaiter fullscreen_waiter(browser());
+    FullscreenNotificationObserver fullscreen_waiter(browser());
     content::WebContents* web_contents =
         browser()->tab_strip_model()->GetActiveWebContents();
     browser()
         ->exclusive_access_manager()
         ->fullscreen_controller()
         ->EnterFullscreenModeForTab(web_contents, GURL());
-    fullscreen_waiter.WaitForState(true);
+    fullscreen_waiter.Wait();
     EXPECT_TRUE(browser_window->IsFullscreen());
     EXPECT_TRUE(window_state->GetHideShelfWhenFullscreen());
     EXPECT_FALSE(tester.IsLocked());
   }
   {
-    FullscreenWaiter fullscreen_waiter(browser());
     tester.Lock();
-    fullscreen_waiter.WaitForState(false);
     EXPECT_FALSE(browser_window->IsFullscreen());
     EXPECT_TRUE(tester.IsLocked());
   }
@@ -249,14 +214,13 @@ IN_PROC_BROWSER_TEST_F(ScreenLockerTest, PasswordAuthWhenAuthDisabled) {
   // Disable authentication for user.
   ScreenLocker::default_screen_locker()->DisableAuthForUser(
       user_manager::StubAccountId(),
-      ash::mojom::AuthDisabledData::New(
-          ash::mojom::AuthDisabledReason::TIME_WINDOW_LIMIT,
-          base::Time::Now() + base::TimeDelta::FromHours(1),
-          base::TimeDelta::FromHours(1)));
+      ash::AuthDisabledData(ash::AuthDisabledReason::kTimeWindowLimit,
+                            base::Time::Now() + base::TimeDelta::FromHours(1),
+                            base::TimeDelta::FromHours(1),
+                            true /*disable_lock_screen_media*/));
 
   // Try to authenticate with password.
-  tester.UnlockWithPassword(user_manager::StubAccountId(), kPassword);
-  base::RunLoop().RunUntilIdle();
+  tester.ForceSubmitPassword(user_manager::StubAccountId(), kPassword);
   EXPECT_TRUE(tester.IsLocked());
 
   // Re-enable authentication for user.
@@ -288,10 +252,10 @@ IN_PROC_BROWSER_TEST_F(ScreenLockerTest, FingerprintAuthWhenAuthDisabled) {
   // Disable authentication for user.
   ScreenLocker::default_screen_locker()->DisableAuthForUser(
       user_manager::StubAccountId(),
-      ash::mojom::AuthDisabledData::New(
-          ash::mojom::AuthDisabledReason::TIME_USAGE_LIMIT,
-          base::Time::Now() + base::TimeDelta::FromHours(1),
-          base::TimeDelta::FromHours(3)));
+      ash::AuthDisabledData(ash::AuthDisabledReason::kTimeUsageLimit,
+                            base::Time::Now() + base::TimeDelta::FromHours(1),
+                            base::TimeDelta::FromHours(3),
+                            true /*disable_lock_screen_media*/));
 
   // Try to authenticate with fingerprint.
   AuthenticateWithFingerprint();

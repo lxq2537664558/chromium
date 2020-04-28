@@ -32,16 +32,16 @@
 #include <memory>
 #include <utility>
 
+#include "base/metrics/histogram_functions.h"
 #include "media/base/audio_bus.h"
 #include "third_party/blink/public/platform/platform.h"
 #include "third_party/blink/public/platform/web_audio_latency_hint.h"
 #include "third_party/blink/renderer/platform/audio/audio_utilities.h"
 #include "third_party/blink/renderer/platform/audio/push_pull_fifo.h"
 #include "third_party/blink/renderer/platform/audio/vector_math.h"
-#include "third_party/blink/renderer/platform/cross_thread_functional.h"
-#include "third_party/blink/renderer/platform/histogram.h"
 #include "third_party/blink/renderer/platform/instrumentation/tracing/trace_event.h"
 #include "third_party/blink/renderer/platform/scheduler/public/post_cross_thread_task.h"
+#include "third_party/blink/renderer/platform/wtf/cross_thread_functional.h"
 
 namespace blink {
 
@@ -67,7 +67,6 @@ AudioDestination::AudioDestination(AudioIOCallback& callback,
                                    const WebAudioLatencyHint& latency_hint,
                                    base::Optional<float> context_sample_rate)
     : number_of_output_channels_(number_of_output_channels),
-      play_state_(PlayState::kStopped),
       fifo_(
           std::make_unique<PushPullFIFO>(number_of_output_channels, kFIFOSize)),
       output_bus_(AudioBus::Create(number_of_output_channels,
@@ -76,7 +75,8 @@ AudioDestination::AudioDestination(AudioIOCallback& callback,
       render_bus_(AudioBus::Create(number_of_output_channels,
                                    audio_utilities::kRenderQuantumFrames)),
       callback_(callback),
-      frames_elapsed_(0) {
+      frames_elapsed_(0),
+      device_state_(DeviceState::kStopped) {
   // Create WebAudioDevice. blink::WebAudioDevice is designed to support the
   // local input (e.g. loopback from OS audio system), but Chromium's media
   // renderer does not support it currently. Thus, we use zero for the number
@@ -86,6 +86,9 @@ AudioDestination::AudioDestination(AudioIOCallback& callback,
   DCHECK(web_audio_device_);
 
   callback_buffer_size_ = web_audio_device_->FramesPerBuffer();
+
+  metric_reporter_.Initialize(
+      callback_buffer_size_, web_audio_device_->SampleRate());
 
   // Primes the FIFO for the given callback buffer size. This is to prevent
   // first FIFO pulls from causing "underflow" errors.
@@ -108,10 +111,10 @@ AudioDestination::AudioDestination(AudioIOCallback& callback,
         context_sample_rate.value() / web_audio_device_->SampleRate();
 
     resampler_.reset(new MediaMultiChannelResampler(
-        MaxChannelCount(), scale_factor, audio_utilities::kRenderQuantumFrames,
-        ConvertToBaseCallback(
-            CrossThreadBind(&AudioDestination::ProvideResamplerInput,
-                            CrossThreadUnretained(this)))));
+        number_of_output_channels, scale_factor,
+        audio_utilities::kRenderQuantumFrames,
+        CrossThreadBindRepeating(&AudioDestination::ProvideResamplerInput,
+                                 CrossThreadUnretained(this))));
     resampler_bus_ =
         media::AudioBus::CreateWrapper(render_bus_->NumberOfChannels());
     for (unsigned int i = 0; i < render_bus_->NumberOfChannels(); ++i) {
@@ -123,29 +126,23 @@ AudioDestination::AudioDestination(AudioIOCallback& callback,
     context_sample_rate_ = web_audio_device_->SampleRate();
   }
 
-  DEFINE_STATIC_LOCAL(SparseHistogram, sample_rate_histogram,
-                      ("WebAudio.AudioContext.HardwareSampleRate"));
-
-  sample_rate_histogram.Sample(web_audio_device_->SampleRate());
-
-  // The actual supplied |sampleRate| is probably a small set including 44100,
-  // 48000, 22050, and 2400 Hz.  Other valid values range from 3000 to 384000
-  // Hz, but are not expected to be used much.
-  DEFINE_STATIC_LOCAL(SparseHistogram, selected_sample_rate_histogram,
-                      ("WebAudio.AudioContextOptions.sampleRate"));
-
-  // From the expected values above and the common HW sample rates, we expect
-  // the most common ratios to be the set 0.5, 44100/48000, and 48000/44100.
-  // Other values are possible but seem unlikely.
-  DEFINE_STATIC_LOCAL(SparseHistogram, sample_rate_ratio_histogram,
-                      ("WebAudio.AudioContextOptions.sampleRateRatio"));
+  base::UmaHistogramSparse("WebAudio.AudioContext.HardwareSampleRate",
+                           web_audio_device_->SampleRate());
 
   // Record the selected sample rate and ratio if the sampleRate was given.  The
   // ratio is recorded as a percentage, rounded to the nearest percent.
   if (context_sample_rate.has_value()) {
-    selected_sample_rate_histogram.Sample(context_sample_rate.value());
-    sample_rate_ratio_histogram.Sample(
-        static_cast<int32_t>(100 * scale_factor + 0.5));
+    // The actual supplied |sampleRate| is probably a small set including 44100,
+    // 48000, 22050, and 2400 Hz.  Other valid values range from 3000 to 384000
+    // Hz, but are not expected to be used much.
+    base::UmaHistogramSparse("WebAudio.AudioContextOptions.sampleRate",
+                             context_sample_rate.value());
+    // From the expected values above and the common HW sample rates, we expect
+    // the most common ratios to be the set 0.5, 44100/48000, and 48000/44100.
+    // Other values are possible but seem unlikely.
+    base::UmaHistogramSparse("WebAudio.AudioContextOptions.sampleRateRatio",
+
+                             static_cast<int32_t>(100 * scale_factor + 0.5));
   }
 }
 
@@ -187,11 +184,11 @@ void AudioDestination::Render(const WebVector<float*>& destination_data,
   // Use the dual-thread rendering model if the AudioWorklet is activated.
   if (worklet_task_runner_) {
     PostCrossThreadTask(
-        *worklet_task_runner_,
-        FROM_HERE,
-        CrossThreadBind(&AudioDestination::RequestRender, WrapRefCounted(this),
-                        number_of_frames, frames_to_render, delay,
-                        delay_timestamp, prior_frames_skipped));
+        *worklet_task_runner_, FROM_HERE,
+        CrossThreadBindOnce(&AudioDestination::RequestRender,
+                            WrapRefCounted(this), number_of_frames,
+                            frames_to_render, delay, delay_timestamp,
+                            prior_frames_skipped));
   } else {
     // Otherwise use the single-thread rendering with AudioDeviceThread.
     RequestRender(number_of_frames, frames_to_render, delay,
@@ -211,16 +208,24 @@ void AudioDestination::RequestRender(size_t frames_requested,
                "frames_to_render", frames_to_render, "timestamp (s)",
                delay_timestamp);
 
+  MutexTryLocker locker(state_change_lock_);
+
+  // The state might be changing by ::Stop() call. If the state is locked, do
+  // not touch the below.
+  if (!locker.Locked())
+    return;
+
+  if (device_state_ != DeviceState::kRunning)
+    return;
+
+  metric_reporter_.BeginTrace();
+
   frames_elapsed_ -= std::min(frames_elapsed_, prior_frames_skipped);
   output_position_.position =
       frames_elapsed_ / static_cast<double>(web_audio_device_->SampleRate()) -
       delay;
   output_position_.timestamp = delay_timestamp;
-
   base::TimeTicks callback_request = base::TimeTicks::Now();
-  metric_.callback_interval =
-      (callback_request - previous_callback_request_).InSecondsF();
-  metric_.render_duration = previous_render_duration_.InSecondsF();
 
   for (size_t pushed_frames = 0; pushed_frames < frames_to_render;
        pushed_frames += audio_utilities::kRenderQuantumFrames) {
@@ -239,85 +244,90 @@ void AudioDestination::RequestRender(size_t frames_requested,
       output_position_.position = 0.0;
 
     if (resampler_) {
-      resampler_->Resample(audio_utilities::kRenderQuantumFrames,
-                           resampler_bus_.get());
+      resampler_->ResampleInternal(audio_utilities::kRenderQuantumFrames,
+                                   resampler_bus_.get());
     } else {
       // Process WebAudio graph and push the rendered output to FIFO.
       callback_.Render(render_bus_.get(), audio_utilities::kRenderQuantumFrames,
-                       output_position_, metric_);
+                       output_position_, metric_reporter_.GetMetric());
     }
 
     fifo_->Push(render_bus_.get());
   }
 
-  // Update the IO callback metric with information from the current iteration.
-  // They are will be picked up in the next render request.
-  previous_callback_request_ = callback_request;
-  previous_render_duration_ = base::TimeTicks::Now() - callback_request;
-
   frames_elapsed_ += frames_requested;
+
+  metric_reporter_.EndTrace();
 }
 
 void AudioDestination::Start() {
   DCHECK(IsMainThread());
+  TRACE_EVENT0("webaudio", "AudioDestination::Start");
 
-  // Start the "audio device" after the rendering thread is ready.
-  if (web_audio_device_ && play_state_ == PlayState::kStopped) {
-    TRACE_EVENT0("webaudio", "AudioDestination::Start");
-    web_audio_device_->Start();
-    play_state_ = PlayState::kPlaying;
-  }
+  if (device_state_ != DeviceState::kStopped)
+    return;
+  web_audio_device_->Start();
+  SetDeviceState(DeviceState::kRunning);
 }
 
 void AudioDestination::StartWithWorkletTaskRunner(
     scoped_refptr<base::SingleThreadTaskRunner> worklet_task_runner) {
   DCHECK(IsMainThread());
+  DCHECK_EQ(worklet_task_runner_, nullptr);
+  TRACE_EVENT0("webaudio", "AudioDestination::StartWithWorkletTaskRunner");
 
-  if (web_audio_device_ && play_state_ == PlayState::kStopped) {
-    TRACE_EVENT0("webaudio", "AudioDestination::Start");
-    worklet_task_runner_ = std::move(worklet_task_runner);
-    web_audio_device_->Start();
-    play_state_ = PlayState::kPlaying;
-  }
+  if (device_state_ != DeviceState::kStopped)
+    return;
+  worklet_task_runner_ = std::move(worklet_task_runner);
+  web_audio_device_->Start();
+  SetDeviceState(DeviceState::kRunning);
 }
 
 void AudioDestination::Stop() {
   DCHECK(IsMainThread());
+  TRACE_EVENT0("webaudio", "AudioDestination::Stop");
 
-  // This assumes stopping the "audio device" is synchronous and dumping the
-  // rendering thread is safe after that.
-  if (web_audio_device_ && play_state_ != PlayState::kStopped) {
-    TRACE_EVENT0("webaudio", "AudioDestination::Stop");
-    web_audio_device_->Stop();
-    worklet_task_runner_ = nullptr;
-    play_state_ = PlayState::kStopped;
-  }
+  if (device_state_ == DeviceState::kStopped)
+    return;
+  web_audio_device_->Stop();
+
+  // Resetting |worklet_task_runner_| here is safe because
+  // AudioDestination::Render() won't be called after WebAudioDevice::Stop()
+  // call above.
+  worklet_task_runner_ = nullptr;
+
+  SetDeviceState(DeviceState::kStopped);
 }
 
 void AudioDestination::Pause() {
   DCHECK(IsMainThread());
-  if (web_audio_device_ && play_state_ == PlayState::kPlaying) {
-    web_audio_device_->Pause();
-    play_state_ = PlayState::kPaused;
-  }
+  TRACE_EVENT0("webaudio", "AudioDestination::Pause");
+
+  if (device_state_ != DeviceState::kRunning)
+    return;
+  web_audio_device_->Pause();
+  SetDeviceState(DeviceState::kPaused);
 }
 
 void AudioDestination::Resume() {
   DCHECK(IsMainThread());
-  if (web_audio_device_ && play_state_ == PlayState::kPaused) {
-    web_audio_device_->Resume();
-    play_state_ = PlayState::kPlaying;
-  }
+  TRACE_EVENT0("webaudio", "AudioDestination::Resume");
+
+  if (device_state_ != DeviceState::kPaused)
+    return;
+  web_audio_device_->Resume();
+  SetDeviceState(DeviceState::kRunning);
+}
+
+bool AudioDestination::IsPlaying() {
+  DCHECK(IsMainThread());
+  MutexLocker locker(state_change_lock_);
+  return device_state_ == DeviceState::kRunning;
 }
 
 uint32_t AudioDestination::CallbackBufferSize() const {
   DCHECK(IsMainThread());
   return callback_buffer_size_;
-}
-
-bool AudioDestination::IsPlaying() {
-  DCHECK(IsMainThread());
-  return play_state_ == PlayState::kPlaying;
 }
 
 int AudioDestination::FramesPerBuffer() const {
@@ -338,19 +348,16 @@ uint32_t AudioDestination::MaxChannelCount() {
 }
 
 bool AudioDestination::CheckBufferSize() {
+  // Record the sizes if we successfully created an output device.
   // Histogram for audioHardwareBufferSize
-  DEFINE_STATIC_LOCAL(SparseHistogram, hardware_buffer_size_histogram,
-                      ("WebAudio.AudioDestination.HardwareBufferSize"));
+  base::UmaHistogramSparse("WebAudio.AudioDestination.HardwareBufferSize",
+                           HardwareBufferSize());
 
   // Histogram for the actual callback size used.  Typically, this is the same
   // as audioHardwareBufferSize, but can be adjusted depending on some
   // heuristics below.
-  DEFINE_STATIC_LOCAL(SparseHistogram, callback_buffer_size_histogram,
-                      ("WebAudio.AudioDestination.CallbackBufferSize"));
-
-  // Record the sizes if we successfully created an output device.
-  hardware_buffer_size_histogram.Sample(HardwareBufferSize());
-  callback_buffer_size_histogram.Sample(callback_buffer_size_);
+  base::UmaHistogramSparse("WebAudio.AudioDestination.CallbackBufferSize",
+                           callback_buffer_size_);
 
   // Check if the requested buffer size is too large.
   bool is_buffer_size_valid =
@@ -364,6 +371,13 @@ bool AudioDestination::CheckBufferSize() {
 void AudioDestination::ProvideResamplerInput(int resampler_frame_delay,
                                              AudioBus* dest) {
   callback_.Render(dest, audio_utilities::kRenderQuantumFrames,
-                   output_position_, metric_);
+                   output_position_, metric_reporter_.GetMetric());
 }
+
+void AudioDestination::SetDeviceState(DeviceState state) {
+  DCHECK(IsMainThread());
+  MutexLocker locker(state_change_lock_);
+  device_state_ = state;
+}
+
 }  // namespace blink

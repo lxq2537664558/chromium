@@ -8,12 +8,14 @@
 #include <stdint.h>
 
 #include "base/bind.h"
-#include "base/message_loop/message_loop.h"
+#include "base/memory/read_only_shared_memory_region.h"
+#include "base/test/task_environment.h"
 #include "components/viz/client/client_resource_provider.h"
 #include "components/viz/client/shared_bitmap_reporter.h"
 #include "components/viz/test/fake_output_surface.h"
 #include "components/viz/test/test_gles2_interface.h"
 #include "gpu/GLES2/gl2extchromium.h"
+#include "gpu/command_buffer/common/mailbox.h"
 #include "media/base/video_frame.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -26,7 +28,7 @@ class FakeSharedBitmapReporter : public viz::SharedBitmapReporter {
   ~FakeSharedBitmapReporter() override = default;
 
   // viz::SharedBitmapReporter implementation.
-  void DidAllocateSharedBitmap(mojo::ScopedSharedBufferHandle buffer,
+  void DidAllocateSharedBitmap(base::ReadOnlySharedMemoryRegion region,
                                const viz::SharedBitmapId& id) override {
     DCHECK_EQ(shared_bitmaps_.count(id), 0u);
     shared_bitmaps_.insert(id);
@@ -79,8 +81,7 @@ class VideoResourceUpdaterTest : public testing::Test {
   // testing::Test implementation.
   void SetUp() override {
     testing::Test::SetUp();
-    resource_provider_ = std::make_unique<viz::ClientResourceProvider>(
-        /*delegated_sync_points_required=*/true);
+    resource_provider_ = std::make_unique<viz::ClientResourceProvider>();
   }
 
   std::unique_ptr<VideoResourceUpdater> CreateUpdaterForHardware(
@@ -177,8 +178,7 @@ class VideoResourceUpdaterTest : public testing::Test {
     const int kDimension = 10;
     gfx::Size size(kDimension, kDimension);
 
-    gpu::Mailbox mailbox;
-    mailbox.name[0] = 51;
+    auto mailbox = gpu::Mailbox::GenerateForSharedImage();
 
     gpu::MailboxHolder mailbox_holders[media::VideoFrame::kMaxPlanes] = {
         gpu::MailboxHolder(mailbox, kMailboxSyncToken, target)};
@@ -244,7 +244,7 @@ class VideoResourceUpdaterTest : public testing::Test {
 
   // VideoResourceUpdater registers as a MemoryDumpProvider, which requires
   // a TaskRunner.
-  base::MessageLoop message_loop_;
+  base::test::SingleThreadTaskEnvironment task_environment_;
   UploadCounterGLES2Interface* gl_;
   scoped_refptr<viz::TestContextProvider> context_provider_;
   FakeSharedBitmapReporter shared_bitmap_reporter_;
@@ -717,7 +717,8 @@ TEST_F(VideoResourceUpdaterTest, CreateForHardwarePlanes_DualNV12) {
   EXPECT_EQ((GLenum)GL_TEXTURE_EXTERNAL_OES,
             resources.resources[0].mailbox_holder.texture_target);
   // |updater| doesn't set |buffer_format| in this case.
-  EXPECT_EQ(viz::RGBA_8888, resources.resources[0].format);
+  EXPECT_EQ(viz::RED_8, resources.resources[0].format);
+  EXPECT_EQ(viz::RG_88, resources.resources[1].format);
 
   video_frame = CreateTestYuvHardwareVideoFrame(media::PIXEL_FORMAT_NV12, 2,
                                                 GL_TEXTURE_RECTANGLE_ARB);
@@ -726,7 +727,8 @@ TEST_F(VideoResourceUpdaterTest, CreateForHardwarePlanes_DualNV12) {
   EXPECT_EQ(2u, resources.resources.size());
   EXPECT_EQ((GLenum)GL_TEXTURE_RECTANGLE_ARB,
             resources.resources[0].mailbox_holder.texture_target);
-  EXPECT_EQ(viz::RGBA_8888, resources.resources[0].format);
+  EXPECT_EQ(viz::RED_8, resources.resources[0].format);
+  EXPECT_EQ(viz::RG_88, resources.resources[1].format);
   EXPECT_EQ(0u, GetSharedImageCount());
 }
 

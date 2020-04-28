@@ -16,6 +16,7 @@
 #include "base/threading/thread_restrictions.h"
 #include "base/threading/thread_task_runner_handle.h"
 #include "base/time/time.h"
+#include "base/timer/timer.h"
 
 namespace chromeos {
 
@@ -25,6 +26,10 @@ FakePowerManagerClient* g_instance = nullptr;
 
 // Minimum power for a USB power source to be classified as AC.
 constexpr double kUsbMinAcWatts = 24;
+
+// The time power manager will wait before resuspending from a dark resume.
+constexpr base::TimeDelta kDarkSuspendDelayTimeout =
+    base::TimeDelta::FromSeconds(20);
 
 // Callback fired when timer started through |StartArcTimer| expires. In
 // non-test environments this does a potentially blocking call on the UI
@@ -53,6 +58,18 @@ power_manager::BacklightBrightnessChange_Cause RequestCauseToChangeCause(
   return power_manager::BacklightBrightnessChange_Cause_USER_REQUEST;
 }
 
+// Copied from Chrome's //base/time/time_now_posix.cc.
+// Returns count of |clk_id| in the form of a time delta. Returns an empty
+// time delta if |clk_id| isn't present on the system.
+base::TimeDelta ClockNow(clockid_t clk_id) {
+  struct timespec ts;
+  if (clock_gettime(clk_id, &ts) != 0) {
+    NOTREACHED() << "clock_gettime(" << clk_id << ") failed.";
+    return base::TimeDelta();
+  }
+  return base::TimeDelta::FromTimeSpec(ts);
+}
+
 }  // namespace
 
 // static
@@ -62,7 +79,7 @@ FakePowerManagerClient* FakePowerManagerClient::Get() {
 }
 
 FakePowerManagerClient::FakePowerManagerClient()
-    : props_(power_manager::PowerSupplyProperties()) {
+    : props_(power_manager::PowerSupplyProperties()), tick_clock_(nullptr) {
   CHECK(!g_instance);
   g_instance = this;
 
@@ -83,6 +100,8 @@ FakePowerManagerClient::~FakePowerManagerClient() {
 
 void FakePowerManagerClient::AddObserver(Observer* observer) {
   observers_.AddObserver(observer);
+  observer->PowerManagerBecameAvailable(true);
+  observer->PowerManagerInitialized();
 }
 
 void FakePowerManagerClient::RemoveObserver(Observer* observer) {
@@ -91,12 +110,6 @@ void FakePowerManagerClient::RemoveObserver(Observer* observer) {
 
 bool FakePowerManagerClient::HasObserver(const Observer* observer) const {
   return observers_.HasObserver(observer);
-}
-
-void FakePowerManagerClient::WaitForServiceToBeAvailable(
-    WaitForServiceToBeAvailableCallback callback) {
-  base::ThreadTaskRunnerHandle::Get()->PostTask(
-      FROM_HERE, base::BindOnce(std::move(callback), true));
 }
 
 void FakePowerManagerClient::SetRenderProcessManagerDelegate(
@@ -254,11 +267,20 @@ void FakePowerManagerClient::GetInactivityDelays(
       FROM_HERE, base::BindOnce(std::move(callback), inactivity_delays_));
 }
 
-base::OnceClosure FakePowerManagerClient::GetSuspendReadinessCallback(
-    const base::Location& from_where) {
+void FakePowerManagerClient::BlockSuspend(const base::UnguessableToken& token,
+                                          const std::string& debug_info) {
   ++num_pending_suspend_readiness_callbacks_;
-  return base::BindOnce(&FakePowerManagerClient::HandleSuspendReadiness,
-                        base::Unretained(this));
+}
+
+void FakePowerManagerClient::UnblockSuspend(
+    const base::UnguessableToken& token) {
+  CHECK_GT(num_pending_suspend_readiness_callbacks_, 0);
+
+  --num_pending_suspend_readiness_callbacks_;
+}
+
+bool FakePowerManagerClient::SupportsAmbientColor() {
+  return supports_ambient_color_;
 }
 
 void FakePowerManagerClient::CreateArcTimers(
@@ -293,7 +315,9 @@ void FakePowerManagerClient::CreateArcTimers(
   std::vector<TimerId> timer_ids;
   for (auto& request : arc_timer_requests) {
     // Insert is safe as |next_timer_id_| is always incremented.
-    timer_expiration_fds_[next_timer_id_] = std::move(request.second);
+    arc_timers_.emplace(
+        next_timer_id_,
+        std::make_pair(new base::OneShotTimer(), std::move(request.second)));
     timer_ids.emplace_back(next_timer_id_);
     next_timer_id_++;
   }
@@ -309,8 +333,14 @@ void FakePowerManagerClient::StartArcTimer(
     TimerId timer_id,
     base::TimeTicks absolute_expiration_time,
     VoidDBusMethodCallback callback) {
-  auto it = timer_expiration_fds_.find(timer_id);
-  if (it == timer_expiration_fds_.end()) {
+  if (simulate_start_arc_timer_failure_) {
+    base::ThreadTaskRunnerHandle::Get()->PostTask(
+        FROM_HERE, base::BindOnce(std::move(callback), false));
+    return;
+  }
+
+  auto it = arc_timers_.find(timer_id);
+  if (it == arc_timers_.end()) {
     base::ThreadTaskRunnerHandle::Get()->PostTask(
         FROM_HERE, base::BindOnce(std::move(callback), false));
     return;
@@ -323,8 +353,14 @@ void FakePowerManagerClient::StartArcTimer(
   // Post task to write to |clock_id|'s expiration fd. This will simulate the
   // timer expiring to the caller. Ignore delaying by
   // |absolute_expiration_time| for test purposes.
-  base::ThreadTaskRunnerHandle::Get()->PostTask(
-      FROM_HERE, base::BindOnce(&ArcTimerExpirationCallback, it->second.get()));
+  base::TimeTicks current_ticks = GetCurrentBootTime();
+  base::TimeDelta task_delay;
+  if (absolute_expiration_time > current_ticks)
+    task_delay = absolute_expiration_time - current_ticks;
+  auto& timer = it->second.first;
+  int expiration_fd = it->second.second.get();
+  timer->Start(FROM_HERE, task_delay,
+               base::BindOnce(&ArcTimerExpirationCallback, expiration_fd));
 }
 
 void FakePowerManagerClient::DeleteArcTimers(const std::string& tag,
@@ -334,8 +370,8 @@ void FakePowerManagerClient::DeleteArcTimers(const std::string& tag,
       FROM_HERE, base::BindOnce(std::move(callback), true));
 }
 
-void FakePowerManagerClient::DeferScreenDim() {
-  num_defer_screen_dim_calls_++;
+base::TimeDelta FakePowerManagerClient::GetDarkSuspendDelayTimeout() {
+  return kDarkSuspendDelayTimeout;
 }
 
 bool FakePowerManagerClient::PopVideoActivityReport() {
@@ -391,11 +427,6 @@ void FakePowerManagerClient::SendPowerButtonEvent(
     observer.PowerButtonEventReceived(down, timestamp);
 }
 
-void FakePowerManagerClient::SendScreenDimImminent() {
-  for (auto& observer : observers_)
-    observer.ScreenDimImminent();
-}
-
 void FakePowerManagerClient::SetLidState(LidState state,
                                          const base::TimeTicks& timestamp) {
   lid_state_ = state;
@@ -428,12 +459,6 @@ void FakePowerManagerClient::NotifyObservers() {
     observer.PowerChanged(*props_);
 }
 
-void FakePowerManagerClient::HandleSuspendReadiness() {
-  CHECK_GT(num_pending_suspend_readiness_callbacks_, 0);
-
-  --num_pending_suspend_readiness_callbacks_;
-}
-
 void FakePowerManagerClient::DeleteArcTimersInternal(const std::string& tag) {
   // Retrieve all timer ids associated with |tag|. Delete all timers associated
   // with these timer ids.
@@ -442,7 +467,7 @@ void FakePowerManagerClient::DeleteArcTimersInternal(const std::string& tag) {
     return;
 
   for (auto timer_id : it->second)
-    timer_expiration_fds_.erase(timer_id);
+    arc_timers_.erase(timer_id);
 
   client_timer_ids_.erase(it);
 }
@@ -463,6 +488,13 @@ bool FakePowerManagerClient::ApplyPendingScreenBrightnessChange() {
   screen_brightness_percent_ = change.percent();
   SendScreenBrightnessChanged(change);
   return true;
+}
+
+// Returns time ticks from boot including time ticks spent during sleeping.
+base::TimeTicks FakePowerManagerClient::GetCurrentBootTime() {
+  if (tick_clock_)
+    return tick_clock_->NowTicks();
+  return base::TimeTicks() + ClockNow(CLOCK_BOOTTIME);
 }
 
 }  // namespace chromeos

@@ -67,7 +67,7 @@ class OfflineContentAggregator : public OfflineContentProvider,
   void UnregisterProvider(const std::string& name_space);
 
   // OfflineContentProvider implementation.
-  void OpenItem(LaunchLocation location, const ContentId& id) override;
+  void OpenItem(const OpenParams& open_params, const ContentId& id) override;
   void RemoveItem(const ContentId& id) override;
   void CancelDownload(const ContentId& id) override;
   void PauseDownload(const ContentId& id) override;
@@ -75,6 +75,7 @@ class OfflineContentAggregator : public OfflineContentProvider,
   void GetItemById(const ContentId& id, SingleItemCallback callback) override;
   void GetAllItems(MultipleItemCallback callback) override;
   void GetVisualsForItem(const ContentId& id,
+                         GetVisualsOptions options,
                          VisualsCallback callback) override;
   void GetShareInfoForItem(const ContentId& id,
                            ShareCallback callback) override;
@@ -88,7 +89,8 @@ class OfflineContentAggregator : public OfflineContentProvider,
   // OfflineContentProvider::Observer implementation.
   void OnItemsAdded(const OfflineItemList& items) override;
   void OnItemRemoved(const ContentId& id) override;
-  void OnItemUpdated(const OfflineItem& item) override;
+  void OnItemUpdated(const OfflineItem& item,
+                     const base::Optional<UpdateDelta>& update_delta) override;
 
   void OnGetAllItemsDone(OfflineContentProvider* provider,
                          const OfflineItemList& items);
@@ -112,7 +114,7 @@ class OfflineContentAggregator : public OfflineContentProvider,
 
   SEQUENCE_CHECKER(sequence_checker_);
 
-  base::WeakPtrFactory<OfflineContentAggregator> weak_ptr_factory_;
+  base::WeakPtrFactory<OfflineContentAggregator> weak_ptr_factory_{this};
 
   DISALLOW_COPY_AND_ASSIGN(OfflineContentAggregator);
 };

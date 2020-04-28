@@ -9,7 +9,6 @@
 
 #include "base/bind.h"
 #include "base/macros.h"
-#include "base/message_loop/message_loop.h"
 #include "base/sequenced_task_runner.h"
 #include "base/task/post_task.h"
 #include "base/task/task_traits.h"
@@ -28,34 +27,14 @@ NetworkChangeNotifierMac::NetworkChangeNotifierMac()
       connection_type_(CONNECTION_UNKNOWN),
       connection_type_initialized_(false),
       initial_connection_type_cv_(&connection_type_lock_),
-      forwarder_(this)
-#if !defined(OS_IOS)
-      ,
-      dns_config_service_runner_(
-          base::CreateSequencedTaskRunnerWithTraits({base::MayBlock()})),
-      dns_config_service_(
-          DnsConfigService::CreateSystemService().release(),
-          // Ensure DnsConfigService lives on |dns_config_service_runner_|
-          // to prevent races where NetworkChangeNotifierPosix outlives
-          // ScopedTaskEnvironment. https://crbug.com/938126
-          base::OnTaskRunnerDeleter(dns_config_service_runner_)) {
-  // DnsConfigService on iOS doesn't watch the config so its result can become
-  // inaccurate at any time.  Disable it to prevent promulgation of inaccurate
-  // DnsConfigs.
-  dns_config_service_runner_->PostTask(
-      FROM_HERE, base::BindOnce(&DnsConfigService::WatchConfig,
-                                base::Unretained(dns_config_service_.get()),
-                                base::BindRepeating(
-                                    &NetworkChangeNotifier::SetDnsConfig)));
-#else
-{
-#endif  // defined(OS_IOS)
+      forwarder_(this) {
   // Must be initialized after the rest of this object, as it may call back into
   // SetInitialConnectionType().
   config_watcher_ = std::make_unique<NetworkConfigWatcherMac>(&forwarder_);
 }
 
 NetworkChangeNotifierMac::~NetworkChangeNotifierMac() {
+  ClearGlobalPointer();
   // Delete the ConfigWatcher to join the notifier thread, ensuring that
   // StartReachabilityNotifications() has an opportunity to run to completion.
   config_watcher_.reset();

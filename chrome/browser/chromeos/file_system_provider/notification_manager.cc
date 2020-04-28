@@ -31,8 +31,7 @@ NotificationManager::NotificationManager(
     : profile_(profile),
       file_system_info_(file_system_info),
       icon_loader_(
-          new extensions::ChromeAppIconLoader(profile, kIconSize, this)),
-      weak_factory_(this) {
+          new extensions::ChromeAppIconLoader(profile, kIconSize, this)) {
   DCHECK_EQ(ProviderId::EXTENSION, file_system_info.provider_id().GetType());
 }
 
@@ -75,7 +74,7 @@ void NotificationManager::Close(bool by_user) {
 
 void NotificationManager::OnAppImageUpdated(const std::string& id,
                                             const gfx::ImageSkia& image) {
-  extension_icon_.reset(new gfx::Image(image));
+  extension_icon_ = gfx::Image(image);
   ShowNotification();
 }
 
@@ -84,7 +83,7 @@ std::string NotificationManager::GetNotificationId() {
 }
 
 void NotificationManager::ShowNotification() {
-  if (!extension_icon_.get())
+  if (extension_icon_.IsEmpty())
     icon_loader_->FetchImage(file_system_info_.provider_id().GetExtensionId());
 
   message_center::RichNotificationData rich_notification_data;
@@ -105,7 +104,7 @@ void NotificationManager::ShowNotification() {
           callbacks_.size() == 1
               ? IDS_FILE_SYSTEM_PROVIDER_UNRESPONSIVE_WARNING
               : IDS_FILE_SYSTEM_PROVIDER_MANY_UNRESPONSIVE_WARNING),
-      extension_icon_.get() ? *extension_icon_.get() : gfx::Image(),
+      extension_icon_,
       base::string16(),  // display_source
       GURL(), notifier_id, rich_notification_data,
       base::MakeRefCounted<message_center::ThunkNotificationDelegate>(

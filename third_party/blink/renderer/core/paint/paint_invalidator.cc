@@ -10,11 +10,17 @@
 #include "third_party/blink/renderer/core/frame/local_frame_view.h"
 #include "third_party/blink/renderer/core/frame/settings.h"
 #include "third_party/blink/renderer/core/layout/layout_block_flow.h"
+#include "third_party/blink/renderer/core/layout/layout_shift_tracker.h"
 #include "third_party/blink/renderer/core/layout/layout_table.h"
 #include "third_party/blink/renderer/core/layout/layout_table_section.h"
 #include "third_party/blink/renderer/core/layout/layout_view.h"
+#include "third_party/blink/renderer/core/layout/ng/inline/ng_fragment_item.h"
 #include "third_party/blink/renderer/core/layout/ng/legacy_layout_tree_walking.h"
+#include "third_party/blink/renderer/core/layout/ng/ng_fragment_child_iterator.h"
+#include "third_party/blink/renderer/core/layout/ng/ng_physical_box_fragment.h"
 #include "third_party/blink/renderer/core/layout/svg/svg_layout_support.h"
+#include "third_party/blink/renderer/core/page/link_highlight.h"
+#include "third_party/blink/renderer/core/page/page.h"
 #include "third_party/blink/renderer/core/paint/clip_path_clipper.h"
 #include "third_party/blink/renderer/core/paint/find_paint_offset_and_visual_rect_needing_update.h"
 #include "third_party/blink/renderer/core/paint/ng/ng_paint_fragment.h"
@@ -29,24 +35,22 @@ namespace blink {
 // If needed, exclude composited layer's subpixel accumulation to avoid full
 // layer raster invalidations during animation with subpixels.
 // See crbug.com/833083 for details.
-template <typename Rect, typename Point>
-void PaintInvalidatorContext::ExcludeCompositedLayerSubpixelAccumulation(
-    const LayoutObject& object,
-    Rect& rect) const {
+bool PaintInvalidatorContext::ShouldExcludeCompositedLayerSubpixelAccumulation(
+    const LayoutObject& object) const {
   // TODO(wangxianzhu): How to handle sub-pixel location animation for CAP?
   if (RuntimeEnabledFeatures::CompositeAfterPaintEnabled())
-    return;
+    return false;
 
   // One of the following conditions happened in crbug.com/837226.
   if (!paint_invalidation_container ||
       !paint_invalidation_container->FirstFragment()
            .HasLocalBorderBoxProperties() ||
       !tree_builder_context_)
-    return;
+    return false;
 
   if (!(paint_invalidation_container->Layer()->GetCompositingReasons() &
         CompositingReason::kComboAllDirectReasons))
-    return;
+    return false;
 
   if (object != paint_invalidation_container &&
       &paint_invalidation_container->FirstFragment().PostScrollTranslation() !=
@@ -54,22 +58,21 @@ void PaintInvalidatorContext::ExcludeCompositedLayerSubpixelAccumulation(
     // Subpixel accumulation doesn't propagate through non-translation
     // transforms. Also skip all transforms, to avoid the runtime cost of
     // verifying whether the transform is a translation.
-    return;
+    return false;
   }
 
-  // Exclude the subpixel accumulation so that the paint invalidator won't
+  // Will exclude the subpixel accumulation so that the paint invalidator won't
   // see changed visual rects during composited animation with subpixels, to
   // avoid full layer invalidation. The subpixel accumulation will be added
   // back in ChunkToLayerMapper::AdjustVisualRectBySubpixelOffset(). Should
   // make sure the code is synced.
   // TODO(wangxianzhu): Avoid exposing subpixel accumulation to platform code.
-  rect.MoveBy(Point(LayoutPoint(
-      -paint_invalidation_container->Layer()->SubpixelAccumulation())));
+  return true;
 }
 
 IntRect PaintInvalidatorContext::MapLocalRectToVisualRect(
     const LayoutObject& object,
-    const LayoutRect& local_rect) const {
+    const PhysicalRect& local_rect) const {
   DCHECK(NeedsVisualRectUpdate(object));
 
   if (local_rect.IsEmpty())
@@ -80,32 +83,20 @@ IntRect PaintInvalidatorContext::MapLocalRectToVisualRect(
          // objects, for carets, selections, etc.
          object.IsBoxModelObject() || object.IsText());
 
-  // The flip below is required because local visual rects are currently in
-  // "physical coordinates with flipped block-flow direction" (see
-  // LayoutBoxModelObject.h) but we need them to be in physical coordinates.
-  auto rect = local_rect;
-  if (object.IsBox()) {
-    ToLayoutBox(object).FlipForWritingMode(rect);
-  } else {
-    // Also convert the rect for non-boxes into physical coordinates before
-    // applying paint offset.
-    // TODO(wangxianzhu): Avoid ContainingBlock().
-    object.ContainingBlock()->FlipForWritingMode(rect);
-  }
-
   // Unite visual rect with clip path bounding rect.
   // It is because the clip path display items are owned by the layout object
   // who has the clip path, and uses its visual rect as bounding rect too.
   // Usually it is done at layout object level and included as a part of
   // local visual overflow, but clip-path can be a reference to SVG, and we
   // have to wait until pre-paint to ensure clean layout.
+  PhysicalRect rect = local_rect;
   if (base::Optional<FloatRect> clip_path_bounding_box =
           ClipPathClipper::LocalClipPathBoundingBox(object))
-    rect.Unite(LayoutRect(EnclosingIntRect(*clip_path_bounding_box)));
+    rect.Unite(PhysicalRect(EnclosingIntRect(*clip_path_bounding_box)));
 
-  rect.MoveBy(fragment_data->PaintOffset());
-  ExcludeCompositedLayerSubpixelAccumulation<LayoutRect, LayoutPoint>(object,
-                                                                      rect);
+  rect.Move(fragment_data->PaintOffset());
+  if (ShouldExcludeCompositedLayerSubpixelAccumulation(object))
+    rect.Move(-paint_invalidation_container->Layer()->SubpixelAccumulation());
   // Use EnclosingIntRect to ensure the final visual rect will cover the rect
   // in source coordinates no matter if the painting will snap to pixels.
   return EnclosingIntRect(rect);
@@ -125,8 +116,10 @@ IntRect PaintInvalidatorContext::MapLocalRectToVisualRectForSVGChild(
   // We also don't need to adjust for clip path here because SVG the local
   // visual rect has already been adjusted by clip path.
   auto rect = local_rect;
-  ExcludeCompositedLayerSubpixelAccumulation<FloatRect, FloatPoint>(object,
-                                                                    rect);
+  if (ShouldExcludeCompositedLayerSubpixelAccumulation(object)) {
+    rect.Move(FloatSize(
+        -paint_invalidation_container->Layer()->SubpixelAccumulation()));
+  }
   // Use EnclosingIntRect to ensure the final visual rect will cover the rect
   // in source coordinates no matter if the painting will snap to pixels.
   return EnclosingIntRect(rect);
@@ -141,22 +134,43 @@ PaintInvalidatorContext::ParentContextAccessor::ParentContext() const {
 
 IntRect PaintInvalidator::ComputeVisualRect(
     const LayoutObject& object,
+    const NGPrePaintInfo* pre_paint_info,
     const PaintInvalidatorContext& context) {
   if (object.IsSVGChild()) {
     return context.MapLocalRectToVisualRectForSVGChild(
         object, SVGLayoutSupport::LocalVisualRect(object));
   }
 
-  return context.MapLocalRectToVisualRect(object, object.LocalVisualRect());
+  PhysicalRect rect;
+  if (pre_paint_info) {
+    const NGFragmentChildIterator& iterator = pre_paint_info->iterator;
+    DCHECK(iterator->BoxFragment() || iterator->FragmentItem());
+    if (object.StyleRef().Visibility() == EVisibility::kVisible) {
+      if (const auto* box_fragment = iterator->BoxFragment())
+        rect = box_fragment->InkOverflow();
+      else
+        rect = iterator->FragmentItem()->InkOverflow();
+      // The paint offset of text and non-atomic inlines are special; they are
+      // set to the paint offset of their container. Add the offset to the
+      // fragment now, to set the correct visual rectangle.
+      if (!object.IsBox())
+        rect.Move(iterator->Link().offset);
+    }
+  } else {
+    rect = object.LocalVisualRect();
+  }
+  return context.MapLocalRectToVisualRect(object, rect);
 }
 
 void PaintInvalidator::UpdatePaintingLayer(const LayoutObject& object,
-                                           PaintInvalidatorContext& context) {
+                                           PaintInvalidatorContext& context,
+                                           bool is_ng_painting) {
   if (object.HasLayer() &&
       ToLayoutBoxModelObject(object).HasSelfPaintingLayer()) {
     context.painting_layer = ToLayoutBoxModelObject(object).Layer();
-  } else if (object.IsColumnSpanAll() ||
-             object.IsFloatingWithNonContainingBlockParent()) {
+  } else if (!is_ng_painting &&
+             (object.IsColumnSpanAll() ||
+              object.IsFloatingWithNonContainingBlockParent())) {
     // See |LayoutObject::PaintingLayer| for the special-cases of floating under
     // inline and multicolumn.
     // Post LayoutNG the |LayoutObject::IsFloatingWithNonContainingBlockParent|
@@ -164,8 +178,9 @@ void PaintInvalidator::UpdatePaintingLayer(const LayoutObject& object,
     context.painting_layer = object.PaintingLayer();
   }
 
-  if (object.IsLayoutBlockFlow() && !object.IsLayoutNGBlockFlow() &&
-      ToLayoutBlockFlow(object).ContainsFloats())
+  auto* layout_block_flow = DynamicTo<LayoutBlockFlow>(object);
+  if (layout_block_flow && !object.IsLayoutNGBlockFlow() &&
+      layout_block_flow->ContainsFloats())
     context.painting_layer->SetNeedsPaintPhaseFloat();
 
   if (object.IsFloating() &&
@@ -173,45 +188,24 @@ void PaintInvalidator::UpdatePaintingLayer(const LayoutObject& object,
        IsLayoutNGContainingBlock(object.ContainingBlock())))
     context.painting_layer->SetNeedsPaintPhaseFloat();
 
-  // Table collapsed borders are painted in PaintPhaseDescendantBlockBackgrounds
-  // on the table's layer.
-  if (object.IsTable() && ToLayoutTable(object).HasCollapsedBorders())
-    context.painting_layer->SetNeedsPaintPhaseDescendantBlockBackgrounds();
-
-  // The following flags are for descendants of the layer object only.
-  if (object == context.painting_layer->GetLayoutObject())
-    return;
-
-  if (object.IsTableSection()) {
-    const auto& section = ToLayoutTableSection(object);
-    if (section.Table()->HasColElements())
-      context.painting_layer->SetNeedsPaintPhaseDescendantBlockBackgrounds();
-  }
-
-  if (object.StyleRef().HasOutline())
+  if (object != context.painting_layer->GetLayoutObject() &&
+      object.StyleRef().HasOutline())
     context.painting_layer->SetNeedsPaintPhaseDescendantOutlines();
-
-  if (object.HasBoxDecorationBackground()
-      // We also paint overflow controls in background phase.
-      || (object.HasOverflowClip() &&
-          ToLayoutBox(object).GetScrollableArea()->HasOverflowControls())) {
-    context.painting_layer->SetNeedsPaintPhaseDescendantBlockBackgrounds();
-  } else {
-    // Hit testing rects for touch action paint in the background phase.
-    if (object.HasEffectiveAllowedTouchAction())
-      context.painting_layer->SetNeedsPaintPhaseDescendantBlockBackgrounds();
-  }
 }
 
 void PaintInvalidator::UpdatePaintInvalidationContainer(
     const LayoutObject& object,
-    PaintInvalidatorContext& context) {
+    PaintInvalidatorContext& context,
+    bool is_ng_painting) {
+  if (RuntimeEnabledFeatures::CompositeAfterPaintEnabled())
+    return;
+
   if (object.IsPaintInvalidationContainer()) {
     context.paint_invalidation_container = ToLayoutBoxModelObject(&object);
-    if (object.StyleRef().IsStackingContext())
+    if (object.StyleRef().IsStackingContext() || object.IsSVGRoot())
       context.paint_invalidation_container_for_stacked_contents =
           ToLayoutBoxModelObject(&object);
-  } else if (object.IsLayoutView()) {
+  } else if (IsA<LayoutView>(object)) {
     // paint_invalidation_container_for_stacked_contents is only for stacked
     // descendants in its own frame, because it doesn't establish stacking
     // context for stacked contents in sub-frames.
@@ -220,8 +214,9 @@ void PaintInvalidator::UpdatePaintInvalidationContainer(
     context.paint_invalidation_container_for_stacked_contents =
         context.paint_invalidation_container =
             &object.ContainerForPaintInvalidation();
-  } else if (object.IsColumnSpanAll() ||
-             object.IsFloatingWithNonContainingBlockParent()) {
+  } else if (!is_ng_painting &&
+             (object.IsColumnSpanAll() ||
+              object.IsFloatingWithNonContainingBlockParent())) {
     // In these cases, the object may belong to an ancestor of the current
     // paint invalidation container, in paint order.
     // Post LayoutNG the |LayoutObject::IsFloatingWithNonContainingBlockParent|
@@ -272,16 +267,41 @@ void PaintInvalidator::UpdatePaintInvalidationContainer(
 }
 
 void PaintInvalidator::UpdateVisualRect(const LayoutObject& object,
+                                        const NGPrePaintInfo* pre_paint_info,
                                         FragmentData& fragment_data,
                                         PaintInvalidatorContext& context) {
   if (!context.NeedsVisualRectUpdate(object))
     return;
 
   DCHECK(context.tree_builder_context_);
-  DCHECK(context.tree_builder_context_->current.paint_offset ==
-         fragment_data.PaintOffset());
+  DCHECK(!pre_paint_info || &fragment_data == &pre_paint_info->fragment_data);
 
-  fragment_data.SetVisualRect(ComputeVisualRect(object, context));
+  IntRect visual_rect = ComputeVisualRect(object, pre_paint_info, context);
+  if (pre_paint_info && !object.IsBox()) {
+    DCHECK(object.IsInline());
+    // Text and non-atomic inlines share the same FragmentData object per block
+    // fragment, and their FragmentData objects are reset when visiting their
+    // first fragment. So just add to the visual rectangle.
+    visual_rect.Unite(fragment_data.VisualRect());
+  } else {
+    DCHECK_EQ(context.tree_builder_context_->current.paint_offset,
+              fragment_data.PaintOffset());
+  }
+  fragment_data.SetVisualRect(visual_rect);
+
+  object.GetFrameView()->GetLayoutShiftTracker().NotifyObjectPrePaint(
+      object,
+      PropertyTreeState(*context.tree_builder_context_->current.transform,
+                        *context.tree_builder_context_->current.clip,
+                        *context.tree_builder_context_->current_effect),
+      context.old_visual_rect, fragment_data.VisualRect(),
+      // Don't report a diff for a LayoutView. Any paint offset translation
+      // it has was inherited from the parent frame, and movements of a
+      // frame relative to its parent are tracked in the parent frame's
+      // LayoutShiftTracker, not the child frame's.
+      IsA<LayoutView>(object)
+          ? FloatSize()
+          : context.tree_builder_context_->paint_offset_delta);
 }
 
 void PaintInvalidator::UpdateEmptyVisualRectFlag(
@@ -308,13 +328,14 @@ void PaintInvalidator::UpdateEmptyVisualRectFlag(
 
 bool PaintInvalidator::InvalidatePaint(
     const LayoutObject& object,
+    const NGPrePaintInfo* pre_paint_info,
     const PaintPropertyTreeBuilderContext* tree_builder_context,
     PaintInvalidatorContext& context) {
   TRACE_EVENT1(TRACE_DISABLED_BY_DEFAULT("blink.invalidation"),
                "PaintInvalidator::InvalidatePaint()", "object",
                object.DebugName().Ascii());
 
-  if (object.IsSVGHiddenContainer())
+  if (object.IsSVGHiddenContainer() || object.IsLayoutTableCol())
     context.subtree_flags |= PaintInvalidatorContext::kSubtreeNoInvalidation;
 
   if (context.subtree_flags & PaintInvalidatorContext::kSubtreeNoInvalidation)
@@ -322,45 +343,90 @@ bool PaintInvalidator::InvalidatePaint(
 
   object.GetMutableForPainting().EnsureIsReadyForPaintInvalidation();
 
-  UpdatePaintingLayer(object, context);
-  UpdatePaintInvalidationContainer(object, context);
+  UpdatePaintingLayer(object, context, /* is_ng_painting */ !!pre_paint_info);
+  UpdatePaintInvalidationContainer(object, context,
+                                   /* is_ng_painting */ !!pre_paint_info);
   UpdateEmptyVisualRectFlag(object, context);
 
   if (!object.ShouldCheckForPaintInvalidation() && !context.NeedsSubtreeWalk())
     return false;
 
-  unsigned tree_builder_index = 0;
+  if (!RuntimeEnabledFeatures::CompositeAfterPaintEnabled() &&
+      object.GetFrame()->GetPage()->GetLinkHighlight().NeedsHighlightEffect(
+          object)) {
+    // We need to recollect the foreign layers for link highlight when the
+    // geometry of the highlights may change. CompositeAfterPaint doesn't
+    // need this because we collect foreign layers during
+    // LocalFrameView::PaintTree() which is not controlled by the flag.
+    object.GetFrameView()->SetForeignLayerListNeedsUpdate();
+  }
 
-  for (auto* fragment_data = &object.GetMutableForPainting().FirstFragment();
-       fragment_data;
-       fragment_data = fragment_data->NextFragment(), tree_builder_index++) {
-    context.old_visual_rect = fragment_data->VisualRect();
-    context.fragment_data = fragment_data;
+  if (pre_paint_info) {
+    FragmentData& fragment_data = pre_paint_info->fragment_data;
+    if (!object.IsBox()) {
+      // Text and non-atomic inlines may generate multiple physical fragments,
+      // and we're updating the VisualRect in the FragmentData as we visit each
+      // of them. As such, the current VisualRect in FragmentData is possibly
+      // incomplete, so letting anyone use it for comparisons is meaningless.
+      // TODO(crbug.com/1043787): Fix this. The way we use FragmentData for
+      // non-atomic inlines is not ideal for how LayoutNG works.
+      context.old_visual_rect = IntRect();
+    } else {
+      context.old_visual_rect = fragment_data.VisualRect();
+    }
+    context.fragment_data = &fragment_data;
 
-    DCHECK(!tree_builder_context ||
-           tree_builder_index < tree_builder_context->fragments.size());
-
-    {
 #if DCHECK_IS_ON()
-      context.tree_builder_context_actually_needed_ =
-          tree_builder_context && tree_builder_context->is_actually_needed;
-      FindObjectVisualRectNeedingUpdateScope finder(object, *fragment_data,
-                                                    context);
+    context.tree_builder_context_actually_needed_ =
+        tree_builder_context && tree_builder_context->is_actually_needed;
 #endif
-      if (tree_builder_context) {
-        context.tree_builder_context_ =
-            &tree_builder_context->fragments[tree_builder_index];
-        context.old_paint_offset =
-            context.tree_builder_context_->old_paint_offset;
-      } else {
-        context.tree_builder_context_ = nullptr;
-        context.old_paint_offset = fragment_data->PaintOffset();
-      }
-
-      UpdateVisualRect(object, *fragment_data, context);
+    if (tree_builder_context) {
+      DCHECK_EQ(tree_builder_context->fragments.size(), 1u);
+      context.tree_builder_context_ = &tree_builder_context->fragments[0];
+      context.old_paint_offset =
+          context.tree_builder_context_->old_paint_offset;
+    } else {
+      context.tree_builder_context_ = nullptr;
+      context.old_paint_offset = fragment_data.PaintOffset();
     }
 
+    UpdateVisualRect(object, pre_paint_info, fragment_data, context);
     object.InvalidatePaint(context);
+  } else {
+    unsigned tree_builder_index = 0;
+
+    for (auto* fragment_data = &object.GetMutableForPainting().FirstFragment();
+         fragment_data;
+         fragment_data = fragment_data->NextFragment(), tree_builder_index++) {
+      context.old_visual_rect = fragment_data->VisualRect();
+      context.fragment_data = fragment_data;
+
+      DCHECK(!tree_builder_context ||
+             tree_builder_index < tree_builder_context->fragments.size());
+
+      {
+#if DCHECK_IS_ON()
+        context.tree_builder_context_actually_needed_ =
+            tree_builder_context && tree_builder_context->is_actually_needed;
+        FindObjectVisualRectNeedingUpdateScope finder(object, *fragment_data,
+                                                      context);
+#endif
+        if (tree_builder_context) {
+          context.tree_builder_context_ =
+              &tree_builder_context->fragments[tree_builder_index];
+          context.old_paint_offset =
+              context.tree_builder_context_->old_paint_offset;
+        } else {
+          context.tree_builder_context_ = nullptr;
+          context.old_paint_offset = fragment_data->PaintOffset();
+        }
+
+        UpdateVisualRect(object, /* pre_paint_info */ nullptr, *fragment_data,
+                         context);
+      }
+
+      object.InvalidatePaint(context);
+    }
   }
 
   auto reason = static_cast<const DisplayItemClient&>(object)

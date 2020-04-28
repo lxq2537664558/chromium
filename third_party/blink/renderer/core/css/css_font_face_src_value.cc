@@ -85,16 +85,20 @@ FontResource& CSSFontFaceSrcValue::Fetch(ExecutionContext* context,
                                          FontResourceClient* client) const {
   if (!fetched_) {
     ResourceRequest resource_request(absolute_resource_);
-    resource_request.SetHttpReferrer(SecurityPolicy::GenerateReferrer(
-        referrer_.referrer_policy, resource_request.Url(), referrer_.referrer));
+    resource_request.SetReferrerPolicy(
+        ReferrerPolicyResolveDefault(referrer_.referrer_policy));
+    resource_request.SetReferrerString(referrer_.referrer);
+    if (is_ad_related_)
+      resource_request.SetIsAdResource();
     ResourceLoaderOptions options;
     options.initiator_info.name = fetch_initiator_type_names::kCSS;
-    FetchParameters params(resource_request, options);
+    FetchParameters params(std::move(resource_request), options);
     if (base::FeatureList::IsEnabled(
             features::kWebFontsCacheAwareTimeoutAdaption)) {
       params.SetCacheAwareLoadingEnabled(kIsCacheAwareLoadingEnabled);
     }
     params.SetContentSecurityCheck(should_check_content_security_policy_);
+    params.SetFromOriginDirtyStyleSheet(origin_clean_ != OriginClean::kTrue);
     const SecurityOrigin* security_origin = context->GetSecurityOrigin();
 
     // Local fonts are accessible from file: URLs even when
@@ -135,7 +139,9 @@ void CSSFontFaceSrcValue::RestoreCachedResourceIfNeeded(
             fetched_->GetResource()->Options().content_security_policy_option);
   context->Fetcher()->EmulateLoadStartedForInspector(
       fetched_->GetResource(), KURL(resource_url),
-      mojom::RequestContextType::FONT, fetch_initiator_type_names::kCSS);
+      mojom::RequestContextType::FONT,
+      network::mojom::RequestDestination::kFont,
+      fetch_initiator_type_names::kCSS);
 }
 
 bool CSSFontFaceSrcValue::Equals(const CSSFontFaceSrcValue& other) const {

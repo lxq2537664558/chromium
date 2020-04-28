@@ -12,7 +12,6 @@
 #include "base/rand_util.h"
 #include "base/task/post_task.h"
 #include "base/threading/sequenced_task_runner_handle.h"
-#include "components/data_use_measurement/core/data_use_user_data.h"
 #include "components/encrypted_messages/encrypted_message.pb.h"
 #include "components/encrypted_messages/message_encrypter.h"
 #include "components/metrics/metrics_log_uploader.h"
@@ -107,17 +106,15 @@ net::NetworkTrafficAnnotationTag GetNetworkTrafficAnnotation(
       semantics {
         sender: "Metrics UKM Log Uploader"
         description:
-          "Report of usage statistics that are keyed by URLs to Chromium, "
-          "sent only if the profile has History Sync. This includes "
-          "information about the web pages you visit and your usage of them, "
-          "such as page load speed. This will also include URLs and "
-          "statistics related to downloaded files. If Extension Sync is "
-          "enabled, these statistics will also include information about "
-          "the extensions that have been installed from Chrome Web Store. "
-          "Google only stores usage statistics associated with published "
-          "extensions, and URLs that are known by Google’s search index. "
-          "Usage statistics are tied to a pseudonymous machine identifier "
-          "and not to your email address."
+          "Report of usage statistics that are keyed by URLs to Chromium. This "
+          "includes information about the web pages you visit and your usage "
+          "of them, such as page load speed. This will also include URLs and "
+          "statistics related to downloaded files. These statistics may also "
+          "include information about the extensions that have been installed "
+          "from Chrome Web Store. Google only stores usage statistics "
+          "associated with published extensions, and URLs that are known by "
+          "Google’s search index. Usage statistics are tied to a "
+          "pseudonymous machine identifier and not to your email address."
         trigger:
           "Reports are automatically generated on startup and at intervals "
           "while Chromium is running with Sync enabled."
@@ -128,11 +125,13 @@ net::NetworkTrafficAnnotationTag GetNetworkTrafficAnnotation(
       policy {
         cookies_allowed: NO
         setting:
-          "Users can enable or disable this feature by disabling "
-          "'Automatically send usage statistics and crash reports to Google' "
-          "in Chromium's settings under Advanced Settings, Privacy. This is "
-          "only enabled if all active profiles have History/Extension Sync "
-          "enabled without a Sync passphrase."
+          "Users can enable or disable this feature by disabling 'Make "
+          "searches and browsing better' in Chrome's settings under Advanced "
+          "Settings, Privacy. This has to be enabled for all active profiles. "
+          "This is only enabled if the user has 'Help improve Chrome's "
+          "features and performance' enabled in the same settings menu. "
+          "Information about the installed extensions is sent only if "
+          "Extension Sync is enabled."
         chrome_policy {
           MetricsReportingEnabled {
             policy_options {mode: MANDATORY}
@@ -244,12 +243,10 @@ void NetMetricsLogUploader::UploadLogToURL(
     const GURL& url) {
   DCHECK(!log_hash.empty());
 
-  // TODO(crbug.com/808498): Restore the data use measurement when bug is fixed.
-
   auto resource_request = std::make_unique<network::ResourceRequest>();
   resource_request->url = url;
   // Drop cookies and auth data.
-  resource_request->allow_credentials = false;
+  resource_request->credentials_mode = network::mojom::CredentialsMode::kOmit;
   resource_request->method = "POST";
 
   std::string reporting_info_string = SerializeReportingInfo(reporting_info);

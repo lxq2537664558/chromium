@@ -4,9 +4,11 @@
 
 package org.chromium.chrome.browser.autofill_assistant.header;
 
-import org.chromium.base.VisibleForTesting;
+import androidx.annotation.VisibleForTesting;
+
 import org.chromium.base.annotations.CalledByNative;
 import org.chromium.base.annotations.JNINamespace;
+import org.chromium.chrome.browser.autofill_assistant.carousel.AssistantChip;
 import org.chromium.ui.modelutil.PropertyModel;
 
 /**
@@ -14,13 +16,15 @@ import org.chromium.ui.modelutil.PropertyModel;
  */
 @JNINamespace("autofill_assistant")
 public class AssistantHeaderModel extends PropertyModel {
-    public static final WritableBooleanPropertyKey VISIBLE = new WritableBooleanPropertyKey();
-
     @VisibleForTesting
     public static final WritableObjectPropertyKey<String> STATUS_MESSAGE =
             new WritableObjectPropertyKey<>();
 
-    static final WritableIntPropertyKey PROGRESS = new WritableIntPropertyKey();
+    public static final WritableObjectPropertyKey<String> BUBBLE_MESSAGE =
+            new WritableObjectPropertyKey<>();
+
+    @VisibleForTesting
+    public static final WritableIntPropertyKey PROGRESS = new WritableIntPropertyKey();
 
     @VisibleForTesting
     public static final WritableBooleanPropertyKey PROGRESS_VISIBLE =
@@ -28,13 +32,32 @@ public class AssistantHeaderModel extends PropertyModel {
 
     static final WritableBooleanPropertyKey SPIN_POODLE = new WritableBooleanPropertyKey();
 
+    @VisibleForTesting
+    public static final WritableObjectPropertyKey<Runnable> FEEDBACK_BUTTON_CALLBACK =
+            new WritableObjectPropertyKey<>();
+
+    public static final WritableObjectPropertyKey<AssistantChip> CHIP =
+            new WritableObjectPropertyKey<>();
+
+    public static final WritableBooleanPropertyKey CHIP_VISIBLE = new WritableBooleanPropertyKey();
+
+    @VisibleForTesting
+    public static final WritableBooleanPropertyKey DISABLE_ANIMATIONS_FOR_TESTING =
+            new WritableBooleanPropertyKey();
+
     public AssistantHeaderModel() {
-        super(VISIBLE, STATUS_MESSAGE, PROGRESS, PROGRESS_VISIBLE, SPIN_POODLE);
+        super(STATUS_MESSAGE, BUBBLE_MESSAGE, PROGRESS, PROGRESS_VISIBLE, SPIN_POODLE,
+                FEEDBACK_BUTTON_CALLBACK, CHIP, CHIP_VISIBLE, DISABLE_ANIMATIONS_FOR_TESTING);
     }
 
     @CalledByNative
     private void setStatusMessage(String statusMessage) {
         set(STATUS_MESSAGE, statusMessage);
+    }
+
+    @CalledByNative
+    private void setBubbleMessage(String bubbleMessage) {
+        set(BUBBLE_MESSAGE, bubbleMessage);
     }
 
     @CalledByNative
@@ -50,5 +73,15 @@ public class AssistantHeaderModel extends PropertyModel {
     @CalledByNative
     private void setSpinPoodle(boolean enabled) {
         set(SPIN_POODLE, enabled);
+    }
+
+    @CalledByNative
+    private void setDelegate(AssistantHeaderDelegate delegate) {
+        set(FEEDBACK_BUTTON_CALLBACK, delegate::onFeedbackButtonClicked);
+    }
+
+    @CalledByNative
+    private void setDisableAnimations(boolean disableAnimations) {
+        set(DISABLE_ANIMATIONS_FOR_TESTING, disableAnimations);
     }
 }

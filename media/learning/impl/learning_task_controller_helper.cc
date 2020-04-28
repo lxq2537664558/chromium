@@ -24,9 +24,14 @@ LearningTaskControllerHelper::LearningTaskControllerHelper(
 
 LearningTaskControllerHelper::~LearningTaskControllerHelper() = default;
 
-void LearningTaskControllerHelper::BeginObservation(base::UnguessableToken id,
-                                                    FeatureVector features) {
+void LearningTaskControllerHelper::BeginObservation(
+    base::UnguessableToken id,
+    FeatureVector features,
+    base::Optional<ukm::SourceId> source_id) {
   auto& pending_example = pending_examples_[id];
+
+  if (source_id)
+    pending_example.source_id = *source_id;
 
   // Start feature prediction, so that we capture the current values.
   if (!feature_provider_.is_null()) {
@@ -98,7 +103,7 @@ void LearningTaskControllerHelper::ProcessExampleIfFinished(
   if (!iter->second.features_done || !iter->second.target_done)
     return;
 
-  add_example_cb_.Run(std::move(iter->second.example));
+  add_example_cb_.Run(std::move(iter->second.example), iter->second.source_id);
   pending_examples_.erase(iter);
 
   // TODO(liberato): If we receive FeatureVector f1 then f2, and start filling

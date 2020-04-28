@@ -7,25 +7,27 @@
 
 #include "base/feature_list.h"
 
-namespace features {
+namespace ntp_features {
 
 // The features should be documented alongside the definition of their values in
 // the .cc file.
 
-extern const base::Feature kNtpCustomizationMenuV2;
-extern const base::Feature kDoodlesOnLocalNtp;
-extern const base::Feature kPromosOnLocalNtp;
-extern const base::Feature kRemoveNtpFakebox;
-extern const base::Feature kSearchSuggestionsOnLocalNtp;
-extern const base::Feature kUseGoogleLocalNtp;
+extern const base::Feature kConfirmSuggestionRemovals;
+extern const base::Feature kDismissPromos;
+extern const base::Feature kRealboxMatchOmniboxTheme;
+extern const base::Feature kRealboxUseGoogleGIcon;
+extern const base::Feature kWebUI;
 
-extern const base::Feature kFakeboxSearchIconOnNtp;
-extern const base::Feature kUseAlternateFakeboxOnNtp;
-extern const base::Feature kHideShortcutsOnNtp;
+// Note: only exposed for about:flags. Use IsNtpRealboxEnabled() instead.
+extern const base::Feature kRealbox;
 
-// Returns whether the Google search style fakebox is enabled.
-bool IsUseAlternateFakeboxOnNtpEnabled();
+extern const base::Feature kSearchSuggestChips;
 
-}  // namespace features
+// Returns true if either kRealbox or omnibox::kZeroSuggestionsOnNTPRealbox
+// are enabled; or omnibox::kOnFocusSuggestions is enabled and configured to
+// show suggestions of some type in the NTP Realbox.
+bool IsRealboxEnabled();
+
+}  // namespace ntp_features
 
 #endif  // CHROME_BROWSER_SEARCH_NTP_FEATURES_H_

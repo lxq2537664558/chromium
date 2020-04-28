@@ -6,17 +6,24 @@
 
 #include <string>
 
-#include "base/logging.h"
+#include "base/check_op.h"
 #include "base/metrics/histogram_macros.h"
+#include "base/notreached.h"
 
 namespace net {
+
+// static
+const base::TimeDelta DnsConfigService::kInvalidationTimeout =
+    base::TimeDelta::FromMilliseconds(150);
 
 DnsConfigService::DnsConfigService()
     : watch_failed_(false),
       have_config_(false),
       have_hosts_(false),
       need_update_(false),
-      last_sent_empty_(true) {}
+      last_sent_empty_(true) {
+  DETACH_FROM_SEQUENCE(sequence_checker_);
+}
 
 DnsConfigService::~DnsConfigService() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
@@ -37,6 +44,11 @@ void DnsConfigService::WatchConfig(const CallbackType& callback) {
   callback_ = callback;
   watch_failed_ = !StartWatching();
   ReadNow();
+}
+
+void DnsConfigService::RefreshConfig() {
+  // Overridden on supported platforms.
+  NOTREACHED();
 }
 
 void DnsConfigService::InvalidateConfig() {
@@ -121,15 +133,7 @@ void DnsConfigService::StartTimer() {
   // outage (when using the wrong config) but at the same time avoid
   // unnecessary Job aborts in HostResolverImpl. The signals come from multiple
   // sources so it might receive multiple events during a config change.
-
-  // DHCP and user-induced changes are on the order of seconds, so 150ms should
-  // not add perceivable delay. On the other hand, config readers should finish
-  // within 150ms with the rare exception of I/O block or extra large HOSTS.
-  const base::TimeDelta kTimeout = base::TimeDelta::FromMilliseconds(150);
-
-  timer_.Start(FROM_HERE,
-               kTimeout,
-               this,
+  timer_.Start(FROM_HERE, kInvalidationTimeout, this,
                &DnsConfigService::OnTimeout);
 }
 

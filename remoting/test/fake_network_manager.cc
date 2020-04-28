@@ -6,7 +6,6 @@
 
 #include "base/bind.h"
 #include "base/location.h"
-#include "base/logging.h"
 #include "base/single_thread_task_runner.h"
 #include "base/threading/thread_task_runner_handle.h"
 #include "jingle/glue/utils.h"
@@ -15,8 +14,7 @@
 namespace remoting {
 
 FakeNetworkManager::FakeNetworkManager(const rtc::IPAddress& address)
-    : started_(false),
-      weak_factory_(this) {
+    : started_(false) {
   network_.reset(new rtc::Network("fake", "Fake Network", address, 32));
   network_->AddIP(address);
 }

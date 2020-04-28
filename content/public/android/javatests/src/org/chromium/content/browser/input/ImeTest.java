@@ -510,12 +510,7 @@ public class ImeTest {
 
         // When input connection is null, we still need to set flags to prevent InputMethodService
         // from entering fullscreen mode and from opening custom UI.
-        CriteriaHelper.pollUiThread(new Criteria() {
-            @Override
-            public boolean isSatisfied() {
-                return mRule.getInputConnection() == null;
-            }
-        });
+        CriteriaHelper.pollUiThread(Criteria.equals(null, mRule::getInputConnection));
         Assert.assertTrue(
                 (mRule.getConnectionFactory().getOutAttrs().imeOptions
                         & (EditorInfo.IME_FLAG_NO_FULLSCREEN | EditorInfo.IME_FLAG_NO_EXTRACT_UI))
@@ -678,7 +673,7 @@ public class ImeTest {
         }));
     }
 
-    private void reloadPage() throws Throwable {
+    private void reloadPage() throws Exception {
         // Reload the page, then focus will be lost and keyboard should be hidden.
         mRule.fullyLoadUrl(mRule.getWebContents().getLastCommittedUrl());
     }
@@ -710,12 +705,8 @@ public class ImeTest {
 
         // We should not show soft keyboard here because focus has been lost.
         thrown.expect(AssertionError.class);
-        CriteriaHelper.pollUiThread(new Criteria() {
-            @Override
-            public boolean isSatisfied() {
-                return mRule.getInputMethodManagerWrapper().isShowWithoutHideOutstanding();
-            }
-        });
+        CriteriaHelper.pollUiThread(
+                () -> mRule.getInputMethodManagerWrapper().isShowWithoutHideOutstanding());
     }
 
     @Test
@@ -899,9 +890,9 @@ public class ImeTest {
         mRule.setComposingText("h", 1);
         Assert.assertEquals("h", mRule.getTextBeforeCursor(9, 0));
 
-        // O
-        mRule.setComposingText("ho", 1);
-        Assert.assertEquals("ho", mRule.getTextBeforeCursor(9, 0));
+        // A
+        mRule.setComposingText("ha", 1);
+        Assert.assertEquals("ha", mRule.getTextBeforeCursor(9, 0));
 
         mRule.setComposingText("h", 1);
         mRule.setComposingRegion(0, 1);
@@ -995,9 +986,9 @@ public class ImeTest {
         mRule.commitText("h", 1);
         Assert.assertEquals("h", mRule.getTextBeforeCursor(9, 0));
 
-        // O
-        mRule.commitText("o", 1);
-        Assert.assertEquals("ho", mRule.getTextBeforeCursor(9, 0));
+        // A
+        mRule.commitText("a", 1);
+        Assert.assertEquals("ha", mRule.getTextBeforeCursor(9, 0));
 
         // DEL, sent via mRule.dispatchKeyEvent like it is in Android WebView or a physical
         // keyboard.
@@ -1018,9 +1009,9 @@ public class ImeTest {
         mRule.commitText("h", 1);
         Assert.assertEquals("h", mRule.getTextBeforeCursor(9, 0));
 
-        // O
-        mRule.commitText("o", 1);
-        Assert.assertEquals("ho", mRule.getTextBeforeCursor(9, 0));
+        // A
+        mRule.commitText("a", 1);
+        Assert.assertEquals("ha", mRule.getTextBeforeCursor(9, 0));
 
         // Multiple keydowns should each delete one character (this is for physical keyboard
         // key-repeat).
@@ -1296,21 +1287,14 @@ public class ImeTest {
         mRule.assertTextsAroundCursor("", null, "");
 
         DOMUtils.longPressNode(mRule.getWebContents(), "input_text");
-        CriteriaHelper.pollUiThread(new Criteria() {
-            @Override
-            public boolean isSatisfied() {
-                return mRule.getSelectionPopupController().isPastePopupShowing()
-                        && mRule.getSelectionPopupController().isInsertionForTesting();
-            }
+        CriteriaHelper.pollUiThread(() -> {
+            Assert.assertTrue(mRule.getSelectionPopupController().isPastePopupShowing());
+            Assert.assertTrue(mRule.getSelectionPopupController().isInsertionForTesting());
         });
 
         mRule.setComposingText("h", 1);
-        CriteriaHelper.pollUiThread(new Criteria() {
-            @Override
-            public boolean isSatisfied() {
-                return !mRule.getSelectionPopupController().isPastePopupShowing();
-            }
-        });
+        CriteriaHelper.pollUiThread(Criteria.equals(
+                false, () -> mRule.getSelectionPopupController().isPastePopupShowing()));
         Assert.assertFalse(mRule.getSelectionPopupController().isInsertionForTesting());
     }
 
@@ -1608,7 +1592,7 @@ public class ImeTest {
         });
         Assert.assertEquals("abc", mRule.runBlockingOnImeThread(new Callable<CharSequence>() {
             @Override
-            public CharSequence call() throws Exception {
+            public CharSequence call() {
                 return connection.getTextBeforeCursor(5, 0);
             }
         }));
@@ -1634,14 +1618,11 @@ public class ImeTest {
         // and waits for the IME thread to finish, but the communication between the IME thread and
         // the renderer is asynchronous, so if we try to run JavaScript right away, the text won't
         // necessarily have been committed yet.
-        CriteriaHelper.pollInstrumentationThread(new Criteria() {
-            @Override
-            public boolean isSatisfied() {
-                try {
-                    return DOMUtils.getNodeContents(webContents, "div").equals("hello world");
-                } catch (InterruptedException | TimeoutException e) {
-                    return false;
-                }
+        CriteriaHelper.pollInstrumentationThread(() -> {
+            try {
+                Assert.assertEquals("hello world", DOMUtils.getNodeContents(webContents, "div"));
+            } catch (TimeoutException e) {
+                Assert.fail(e.toString());
             }
         });
 

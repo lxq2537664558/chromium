@@ -8,7 +8,6 @@
 #include <string>
 
 #include "base/callback.h"
-#include "base/memory/weak_ptr.h"
 #include "components/keyed_service/core/keyed_service.h"
 
 class GURL;
@@ -19,6 +18,8 @@ class ImageFetcher;
 namespace ntp_snippets {
 class ContentSuggestionsService;
 }
+
+class PrefService;
 
 namespace offline_pages {
 class OfflineEventLogger;
@@ -86,16 +87,18 @@ class PrefetchService : public KeyedService {
   // mode.
   virtual PrefetchGCMHandler* GetPrefetchGCMHandler() = 0;
 
-  // Obtains the current GCM token from the PrefetchGCMHandler
-  virtual void GetGCMToken(GCMTokenCallback callback) = 0;
-
-  // Stores and retrieves a cached GCM token to be used if PrefetchGCMHandler is
+  // Retrieves a cached GCM token from prefs to be used if PrefetchGCMHandler is
   // unavailable.
-  virtual void SetCachedGCMToken(const std::string& gcm_token) = 0;
-  virtual const std::string& GetCachedGCMToken() const = 0;
+  virtual std::string GetCachedGCMToken() const = 0;
+
+  virtual void SetEnabledByServer(PrefService* pref_service, bool enabled) = 0;
 
   // Internal usage only functions. They will eventually be moved out of this
   // class.
+
+  // Attempt prefetching the current set of suggested articles by pretending
+  // they are new. Can be used to force-start the prefetching pipeline.
+  virtual void ForceRefreshSuggestions() = 0;
 
   // Sub-components that are created and owned by this service.
   // The service manages lifetime, hookup and initialization of Prefetch

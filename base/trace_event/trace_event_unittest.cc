@@ -130,19 +130,19 @@ class TraceEventTestFixture : public testing::Test {
   }
 
   void CancelTraceAsync(WaitableEvent* flush_complete_event) {
-    TraceLog::GetInstance()->CancelTracing(
-        base::Bind(&TraceEventTestFixture::OnTraceDataCollected,
-                   base::Unretained(static_cast<TraceEventTestFixture*>(this)),
-                   base::Unretained(flush_complete_event)));
+    TraceLog::GetInstance()->CancelTracing(base::BindRepeating(
+        &TraceEventTestFixture::OnTraceDataCollected,
+        base::Unretained(static_cast<TraceEventTestFixture*>(this)),
+        base::Unretained(flush_complete_event)));
   }
 
   void EndTraceAndFlushAsync(WaitableEvent* flush_complete_event) {
     TraceLog::GetInstance()->SetDisabled(TraceLog::RECORDING_MODE |
                                          TraceLog::FILTERING_MODE);
-    TraceLog::GetInstance()->Flush(
-        base::Bind(&TraceEventTestFixture::OnTraceDataCollected,
-                   base::Unretained(static_cast<TraceEventTestFixture*>(this)),
-                   base::Unretained(flush_complete_event)));
+    TraceLog::GetInstance()->Flush(base::BindRepeating(
+        &TraceEventTestFixture::OnTraceDataCollected,
+        base::Unretained(static_cast<TraceEventTestFixture*>(this)),
+        base::Unretained(flush_complete_event)));
   }
 
   void SetUp() override {
@@ -1469,7 +1469,7 @@ TEST_F(TraceEventTestFixture, AsyncBeginEndEvents) {
 }
 
 // Test ASYNC_BEGIN/END events
-TEST_F(TraceEventTestFixture, AsyncBeginEndPointerMangling) {
+TEST_F(TraceEventTestFixture, AsyncBeginEndPointerNotMangled) {
   void* ptr = this;
 
   TraceLog::GetInstance()->SetProcessID(100);
@@ -1490,19 +1490,13 @@ TEST_F(TraceEventTestFixture, AsyncBeginEndPointerMangling) {
   EXPECT_TRUE(async_begin2);
   EXPECT_TRUE(async_end);
 
-  Value* value = nullptr;
-  std::string async_begin_id_str;
-  std::string async_begin2_id_str;
-  std::string async_end_id_str;
-  ASSERT_TRUE(async_begin->Get("id", &value));
-  ASSERT_TRUE(value->GetAsString(&async_begin_id_str));
-  ASSERT_TRUE(async_begin2->Get("id", &value));
-  ASSERT_TRUE(value->GetAsString(&async_begin2_id_str));
-  ASSERT_TRUE(async_end->Get("id", &value));
-  ASSERT_TRUE(value->GetAsString(&async_end_id_str));
+  std::string async_begin_id_str = *async_begin->FindStringPath("id2.local");
+  std::string async_begin2_id_str = *async_begin2->FindStringPath("id2.local");
+  std::string async_end_id_str = *async_end->FindStringPath("id2.local");
 
+  // Since all ids are process-local and not mangled, they should be equal.
   EXPECT_STREQ(async_begin_id_str.c_str(), async_begin2_id_str.c_str());
-  EXPECT_STRNE(async_begin_id_str.c_str(), async_end_id_str.c_str());
+  EXPECT_STREQ(async_begin_id_str.c_str(), async_end_id_str.c_str());
 }
 
 // Test that static strings are not copied.
@@ -1823,10 +1817,11 @@ TEST_F(TraceEventTestFixture, DeepCopy) {
   std::string val2("val2");
 
   BeginTrace();
-  TRACE_EVENT_COPY_INSTANT0("category", name1.c_str(),
-                            TRACE_EVENT_SCOPE_THREAD);
-  TRACE_EVENT_COPY_BEGIN1("category", name2.c_str(),
-                          arg1.c_str(), 5);
+  TRACE_EVENT_INSTANT_WITH_FLAGS0(
+      "category", name1.c_str(),
+      TRACE_EVENT_FLAG_COPY | TRACE_EVENT_SCOPE_THREAD);
+  TRACE_EVENT_BEGIN_WITH_FLAGS1("category", name2.c_str(),
+                                TRACE_EVENT_FLAG_COPY, arg1.c_str(), 5);
   TRACE_EVENT_COPY_END2("category", name3.c_str(),
                         arg1.c_str(), val1,
                         arg2.c_str(), val2);
@@ -2332,7 +2327,7 @@ bool IsTraceEventArgsWhitelisted(const char* category_group_name,
 
   if (base::MatchPattern(category_group_name, "benchmark") &&
       base::MatchPattern(event_name, "granularly_whitelisted")) {
-    *arg_filter = base::Bind(&IsArgNameWhitelisted);
+    *arg_filter = base::BindRepeating(&IsArgNameWhitelisted);
     return true;
   }
 
@@ -2343,7 +2338,7 @@ bool IsTraceEventArgsWhitelisted(const char* category_group_name,
 
 TEST_F(TraceEventTestFixture, ArgsWhitelisting) {
   TraceLog::GetInstance()->SetArgumentFilterPredicate(
-      base::Bind(&IsTraceEventArgsWhitelisted));
+      base::BindRepeating(&IsTraceEventArgsWhitelisted));
 
   TraceLog::GetInstance()->SetEnabled(
     TraceConfig(kRecordAllCategoryFilter, "enable-argument-filter"),

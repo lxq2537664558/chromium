@@ -29,6 +29,7 @@
 #include "base/win/current_module.h"
 #include "base/win/registry.h"
 #include "base/win/shortcut.h"
+#include "base/win/win_util.h"
 #include "base/win/windows_version.h"
 #include "chrome/chrome_cleaner/constants/version.h"
 #include "chrome/chrome_cleaner/os/file_path_sanitization.h"
@@ -303,42 +304,6 @@ void CollectMatchingPaths(const base::FilePath& root_path,
   }
 }
 
-bool CollectPathsRecursivelyWithLimits(const base::FilePath& file_path,
-                                       size_t max_files,
-                                       size_t max_filesize,
-                                       bool allow_folders,
-                                       FilePathSet* paths) {
-  DCHECK(paths);
-
-  FilePathSet collected_paths;
-  collected_paths.Insert(file_path);
-
-  size_t count_files = 0;
-  base::FileEnumerator file_enum(
-      file_path, true,
-      base::FileEnumerator::FILES | base::FileEnumerator::DIRECTORIES);
-  for (base::FilePath file = file_enum.Next(); !file.empty();
-       file = file_enum.Next()) {
-    if (count_files >= max_files)
-      return false;
-    ++count_files;
-
-    base::FileEnumerator::FileInfo file_info = file_enum.GetInfo();
-    if (file_info.IsDirectory()) {
-      if (!allow_folders)
-        return false;
-    } else {
-      if (static_cast<size_t>(file_info.GetSize()) >= max_filesize)
-        return false;
-    }
-
-    collected_paths.Insert(file);
-  }
-
-  paths->CopyFrom(collected_paths);
-  return true;
-}
-
 bool PathContainsWildcards(const base::FilePath& file_path) {
   base::FilePath::StringType name(file_path.value());
   return NameContainsWildcards(name);
@@ -366,34 +331,6 @@ bool PathHasActiveExtension(const base::FilePath& file_path) {
   base::TrimString(extension, L" ", &extension);
   return g_active_extensions.find(extension.c_str()) !=
          g_active_extensions.end();
-}
-
-bool HasAlternateFileStream(const base::FilePath& path) {
-  // Detect if an alternate file stream is specified in the file path.
-  // The full name of a stream is "filename:stream_name:stream_type", but the
-  // type is optional, so "filename:stream_name" is also possible.
-  // https://msdn.microsoft.com/en-us/library/windows/desktop/aa364404%28v=vs.85%29.aspx
-
-  // Unless the default stream is specified, simply detect colons in the base
-  // name.
-  if (base::EndsWith(path.value(), kDefaultDataStream,
-                     base::CompareCase::INSENSITIVE_ASCII)) {
-    return false;
-  }
-  base::string16 base_name = path.BaseName().value();
-  CHECK_EQ(base::FilePath::StringType::npos, base_name.find(L"::"))
-      << "Stream type other than $DATA was specified for default file stream: "
-      << base_name;
-  return base_name.find(L':') != base::FilePath::StringType::npos;
-}
-
-bool HasDosExecutableHeader(const base::FilePath& path) {
-  // DOS executable files start with "MZ" magic number.
-  constexpr char kDosExecutableMagicNumber[] = "MZ";
-  std::string file_header;
-  base::ReadFileToStringWithMaxSize(path, &file_header,
-                                    strlen(kDosExecutableMagicNumber));
-  return file_header == kDosExecutableMagicNumber;
 }
 
 void InitializeDiskUtil() {
@@ -503,7 +440,7 @@ base::string16 FileInformationToString(
 }
 
 bool IsCompanyOnIgnoredReportingList(const base::string16& company_name) {
-  return base::ContainsValue(kCompanyIgnoredReportingList, company_name);
+  return base::Contains(kCompanyIgnoredReportingList, company_name);
 }
 
 bool IsExecutableOnIgnoredReportingList(const base::FilePath& file_path) {
@@ -686,9 +623,9 @@ void GetLayeredServiceProviders(const LayeredServiceProviderAPI& lsp_api,
           providers->emplace(base::FilePath(path), std::set<GUID, GUIDLess>());
       inserted.first->second.insert(service_providers[i].ProviderId);
     } else {
-      base::string16 guid;
-      GUIDToString(service_providers[i].ProviderId, &guid);
-      LOG(ERROR) << "Couldn't get path for provider: " << guid;
+      LOG(ERROR) << "Couldn't get path for provider: "
+                 << base::win::String16FromGUID(
+                        service_providers[i].ProviderId);
     }
   }
 }

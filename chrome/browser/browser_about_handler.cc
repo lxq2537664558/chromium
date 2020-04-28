@@ -7,8 +7,8 @@
 #include <string>
 
 #include "base/bind.h"
+#include "base/check.h"
 #include "base/location.h"
-#include "base/logging.h"
 #include "base/single_thread_task_runner.h"
 #include "base/strings/string_util.h"
 #include "base/threading/thread_task_runner_handle.h"
@@ -39,7 +39,8 @@ bool WillHandleBrowserAboutURL(GURL* url,
   FixupBrowserAboutURL(url, browser_context);
 
   // Check that about: URLs are fixed up to chrome: by url_formatter::FixupURL.
-  DCHECK((url->IsAboutBlank()) || !url->SchemeIs(url::kAboutScheme));
+  DCHECK(url->IsAboutBlank() || url->IsAboutSrcdoc() ||
+         !url->SchemeIs(url::kAboutScheme));
 
   // Only handle chrome://foo/, url_formatter::FixupURL translates about:foo.
   if (!url->SchemeIs(content::kChromeUIScheme))

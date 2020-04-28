@@ -19,7 +19,7 @@
 #include "chrome/grit/generated_resources.h"
 #include "components/prefs/pref_service.h"
 #include "ui/base/l10n/l10n_util.h"
-#include "ui/gfx/paint_vector_icon.h"
+#include "ui/base/models/image_model.h"
 #include "ui/native_theme/native_theme.h"
 
 RecoveryInstallGlobalError::RecoveryInstallGlobalError(Profile* profile)
@@ -34,10 +34,8 @@ RecoveryInstallGlobalError::RecoveryInstallGlobalError(Profile* profile)
     elevation_needed_ =
         pref->GetBoolean(prefs::kRecoveryComponentNeedsElevation);
   }
-  if (elevation_needed_) {
-    GlobalErrorServiceFactory::GetForProfile(profile_)->NotifyErrorsChanged(
-        this);
-  }
+  if (elevation_needed_)
+    GlobalErrorServiceFactory::GetForProfile(profile_)->NotifyErrorsChanged();
 
   pref_registrar_.Init(pref);
   pref_registrar_.Add(
@@ -69,11 +67,9 @@ base::string16 RecoveryInstallGlobalError::MenuItemLabel() {
   return l10n_util::GetStringUTF16(IDS_UPDATE_NOW);
 }
 
-gfx::Image RecoveryInstallGlobalError::MenuItemIcon() {
-  return gfx::Image(gfx::CreateVectorIcon(
-      kBrowserToolsUpdateIcon,
-      ui::NativeTheme::GetInstanceForNativeUi()->GetSystemColor(
-          ui::NativeTheme::kColorId_AlertSeverityHigh)));
+ui::ImageModel RecoveryInstallGlobalError::MenuItemIcon() {
+  return ui::ImageModel::FromVectorIcon(
+      kBrowserToolsUpdateIcon, ui::NativeTheme::kColorId_AlertSeverityHigh);
 }
 
 void RecoveryInstallGlobalError::ExecuteMenuItem(Browser* browser) {
@@ -95,12 +91,6 @@ void RecoveryInstallGlobalError::ShowBubbleView(Browser* browser) {
 
 bool RecoveryInstallGlobalError::ShouldCloseOnDeactivate() const {
   return false;
-}
-
-gfx::Image RecoveryInstallGlobalError::GetBubbleViewIcon() {
-  // TODO(estade): there shouldn't be an icon in the bubble, but
-  // GlobalErrorBubbleView currently requires it. See crbug.com/673995
-  return MenuItemIcon();
 }
 
 base::string16 RecoveryInstallGlobalError::GetBubbleViewTitle() {
@@ -157,5 +147,5 @@ void RecoveryInstallGlobalError::OnElevationRequirementChanged() {
   if (elevation_needed_)
     has_shown_bubble_view_ = false;
 
-  GlobalErrorServiceFactory::GetForProfile(profile_)->NotifyErrorsChanged(this);
+  GlobalErrorServiceFactory::GetForProfile(profile_)->NotifyErrorsChanged();
 }

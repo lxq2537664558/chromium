@@ -22,7 +22,6 @@
 #include "ui/events/event_constants.h"
 #include "ui/events/platform/platform_event_dispatcher.h"
 #include "ui/gfx/animation/throb_animation.h"
-#include "ui/views/controls/button/menu_button.h"
 #include "ui/views/controls/button/menu_button_controller.h"
 #include "ui/views/controls/menu/menu_config.h"
 #include "ui/views/controls/menu/menu_delegate.h"
@@ -38,7 +37,7 @@ class OSExchangeData;
 }
 namespace views {
 
-class MenuButton;
+class Button;
 class MenuHostRootView;
 class MenuItemView;
 class MenuPreTargetHandler;
@@ -50,13 +49,13 @@ class ViewTracker;
 namespace internal {
 class MenuControllerDelegate;
 class MenuRunnerImpl;
-}
+}  // namespace internal
 
 namespace test {
 class MenuControllerTest;
 class MenuControllerTestApi;
 class MenuControllerUITest;
-}
+}  // namespace test
 
 // MenuController -------------------------------------------------------------
 
@@ -69,26 +68,26 @@ class VIEWS_EXPORT MenuController
       public WidgetObserver {
  public:
   // Enumeration of how the menu should exit.
-  enum ExitType {
+  enum class ExitType {
     // Don't exit.
-    EXIT_NONE,
+    kNone,
 
     // All menus, including nested, should be exited.
-    EXIT_ALL,
+    kAll,
 
     // Only the outermost menu should be exited.
-    EXIT_OUTERMOST,
+    kOutermost,
 
-    // This is set if the menu is being closed as the result of one of the menus
-    // being destroyed.
-    EXIT_DESTROYED
+    // the menu is being closed as the result of one of the menus being
+    // destroyed.
+    kDestroyed
   };
 
   // Types of comboboxes.
-  enum ComboboxType {
-    kNotACombobox,
-    kEditableCombobox,
-    kReadonlyCombobox,
+  enum class ComboboxType {
+    kNone,
+    kEditable,
+    kReadonly,
   };
 
   // If a menu is currently active, this returns the controller for it.
@@ -96,7 +95,7 @@ class VIEWS_EXPORT MenuController
 
   // Runs the menu at the specified location.
   void Run(Widget* parent,
-           MenuButton* button,
+           MenuButtonController* button_controller,
            MenuItemView* root,
            const gfx::Rect& bounds,
            MenuAnchorPosition position,
@@ -133,16 +132,13 @@ class VIEWS_EXPORT MenuController
   // with the various parameters.
   void Cancel(ExitType type);
 
-  // An alternative to Cancel(EXIT_ALL) that can be used with a OneShotTimer.
-  void CancelAll() { Cancel(EXIT_ALL); }
-
   // When is_nested_run() this will add a delegate to the stack. The most recent
   // delegate will be notified. It will be removed upon the exiting of the
   // nested menu. Ownership is not taken.
   void AddNestedDelegate(internal::MenuControllerDelegate* delegate);
 
-  // Returns the current exit type. This returns a value other than EXIT_NONE if
-  // the menu is being canceled.
+  // Returns the current exit type. This returns a value other than
+  // ExitType::kNone if the menu is being canceled.
   ExitType exit_type() const { return exit_type_; }
 
   // Returns the time from the event which closed the menu - or 0.
@@ -309,12 +305,7 @@ class VIEWS_EXPORT MenuController
   // Used by GetMenuPart to indicate the menu part at a particular location.
   struct MenuPart {
     // Type of part.
-    enum Type {
-      NONE,
-      MENU_ITEM,
-      SCROLL_UP,
-      SCROLL_DOWN
-    };
+    enum Type { NONE, MENU_ITEM, SCROLL_UP, SCROLL_DOWN };
 
     // Convenience for testing type == SCROLL_DOWN or type == SCROLL_UP.
     bool is_scroll() const { return type == SCROLL_DOWN || type == SCROLL_UP; }
@@ -354,8 +345,9 @@ class VIEWS_EXPORT MenuController
                                  const ui::LocatedEvent* event);
   void StartDrag(SubmenuView* source, const gfx::Point& location);
 
-  // Key processing.
-  void OnKeyDown(ui::KeyboardCode key_code);
+  // Handles |key_code| as a keypress. Returns true if OnKeyPressed handled the
+  // key code.
+  bool OnKeyPressed(ui::KeyboardCode key_code);
 
   // Creates a MenuController. See |for_drop_| member for details on |for_drop|.
   MenuController(bool for_drop, internal::MenuControllerDelegate* delegate);
@@ -591,7 +583,7 @@ class VIEWS_EXPORT MenuController
   void SetExitType(ExitType type);
 
   // Performs the teardown of menus. This will notify the |delegate_|. If
-  // |exit_type_| is EXIT_ALL all nested runs will be exited.
+  // |exit_type_| is ExitType::kAll all nested runs will be exited.
   void ExitMenu();
 
   // Performs the teardown of the menu launched by Run(). The selected item is
@@ -636,7 +628,7 @@ class VIEWS_EXPORT MenuController
   bool showing_ = false;
 
   // Indicates what to exit.
-  ExitType exit_type_ = EXIT_NONE;
+  ExitType exit_type_ = ExitType::kNone;
 
   // Whether we did a capture. We do a capture only if we're blocking and
   // the mouse was down when Run.
@@ -681,7 +673,8 @@ class VIEWS_EXPORT MenuController
 
   // Drop target.
   MenuItemView* drop_target_ = nullptr;
-  MenuDelegate::DropPosition drop_position_ = MenuDelegate::DROP_UNKNOWN;
+  MenuDelegate::DropPosition drop_position_ =
+      MenuDelegate::DropPosition::kUnknow;
 
   // Owner of child windows.
   // WARNING: this may be NULL.
@@ -705,7 +698,7 @@ class VIEWS_EXPORT MenuController
   // continually processing whether we can drop, we cache the coordinates.
   bool valid_drop_coordinates_ = false;
   gfx::Point drop_pt_;
-  int last_drop_operation_ = MenuDelegate::DROP_UNKNOWN;
+  int last_drop_operation_ = ui::DragDropTypes::DRAG_NONE;
 
   // If true, we're in the middle of invoking ShowAt on a submenu.
   bool showing_submenu_ = false;
@@ -744,7 +737,7 @@ class VIEWS_EXPORT MenuController
 
   // Controls behavior differences between a combobox and other types of menu
   // (like a context menu).
-  ComboboxType combobox_type_ = kNotACombobox;
+  ComboboxType combobox_type_ = ComboboxType::kNone;
 
   // Whether the menu |owner_| needs gesture events. When set to true, the menu
   // will preserve the gesture events of the |owner_| and MenuController will

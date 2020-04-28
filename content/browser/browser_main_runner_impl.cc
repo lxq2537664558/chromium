@@ -10,11 +10,8 @@
 #include "base/debug/leak_annotations.h"
 #include "base/lazy_instance.h"
 #include "base/logging.h"
-#include "base/message_loop/message_loop.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/run_loop.h"
-#include "base/sampling_heap_profiler/sampling_heap_profiler.h"
-#include "base/strings/string_number_conversions.h"
 #include "base/synchronization/atomic_flag.h"
 #include "base/time/time.h"
 #include "base/trace_event/heap_profiler_allocation_context_tracker.h"
@@ -30,6 +27,7 @@
 #include "content/public/common/main_function_params.h"
 #include "third_party/skia/include/core/SkGraphics.h"
 #include "ui/base/ime/init/input_method_initializer.h"
+#include "ui/gfx/font_util.h"
 
 #if defined(OS_ANDROID)
 #include "content/browser/android/tracing_controller_android.h"
@@ -38,7 +36,6 @@
 #if defined(OS_WIN)
 #include "base/win/windows_version.h"
 #include "ui/base/win/scoped_ole_initializer.h"
-#include "ui/gfx/win/direct_write.h"
 #endif
 
 namespace content {
@@ -57,7 +54,7 @@ BrowserMainRunnerImpl::BrowserMainRunnerImpl()
     : initialization_started_(false),
       is_shutdown_(false),
       scoped_execution_fence_(
-          std::make_unique<base::ThreadPool::ScopedExecutionFence>()) {}
+          std::make_unique<base::ThreadPoolInstance::ScopedExecutionFence>()) {}
 
 BrowserMainRunnerImpl::~BrowserMainRunnerImpl() {
   if (initialization_started_ && !is_shutdown_)
@@ -78,19 +75,6 @@ int BrowserMainRunnerImpl::Initialize(const MainFunctionParams& parameters) {
 
     const base::TimeTicks start_time_step1 = base::TimeTicks::Now();
 
-    base::SamplingHeapProfiler::Init();
-    if (parameters.command_line.HasSwitch(switches::kSamplingHeapProfiler)) {
-      base::SamplingHeapProfiler* profiler = base::SamplingHeapProfiler::Get();
-      unsigned sampling_interval = 0;
-      bool parsed =
-          base::StringToUint(parameters.command_line.GetSwitchValueASCII(
-                                 switches::kSamplingHeapProfiler),
-                             &sampling_interval);
-      if (parsed && sampling_interval > 0)
-        profiler->SetSamplingInterval(sampling_interval * 1024);
-      profiler->Start();
-    }
-
     SkGraphics::Init();
 
     if (parameters.command_line.HasSwitch(switches::kWaitForDebugger))
@@ -106,8 +90,9 @@ int BrowserMainRunnerImpl::Initialize(const MainFunctionParams& parameters) {
     // (Text Services Framework) module can interact with the message pump
     // on Windows 8 Metro mode.
     ole_initializer_.reset(new ui::ScopedOleInitializer);
-    gfx::win::InitializeDirectWrite();
 #endif  // OS_WIN
+
+    gfx::InitializeFonts();
 
     main_loop_.reset(
         new BrowserMainLoop(parameters, std::move(scoped_execution_fence_)));
@@ -115,7 +100,8 @@ int BrowserMainRunnerImpl::Initialize(const MainFunctionParams& parameters) {
     main_loop_->Init();
 
     if (parameters.created_main_parts_closure) {
-      parameters.created_main_parts_closure->Run(main_loop_->parts());
+      std::move(*parameters.created_main_parts_closure)
+          .Run(main_loop_->parts());
       delete parameters.created_main_parts_closure;
     }
 
@@ -181,7 +167,8 @@ void BrowserMainRunnerImpl::Shutdown() {
   main_loop_->PreShutdown();
 
   // Finalize the startup tracing session if it is still active.
-  TracingControllerImpl::GetInstance()->FinalizeStartupTracingIfNeeded();
+  if (TracingControllerImpl::GetInstance())
+    TracingControllerImpl::GetInstance()->FinalizeStartupTracingIfNeeded();
 
   {
     // The trace event has to stay between profiler creation and destruction.

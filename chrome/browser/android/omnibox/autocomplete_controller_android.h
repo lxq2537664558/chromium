@@ -13,7 +13,7 @@
 #include "base/memory/singleton.h"
 #include "components/keyed_service/content/browser_context_keyed_service_factory.h"
 #include "components/keyed_service/core/keyed_service.h"
-#include "components/omnibox/browser/autocomplete_controller_delegate.h"
+#include "components/omnibox/browser/autocomplete_controller.h"
 #include "components/omnibox/browser/autocomplete_input.h"
 #include "content/public/browser/notification_observer.h"
 #include "content/public/browser/notification_registrar.h"
@@ -26,7 +26,7 @@ class AutocompleteResult;
 class Profile;
 
 // The native part of the Java AutocompleteController class.
-class AutocompleteControllerAndroid : public AutocompleteControllerDelegate,
+class AutocompleteControllerAndroid : public AutocompleteController::Observer,
                                       public KeyedService {
  public:
   explicit AutocompleteControllerAndroid(Profile* profile);
@@ -38,11 +38,11 @@ class AutocompleteControllerAndroid : public AutocompleteControllerDelegate,
              jint j_cursor_pos,
              const base::android::JavaRef<jstring>& j_desired_tld,
              const base::android::JavaRef<jstring>& j_current_url,
+             jint j_page_classification,
              bool prevent_inline_autocomplete,
              bool prefer_keyword,
              bool allow_exact_keyword_match,
-             bool want_asynchronous_matches,
-             bool focused_from_fakebox);
+             bool want_asynchronous_matches);
   base::android::ScopedJavaLocalRef<jobject> Classify(
       JNIEnv* env,
       const base::android::JavaParamRef<jobject>& obj,
@@ -53,8 +53,8 @@ class AutocompleteControllerAndroid : public AutocompleteControllerDelegate,
       const base::android::JavaParamRef<jobject>& obj,
       const base::android::JavaParamRef<jstring>& j_omnibox_text,
       const base::android::JavaParamRef<jstring>& j_current_url,
-      const base::android::JavaParamRef<jstring>& j_current_title,
-      jboolean focused_from_fakebox);
+      jint j_page_classification,
+      const base::android::JavaParamRef<jstring>& j_current_title);
   void Stop(JNIEnv* env,
             const base::android::JavaParamRef<jobject>& obj,
             bool clear_result);
@@ -66,7 +66,7 @@ class AutocompleteControllerAndroid : public AutocompleteControllerDelegate,
       jint selected_index,
       jint hash_code,
       const base::android::JavaParamRef<jstring>& j_current_url,
-      jboolean focused_from_fakebox,
+      jint j_page_classification,
       jlong elapsed_time_since_first_modified,
       jint completed_length,
       const base::android::JavaParamRef<jobject>& j_web_contents);
@@ -74,7 +74,7 @@ class AutocompleteControllerAndroid : public AutocompleteControllerDelegate,
                         const base::android::JavaParamRef<jobject>& obj,
                         jint selected_index,
                         jint hash_code);
-  base::android::ScopedJavaLocalRef<jstring>
+  base::android::ScopedJavaLocalRef<jobject>
   UpdateMatchDestinationURLWithQueryFormulationTime(
       JNIEnv* env,
       const base::android::JavaParamRef<jobject>& obj,
@@ -112,21 +112,22 @@ class AutocompleteControllerAndroid : public AutocompleteControllerDelegate,
   ~AutocompleteControllerAndroid() override;
   void InitJNI(JNIEnv* env, jobject obj);
 
-  // AutocompleteControllerDelegate implementation.
-  void OnResultChanged(bool default_match_changed) override;
+  // AutocompleteController::Observer implementation.
+  void OnResultChanged(AutocompleteController* controller,
+                       bool default_match_changed) override;
 
   // Notifies the Java AutocompleteController that suggestions were received
   // based on the text the user typed in last.
   void NotifySuggestionsReceived(
       const AutocompleteResult& autocomplete_result);
 
-  // Classifies the type of page we are on.
-  metrics::OmniboxEventProto::PageClassification ClassifyPage(
-      const GURL& gurl,
-      bool focused_from_fakebox) const;
-
   base::android::ScopedJavaLocalRef<jobject> BuildOmniboxSuggestion(
       JNIEnv* env, const AutocompleteMatch& match);
+
+  // Construct Java Group Headers map from supplied HeadersMap.
+  base::android::ScopedJavaLocalRef<jobject> BuildOmniboxGroupHeaders(
+      JNIEnv* env,
+      const SearchSuggestionParser::HeadersMap& header_map);
 
   // A helper method for fetching the top synchronous autocomplete result.
   // The |prevent_inline_autocomplete| flag is passed to the AutocompleteInput

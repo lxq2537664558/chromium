@@ -34,6 +34,20 @@
 #include "ui/views/widget/widget.h"
 #include "ui/views/window/dialog_delegate.h"
 
+namespace {
+
+std::unique_ptr<views::ImageButton> CreateLearnMoreButton(
+    views::ButtonListener* listener) {
+  auto learn_more_button = views::CreateVectorImageButtonWithNativeTheme(
+      listener, vector_icons::kHelpOutlineIcon);
+  learn_more_button->SetAccessibleName(
+      l10n_util::GetStringUTF16(IDS_CHROMEOS_ACC_LEARN_MORE));
+  learn_more_button->SetFocusForPlatform();
+  return learn_more_button;
+}
+
+}  // namespace
+
 namespace chromeos {
 namespace attestation {
 
@@ -41,7 +55,7 @@ namespace attestation {
 views::Widget* PlatformVerificationDialog::ShowDialog(
     content::WebContents* web_contents,
     const GURL& requesting_origin,
-    const ConsentCallback& callback) {
+    ConsentCallback callback) {
   // This could happen when the permission is requested from an extension. See
   // http://crbug.com/728534
   // TODO(wittman): Remove this check after ShowWebModalDialogViews() API is
@@ -64,9 +78,7 @@ views::Widget* PlatformVerificationDialog::ShowDialog(
   std::string origin = extension ? extension->name() : requesting_origin.spec();
 
   PlatformVerificationDialog* dialog = new PlatformVerificationDialog(
-      web_contents,
-      base::UTF8ToUTF16(origin),
-      callback);
+      web_contents, base::UTF8ToUTF16(origin), std::move(callback));
 
   return constrained_window::ShowWebModalDialogViews(dialog, web_contents);
 }
@@ -77,66 +89,40 @@ PlatformVerificationDialog::~PlatformVerificationDialog() {
 PlatformVerificationDialog::PlatformVerificationDialog(
     content::WebContents* web_contents,
     const base::string16& domain,
-    const ConsentCallback& callback)
+    ConsentCallback callback)
     : content::WebContentsObserver(web_contents),
       domain_(domain),
-      callback_(callback),
-      learn_more_button_(nullptr) {
+      callback_(std::move(callback)) {
+  DialogDelegate::SetButtonLabel(
+      ui::DIALOG_BUTTON_OK, l10n_util::GetStringUTF16(IDS_PERMISSION_ALLOW));
+  DialogDelegate::SetButtonLabel(
+      ui::DIALOG_BUTTON_CANCEL, l10n_util::GetStringUTF16(IDS_PERMISSION_DENY));
+  learn_more_button_ =
+      DialogDelegate::SetExtraView(CreateLearnMoreButton(this));
   SetLayoutManager(std::make_unique<views::FillLayout>());
   SetBorder(views::CreateEmptyBorder(
       views::LayoutProvider::Get()->GetDialogInsetsForContentType(
           views::TEXT, views::TEXT)));
 
+  auto run_callback = [](PlatformVerificationDialog* dialog,
+                         ConsentResponse response) {
+    std::move(dialog->callback_).Run(response);
+  };
+
+  DialogDelegate::SetAcceptCallback(base::BindOnce(
+      run_callback, base::Unretained(this), CONSENT_RESPONSE_ALLOW));
+  DialogDelegate::SetCancelCallback(base::BindOnce(
+      run_callback, base::Unretained(this), CONSENT_RESPONSE_DENY));
+  DialogDelegate::SetCloseCallback(base::BindOnce(
+      run_callback, base::Unretained(this), CONSENT_RESPONSE_NONE));
+
   // Explanation string.
-  views::Label* label = new views::Label(l10n_util::GetStringFUTF16(
+  auto label = std::make_unique<views::Label>(l10n_util::GetStringFUTF16(
       IDS_PLATFORM_VERIFICATION_DIALOG_HEADLINE, domain_));
   label->SetMultiLine(true);
   label->SetHorizontalAlignment(gfx::ALIGN_LEFT);
-  AddChildView(label);
+  AddChildView(std::move(label));
   chrome::RecordDialogCreation(chrome::DialogIdentifier::PLATFORM_VERIFICATION);
-}
-
-views::View* PlatformVerificationDialog::CreateExtraView() {
-  learn_more_button_ = views::CreateVectorImageButton(this);
-  views::SetImageFromVectorIcon(learn_more_button_,
-                                vector_icons::kHelpOutlineIcon);
-  learn_more_button_->SetAccessibleName(
-      l10n_util::GetStringUTF16(IDS_CHROMEOS_ACC_LEARN_MORE));
-  learn_more_button_->SetFocusForPlatform();
-  return learn_more_button_;
-}
-
-bool PlatformVerificationDialog::Cancel() {
-  // This method is called when user clicked "Block" button.
-  callback_.Run(CONSENT_RESPONSE_DENY);
-  return true;
-}
-
-bool PlatformVerificationDialog::Accept() {
-  // This method is called when user clicked "Allow" button.
-  callback_.Run(CONSENT_RESPONSE_ALLOW);
-  return true;
-}
-
-bool PlatformVerificationDialog::Close() {
-  // This method is called when user clicked "x" or pressed "Esc" to dismiss the
-  // dialog, the permission request is canceled, or when the tab containing this
-  // dialog is closed.
-  callback_.Run(CONSENT_RESPONSE_NONE);
-  return true;
-}
-
-base::string16 PlatformVerificationDialog::GetDialogButtonLabel(
-    ui::DialogButton button) const {
-  switch (button) {
-    case ui::DIALOG_BUTTON_OK:
-      return l10n_util::GetStringUTF16(IDS_PERMISSION_ALLOW);
-    case ui::DIALOG_BUTTON_CANCEL:
-      return l10n_util::GetStringUTF16(IDS_PERMISSION_DENY);
-    default:
-      NOTREACHED();
-  }
-  return base::string16();
 }
 
 ui::ModalType PlatformVerificationDialog::GetModalType() const {

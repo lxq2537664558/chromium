@@ -6,7 +6,6 @@
 
 #include "base/logging.h"
 #include "base/memory/ptr_util.h"
-#include "base/no_destructor.h"
 #include "base/stl_util.h"
 #include "chromeos/services/secure_channel/authenticated_channel.h"
 #include "chromeos/services/secure_channel/ble_initiator_connection_attempt.h"
@@ -23,13 +22,18 @@ PendingConnectionManagerImpl::Factory*
     PendingConnectionManagerImpl::Factory::test_factory_ = nullptr;
 
 // static
-PendingConnectionManagerImpl::Factory*
-PendingConnectionManagerImpl::Factory::Get() {
-  if (test_factory_)
-    return test_factory_;
+std::unique_ptr<PendingConnectionManager>
+PendingConnectionManagerImpl::Factory::Create(
+    Delegate* delegate,
+    BleConnectionManager* ble_connection_manager,
+    scoped_refptr<device::BluetoothAdapter> bluetooth_adapter) {
+  if (test_factory_) {
+    return test_factory_->CreateInstance(delegate, ble_connection_manager,
+                                         bluetooth_adapter);
+  }
 
-  static base::NoDestructor<Factory> factory;
-  return factory.get();
+  return base::WrapUnique(new PendingConnectionManagerImpl(
+      delegate, ble_connection_manager, bluetooth_adapter));
 }
 
 // static
@@ -39,15 +43,6 @@ void PendingConnectionManagerImpl::Factory::SetFactoryForTesting(
 }
 
 PendingConnectionManagerImpl::Factory::~Factory() = default;
-
-std::unique_ptr<PendingConnectionManager>
-PendingConnectionManagerImpl::Factory::BuildInstance(
-    Delegate* delegate,
-    BleConnectionManager* ble_connection_manager,
-    scoped_refptr<device::BluetoothAdapter> bluetooth_adapter) {
-  return base::WrapUnique(new PendingConnectionManagerImpl(
-      delegate, ble_connection_manager, bluetooth_adapter));
-}
 
 PendingConnectionManagerImpl::PendingConnectionManagerImpl(
     Delegate* delegate,
@@ -103,7 +98,7 @@ void PendingConnectionManagerImpl::HandleConnectionRequest(
 void PendingConnectionManagerImpl::OnConnectionAttemptSucceeded(
     const ConnectionDetails& connection_details,
     std::unique_ptr<AuthenticatedChannel> authenticated_channel) {
-  if (!base::ContainsKey(details_to_attempt_details_map_, connection_details)) {
+  if (!base::Contains(details_to_attempt_details_map_, connection_details)) {
     PA_LOG(ERROR) << "PendingConnectionManagerImpl::"
                   << "OnConnectionAttemptSucceeded(): Attempt succeeded, but "
                   << "there was no corresponding map entry. "
@@ -162,11 +157,11 @@ void PendingConnectionManagerImpl::HandleBleInitiatorRequest(
     ConnectionPriority connection_priority) {
   // If no ConnectionAttempt exists to this device in the initiator role, create
   // one.
-  if (!base::ContainsKey(id_pair_to_ble_initiator_connection_attempts_,
-                         connection_attempt_details.device_id_pair())) {
+  if (!base::Contains(id_pair_to_ble_initiator_connection_attempts_,
+                      connection_attempt_details.device_id_pair())) {
     id_pair_to_ble_initiator_connection_attempts_[connection_attempt_details
                                                       .device_id_pair()] =
-        BleInitiatorConnectionAttempt::Factory::Get()->BuildInstance(
+        BleInitiatorConnectionAttempt::Factory::Create(
             ble_connection_manager_, this /* delegate */,
             connection_attempt_details);
   }
@@ -176,7 +171,7 @@ void PendingConnectionManagerImpl::HandleBleInitiatorRequest(
                                                         .device_id_pair()];
 
   bool success = connection_attempt->AddPendingConnectionRequest(
-      PendingBleInitiatorConnectionRequest::Factory::Get()->BuildInstance(
+      PendingBleInitiatorConnectionRequest::Factory::Create(
           std::move(client_connection_parameters), connection_priority,
           connection_attempt.get() /* delegate */, bluetooth_adapter_));
 
@@ -195,11 +190,11 @@ void PendingConnectionManagerImpl::HandleBleListenerRequest(
     ConnectionPriority connection_priority) {
   // If no ConnectionAttempt exists to this device in the listener role, create
   // one.
-  if (!base::ContainsKey(id_pair_to_ble_listener_connection_attempts_,
-                         connection_attempt_details.device_id_pair())) {
+  if (!base::Contains(id_pair_to_ble_listener_connection_attempts_,
+                      connection_attempt_details.device_id_pair())) {
     id_pair_to_ble_listener_connection_attempts_[connection_attempt_details
                                                      .device_id_pair()] =
-        BleListenerConnectionAttempt::Factory::Get()->BuildInstance(
+        BleListenerConnectionAttempt::Factory::Create(
             ble_connection_manager_, this /* delegate */,
             connection_attempt_details);
   }
@@ -209,7 +204,7 @@ void PendingConnectionManagerImpl::HandleBleListenerRequest(
                                                        .device_id_pair()];
 
   bool success = connection_attempt->AddPendingConnectionRequest(
-      PendingBleListenerConnectionRequest::Factory::Get()->BuildInstance(
+      PendingBleListenerConnectionRequest::Factory::Create(
           std::move(client_connection_parameters), connection_priority,
           connection_attempt.get() /* delegate */, bluetooth_adapter_));
 

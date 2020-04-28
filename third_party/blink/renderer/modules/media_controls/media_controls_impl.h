@@ -83,9 +83,6 @@ class MODULES_EXPORT MediaControlsImpl final : public HTMLDivElement,
   explicit MediaControlsImpl(HTMLMediaElement&);
   ~MediaControlsImpl() override = default;
 
-  // Returns whether the ModernMediaControlsEnabled runtime flag is on.
-  static bool IsModern();
-
   // Returns whether the event is considered a touch event.
   static bool IsTouchEvent(Event*);
 
@@ -161,7 +158,7 @@ class MODULES_EXPORT MediaControlsImpl final : public HTMLDivElement,
   const MediaControlRemainingTimeDisplayElement& RemainingTimeDisplay() const;
   MediaControlToggleClosedCaptionsButtonElement& ToggleClosedCaptions();
 
-  void Trace(blink::Visitor*) override;
+  void Trace(Visitor*) override;
 
   // Track the state of the controls.
   enum ControlsState {
@@ -171,8 +168,11 @@ class MODULES_EXPORT MediaControlsImpl final : public HTMLDivElement,
     // Metadata has not been loaded.
     kNotLoaded,
 
-    // Metadata is being loaded.
-    kLoadingMetadata,
+    // Metadata is being loaded and the media will not play once it's loaded.
+    kLoadingMetadataPaused,
+
+    // Metadata is being loaded and the media will play once it's loaded.
+    kLoadingMetadataPlaying,
 
     // Metadata is loaded and the media is ready to play. This can be when the
     // media is paused, when it has ended or before the media has started
@@ -280,7 +280,7 @@ class MODULES_EXPORT MediaControlsImpl final : public HTMLDivElement,
   void ElementSizeChangedTimerFired(TimerBase*);
 
   // Update any visible indicators of the current time.
-  void UpdateTimeIndicators();
+  void UpdateTimeIndicators(bool suppress_aria = false);
 
   // Hide elements that don't fit, and show those things that we want which
   // do fit.  This requires that m_effectiveWidth and m_effectiveHeight are
@@ -291,7 +291,6 @@ class MODULES_EXPORT MediaControlsImpl final : public HTMLDivElement,
   void UpdateOverflowMenuWanted() const;
   void UpdateOverflowMenuItemCSSClass() const;
   void UpdateScrubbingMessageFits() const;
-  void UpdateOverflowAndTrackListCSSClassForPip() const;
   void UpdateSizingCSSClass();
   void MaybeRecordElementsDisplayed() const;
 
@@ -431,9 +430,6 @@ class MODULES_EXPORT MediaControlsImpl final : public HTMLDivElement,
 
   DISALLOW_COPY_AND_ASSIGN(MediaControlsImpl);
 };
-
-DEFINE_ELEMENT_TYPE_CASTS(MediaControlsImpl, IsMediaControls());
-
 }  // namespace blink
 
 #endif

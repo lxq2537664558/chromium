@@ -29,6 +29,7 @@
 #include "third_party/blink/renderer/core/dom/element_traversal.h"
 #include "third_party/blink/renderer/core/dom/events/event_listener.h"
 #include "third_party/blink/renderer/core/dom/static_node_list.h"
+#include "third_party/blink/renderer/core/dom/xml_document.h"
 #include "third_party/blink/renderer/core/editing/frame_selection.h"
 #include "third_party/blink/renderer/core/frame/deprecation.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
@@ -100,8 +101,6 @@ SVGSVGElement::SVGSVGElement(Document& doc)
   UseCounter::Count(doc, WebFeature::kSVGSVGElement);
 }
 
-DEFINE_NODE_FACTORY(SVGSVGElement)
-
 SVGSVGElement::~SVGSVGElement() = default;
 
 float SVGSVGElement::currentScale() const {
@@ -122,16 +121,12 @@ void SVGSVGElement::setCurrentScale(float scale) {
 
 class SVGCurrentTranslateTearOff : public SVGPointTearOff {
  public:
-  static SVGCurrentTranslateTearOff* Create(SVGSVGElement* context_element) {
-    return MakeGarbageCollected<SVGCurrentTranslateTearOff>(context_element);
-  }
-
   SVGCurrentTranslateTearOff(SVGSVGElement* context_element)
       : SVGPointTearOff(context_element->translation_, context_element) {}
 
   void CommitChange() override {
     DCHECK(ContextElement());
-    ToSVGSVGElement(ContextElement())->UpdateUserTransform();
+    To<SVGSVGElement>(ContextElement())->UpdateUserTransform();
   }
 };
 
@@ -152,7 +147,7 @@ void SVGSVGElement::UpdateUserTransform() {
 }
 
 bool SVGSVGElement::ZoomAndPanEnabled() const {
-  SVGZoomAndPanType zoom_and_pan = this->zoomAndPan();
+  SVGZoomAndPanType zoom_and_pan = zoomAndPan();
   if (view_spec_ && view_spec_->ZoomAndPan() != kSVGZoomAndPanUnknown)
     zoom_and_pan = view_spec_->ZoomAndPan();
   return zoom_and_pan == kSVGZoomAndPanMagnify;
@@ -208,13 +203,6 @@ bool SVGSVGElement::IsPresentationAttribute(const QualifiedName& name) const {
   return SVGGraphicsElement::IsPresentationAttribute(name);
 }
 
-bool SVGSVGElement::IsPresentationAttributeWithSVGDOM(
-    const QualifiedName& attr_name) const {
-  if (attr_name == svg_names::kWidthAttr || attr_name == svg_names::kHeightAttr)
-    return false;
-  return SVGGraphicsElement::IsPresentationAttributeWithSVGDOM(attr_name);
-}
-
 void SVGSVGElement::CollectStyleForPresentationAttribute(
     const QualifiedName& name,
     const AtomicString& value,
@@ -255,7 +243,7 @@ void SVGSVGElement::SvgAttributeChanged(const QualifiedName& attr_name) {
     // height attributes can affect the replaced size so we need
     // to mark it for updating.
     if (width_or_height_changed) {
-      LayoutObject* layout_object = this->GetLayoutObject();
+      LayoutObject* layout_object = GetLayoutObject();
       // If the element is not attached, we cannot be sure if it is (going to
       // be) an outermost root, so always mark presentation attributes dirty in
       // that case.
@@ -312,7 +300,7 @@ static bool IntersectsAllowingEmpty(const FloatRect& r1, const FloatRect& r2) {
 static bool IsIntersectionOrEnclosureTarget(LayoutObject* layout_object) {
   return layout_object->IsSVGShape() || layout_object->IsSVGText() ||
          layout_object->IsSVGImage() ||
-         IsSVGUseElement(*layout_object->GetNode());
+         IsA<SVGUseElement>(*layout_object->GetNode());
 }
 
 bool SVGSVGElement::CheckIntersectionOrEnclosure(
@@ -329,7 +317,7 @@ bool SVGSVGElement::CheckIntersectionOrEnclosure(
     return false;
 
   AffineTransform ctm =
-      ToSVGGraphicsElement(element).ComputeCTM(kAncestorScope, this);
+      To<SVGGraphicsElement>(element).ComputeCTM(kAncestorScope, this);
   FloatRect mapped_repaint_rect =
       ctm.MapRect(layout_object->VisualRectInLocalSVGCoordinates());
 
@@ -347,6 +335,13 @@ bool SVGSVGElement::CheckIntersectionOrEnclosure(
   }
 
   return result;
+}
+
+void SVGSVGElement::DidMoveToNewDocument(Document& old_document) {
+  SVGGraphicsElement::DidMoveToNewDocument(old_document);
+  if (TimeContainer()->IsStarted()) {
+    TimeContainer()->ResetDocumentTime();
+  }
 }
 
 StaticNodeList* SVGSVGElement::CollectIntersectionOrEnclosureList(
@@ -378,7 +373,8 @@ StaticNodeList* SVGSVGElement::CollectIntersectionOrEnclosureList(
 StaticNodeList* SVGSVGElement::getIntersectionList(
     SVGRectTearOff* rect,
     SVGElement* reference_element) const {
-  GetDocument().UpdateStyleAndLayoutForNode(this);
+  GetDocument().UpdateStyleAndLayoutForNode(this,
+                                            DocumentUpdateReason::kJavaScript);
 
   return CollectIntersectionOrEnclosureList(
       rect->Target()->Value(), reference_element, kCheckIntersection);
@@ -387,7 +383,8 @@ StaticNodeList* SVGSVGElement::getIntersectionList(
 StaticNodeList* SVGSVGElement::getEnclosureList(
     SVGRectTearOff* rect,
     SVGElement* reference_element) const {
-  GetDocument().UpdateStyleAndLayoutForNode(this);
+  GetDocument().UpdateStyleAndLayoutForNode(this,
+                                            DocumentUpdateReason::kJavaScript);
 
   return CollectIntersectionOrEnclosureList(rect->Target()->Value(),
                                             reference_element, kCheckEnclosure);
@@ -396,7 +393,8 @@ StaticNodeList* SVGSVGElement::getEnclosureList(
 bool SVGSVGElement::checkIntersection(SVGElement* element,
                                       SVGRectTearOff* rect) const {
   DCHECK(element);
-  GetDocument().UpdateStyleAndLayoutForNode(this);
+  GetDocument().UpdateStyleAndLayoutForNode(this,
+                                            DocumentUpdateReason::kJavaScript);
 
   return CheckIntersectionOrEnclosure(*element, rect->Target()->Value(),
                                       kCheckIntersection);
@@ -405,7 +403,8 @@ bool SVGSVGElement::checkIntersection(SVGElement* element,
 bool SVGSVGElement::checkEnclosure(SVGElement* element,
                                    SVGRectTearOff* rect) const {
   DCHECK(element);
-  GetDocument().UpdateStyleAndLayoutForNode(this);
+  GetDocument().UpdateStyleAndLayoutForNode(this,
+                                            DocumentUpdateReason::kJavaScript);
 
   return CheckIntersectionOrEnclosure(*element, rect->Target()->Value(),
                                       kCheckEnclosure);
@@ -457,7 +456,7 @@ AffineTransform SVGSVGElement::LocalCoordinateSpaceTransform(
     transform.Translate(x_->CurrentValue()->Value(length_context),
                         y_->CurrentValue()->Value(length_context));
   } else if (mode == kScreenScope) {
-    if (LayoutObject* layout_object = this->GetLayoutObject()) {
+    if (LayoutObject* layout_object = GetLayoutObject()) {
       TransformationMatrix matrix;
       // Adjust for the zoom level factored into CSS coordinates (WK bug
       // #96361).
@@ -507,6 +506,7 @@ void SVGSVGElement::AttachLayoutTree(AttachContext& context) {
 
 LayoutObject* SVGSVGElement::CreateLayoutObject(const ComputedStyle&,
                                                 LegacyLayout) {
+  UseCounter::Count(GetDocument(), WebFeature::kLegacyLayoutBySVG);
   if (IsOutermostSVGSVGElement())
     return new LayoutSVGRoot(this);
 
@@ -517,7 +517,7 @@ Node::InsertionNotificationRequest SVGSVGElement::InsertedInto(
     ContainerNode& root_parent) {
   if (root_parent.isConnected()) {
     UseCounter::Count(GetDocument(), WebFeature::kSVGSVGElementInDocument);
-    if (root_parent.GetDocument().IsXMLDocument())
+    if (IsA<XMLDocument>(root_parent.GetDocument()))
       UseCounter::Count(GetDocument(), WebFeature::kSVGSVGElementInXMLDocument);
 
     GetDocument().AccessSVGExtensions().AddTimeContainer(this);
@@ -558,13 +558,12 @@ bool SVGSVGElement::animationsPaused() const {
 }
 
 float SVGSVGElement::getCurrentTime() const {
-  return clampTo<float>(time_container_->Elapsed());
+  return clampTo<float>(time_container_->Elapsed().InSecondsF());
 }
 
 void SVGSVGElement::setCurrentTime(float seconds) {
   DCHECK(std::isfinite(seconds));
-  seconds = max(seconds, 0.0f);
-  time_container_->SetElapsed(seconds);
+  time_container_->SetElapsed(SMILTime::FromSecondsD(std::max(seconds, 0.0f)));
 }
 
 bool SVGSVGElement::SelfHasRelativeLengths() const {
@@ -635,18 +634,21 @@ FloatSize SVGSVGElement::CurrentViewportSize() const {
 }
 
 bool SVGSVGElement::HasIntrinsicWidth() const {
-  return width()->CurrentValue()->TypeWithCalcResolved() !=
-         CSSPrimitiveValue::UnitType::kPercentage;
+  // TODO(crbug.com/979895): This is the result of a refactoring, which might
+  // have revealed an existing bug that we are not handling math functions
+  // involving percentages correctly. Fix it if necessary.
+  return !width()->CurrentValue()->IsPercentage();
 }
 
 bool SVGSVGElement::HasIntrinsicHeight() const {
-  return height()->CurrentValue()->TypeWithCalcResolved() !=
-         CSSPrimitiveValue::UnitType::kPercentage;
+  // TODO(crbug.com/979895): This is the result of a refactoring, which might
+  // have revealed an existing bug that we are not handling math functions
+  // involving percentages correctly. Fix it if necessary.
+  return !height()->CurrentValue()->IsPercentage();
 }
 
 float SVGSVGElement::IntrinsicWidth() const {
-  if (width()->CurrentValue()->TypeWithCalcResolved() ==
-      CSSPrimitiveValue::UnitType::kPercentage)
+  if (!HasIntrinsicWidth())
     return 0;
 
   SVGLengthContext length_context(this);
@@ -654,8 +656,7 @@ float SVGSVGElement::IntrinsicWidth() const {
 }
 
 float SVGSVGElement::IntrinsicHeight() const {
-  if (height()->CurrentValue()->TypeWithCalcResolved() ==
-      CSSPrimitiveValue::UnitType::kPercentage)
+  if (!HasIntrinsicHeight())
     return 0;
 
   SVGLengthContext length_context(this);
@@ -704,14 +705,14 @@ void SVGSVGElement::SetupInitialView(const String& fragment_identifier,
       return;
     }
   }
-  if (IsSVGViewElement(anchor_node)) {
+  if (auto* svg_view_element = DynamicTo<SVGViewElement>(anchor_node)) {
     // Spec: If the SVG fragment identifier addresses a 'view' element within an
     // SVG document (e.g., MyDrawing.svg#MyView) then the root 'svg' element is
     // displayed in the SVG viewport. Any view specification attributes included
     // on the given 'view' element override the corresponding view specification
     // attributes on the root 'svg' element.
     SVGViewSpec* view_spec =
-        SVGViewSpec::CreateForViewElement(ToSVGViewElement(*anchor_node));
+        SVGViewSpec::CreateForViewElement(*svg_view_element);
     UseCounter::Count(GetDocument(),
                       WebFeature::kSVGSVGElementFragmentSVGViewElement);
     SetViewSpec(view_spec);
@@ -734,7 +735,7 @@ void SVGSVGElement::FinishParsingChildren() {
   SendSVGLoadEventIfPossible();
 }
 
-void SVGSVGElement::Trace(blink::Visitor* visitor) {
+void SVGSVGElement::Trace(Visitor* visitor) {
   visitor->Trace(x_);
   visitor->Trace(y_);
   visitor->Trace(width_);

@@ -8,9 +8,9 @@
 
 #include "base/bind.h"
 #include "base/macros.h"
-#include "base/message_loop/message_loop.h"
 #include "base/run_loop.h"
 #include "base/single_thread_task_runner.h"
+#include "base/test/task_environment.h"
 #include "base/threading/thread.h"
 #include "remoting/host/mouse_cursor_monitor_proxy.h"
 #include "remoting/protocol/protocol_mock_objects.h"
@@ -88,11 +88,9 @@ class MouseCursorMonitorProxyTest
 
   // webrtc::MouseCursorMonitor::Callback implementation.
   void OnMouseCursor(webrtc::MouseCursor* mouse_cursor) override;
-  void OnMouseCursorPosition(webrtc::MouseCursorMonitor::CursorState state,
-                             const webrtc::DesktopVector& position) override;
 
  protected:
-  base::MessageLoop message_loop_;
+  base::test::SingleThreadTaskEnvironment task_environment_;
   base::RunLoop run_loop_;
   base::Thread capture_thread_;
   std::unique_ptr<MouseCursorMonitorProxy> proxy_;
@@ -102,7 +100,7 @@ class MouseCursorMonitorProxyTest
 
 void MouseCursorMonitorProxyTest::OnMouseCursor(
     webrtc::MouseCursor* mouse_cursor) {
-  DCHECK(message_loop_.task_runner()->BelongsToCurrentThread());
+  DCHECK(task_environment_.GetMainThreadTaskRunner()->BelongsToCurrentThread());
 
   EXPECT_EQ(kCursorWidth, mouse_cursor->image()->size().width());
   EXPECT_EQ(kCursorHeight, mouse_cursor->image()->size().height());
@@ -111,12 +109,6 @@ void MouseCursorMonitorProxyTest::OnMouseCursor(
   delete mouse_cursor;
 
   run_loop_.Quit();
-}
-
-void MouseCursorMonitorProxyTest::OnMouseCursorPosition(
-    webrtc::MouseCursorMonitor::CursorState state,
-    const webrtc::DesktopVector& position) {
-  NOTREACHED();
 }
 
 TEST_F(MouseCursorMonitorProxyTest, CursorShape) {

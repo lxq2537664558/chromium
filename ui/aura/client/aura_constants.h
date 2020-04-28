@@ -24,6 +24,12 @@ namespace aura {
 namespace client {
 class FocusClient;
 
+// Values used with property key kResizeBehaviorKey.
+constexpr int kResizeBehaviorNone = 0;
+constexpr int kResizeBehaviorCanResize = 1 << 0;
+constexpr int kResizeBehaviorCanMaximize = 1 << 1;
+constexpr int kResizeBehaviorCanMinimize = 1 << 2;
+
 // Alphabetical sort.
 
 // A property key to store whether accessibility focus falls back to widget or
@@ -41,9 +47,6 @@ AURA_EXPORT extern const WindowProperty<bool>* const
 // pointer down event occurs on them.
 AURA_EXPORT extern const WindowProperty<bool>* const kActivateOnPointerKey;
 
-// A property key to store always-on-top flag.
-AURA_EXPORT extern const WindowProperty<bool>* const kAlwaysOnTopKey;
-
 // A property key to store whether animations are disabled for the window. Type
 // of value is an int.
 AURA_EXPORT extern const WindowProperty<bool>* const kAnimationsDisabledKey;
@@ -51,16 +54,6 @@ AURA_EXPORT extern const WindowProperty<bool>* const kAnimationsDisabledKey;
 // A property key to store the app icon, typically larger for shelf icons, etc.
 // This is not transported to the window service.
 AURA_EXPORT extern const WindowProperty<gfx::ImageSkia*>* const kAppIconKey;
-
-// A property key to store a large version of the app icon, which is
-// transported to the window service.
-AURA_EXPORT extern const WindowProperty<gfx::ImageSkia*>* const
-    kAppIconLargeKey;
-
-// A property key to store a smaller version of the app icon, which is
-// transported to the window service.
-AURA_EXPORT extern const WindowProperty<gfx::ImageSkia*>* const
-    kAppIconSmallKey;
 
 // A property key to store the type of window that will be used to record
 // pointer metrics. See AppType in ash/public/cpp/app_types.h for more details.
@@ -97,21 +90,9 @@ AURA_EXPORT extern const WindowProperty<gfx::Rect*>* const
 // A property key to store the focus client on the window.
 AURA_EXPORT extern const WindowProperty<FocusClient*>* const kFocusClientKey;
 
-// Should be set to true for fullscreen/maximized windows that want to be
-// drag-moved in response to gesture events in the top of the client
-// area/screen.
-AURA_EXPORT extern const WindowProperty<bool>* const
-    kGestureDragFromClientAreaTopMovesWindow;
-
 // A property key to store the host window of a window. This lets
 // WebContentsViews find the windows that should constrain NPAPI plugins.
 AURA_EXPORT extern const WindowProperty<Window*>* const kHostWindowKey;
-
-// A property key to store the maximum size of the window.
-AURA_EXPORT extern const WindowProperty<gfx::Size*>* const kMaximumSize;
-
-// A property key to store the minimum size of the window.
-AURA_EXPORT extern const WindowProperty<gfx::Size*>* const kMinimumSize;
 
 // The modal parent of a child modal window.
 AURA_EXPORT extern const WindowProperty<Window*>* const kChildModalParentKey;
@@ -144,14 +125,8 @@ AURA_EXPORT extern const WindowProperty<ui::WindowShowState>* const
     kPreFullscreenShowStateKey;
 
 // A property key to store the resize behavior, which is a bitmask of the
-// ws::mojom::kResizeBehavior values.
-AURA_EXPORT extern const WindowProperty<int32_t>* const kResizeBehaviorKey;
-
-// Reserves a number of dip around the window (i.e. inset from its exterior
-// border) for event routing back to the top level window. This is used for
-// routing events to toplevel window resize handles. It should only be respected
-// for restored windows (maximized and fullscreen can't be drag-resized).
-AURA_EXPORT extern const WindowProperty<int>* const kResizeHandleInset;
+// ResizeBehavior values.
+AURA_EXPORT extern const WindowProperty<int>* const kResizeBehaviorKey;
 
 // A property key to store the restore bounds in screen coordinates for a
 // window.
@@ -164,10 +139,6 @@ AURA_EXPORT extern const WindowProperty<ui::WindowShowState>* const
 
 // A property key to store the title of the window; sometimes shown to users.
 AURA_EXPORT extern const WindowProperty<base::string16*>* const kTitleKey;
-
-// Indicates if the title of the window should be shown. This is only used for
-// top-levels that show a title. Default is false.
-AURA_EXPORT extern const WindowProperty<bool>* const kTitleShownKey;
 
 // The inset of the topmost view in the client view from the top of the
 // non-client view. The topmost view depends on the window type. The topmost
@@ -182,8 +153,8 @@ AURA_EXPORT extern const WindowProperty<gfx::ImageSkia*>* const kWindowIconKey;
 // Default is -1, meaning "unspecified". 0 Ensures corners are square.
 AURA_EXPORT extern const WindowProperty<int>* const kWindowCornerRadiusKey;
 
-AURA_EXPORT extern const WindowProperty<ws::mojom::WindowType>* const
-    kWindowTypeKey;
+// A property key to store the z-ordering.
+AURA_EXPORT extern const WindowProperty<ui::ZOrderLevel>* const kZOrderingKey;
 
 // Alphabetical sort.
 

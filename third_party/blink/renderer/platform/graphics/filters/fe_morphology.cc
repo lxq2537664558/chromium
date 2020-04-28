@@ -24,10 +24,10 @@
 
 #include "third_party/blink/renderer/platform/graphics/filters/fe_morphology.h"
 
-#include "SkMorphologyImageFilter.h"
 #include "third_party/blink/renderer/platform/graphics/filters/filter.h"
 #include "third_party/blink/renderer/platform/graphics/filters/paint_filter_builder.h"
 #include "third_party/blink/renderer/platform/wtf/text/text_stream.h"
+#include "third_party/skia/include/effects/SkMorphologyImageFilter.h"
 
 namespace blink {
 
@@ -85,8 +85,8 @@ FloatRect FEMorphology::MapEffect(const FloatRect& rect) const {
 sk_sp<PaintFilter> FEMorphology::CreateImageFilter() {
   sk_sp<PaintFilter> input(paint_filter_builder::Build(
       InputEffect(0), OperatingInterpolationSpace()));
-  int radius_x = clampTo<int>(GetFilter()->ApplyHorizontalScale(radius_x_));
-  int radius_y = clampTo<int>(GetFilter()->ApplyVerticalScale(radius_y_));
+  float radius_x = GetFilter()->ApplyHorizontalScale(radius_x_);
+  float radius_y = GetFilter()->ApplyVerticalScale(radius_y_);
   PaintFilter::CropRect rect = GetCropRect();
   MorphologyPaintFilter::MorphType morph_type =
       type_ == FEMORPHOLOGY_OPERATOR_DILATE

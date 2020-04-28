@@ -27,7 +27,7 @@
 #define THIRD_PARTY_BLINK_RENDERER_MODULES_GAMEPAD_NAVIGATOR_GAMEPAD_H_
 
 #include "third_party/blink/renderer/core/dom/dom_high_res_time_stamp.h"
-#include "third_party/blink/renderer/core/execution_context/context_lifecycle_observer.h"
+#include "third_party/blink/renderer/core/execution_context/execution_context_lifecycle_observer.h"
 #include "third_party/blink/renderer/core/frame/local_dom_window.h"
 #include "third_party/blink/renderer/core/frame/navigator.h"
 #include "third_party/blink/renderer/core/frame/platform_event_controller.h"
@@ -50,9 +50,9 @@ class GamepadList;
 class Navigator;
 
 class MODULES_EXPORT NavigatorGamepad final
-    : public GarbageCollectedFinalized<NavigatorGamepad>,
+    : public GarbageCollected<NavigatorGamepad>,
       public Supplement<Navigator>,
-      public DOMWindowClient,
+      public ExecutionContextClient,
       public PlatformEventController,
       public LocalDOMWindow::EventListenerObserver,
       public Gamepad::Client {
@@ -70,11 +70,10 @@ class MODULES_EXPORT NavigatorGamepad final
   static GamepadList* getGamepads(Navigator&);
   GamepadList* Gamepads();
 
-  void Trace(blink::Visitor*) override;
+  void Trace(Visitor*) override;
 
  private:
   void SampleGamepads();
-  void SampleGamepad(const device::Gamepad& device_gamepad, Gamepad& gamepad);
 
   void DidRemoveGamepadEventListeners();
   bool StartUpdatingIfAttached();
@@ -117,12 +116,12 @@ class MODULES_EXPORT NavigatorGamepad final
 
   // The timestamp for the navigationStart attribute. Gamepad timestamps are
   // reported relative to this value.
-  TimeTicks navigation_start_;
+  base::TimeTicks navigation_start_;
 
   // The timestamp when gamepads were made available to the page. If no data has
   // been received from the hardware, the gamepad timestamp should be equal to
   // this value.
-  TimeTicks gamepads_start_;
+  base::TimeTicks gamepads_start_;
 
   // True if there is at least one listener for gamepad connection or
   // disconnection events.

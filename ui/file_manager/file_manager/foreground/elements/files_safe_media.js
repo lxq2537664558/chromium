@@ -10,7 +10,7 @@ const FILES_APP_ORIGIN = 'chrome-extension://hhaomjibdihmijegdhdafkllkbggdgoj';
  * files-safe-media-tap-outside events are fired depending on the position
  * of the tap.
  */
-var FilesSafeMedia = Polymer({
+const FilesSafeMedia = Polymer({
   is: 'files-safe-media',
 
   properties: {
@@ -50,7 +50,7 @@ var FilesSafeMedia = Polymer({
   onSrcChange_: function() {
     if (!this.src && this.webview_) {
       // Remove webview to clean up unnecessary processes.
-      Polymer.dom(this.$.content).removeChild(this.webview_);
+      this.$.content.removeChild(this.webview_);
       this.webview_ = null;
     } else if (this.src && !this.webview_) {
       // Create webview node only if src exists to save resources.
@@ -59,7 +59,7 @@ var FilesSafeMedia = Polymer({
       this.webview_ = webview;
       webview.partition = 'trusted';
       webview.allowtransparency = 'true';
-      Polymer.dom(this.$.content).appendChild(webview);
+      this.$.content.appendChild(webview);
       webview.addEventListener(
           'contentload', this.onSrcChange_.bind(this));
       webview.src = this.sourceFile_();
@@ -107,6 +107,8 @@ var FilesSafeMedia = Polymer({
         if (this.webview_) {
           this.webview_.removeAttribute('loaded');
         }
+      } else if (event.data === 'content-decode-failed') {
+        this.fire('files-safe-media-load-error');
       }
     });
   }

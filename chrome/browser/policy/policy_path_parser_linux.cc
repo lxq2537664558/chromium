@@ -4,6 +4,7 @@
 
 #include <pwd.h>
 #include <stddef.h>
+#include <string.h>
 #include <sys/types.h>
 #include <unistd.h>
 
@@ -55,12 +56,6 @@ base::FilePath::StringType ExpandPathVariables(
 }
 
 void CheckUserDataDirPolicy(base::FilePath* user_data_dir) {
-  // This function is not implemented in Linux because we don't support the
-  // policy on this platform.
-  NOTREACHED();
-}
-
-void CheckDiskCacheDirPolicy(base::FilePath* user_data_dir) {
   // This function is not implemented in Linux because we don't support the
   // policy on this platform.
   NOTREACHED();

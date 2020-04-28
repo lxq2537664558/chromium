@@ -24,14 +24,12 @@
 #include "content/shell/browser/shell.h"
 #include "content/shell/browser/shell_browser_context.h"
 #include "content/shell/browser/shell_devtools_manager_delegate.h"
-#include "content/shell/browser/shell_net_log.h"
 #include "content/shell/common/shell_switches.h"
 #include "device/bluetooth/bluetooth_adapter_factory.h"
 #include "net/base/filename_util.h"
 #include "net/base/net_module.h"
 #include "net/grit/net_resources.h"
 #include "services/service_manager/embedder/result_codes.h"
-#include "ui/base/material_design/material_design_controller.h"
 #include "ui/base/resource/resource_bundle.h"
 #include "url/gurl.h"
 
@@ -66,13 +64,12 @@ GURL GetStartupURL() {
   base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
   if (command_line->HasSwitch(switches::kBrowserTest))
     return GURL();
-  const base::CommandLine::StringVector& args = command_line->GetArgs();
 
 #if defined(OS_ANDROID)
   // Delay renderer creation on Android until surface is ready.
   return GURL();
-#endif
-
+#else
+  const base::CommandLine::StringVector& args = command_line->GetArgs();
   if (args.empty())
     return GURL("https://www.google.com/");
 
@@ -82,16 +79,15 @@ GURL GetStartupURL() {
 
   return net::FilePathToFileURL(
       base::MakeAbsoluteFilePath(base::FilePath(args[0])));
+#endif
 }
 
-base::StringPiece PlatformResourceProvider(int key) {
+scoped_refptr<base::RefCountedMemory> PlatformResourceProvider(int key) {
   if (key == IDR_DIR_HEADER_HTML) {
-    base::StringPiece html_data =
-        ui::ResourceBundle::GetSharedInstance().GetRawDataResource(
-            IDR_DIR_HEADER_HTML);
-    return html_data;
+    return ui::ResourceBundle::GetSharedInstance().LoadDataResourceBytes(
+        IDR_DIR_HEADER_HTML);
   }
-  return base::StringPiece();
+  return nullptr;
 }
 
 }  // namespace
@@ -116,7 +112,7 @@ void ShellBrowserMainParts::PreMainMessageLoopStart() {
 void ShellBrowserMainParts::PostMainMessageLoopStart() {
 #if defined(OS_CHROMEOS)
   chromeos::DBusThreadManager::Initialize();
-  bluez::BluezDBusManager::Initialize();
+  bluez::BluezDBusManager::InitializeFake();
 #elif defined(OS_LINUX)
   bluez::DBusBluezManagerWrapperLinux::Initialize();
 #endif
@@ -137,13 +133,11 @@ int ShellBrowserMainParts::PreEarlyInitialization() {
 }
 
 void ShellBrowserMainParts::InitializeBrowserContexts() {
-  set_browser_context(new ShellBrowserContext(false, net_log_.get()));
-  set_off_the_record_browser_context(
-      new ShellBrowserContext(true, net_log_.get()));
+  set_browser_context(new ShellBrowserContext(false));
+  set_off_the_record_browser_context(new ShellBrowserContext(true));
 }
 
 void ShellBrowserMainParts::InitializeMessageLoopContext() {
-  ui::MaterialDesignController::Initialize();
   Shell::CreateNewWindow(browser_context_.get(), GetStartupURL(), nullptr,
                          gfx::Size());
 }
@@ -158,8 +152,6 @@ int ShellBrowserMainParts::PreCreateThreads() {
         std::make_unique<crash_reporter::ChildProcessCrashObserver>());
   }
 #endif
-
-  net_log_ = std::make_unique<ShellNetLog>("content_shell");
   return 0;
 }
 
@@ -171,7 +163,7 @@ void ShellBrowserMainParts::PreMainMessageLoopRun() {
   InitializeMessageLoopContext();
 
   if (parameters_.ui_task) {
-    parameters_.ui_task->Run();
+    std::move(*parameters_.ui_task).Run();
     delete parameters_.ui_task;
     run_message_loop_ = false;
   }

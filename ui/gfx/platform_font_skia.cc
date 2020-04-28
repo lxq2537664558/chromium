@@ -25,6 +25,10 @@
 #include "ui/gfx/skia_font_delegate.h"
 #include "ui/gfx/text_utils.h"
 
+#if defined(OS_WIN)
+#include "ui/gfx/system_fonts_win.h"
+#endif
+
 namespace gfx {
 namespace {
 
@@ -36,6 +40,8 @@ const char* kFallbackFontFamilyName = "serif";
 #else
 const char* kFallbackFontFamilyName = "sans";
 #endif
+
+constexpr SkGlyphID kUnsupportedGlyph = 0;
 
 // The default font, used for the default constructor.
 base::LazyInstance<scoped_refptr<PlatformFontSkia>>::Leaky g_default_font =
@@ -102,6 +108,35 @@ PlatformFontSkia::PlatformFontSkia(const std::string& font_name,
                   query.weight, gfx::GetFontRenderParams(query, nullptr));
 }
 
+PlatformFontSkia::PlatformFontSkia(
+    sk_sp<SkTypeface> typeface,
+    int font_size_pixels,
+    const base::Optional<FontRenderParams>& params) {
+  DCHECK(typeface);
+
+  SkString family_name;
+  typeface->getFamilyName(&family_name);
+
+  SkFontStyle font_style = typeface->fontStyle();
+  Font::Weight font_weight = FontWeightFromInt(font_style.weight());
+
+  int style = typeface->isItalic() ? Font::ITALIC : Font::NORMAL;
+
+  FontRenderParams actual_render_params;
+  if (!params) {
+    FontRenderParamsQuery query;
+    query.families.push_back(family_name.c_str());
+    query.pixel_size = font_size_pixels;
+    query.weight = font_weight;
+    actual_render_params = gfx::GetFontRenderParams(query, nullptr);
+  } else {
+    actual_render_params = params.value();
+  }
+
+  InitFromDetails(std::move(typeface), family_name.c_str(), font_size_pixels,
+                  style, font_weight, actual_render_params);
+}
+
 ////////////////////////////////////////////////////////////////////////////////
 // PlatformFontSkia, PlatformFont implementation:
 
@@ -112,10 +147,22 @@ bool PlatformFontSkia::InitDefaultFont() {
 
   bool success = false;
   std::string family = kFallbackFontFamilyName;
-  int size_pixels = 12;
+  int size_pixels = PlatformFont::kDefaultBaseFontSize;
   int style = Font::NORMAL;
   Font::Weight weight = Font::Weight::NORMAL;
   FontRenderParams params;
+
+#if defined(OS_WIN)
+  // On windows, the system default font is retrieved by using the GDI API
+  // SystemParametersInfo(...) (see struct NONCLIENTMETRICS). The font
+  // properties need to be converted as close as possible to a skia font.
+  // The style must be kept (see http://crbug/989476).
+  gfx::Font system_font = win::GetDefaultSystemFont();
+  family = system_font.GetFontName();
+  size_pixels = system_font.GetFontSize();
+  style = system_font.GetStyle();
+  weight = system_font.GetWeight();
+#endif  // OS_WIN
 
   // On Linux, SkiaFontDelegate is used to query the native toolkit (e.g.
   // GTK+) for the default UI font.
@@ -139,6 +186,8 @@ bool PlatformFontSkia::InitDefaultFont() {
 #else
     NOTREACHED();
 #endif
+  } else {
+    params = gfx::GetFontRenderParams(FontRenderParamsQuery(), nullptr);
   }
 
   sk_sp<SkTypeface> typeface =
@@ -166,7 +215,12 @@ void PlatformFontSkia::SetDefaultFontDescription(
 Font PlatformFontSkia::DeriveFont(int size_delta,
                                   int style,
                                   Font::Weight weight) const {
+#if defined(OS_WIN)
+  const int new_size = win::AdjustFontSize(font_size_pixels_, size_delta);
+#else
   const int new_size = font_size_pixels_ + size_delta;
+#endif
+
   DCHECK_GT(new_size, 0);
 
   // If the style changed, we may need to load a new face.
@@ -224,7 +278,7 @@ const std::string& PlatformFontSkia::GetFontName() const {
   return font_family_;
 }
 
-std::string PlatformFontSkia::GetActualFontNameForTesting() const {
+std::string PlatformFontSkia::GetActualFontName() const {
   SkString family_name;
   typeface_->getFamilyName(&family_name);
   return family_name.c_str();
@@ -248,6 +302,11 @@ const FontRenderParams& PlatformFontSkia::GetFontRenderParams() {
     device_scale_factor_ = current_scale_factor;
   }
   return font_render_params_;
+}
+
+sk_sp<SkTypeface> PlatformFontSkia::GetNativeSkTypeface() const {
+  DCHECK(typeface_);
+  return sk_sp<SkTypeface>(typeface_);
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -321,7 +380,16 @@ void PlatformFontSkia::ComputeMetricsIfNecessary() {
     metrics_need_computation_ = false;
 
     SkFont font(typeface_, font_size_pixels_);
-    font.setEdging(SkFont::Edging::kAlias);
+    const FontRenderParams& params = GetFontRenderParams();
+    if (!params.antialiasing) {
+      font.setEdging(SkFont::Edging::kAlias);
+    } else if (params.subpixel_rendering ==
+               FontRenderParams::SUBPIXEL_RENDERING_NONE) {
+      font.setEdging(SkFont::Edging::kAntiAlias);
+    } else {
+      font.setEdging(SkFont::Edging::kSubpixelAntiAlias);
+    }
+
     font.setEmbolden(weight_ >= Font::Weight::BOLD && !typeface_->isBold());
     font.setSkewX((Font::ITALIC & style_) && !typeface_->isItalic()
                       ? -SK_Scalar1 / 4
@@ -329,9 +397,47 @@ void PlatformFontSkia::ComputeMetricsIfNecessary() {
     SkFontMetrics metrics;
     font.getMetrics(&metrics);
     ascent_pixels_ = SkScalarCeilToInt(-metrics.fAscent);
-    height_pixels_ = ascent_pixels_ + SkScalarCeilToInt(metrics.fDescent);
     cap_height_pixels_ = SkScalarCeilToInt(metrics.fCapHeight);
-    average_width_pixels_ = SkScalarToDouble(metrics.fAvgCharWidth);
+
+    // There is a mismatch between the way the PlatformFontWin was computing the
+    // font height in pixel. The font height may vary by one pixel due to
+    // decimal rounding.
+    //     Windows Skia implements : ceil(descent - ascent)
+    //     Linux Skia implements   : ceil(-ascent) + ceil(descent)
+    // TODO(etienneb): Make both implementation consistent and fix the broken
+    // unittests.
+#if defined(OS_WIN)
+    height_pixels_ = SkScalarCeilToInt(metrics.fDescent - metrics.fAscent);
+#else
+    height_pixels_ = ascent_pixels_ + SkScalarCeilToInt(metrics.fDescent);
+#endif
+
+    if (metrics.fAvgCharWidth) {
+      average_width_pixels_ = SkScalarToDouble(metrics.fAvgCharWidth);
+    } else {
+      // Some Skia fonts manager do not compute the average character size
+      // (e.g. Direct Write). The following code computes the average character
+      // width the same way Blink (e.g. SimpleFontData) does. Use the width of
+      // the letter 'x' when available, otherwise use the max character width.
+      SkGlyphID glyph = typeface_->unicharToGlyph('x');
+      if (glyph != kUnsupportedGlyph) {
+        SkScalar sk_width;
+        font.getWidths(&glyph, 1, &sk_width);
+        average_width_pixels_ = SkScalarToDouble(sk_width);
+      }
+      if (!average_width_pixels_) {
+        if (metrics.fMaxCharWidth) {
+          average_width_pixels_ = SkScalarToDouble(metrics.fMaxCharWidth);
+        } else {
+          // Older version of the DirectWrite API doesn't implement support for
+          // max char width. Fall back on a multiple of the ascent. This is
+          // entirely arbitrary but comes pretty close to the expected value in
+          // most cases.
+          average_width_pixels_ = ascent_pixels_ * 2;
+        }
+      }
+    }
+    DCHECK_NE(average_width_pixels_, 0);
   }
 }
 
@@ -348,6 +454,15 @@ PlatformFont* PlatformFont::CreateFromNameAndSize(const std::string& font_name,
                                                   int font_size) {
   TRACE_EVENT0("fonts", "PlatformFont::CreateFromNameAndSize");
   return new PlatformFontSkia(font_name, font_size);
+}
+
+// static
+PlatformFont* PlatformFont::CreateFromSkTypeface(
+    sk_sp<SkTypeface> typeface,
+    int font_size_pixels,
+    const base::Optional<FontRenderParams>& params) {
+  TRACE_EVENT0("fonts", "PlatformFont::CreateFromSkTypeface");
+  return new PlatformFontSkia(typeface, font_size_pixels, params);
 }
 
 }  // namespace gfx

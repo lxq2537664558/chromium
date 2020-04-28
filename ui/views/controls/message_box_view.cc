@@ -6,11 +6,14 @@
 
 #include <stddef.h>
 
+#include <memory>
 #include <numeric>
+#include <utility>
 
 #include "base/i18n/rtl.h"
 #include "base/strings/string_split.h"
 #include "base/strings/utf_string_conversions.h"
+#include "ui/accessibility/ax_enums.mojom.h"
 #include "ui/accessibility/ax_node_data.h"
 #include "ui/base/clipboard/clipboard.h"
 #include "ui/base/clipboard/scoped_clipboard_writer.h"
@@ -18,7 +21,6 @@
 #include "ui/views/border.h"
 #include "ui/views/controls/button/checkbox.h"
 #include "ui/views/controls/label.h"
-#include "ui/views/controls/link.h"
 #include "ui/views/controls/scroll_view.h"
 #include "ui/views/controls/textfield/textfield.h"
 #include "ui/views/layout/box_layout.h"
@@ -44,8 +46,8 @@ constexpr int kDefaultMessageWidth = 400;
 // 0085          ; B # Cc       <control-0085>
 // 2029          ; B # Zp       PARAGRAPH SEPARATOR
 bool IsParagraphSeparator(base::char16 c) {
-  return ( c == 0x000A || c == 0x000D || c == 0x001C || c == 0x001D ||
-           c == 0x001E || c == 0x0085 || c == 0x2029);
+  return (c == 0x000A || c == 0x000D || c == 0x001C || c == 0x001D ||
+          c == 0x001E || c == 0x0085 || c == 0x2029);
 }
 
 // Splits |text| into a vector of paragraphs.
@@ -72,9 +74,6 @@ namespace views {
 ///////////////////////////////////////////////////////////////////////////////
 // MessageBoxView, public:
 
-// static
-const char MessageBoxView::kViewClassName[] = "MessageBoxView";
-
 MessageBoxView::InitParams::InitParams(const base::string16& message)
     : options(NO_OPTIONS),
       message(message),
@@ -85,18 +84,19 @@ MessageBoxView::InitParams::InitParams(const base::string16& message)
 MessageBoxView::InitParams::~InitParams() = default;
 
 MessageBoxView::MessageBoxView(const InitParams& params)
-    : message_width_(params.message_width) {
-  Init(params);
+    : inter_row_vertical_spacing_(params.inter_row_vertical_spacing),
+      message_width_(params.message_width) {
+  Init(std::move(params));
 }
 
 MessageBoxView::~MessageBoxView() = default;
 
 base::string16 MessageBoxView::GetInputText() {
-  return prompt_field_ ? prompt_field_->text() : base::string16();
+  return prompt_field_ ? prompt_field_->GetText() : base::string16();
 }
 
 bool MessageBoxView::IsCheckBoxSelected() {
-  return checkbox_ ? checkbox_->checked() : false;
+  return checkbox_ && checkbox_->GetChecked();
 }
 
 void MessageBoxView::SetCheckBoxLabel(const base::string16& label) {
@@ -119,26 +119,16 @@ void MessageBoxView::SetCheckBoxSelected(bool selected) {
 }
 
 void MessageBoxView::SetLink(const base::string16& text,
-                             LinkListener* listener) {
-  size_t child_count = children().size();
-  if (text.empty()) {
-    DCHECK(!listener);
-    delete link_;
-    link_ = nullptr;
-  } else {
-    DCHECK(listener);
-    if (!link_) {
-      // See the comment above in SetCheckBoxLabel();
-      SetLayoutManager(nullptr);
-      link_ = AddChildView(std::make_unique<Link>(text));
-      link_->SetHorizontalAlignment(gfx::ALIGN_LEFT);
-    } else {
-      link_->SetText(text);
-    }
-    link_->set_listener(listener);
-  }
-  if (child_count != children().size())
-    ResetLayoutManager();
+                             Link::ClickedCallback callback) {
+  DCHECK(!text.empty());
+  DCHECK(!callback.is_null());
+  DCHECK(!link_);
+  // See the comment in SetCheckBoxLabel();
+  SetLayoutManager(nullptr);
+  link_ = AddChildView(std::make_unique<Link>(text));
+  link_->SetHorizontalAlignment(gfx::ALIGN_LEFT);
+  link_->set_callback(std::move(callback));
+  ResetLayoutManager();
 }
 
 void MessageBoxView::GetAccessibleNodeData(ui::AXNodeData* node_data) {
@@ -168,18 +158,16 @@ bool MessageBoxView::AcceleratorPressed(const ui::Accelerator& accelerator) {
 
   // Don't intercept Ctrl-C if we only use a single message label supporting
   // text selection.
-  if (message_labels_.size() == 1u && message_labels_[0]->selectable())
+  if (message_labels_.size() == 1u && message_labels_[0]->GetSelectable())
     return false;
 
-  ui::ScopedClipboardWriter scw(ui::CLIPBOARD_TYPE_COPY_PASTE);
-  scw.WriteText(std::accumulate(
-      message_labels_.cbegin(), message_labels_.cend(), base::string16(),
-      [](base::string16& left, Label* right) { return left + right->text(); }));
+  ui::ScopedClipboardWriter scw(ui::ClipboardBuffer::kCopyPaste);
+  scw.WriteText(std::accumulate(message_labels_.cbegin(),
+                                message_labels_.cend(), base::string16(),
+                                [](base::string16& left, Label* right) {
+                                  return left + right->GetText();
+                                }));
   return true;
-}
-
-const char* MessageBoxView::GetClassName() const {
-  return kViewClassName;
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -192,8 +180,8 @@ void MessageBoxView::Init(const InitParams& params) {
   // We explicitly set insets on the message contents instead of the scroll view
   // so that the scroll view borders are not capped by dialog insets.
   message_contents->SetBorder(CreateEmptyBorder(GetHorizontalInsets(provider)));
-  message_contents->SetLayoutManager(
-      std::make_unique<views::BoxLayout>(views::BoxLayout::kVertical));
+  message_contents->SetLayoutManager(std::make_unique<views::BoxLayout>(
+      views::BoxLayout::Orientation::kVertical));
   auto add_label = [&message_contents, this](
                        const base::string16& text, bool multi_line,
                        gfx::HorizontalAlignment alignment) {
@@ -232,15 +220,12 @@ void MessageBoxView::Init(const InitParams& params) {
     prompt_field_ = AddChildView(std::move(prompt_field));
   }
 
-  inter_row_vertical_spacing_ = params.inter_row_vertical_spacing;
-
   ResetLayoutManager();
 }
 
 void MessageBoxView::ResetLayoutManager() {
   // Initialize the Grid Layout Manager used for this dialog box.
-  GridLayout* layout =
-      SetLayoutManager(std::make_unique<views::GridLayout>(this));
+  GridLayout* layout = SetLayoutManager(std::make_unique<views::GridLayout>());
 
   // Add the column set for the message displayed at the top of the dialog box.
   constexpr int kMessageViewColumnSetId = 0;
@@ -262,27 +247,27 @@ void MessageBoxView::ResetLayoutManager() {
   }
 
   layout->StartRow(0, kMessageViewColumnSetId);
-  layout->AddView(scroll_view_);
+  layout->AddExistingView(scroll_view_);
 
   views::DialogContentType trailing_content_type = views::TEXT;
   if (prompt_field_) {
     layout->AddPaddingRow(0, inter_row_vertical_spacing_);
     layout->StartRow(0, kExtraViewColumnSetId);
-    layout->AddView(prompt_field_);
+    layout->AddExistingView(prompt_field_);
     trailing_content_type = views::CONTROL;
   }
 
   if (checkbox_) {
     layout->AddPaddingRow(0, inter_row_vertical_spacing_);
     layout->StartRow(0, kExtraViewColumnSetId);
-    layout->AddView(checkbox_);
+    layout->AddExistingView(checkbox_);
     trailing_content_type = views::TEXT;
   }
 
   if (link_) {
     layout->AddPaddingRow(0, inter_row_vertical_spacing_);
     layout->StartRow(0, kExtraViewColumnSetId);
-    layout->AddView(link_);
+    layout->AddExistingView(link_);
     trailing_content_type = views::TEXT;
   }
 
@@ -302,5 +287,9 @@ gfx::Insets MessageBoxView::GetHorizontalInsets(
                         horizontal_insets.right());
   return horizontal_insets;
 }
+
+BEGIN_METADATA(MessageBoxView)
+METADATA_PARENT_CLASS(View)
+END_METADATA()
 
 }  // namespace views

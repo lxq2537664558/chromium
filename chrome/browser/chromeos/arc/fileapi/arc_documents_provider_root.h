@@ -19,9 +19,9 @@
 #include "base/optional.h"
 #include "base/time/time.h"
 #include "chrome/browser/chromeos/arc/fileapi/arc_file_system_operation_runner.h"
-#include "components/arc/common/file_system.mojom.h"
-#include "storage/browser/fileapi/async_file_util.h"
-#include "storage/browser/fileapi/watcher_manager.h"
+#include "components/arc/mojom/file_system.mojom-forward.h"
+#include "storage/browser/file_system/async_file_util.h"
+#include "storage/browser/file_system/watcher_manager.h"
 
 class GURL;
 
@@ -41,6 +41,18 @@ class ArcDocumentsProviderRoot : public ArcFileSystemOperationRunner::Observer {
     base::Time last_modified;
   };
 
+  // Extra metadata about write capabilities. All fields are false on read-only
+  // roots.
+  struct ExtraFileMetadata {
+    // True if a document is deletable.
+    bool supports_delete;
+    // True if a document can be renamed.
+    bool supports_rename;
+    // True if a document is a directory that supports creation of new files
+    // within it.
+    bool dir_supports_create;
+  };
+
   // TODO(crbug.com/755451): Use OnceCallback/RepeatingCallback.
   using GetFileInfoCallback = storage::AsyncFileUtil::GetFileInfoCallback;
   using StatusCallback = storage::AsyncFileUtil::StatusCallback;
@@ -53,11 +65,15 @@ class ArcDocumentsProviderRoot : public ArcFileSystemOperationRunner::Observer {
   using WatcherStatusCallback = storage::WatcherManager::StatusCallback;
   using ResolveToContentUrlCallback =
       base::OnceCallback<void(const GURL& content_url)>;
+  using GetMetadataCallback =
+      base::OnceCallback<void(base::File::Error error,
+                              const ExtraFileMetadata& metadata)>;
 
   ArcDocumentsProviderRoot(ArcFileSystemOperationRunner* runner,
                            const std::string& authority,
                            const std::string& root_document_id,
                            const std::string& root_id,
+                           bool read_only,
                            const std::vector<std::string>& mime_types);
   ~ArcDocumentsProviderRoot() override;
 
@@ -147,13 +163,13 @@ class ArcDocumentsProviderRoot : public ArcFileSystemOperationRunner::Observer {
   //   2. Keep consistency of installed watchers so that the caller can avoid
   //      dangling watchers.
   void AddWatcher(const base::FilePath& path,
-                  const WatcherNotificationCallback& watcher_callback,
-                  const WatcherStatusCallback& callback);
+                  WatcherNotificationCallback watcher_callback,
+                  WatcherStatusCallback callback);
 
   // Uninstalls a document watcher.
   // See the documentation of AddWatcher() above.
   void RemoveWatcher(const base::FilePath& path,
-                     const WatcherStatusCallback& callback);
+                     WatcherStatusCallback callback);
 
   // Resolves a file path into a content:// URL pointing to the file
   // on DocumentsProvider. Returns URL that can be passed to
@@ -161,6 +177,11 @@ class ArcDocumentsProviderRoot : public ArcFileSystemOperationRunner::Observer {
   // On errors, an invalid GURL is returned.
   void ResolveToContentUrl(const base::FilePath& path,
                            ResolveToContentUrlCallback callback);
+
+  // Get extra metadata of the file at |path|.
+  // The metadata is about capatility of write operations.
+  // See ExtraFileMetadata for the supported capabilities.
+  void GetMetadata(const base::FilePath& path, GetMetadataCallback callback);
 
   // Instructs to make directory caches expire "soon" after callbacks are
   // called, that is, when the message loop gets idle.
@@ -268,17 +289,16 @@ class ArcDocumentsProviderRoot : public ArcFileSystemOperationRunner::Observer {
                    const std::string& target_display_name_to_rename,
                    mojom::DocumentPtr document);
 
-  void AddWatcherWithDocumentId(
-      const base::FilePath& path,
-      uint64_t watcher_request_id,
-      const WatcherNotificationCallback& watcher_callback,
-      const std::string& document_id);
+  void AddWatcherWithDocumentId(const base::FilePath& path,
+                                uint64_t watcher_request_id,
+                                WatcherNotificationCallback watcher_callback,
+                                const std::string& document_id);
   void OnWatcherAdded(const base::FilePath& path,
                       uint64_t watcher_request_id,
                       int64_t watcher_id);
   void OnWatcherAddedButRemoved(bool success);
 
-  void OnWatcherRemoved(const WatcherStatusCallback& callback, bool success);
+  void OnWatcherRemoved(WatcherStatusCallback callback, bool success);
 
   // Returns true if the specified watcher request has been canceled.
   // This function should be called only while the request is in-flight.
@@ -287,6 +307,11 @@ class ArcDocumentsProviderRoot : public ArcFileSystemOperationRunner::Observer {
 
   void ResolveToContentUrlWithDocumentId(ResolveToContentUrlCallback callback,
                                          const std::string& document_id);
+
+  void GetMetadataWithDocumentId(GetMetadataCallback callback,
+                                 const std::string& document_id);
+  void OnMetadataGotten(GetMetadataCallback callback,
+                        mojom::DocumentPtr document);
 
   // Resolves |path| to a document ID. Failures are indicated by an empty
   // document ID.
@@ -326,6 +351,7 @@ class ArcDocumentsProviderRoot : public ArcFileSystemOperationRunner::Observer {
   const std::string authority_;
   const std::string root_document_id_;
   const std::string root_id_;
+  const bool read_only_;
   const std::vector<std::string> mime_types_;
 
   bool directory_cache_expire_soon_ = false;
@@ -348,7 +374,7 @@ class ArcDocumentsProviderRoot : public ArcFileSystemOperationRunner::Observer {
 
   uint64_t next_watcher_request_id_ = 1;
 
-  base::WeakPtrFactory<ArcDocumentsProviderRoot> weak_ptr_factory_;
+  base::WeakPtrFactory<ArcDocumentsProviderRoot> weak_ptr_factory_{this};
 
   DISALLOW_COPY_AND_ASSIGN(ArcDocumentsProviderRoot);
 };

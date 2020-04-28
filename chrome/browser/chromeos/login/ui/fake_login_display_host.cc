@@ -11,16 +11,16 @@ namespace chromeos {
 
 class FakeLoginDisplayHost::FakeBaseScreen : public chromeos::BaseScreen {
  public:
-  explicit FakeBaseScreen(chromeos::OobeScreen screen_id)
-      : BaseScreen(screen_id) {}
+  explicit FakeBaseScreen(chromeos::OobeScreenId screen_id)
+      : BaseScreen(screen_id, OobeScreenPriority::DEFAULT) {}
 
   ~FakeBaseScreen() override = default;
 
-  // chromeos::BaseScreen:
-  void Show() override {}
-  void Hide() override {}
-
  private:
+  // chromeos::BaseScreen:
+  void ShowImpl() override {}
+  void HideImpl() override {}
+
   DISALLOW_COPY_AND_ASSIGN(FakeBaseScreen);
 };
 
@@ -57,9 +57,11 @@ void FakeLoginDisplayHost::BeforeSessionStart() {}
 
 void FakeLoginDisplayHost::Finalize(base::OnceClosure) {}
 
+void FakeLoginDisplayHost::FinalizeImmediately() {}
+
 void FakeLoginDisplayHost::SetStatusAreaVisible(bool visible) {}
 
-void FakeLoginDisplayHost::StartWizard(OobeScreen first_screen) {
+void FakeLoginDisplayHost::StartWizard(OobeScreenId first_screen) {
   wizard_controller_ = std::make_unique<WizardController>();
 
   fake_screen_ = std::make_unique<FakeBaseScreen>(first_screen);
@@ -79,8 +81,7 @@ void FakeLoginDisplayHost::StartUserAdding(
 
 void FakeLoginDisplayHost::CancelUserAdding() {}
 
-void FakeLoginDisplayHost::StartSignInScreen(
-    const LoginScreenContext& context) {}
+void FakeLoginDisplayHost::StartSignInScreen() {}
 
 void FakeLoginDisplayHost::OnPreferencesChanged() {}
 
@@ -93,6 +94,8 @@ void FakeLoginDisplayHost::StartAppLaunch(const std::string& app_id,
 void FakeLoginDisplayHost::StartDemoAppLaunch() {}
 
 void FakeLoginDisplayHost::StartArcKiosk(const AccountId& account_id) {}
+
+void FakeLoginDisplayHost::StartWebKiosk(const AccountId& account_id) {}
 
 void FakeLoginDisplayHost::CompleteLogin(const UserContext& user_context) {}
 
@@ -112,16 +115,11 @@ bool FakeLoginDisplayHost::IsUserWhitelisted(const AccountId& account_id) {
   return false;
 }
 
-void FakeLoginDisplayHost::ShowGaiaDialog(
-    bool can_close,
-    const base::Optional<AccountId>& prefilled_account) {}
+void FakeLoginDisplayHost::ShowGaiaDialog(const AccountId& prefilled_account) {}
 
 void FakeLoginDisplayHost::HideOobeDialog() {}
 
-void FakeLoginDisplayHost::UpdateOobeDialogSize(int width, int height) {}
-
-void FakeLoginDisplayHost::UpdateOobeDialogState(
-    ash::mojom::OobeDialogState state) {}
+void FakeLoginDisplayHost::UpdateOobeDialogState(ash::OobeDialogState state) {}
 
 const user_manager::UserList FakeLoginDisplayHost::GetUsers() {
   return user_manager::UserList();
@@ -140,5 +138,7 @@ void FakeLoginDisplayHost::ShowResetScreen() {}
 void FakeLoginDisplayHost::HandleDisplayCaptivePortal() {}
 
 void FakeLoginDisplayHost::UpdateAddUserButtonStatus() {}
+
+void FakeLoginDisplayHost::RequestSystemInfoUpdate() {}
 
 }  // namespace chromeos

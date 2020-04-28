@@ -8,28 +8,33 @@
 #include "base/macros.h"
 #include "base/single_thread_task_runner.h"
 #include "base/threading/thread_task_runner_handle.h"
-#include "chrome/browser/chrome_notification_types.h"
-#include "chrome/browser/chromeos/login/screens/gaia_view.h"
 #include "chrome/browser/chromeos/login/test/fake_gaia_mixin.h"
 #include "chrome/browser/chromeos/login/test/oobe_base_test.h"
 #include "chrome/browser/chromeos/login/test/oobe_screen_waiter.h"
+#include "chrome/browser/chromeos/login/test/session_manager_state_waiter.h"
 #include "chrome/browser/chromeos/login/ui/login_display_host_webui.h"
 #include "chrome/browser/chromeos/login/wizard_controller.h"
 #include "chrome/browser/lifetime/application_lifetime.h"
+#include "chrome/browser/ui/webui/chromeos/login/gaia_screen_handler.h"
 #include "chrome/browser/ui/webui/chromeos/login/signin_screen_handler.h"
+#include "chrome/browser/ui/webui/signin/signin_utils.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chromeos/constants/chromeos_switches.h"
+#include "chromeos/dbus/cryptohome/fake_cryptohome_client.h"
+#include "chromeos/dbus/cryptohome/key.pb.h"
+#include "chromeos/dbus/cryptohome/rpc.pb.h"
+#include "chromeos/login/auth/cryptohome_key_constants.h"
+#include "components/account_id/account_id.h"
+#include "components/user_manager/known_user.h"
+#include "components/user_manager/user.h"
 #include "content/public/test/browser_test_utils.h"
-#include "content/public/test/test_utils.h"
 #include "google_apis/gaia/gaia_switches.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
 #include "net/test/embedded_test_server/http_response.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/base/test/ui_controls.h"
 #include "ui/views/widget/widget.h"
-
-using namespace net::test_server;
 
 namespace chromeos {
 
@@ -73,18 +78,38 @@ class OobeTest : public OobeBaseTest {
 IN_PROC_BROWSER_TEST_F(OobeTest, NewUser) {
   WaitForGaiaPageLoad();
 
-  content::WindowedNotificationObserver session_start_waiter(
-      chrome::NOTIFICATION_SESSION_STARTED,
-      content::NotificationService::AllSources());
-
+  // Make the MountEx cryptohome call fail iff the |create| field is missing,
+  // which simulates the real cryptohomed's behavior for the new user mount.
+  FakeCryptohomeClient::Get()->set_mount_create_required(true);
   LoginDisplayHost::default_host()
       ->GetOobeUI()
-      ->GetGaiaScreenView()
+      ->GetView<GaiaScreenHandler>()
       ->ShowSigninScreenForTest(FakeGaiaMixin::kFakeUserEmail,
                                 FakeGaiaMixin::kFakeUserPassword,
                                 FakeGaiaMixin::kEmptyUserServices);
+  test::WaitForPrimaryUserSessionStart();
 
-  session_start_waiter.Wait();
+  const AccountId account_id =
+      user_manager::UserManager::Get()->GetActiveUser()->GetAccountId();
+  EXPECT_FALSE(
+      user_manager::known_user::GetIsUsingSAMLPrincipalsAPI(account_id));
+
+  // Verify the parameters that were passed to the latest MountEx call.
+  const cryptohome::AuthorizationRequest& cryptohome_auth =
+      FakeCryptohomeClient::Get()->get_last_mount_authentication();
+  EXPECT_EQ(cryptohome::KeyData::KEY_TYPE_PASSWORD,
+            cryptohome_auth.key().data().type());
+  EXPECT_TRUE(cryptohome_auth.key().data().label().empty());
+  EXPECT_FALSE(cryptohome_auth.key().secret().empty());
+  const cryptohome::MountRequest& last_mount_request =
+      FakeCryptohomeClient::Get()->get_last_mount_request();
+  ASSERT_TRUE(last_mount_request.has_create());
+  ASSERT_EQ(1, last_mount_request.create().keys_size());
+  EXPECT_EQ(cryptohome::KeyData::KEY_TYPE_PASSWORD,
+            last_mount_request.create().keys(0).data().type());
+  EXPECT_EQ(kCryptohomeGaiaKeyLabel,
+            last_mount_request.create().keys(0).data().label());
+  EXPECT_FALSE(last_mount_request.create().keys(0).secret().empty());
 }
 
 IN_PROC_BROWSER_TEST_F(OobeTest, Accelerator) {
@@ -97,7 +122,7 @@ IN_PROC_BROWSER_TEST_F(OobeTest, Accelerator) {
                             false,   // shift
                             true,    // alt
                             false);  // command
-  OobeScreenWaiter(OobeScreen::SCREEN_OOBE_ENROLLMENT).Wait();
+  OobeScreenWaiter(EnrollmentScreenView::kScreenId).Wait();
 }
 
 }  // namespace chromeos

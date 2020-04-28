@@ -7,12 +7,11 @@
 
 #include "base/macros.h"
 #include "chrome/browser/ui/browser_list_observer.h"
+#include "chrome/browser/ui/toolbar/toolbar_actions_bar.h"
 #include "chrome/browser/ui/toolbar/toolbar_actions_bar_observer.h"
 #include "ui/views/bubble/bubble_dialog_delegate_view.h"
 
-class BrowserActionsContainer;
 class BrowserView;
-class ToolbarActionsBar;
 enum class ImeWarningBubblePermissionStatus;
 
 namespace extensions {
@@ -37,10 +36,6 @@ class ImeWarningBubbleView : public views::BubbleDialogDelegateView,
   static void ShowBubble(const extensions::Extension* extension,
                          BrowserView* browser_view,
                          const ImeWarningBubbleResponseCallback& callback);
-
-  // views::DialogDelegate:
-  bool Accept() override;
-  bool Cancel() override;
 
   // ToolbarActionsBarObserver:
   void OnToolbarActionsBarAnimationEnded() override;
@@ -69,7 +64,7 @@ class ImeWarningBubbleView : public views::BubbleDialogDelegateView,
   bool IsToolbarAnimating();
 
   const extensions::Extension* extension_;
-  BrowserView* browser_view_;
+  BrowserView* const browser_view_;
 
   // Saves the Browser instance of the browser view, which will be used in
   // OnBrowserRemoved(), as browser_view_->browser() may be null when
@@ -77,24 +72,20 @@ class ImeWarningBubbleView : public views::BubbleDialogDelegateView,
   Browser* const browser_;
 
   // True if bubble anchors to the action of the extension.
-  bool anchor_to_action_;
+  bool anchor_to_action_ = false;
 
   // The check box on the bubble view.
-  views::Checkbox* never_show_checkbox_;
+  views::Checkbox* never_show_checkbox_ = nullptr;
 
   ImeWarningBubbleResponseCallback response_callback_;
 
   // True if the warning bubble has been shown.
-  bool bubble_has_shown_;
-
-  BrowserActionsContainer* container_;
-
-  ToolbarActionsBar* toolbar_actions_bar_;
+  bool bubble_has_shown_ = false;
 
   ScopedObserver<ToolbarActionsBar, ToolbarActionsBarObserver>
-      toolbar_actions_bar_observer_;
+      toolbar_actions_bar_observer_{this};
 
-  base::WeakPtrFactory<ImeWarningBubbleView> weak_ptr_factory_;
+  base::WeakPtrFactory<ImeWarningBubbleView> weak_ptr_factory_{this};
 
   DISALLOW_COPY_AND_ASSIGN(ImeWarningBubbleView);
 };

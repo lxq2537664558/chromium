@@ -46,13 +46,10 @@ class SessionCountMatchChecker : public SingleClientStatusChangeChecker {
         verifier_(fake_server) {}
 
   // StatusChangeChecker implementation.
-  bool IsExitConditionSatisfied() override {
-    return verifier_.VerifyEntityCountByType(expected_count_, syncer::SESSIONS);
-  }
-
-  std::string GetDebugMessage() const override {
-    return "Waiting for a matching number of sessions to be refleted on the "
+  bool IsExitConditionSatisfied(std::ostream* os) override {
+    *os << "Waiting for a matching number of sessions to be refleted on the "
            "fake server.";
+    return verifier_.VerifyEntityCountByType(expected_count_, syncer::SESSIONS);
   }
 
  private:
@@ -68,7 +65,8 @@ class SessionCountMatchChecker : public SingleClientStatusChangeChecker {
 // In the second phase, we take down client 1 and while it's down upload more
 // data from client 0. That second phase will rely on polling on client 1 to
 // receive the update.
-IN_PROC_BROWSER_TEST_F(TwoClientPollingSyncTest, ShouldPollOnStartup) {
+// Flaky: crbug.com/988161
+IN_PROC_BROWSER_TEST_F(TwoClientPollingSyncTest, DISABLED_ShouldPollOnStartup) {
   ASSERT_TRUE(SetupClients()) << "SetupClients() failed.";
 
   // Choose larger interval to verify the poll-on-start logic.
@@ -81,8 +79,8 @@ IN_PROC_BROWSER_TEST_F(TwoClientPollingSyncTest, ShouldPollOnStartup) {
   // clear its data even with KEEP_DATA, which means we'd always send a regular
   // GetUpdates request on starting Sync again, and so we'd have no need for a
   // poll.
-  GetClient(0)->DisableSyncForDatatype(syncer::AUTOFILL);
-  GetClient(1)->DisableSyncForDatatype(syncer::AUTOFILL);
+  GetClient(0)->DisableSyncForType(syncer::UserSelectableType::kAutofill);
+  GetClient(1)->DisableSyncForType(syncer::UserSelectableType::kAutofill);
   // TODO(crbug.com/890737): Once AUTOFILL_WALLET_DATA gets properly disabled
   // based on the pref, we can just disable that instead of all of AUTOFILL:
   // autofill::prefs::SetPaymentsIntegrationEnabled(GetProfile(0)->GetPrefs(),

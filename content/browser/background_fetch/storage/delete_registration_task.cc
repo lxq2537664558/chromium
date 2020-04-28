@@ -11,6 +11,7 @@
 #include "content/browser/background_fetch/background_fetch.pb.h"
 #include "content/browser/background_fetch/background_fetch_data_manager.h"
 #include "content/browser/background_fetch/storage/database_helpers.h"
+#include "content/browser/cache_storage/cache_storage.h"
 #include "content/browser/cache_storage/cache_storage_manager.h"
 #include "content/browser/service_worker/service_worker_context_wrapper.h"
 #include "third_party/blink/public/common/cache_storage/cache_storage_utils.h"
@@ -50,8 +51,7 @@ DeleteRegistrationTask::DeleteRegistrationTask(
       service_worker_registration_id_(service_worker_registration_id),
       origin_(origin),
       unique_id_(unique_id),
-      callback_(std::move(callback)),
-      weak_factory_(this) {}
+      callback_(std::move(callback)) {}
 
 DeleteRegistrationTask::~DeleteRegistrationTask() = default;
 

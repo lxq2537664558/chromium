@@ -21,6 +21,8 @@
 #include "base/test/test_timeouts.h"
 #include "base/threading/thread_task_runner_handle.h"
 #include "base/time/time.h"
+#include "build/build_config.h"
+#include "components/network_session_configurator/common/network_switches.h"
 #include "content/browser/frame_host/cross_process_frame_connector.h"
 #include "content/browser/frame_host/frame_tree.h"
 #include "content/browser/frame_host/navigation_controller_impl.h"
@@ -28,8 +30,9 @@
 #include "content/browser/frame_host/render_frame_host_impl.h"
 #include "content/browser/renderer_host/render_widget_host_view_child_frame.h"
 #include "content/browser/web_contents/web_contents_impl.h"
+#include "content/common/content_navigation_policy.h"
 #include "content/common/frame_messages.h"
-#include "content/public/browser/javascript_dialog_manager.h"
+#include "content/public/browser/back_forward_cache.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/common/url_constants.h"
 #include "content/public/test/browser_test_utils.h"
@@ -49,12 +52,12 @@ namespace content {
 
 namespace {
 
-void UnloadPrint(FrameTreeNode* node, const char* message) {
+void UnloadPrint(const ToRenderFrameHost& target, const char* message) {
   EXPECT_TRUE(
-      ExecJs(node, JsReplace("window.onunload = function() { "
-                             "  window.domAutomationController.send($1);"
-                             "}",
-                             message)));
+      ExecJs(target, JsReplace("window.onunload = function() { "
+                               "  window.domAutomationController.send($1);"
+                               "}",
+                               message)));
 }
 
 }  // namespace
@@ -281,99 +284,33 @@ IN_PROC_BROWSER_TEST_F(SitePerProcessBrowserTest,
 }
 
 // Verify that when the last active frame in a process is going away as part of
-// OnSwapOut, the SwapOut ACK is received prior to the process starting to shut
-// down, ensuring that any related unload work also happens before shutdown.
-// See https://crbug.com/867274 and https://crbug.com/794625.
+// OnUnload, the FrameHostMsg_Unload_ACK is received prior to the process
+// starting to shut down, ensuring that any related unload work also happens
+// before shutdown. See https://crbug.com/867274 and https://crbug.com/794625.
 IN_PROC_BROWSER_TEST_F(SitePerProcessBrowserTest,
-                       SwapOutACKArrivesPriorToProcessShutdownRequest) {
+                       UnloadACKArrivesPriorToProcessShutdownRequest) {
   GURL start_url(embedded_test_server()->GetURL("a.com", "/title1.html"));
   EXPECT_TRUE(NavigateToURL(shell(), start_url));
   RenderFrameHostImpl* rfh = web_contents()->GetMainFrame();
-  rfh->DisableSwapOutTimerForTesting();
+  rfh->DisableUnloadTimerForTesting();
 
   // Navigate cross-site.  Since the current frame is the last active frame in
   // the current process, the process will eventually shut down.  Once the
-  // process goes away, ensure that the SwapOut ACK was received (i.e., that we
-  // didn't just simulate OnSwappedOut() due to the process erroneously going
-  // away before the SwapOut ACK was received, as in https://crbug.com/867274).
+  // process goes away, ensure that the FrameHostMsg_Unload_ACK was received
+  // (i.e., that we didn't just simulate OnUnloaded() due to the process
+  // erroneously going away before the FrameHostMsg_Unload_ACK was received, as
+  // in https://crbug.com/867274).
   RenderProcessHostWatcher watcher(
       rfh->GetProcess(), RenderProcessHostWatcher::WATCH_FOR_PROCESS_EXIT);
-  auto swapout_ack_filter = base::MakeRefCounted<ObserveMessageFilter>(
-      FrameMsgStart, FrameHostMsg_SwapOut_ACK::ID);
-  rfh->GetProcess()->AddFilter(swapout_ack_filter.get());
+  auto unload_ack_filter = base::MakeRefCounted<ObserveMessageFilter>(
+      FrameMsgStart, FrameHostMsg_Unload_ACK::ID);
+  rfh->GetProcess()->AddFilter(unload_ack_filter.get());
   GURL cross_site_url(embedded_test_server()->GetURL("b.com", "/title1.html"));
   EXPECT_TRUE(NavigateToURLFromRenderer(shell(), cross_site_url));
   watcher.Wait();
-  EXPECT_TRUE(swapout_ack_filter->has_received_message());
+  EXPECT_TRUE(unload_ack_filter->has_received_message());
   EXPECT_TRUE(watcher.did_exit_normally());
 }
-
-class TestWCBeforeUnloadDelegate : public JavaScriptDialogManager,
-                                   public WebContentsDelegate {
- public:
-  explicit TestWCBeforeUnloadDelegate(WebContentsImpl* web_contents)
-      : web_contents_(web_contents) {
-    web_contents_->SetDelegate(this);
-  }
-
-  ~TestWCBeforeUnloadDelegate() override {
-    if (!callback_.is_null())
-      std::move(callback_).Run(true, base::string16());
-
-    web_contents_->SetDelegate(nullptr);
-    web_contents_->SetJavaScriptDialogManagerForTesting(nullptr);
-  }
-
-  void Wait() {
-    run_loop_->Run();
-    run_loop_ = std::make_unique<base::RunLoop>();
-  }
-
-  // WebContentsDelegate
-
-  JavaScriptDialogManager* GetJavaScriptDialogManager(
-      WebContents* source) override {
-    return this;
-  }
-
-  // JavaScriptDialogManager
-
-  void RunJavaScriptDialog(WebContents* web_contents,
-                           RenderFrameHost* render_frame_host,
-                           JavaScriptDialogType dialog_type,
-                           const base::string16& message_text,
-                           const base::string16& default_prompt_text,
-                           DialogClosedCallback callback,
-                           bool* did_suppress_message) override {
-    NOTREACHED();
-  }
-
-  void RunBeforeUnloadDialog(WebContents* web_contents,
-                             RenderFrameHost* render_frame_host,
-                             bool is_reload,
-                             DialogClosedCallback callback) override {
-    callback_ = std::move(callback);
-    run_loop_->Quit();
-  }
-
-  bool HandleJavaScriptDialog(WebContents* web_contents,
-                              bool accept,
-                              const base::string16* prompt_override) override {
-    NOTREACHED();
-    return true;
-  }
-
-  void CancelDialogs(WebContents* web_contents, bool reset_state) override {}
-
- private:
-  WebContentsImpl* web_contents_;
-
-  DialogClosedCallback callback_;
-
-  std::unique_ptr<base::RunLoop> run_loop_ = std::make_unique<base::RunLoop>();
-
-  DISALLOW_COPY_AND_ASSIGN(TestWCBeforeUnloadDelegate);
-};
 
 // This is a regression test for https://crbug.com/891423 in which tabs showing
 // beforeunload dialogs stalled navigation and triggered the "hung process"
@@ -407,7 +344,7 @@ IN_PROC_BROWSER_TEST_F(SitePerProcessBrowserTest,
       base::string16());
 
   // Hang the first contents in a beforeunload dialog.
-  TestWCBeforeUnloadDelegate test_delegate(web_contents);
+  BeforeUnloadBlockingDelegate test_delegate(web_contents);
   EXPECT_TRUE(
       ExecJs(web_contents, "window.onbeforeunload=function(e){ return 'x' }"));
   EXPECT_TRUE(ExecJs(web_contents,
@@ -417,7 +354,7 @@ IN_PROC_BROWSER_TEST_F(SitePerProcessBrowserTest,
   // Attempt to navigate the second tab to a.com.  This will attempt to reuse
   // the hung process.
   base::TimeDelta kTimeout = base::TimeDelta::FromMilliseconds(100);
-  NavigationHandleImpl::SetCommitTimeoutForTesting(kTimeout);
+  NavigationRequest::SetCommitTimeoutForTesting(kTimeout);
   GURL hung_url(embedded_test_server()->GetURL("a.com", "/title3.html"));
   UnresponsiveRendererObserver unresponsive_renderer_observer(new_contents);
   EXPECT_TRUE(
@@ -431,7 +368,7 @@ IN_PROC_BROWSER_TEST_F(SitePerProcessBrowserTest,
   EXPECT_FALSE(hung_process);
 
   // Reset the timeout.
-  NavigationHandleImpl::SetCommitTimeoutForTesting(base::TimeDelta());
+  NavigationRequest::SetCommitTimeoutForTesting(base::TimeDelta());
 }
 
 // Test that unload handlers in iframes are run, even when the removed subtree
@@ -445,7 +382,14 @@ IN_PROC_BROWSER_TEST_F(SitePerProcessBrowserTest,
 // B2  A2
 //     |
 //     C3
-IN_PROC_BROWSER_TEST_F(SitePerProcessBrowserTest, UnloadHandlerSubframes) {
+// TODO(crbug.com/1012185): Flaky timeouts on Linux and Mac.
+#if defined(OS_LINUX) || defined(OS_MACOSX)
+#define MAYBE_UnloadHandlerSubframes DISABLED_UnloadHandlerSubframes
+#else
+#define MAYBE_UnloadHandlerSubframes UnloadHandlerSubframes
+#endif
+IN_PROC_BROWSER_TEST_F(SitePerProcessBrowserTest,
+                       MAYBE_UnloadHandlerSubframes) {
   GURL main_url(embedded_test_server()->GetURL(
       "a.com", "/cross_site_iframe_factory.html?a(b(c(b),c(a(c))),d)"));
   EXPECT_TRUE(NavigateToURL(shell(), main_url));
@@ -463,8 +407,8 @@ IN_PROC_BROWSER_TEST_F(SitePerProcessBrowserTest, UnloadHandlerSubframes) {
   DOMMessageQueue dom_message_queue(
       WebContents::FromRenderFrameHost(web_contents()->GetMainFrame()));
 
-  // Disable the swap out timer on B1.
-  root->child_at(0)->current_frame_host()->DisableSwapOutTimerForTesting();
+  // Disable the unload timer on B1.
+  root->child_at(0)->current_frame_host()->DisableUnloadTimerForTesting();
 
   // Process B and C are expected to shutdown once every unload handler has
   // run.
@@ -541,6 +485,9 @@ IN_PROC_BROWSER_TEST_F(SitePerProcessBrowserTest, SlowUnloadHandlerInIframe) {
 // Navigate from A(B(A(B)) to C. Check the unload handler are executed, executed
 // in the right order and the processes for A and B are removed.
 IN_PROC_BROWSER_TEST_F(SitePerProcessBrowserTest, Unload_ABAB) {
+  web_contents()->GetController().GetBackForwardCache().DisableForTesting(
+      content::BackForwardCache::TEST_USES_UNLOAD_EVENT);
+
   GURL initial_url(embedded_test_server()->GetURL(
       "a.com", "/cross_site_iframe_factory.html?a(b(a(b)))"));
   GURL next_url(embedded_test_server()->GetURL("c.com", "/title1.html"));
@@ -554,7 +501,7 @@ IN_PROC_BROWSER_TEST_F(SitePerProcessBrowserTest, Unload_ABAB) {
   UnloadPrint(root->child_at(0), "B1");
   UnloadPrint(root->child_at(0)->child_at(0), "A2");
   UnloadPrint(root->child_at(0)->child_at(0)->child_at(0), "B2");
-  root->current_frame_host()->DisableSwapOutTimerForTesting();
+  root->current_frame_host()->DisableUnloadTimerForTesting();
 
   DOMMessageQueue dom_message_queue(
       WebContents::FromRenderFrameHost(web_contents()->GetMainFrame()));
@@ -618,17 +565,17 @@ IN_PROC_BROWSER_TEST_F(SitePerProcessBrowserTest, UnloadNestedPendingDeletion) {
   EXPECT_EQ(RenderFrameHostImpl::UnloadState::NotRun, rfh_c->unload_state_);
 
   // Act as if there was a slow unload handler on rfh_b and rfh_c.
-  // The navigating frames are waiting for FrameHostMsg_SwapoutACK.
-  auto swapout_ack_filter_b = base::MakeRefCounted<DropMessageFilter>(
-      FrameMsgStart, FrameHostMsg_SwapOut_ACK::ID);
-  auto swapout_ack_filter_c = base::MakeRefCounted<DropMessageFilter>(
-      FrameMsgStart, FrameHostMsg_SwapOut_ACK::ID);
-  rfh_b->GetProcess()->AddFilter(swapout_ack_filter_b.get());
-  rfh_c->GetProcess()->AddFilter(swapout_ack_filter_c.get());
+  // The navigating frames are waiting for FrameHostMsg_Unload_ACK.
+  auto unload_ack_filter_b = base::MakeRefCounted<DropMessageFilter>(
+      FrameMsgStart, FrameHostMsg_Unload_ACK::ID);
+  auto unload_ack_filter_c = base::MakeRefCounted<DropMessageFilter>(
+      FrameMsgStart, FrameHostMsg_Unload_ACK::ID);
+  rfh_b->GetProcess()->AddFilter(unload_ack_filter_b.get());
+  rfh_c->GetProcess()->AddFilter(unload_ack_filter_c.get());
   EXPECT_TRUE(ExecuteScript(rfh_b->frame_tree_node(), onunload_script));
   EXPECT_TRUE(ExecuteScript(rfh_c->frame_tree_node(), onunload_script));
-  rfh_b->DisableSwapOutTimerForTesting();
-  rfh_c->DisableSwapOutTimerForTesting();
+  rfh_b->DisableUnloadTimerForTesting();
+  rfh_c->DisableUnloadTimerForTesting();
 
   RenderFrameDeletedObserver delete_b(rfh_b), delete_c(rfh_c);
 
@@ -638,6 +585,9 @@ IN_PROC_BROWSER_TEST_F(SitePerProcessBrowserTest, UnloadNestedPendingDeletion) {
   EXPECT_EQ(RenderFrameHostImpl::UnloadState::NotRun, rfh_b->unload_state_);
   EXPECT_EQ(RenderFrameHostImpl::UnloadState::InProgress, rfh_c->unload_state_);
   RenderFrameHostImpl* rfh_d = rfh_b->child_at(0)->current_frame_host();
+  // Set an arbitrarily long timeout to ensure the subframe unload timer doesn't
+  // fire before we call OnDetach().
+  rfh_d->SetSubframeUnloadTimeoutForTesting(base::TimeDelta::FromSeconds(30));
 
   RenderFrameDeletedObserver delete_d(rfh_d);
 
@@ -664,7 +614,7 @@ IN_PROC_BROWSER_TEST_F(SitePerProcessBrowserTest, UnloadNestedPendingDeletion) {
 
   // rfh_b completes its unload event.
   EXPECT_FALSE(delete_b.deleted());
-  rfh_b->OnSwapOutACK();
+  rfh_b->OnUnloadACK();
   EXPECT_TRUE(delete_b.deleted());
 }
 
@@ -673,6 +623,9 @@ IN_PROC_BROWSER_TEST_F(SitePerProcessBrowserTest, UnloadNestedPendingDeletion) {
 // If B1 receives FrameHostMsg_OnDetach before A2, it should not destroy itself
 // and its children, but rather wait for A2.
 IN_PROC_BROWSER_TEST_F(SitePerProcessBrowserTest, PartialUnloadHandler) {
+  web_contents()->GetController().GetBackForwardCache().DisableForTesting(
+      content::BackForwardCache::TEST_USES_UNLOAD_EVENT);
+
   GURL url_aba(embedded_test_server()->GetURL(
       "a.com", "/cross_site_iframe_factory.html?a(b(a))"));
   GURL url_c(embedded_test_server()->GetURL("c.com", "/title1.html"));
@@ -688,18 +641,21 @@ IN_PROC_BROWSER_TEST_F(SitePerProcessBrowserTest, PartialUnloadHandler) {
   RenderFrameDeletedObserver delete_a2(a2);
   RenderFrameDeletedObserver delete_b1(b1);
 
-  // Disable Detach and Swapout ACK. They will be called manually.
-  auto swapout_ack_filter = base::MakeRefCounted<DropMessageFilter>(
-      FrameMsgStart, FrameHostMsg_SwapOut_ACK::ID);
+  // Disable Detach and FrameHostMsg_Unload_ACK. They will be called manually.
+  auto unload_ack_filter = base::MakeRefCounted<DropMessageFilter>(
+      FrameMsgStart, FrameHostMsg_Unload_ACK::ID);
   auto detach_filter_a = base::MakeRefCounted<DropMessageFilter>(
       FrameMsgStart, FrameHostMsg_Detach::ID);
   auto detach_filter_b = base::MakeRefCounted<DropMessageFilter>(
       FrameMsgStart, FrameHostMsg_Detach::ID);
-  a1->GetProcess()->AddFilter(swapout_ack_filter.get());
+  a1->GetProcess()->AddFilter(unload_ack_filter.get());
   a1->GetProcess()->AddFilter(detach_filter_a.get());
   b1->GetProcess()->AddFilter(detach_filter_b.get());
 
-  a1->DisableSwapOutTimerForTesting();
+  a1->DisableUnloadTimerForTesting();
+  // Set an arbitrarily long timeout to ensure the subframe unload timer doesn't
+  // fire before we call OnDetach().
+  b1->SetSubframeUnloadTimeoutForTesting(base::TimeDelta::FromSeconds(30));
 
   // Add unload handler on A2, but not on the other frames.
   UnloadPrint(a2->frame_tree_node(), "A2");
@@ -741,8 +697,8 @@ IN_PROC_BROWSER_TEST_F(SitePerProcessBrowserTest, PartialUnloadHandler) {
   EXPECT_TRUE(delete_a2.deleted());
   EXPECT_EQ(RenderFrameHostImpl::UnloadState::InProgress, a1->unload_state_);
 
-  // 5) A1 receives SwapOutACK and deletes itself.
-  a1->OnSwapOutACK();
+  // 5) A1 receives FrameHostMsg_Unload_ACK and deletes itself.
+  a1->OnUnloadACK();
   EXPECT_TRUE(delete_a1.deleted());
 }
 
@@ -770,6 +726,9 @@ IN_PROC_BROWSER_TEST_F(SitePerProcessBrowserTest, PartialUnloadHandler) {
 //          [6]            [14] |
 IN_PROC_BROWSER_TEST_F(SitePerProcessBrowserTest,
                        PendingDeletionCheckCompletedOnSubtree) {
+  web_contents()->GetController().GetBackForwardCache().DisableForTesting(
+      content::BackForwardCache::TEST_USES_UNLOAD_EVENT);
+
   GURL url_1(embedded_test_server()->GetURL(
       "a.com",
       "/cross_site_iframe_factory.html?a(a,a,a(a),a(a),a(a),a(a,a),a(a,a))"));
@@ -807,14 +766,14 @@ IN_PROC_BROWSER_TEST_F(SitePerProcessBrowserTest,
   UnloadPrint(rfh_6->frame_tree_node(), "");
   UnloadPrint(rfh_14->frame_tree_node(), "");
 
-  // Disable Detach and Swapout ACK.
-  auto swapout_ack_filter = base::MakeRefCounted<DropMessageFilter>(
-      FrameMsgStart, FrameHostMsg_SwapOut_ACK::ID);
+  // Disable Detach and FrameHostMsg_Unload_ACK.
+  auto unload_ack_filter = base::MakeRefCounted<DropMessageFilter>(
+      FrameMsgStart, FrameHostMsg_Unload_ACK::ID);
   auto detach_filter = base::MakeRefCounted<DropMessageFilter>(
       FrameMsgStart, FrameHostMsg_Detach::ID);
-  rfh_0->GetProcess()->AddFilter(swapout_ack_filter.get());
+  rfh_0->GetProcess()->AddFilter(unload_ack_filter.get());
   rfh_0->GetProcess()->AddFilter(detach_filter.get());
-  rfh_0->DisableSwapOutTimerForTesting();
+  rfh_0->DisableUnloadTimerForTesting();
 
   // 2) Navigate cross process and check the tree. See diagram above.
   EXPECT_TRUE(NavigateToURL(shell(), url_2));
@@ -1013,6 +972,591 @@ IN_PROC_BROWSER_TEST_F(SitePerProcessBrowserTest,
     TitleWatcher title_watcher(shell()->web_contents(), title_when_done);
     EXPECT_TRUE(ExecuteScript(root, "w.close()"));
     EXPECT_EQ(title_watcher.WaitAndGetTitle(), title_when_done);
+  }
+}
+
+// Regression test for https://crbug.com/960006.
+//
+// 1. Navigate to a1(a2(b3),c4),
+// 2. b3 has a slow unload handler.
+// 3. a2 navigates same process.
+// 4. When the new document is loaded, a message is sent to c4 to check it
+//    cannot see b3 anymore, even if b3 is still unloading.
+IN_PROC_BROWSER_TEST_F(
+    SitePerProcessBrowserTest,
+    IsDetachedSubframeObservableDuringUnloadHandlerSameProcess) {
+  GURL page_url(embedded_test_server()->GetURL(
+      "a.com", "/cross_site_iframe_factory.html?a(a(b),c)"));
+  EXPECT_TRUE(NavigateToURL(shell(), page_url));
+  RenderFrameHostImpl* node1 =
+      static_cast<WebContentsImpl*>(shell()->web_contents())
+          ->GetFrameTree()
+          ->root()
+          ->current_frame_host();
+  RenderFrameHostImpl* node2 = node1->child_at(0)->current_frame_host();
+  RenderFrameHostImpl* node3 = node2->child_at(0)->current_frame_host();
+  RenderFrameHostImpl* node4 = node1->child_at(1)->current_frame_host();
+  ASSERT_TRUE(ExecJs(node1, "window.name = 'node1'"));
+  ASSERT_TRUE(ExecJs(node2, "window.name = 'node2'"));
+  ASSERT_TRUE(ExecJs(node3, "window.name = 'node3'"));
+  ASSERT_TRUE(ExecJs(node4, "window.name = 'node4'"));
+
+  // Test sanity check.
+  EXPECT_EQ(true, EvalJs(node1, "!!top.node2.node3"));
+  EXPECT_EQ(true, EvalJs(node2, "!!top.node2.node3"));
+  EXPECT_EQ(true, EvalJs(node3, "!!top.node2.node3"));
+  EXPECT_EQ(true, EvalJs(node4, "!!top.node2.node3"));
+
+  // Simulate a long-running unload handler in |node3|.
+  auto detach_filter = base::MakeRefCounted<DropMessageFilter>(
+      FrameMsgStart, FrameHostMsg_Detach::ID);
+  node3->GetProcess()->AddFilter(detach_filter.get());
+  node2->DisableUnloadTimerForTesting();
+  ASSERT_TRUE(ExecJs(node3, "window.onunload = ()=>{}"));
+
+  // Prepare |node4| to respond to postMessage with a report of whether it can
+  // still find |node3|.
+  const char* kPostMessageHandlerScript = R"(
+      window.postMessageGotData == false;
+      window.postMessageCallback = function() {};
+      function receiveMessage(event) {
+          console.log('node4 - receiveMessage...');
+
+          var can_node3_be_found = false;
+          try {
+            can_node3_be_found = !!top.node2.node3;
+          } catch(e) {
+            can_node3_be_found = false;
+          }
+
+          window.postMessageGotData = true;
+          window.postMessageData = can_node3_be_found;
+          window.postMessageCallback(window.postMessageData);
+      }
+      window.addEventListener("message", receiveMessage, false);
+  )";
+  ASSERT_TRUE(ExecJs(node4, kPostMessageHandlerScript));
+
+  // Make |node1| navigate |node2| same process and after the navigation
+  // succeeds, send a post message to |node4|. We expect that the effects of the
+  // commit should be visible to |node4| by the time it receives the posted
+  // message.
+  const char* kNavigationScript = R"(
+      var node2_frame = document.getElementsByTagName('iframe')[0];
+      node2_frame.onload = function() {
+          console.log('node2_frame.onload ...');
+          node4.postMessage('try to find node3', '*');
+      };
+      node2_frame.src = $1;
+  )";
+  GURL url = embedded_test_server()->GetURL("a.com", "/title1.html");
+  ASSERT_TRUE(ExecJs(node1, JsReplace(kNavigationScript, url)));
+
+  // Check if |node4| has seen |node3| even after |node2| navigation finished
+  // (no other frame should see |node3| after the navigation of its parent).
+  const char* kPostMessageResultsScript = R"(
+      new Promise(function (resolve, reject) {
+          if (window.postMessageGotData)
+            resolve(window.postMessageData);
+          else
+            window.postMessageCallback = resolve;
+      });
+  )";
+  EXPECT_EQ(false, EvalJs(node4, kPostMessageResultsScript));
+}
+
+// Regression test for https://crbug.com/960006.
+//
+// 1. Navigate to a1(a2(b3),c4),
+// 2. b3 has a slow unload handler.
+// 3. a2 navigates cross process.
+// 4. When the new document is loaded, a message is sent to c4 to check it
+//    cannot see b3 anymore, even if b3 is still unloading.
+//
+// Note: This test is the same as the above, except it uses a cross-process
+// navigation at step 3.
+IN_PROC_BROWSER_TEST_F(
+    SitePerProcessBrowserTest,
+    IsDetachedSubframeObservableDuringUnloadHandlerCrossProcess) {
+  GURL page_url(embedded_test_server()->GetURL(
+      "a.com", "/cross_site_iframe_factory.html?a(a(b),c)"));
+  EXPECT_TRUE(NavigateToURL(shell(), page_url));
+  RenderFrameHostImpl* node1 =
+      static_cast<WebContentsImpl*>(shell()->web_contents())
+          ->GetFrameTree()
+          ->root()
+          ->current_frame_host();
+  RenderFrameHostImpl* node2 = node1->child_at(0)->current_frame_host();
+  RenderFrameHostImpl* node3 = node2->child_at(0)->current_frame_host();
+  RenderFrameHostImpl* node4 = node1->child_at(1)->current_frame_host();
+  ASSERT_TRUE(ExecJs(node1, "window.name = 'node1'"));
+  ASSERT_TRUE(ExecJs(node2, "window.name = 'node2'"));
+  ASSERT_TRUE(ExecJs(node3, "window.name = 'node3'"));
+  ASSERT_TRUE(ExecJs(node4, "window.name = 'node4'"));
+
+  // Test sanity check.
+  EXPECT_EQ(true, EvalJs(node1, "!!top.node2.node3"));
+  EXPECT_EQ(true, EvalJs(node2, "!!top.node2.node3"));
+  EXPECT_EQ(true, EvalJs(node3, "!!top.node2.node3"));
+  EXPECT_EQ(true, EvalJs(node4, "!!top.node2.node3"));
+
+  // Add a long-running unload handler to |node3|.
+  auto detach_filter = base::MakeRefCounted<DropMessageFilter>(
+      FrameMsgStart, FrameHostMsg_Detach::ID);
+  node3->GetProcess()->AddFilter(detach_filter.get());
+  node2->DisableUnloadTimerForTesting();
+  ASSERT_TRUE(ExecJs(node3, "window.onunload = ()=>{}"));
+
+  // Prepare |node4| to respond to postMessage with a report of whether it can
+  // still find |node3|.
+  const char* kPostMessageHandlerScript = R"(
+      window.postMessageGotData == false;
+      window.postMessageCallback = function() {};
+      function receiveMessage(event) {
+          console.log('node4 - receiveMessage...');
+
+          var can_node3_be_found = false;
+          try {
+            can_node3_be_found = !!top.node2.node3;
+          } catch(e) {
+            can_node3_be_found = false;
+          }
+
+          window.postMessageGotData = true;
+          window.postMessageData = can_node3_be_found;
+          window.postMessageCallback(window.postMessageData);
+      }
+      window.addEventListener("message", receiveMessage, false);
+  )";
+  ASSERT_TRUE(ExecJs(node4, kPostMessageHandlerScript));
+
+  // Make |node1| navigate |node2| cross process and after the navigation
+  // succeeds, send a post message to |node4|. We expect that the effects of the
+  // commit should be visible to |node4| by the time it receives the posted
+  // message.
+  const char* kNavigationScript = R"(
+      var node2_frame = document.getElementsByTagName('iframe')[0];
+      node2_frame.onload = function() {
+          console.log('node2_frame.onload ...');
+          node4.postMessage('try to find node3', '*');
+      };
+      node2_frame.src = $1;
+  )";
+  GURL url = embedded_test_server()->GetURL("d.com", "/title1.html");
+  ASSERT_TRUE(ExecJs(node1, JsReplace(kNavigationScript, url)));
+
+  // Check if |node4| has seen |node3| even after |node2| navigation finished
+  // (no other frame should see |node3| after the navigation of its parent).
+  const char* kPostMessageResultsScript = R"(
+      new Promise(function (resolve, reject) {
+          if (window.postMessageGotData)
+            resolve(window.postMessageData);
+          else
+            window.postMessageCallback = resolve;
+      });
+  )";
+  EXPECT_EQ(false, EvalJs(node4, kPostMessageResultsScript));
+}
+
+// Regression test. https://crbug.com/963330
+// 1. Start from A1(B2,C3)
+// 2. B2 is the "focused frame", is deleted and starts unloading.
+// 3. C3 commits a new navigation before B2 has completed its unload.
+IN_PROC_BROWSER_TEST_F(SitePerProcessBrowserTest, FocusedFrameUnload) {
+  // 1) Start from A1(B2,C3)
+  EXPECT_TRUE(NavigateToURL(
+      shell(), embedded_test_server()->GetURL(
+                   "a.com", "/cross_site_iframe_factory.html?a(b,c)")));
+  RenderFrameHostImpl* A1 = web_contents()->GetMainFrame();
+  RenderFrameHostImpl* B2 = A1->child_at(0)->current_frame_host();
+  RenderFrameHostImpl* C3 = A1->child_at(1)->current_frame_host();
+  FrameTree* frame_tree = A1->frame_tree_node()->frame_tree();
+
+  // 2.1) Make B2 to be the focused frame.
+  EXPECT_EQ(A1->frame_tree_node(), frame_tree->GetFocusedFrame());
+  EXPECT_TRUE(ExecJs(A1, "document.querySelector('iframe').focus()"));
+  EXPECT_EQ(B2->frame_tree_node(), frame_tree->GetFocusedFrame());
+
+  // 2.2 Unload B2. Drop detach message to simulate a long unloading.
+  auto filter = base::MakeRefCounted<DropMessageFilter>(
+      FrameMsgStart, FrameHostMsg_Detach::ID);
+  B2->GetProcess()->AddFilter(filter.get());
+  B2->SetSubframeUnloadTimeoutForTesting(base::TimeDelta::FromSeconds(30));
+
+  EXPECT_FALSE(B2->GetSuddenTerminationDisablerState(
+      blink::mojom::SuddenTerminationDisablerType::kUnloadHandler));
+  EXPECT_TRUE(ExecJs(B2, "window.onunload = ()=>{};"));
+  EXPECT_TRUE(B2->GetSuddenTerminationDisablerState(
+      blink::mojom::SuddenTerminationDisablerType::kUnloadHandler));
+
+  EXPECT_TRUE(B2->is_active());
+  EXPECT_TRUE(ExecJs(A1, "document.querySelector('iframe').remove()"));
+  EXPECT_EQ(nullptr, frame_tree->GetFocusedFrame());
+  EXPECT_EQ(2u, A1->child_count());
+  EXPECT_FALSE(B2->is_active());
+
+  // 3. C3 navigates.
+  NavigateFrameToURL(C3->frame_tree_node(),
+                     embedded_test_server()->GetURL("d.com", "/title1.html"));
+  EXPECT_TRUE(WaitForLoadStop(web_contents()));
+  EXPECT_EQ(2u, A1->child_count());
+}
+
+// Test the unload timeout is effective.
+IN_PROC_BROWSER_TEST_F(SitePerProcessBrowserTest, UnloadTimeout) {
+  GURL main_url(embedded_test_server()->GetURL(
+      "a.com", "/cross_site_iframe_factory.html?a(b)"));
+  EXPECT_TRUE(NavigateToURL(shell(), main_url));
+  RenderFrameHostImpl* A1 = web_contents()->GetMainFrame();
+  RenderFrameHostImpl* B2 = A1->child_at(0)->current_frame_host();
+
+  // Simulate the iframe being slow to unload by dropping the
+  // FrameHostMsg_Detach message sent from B2 to the browser.
+  EXPECT_TRUE(ExecJs(B2, "window.onunload = ()=>{};"));
+  auto detach_filter = base::MakeRefCounted<DropMessageFilter>(
+      FrameMsgStart, FrameHostMsg_Detach::ID);
+  B2->GetProcess()->AddFilter(detach_filter.get());
+
+  RenderFrameDeletedObserver delete_B2(B2);
+  EXPECT_TRUE(ExecJs(A1, "document.querySelector('iframe').remove()"));
+  delete_B2.WaitUntilDeleted();
+}
+
+// Test that an unloading child can PostMessage its cross-process parent.
+IN_PROC_BROWSER_TEST_F(SitePerProcessBrowserTest,
+                       UnloadPostMessageToParentCrossProcess) {
+  GURL main_url(embedded_test_server()->GetURL(
+      "a.com", "/cross_site_iframe_factory.html?a(b)"));
+  EXPECT_TRUE(NavigateToURL(shell(), main_url));
+  RenderFrameHostImpl* A1 = web_contents()->GetMainFrame();
+  RenderFrameHostImpl* B2 = A1->child_at(0)->current_frame_host();
+  RenderFrameDeletedObserver delete_B2(B2);
+  EXPECT_TRUE(ExecJs(B2, R"(
+    window.addEventListener("unload", function() {
+      window.parent.postMessage("B2 message", "*");
+    });
+  )"));
+  EXPECT_TRUE(ExecJs(A1, R"(
+    window.received_message = "nothing received";
+    var received = false;
+    window.addEventListener('message', function(event) {
+      received_message = event.data;
+    });
+    document.querySelector('iframe').remove();
+  )"));
+  delete_B2.WaitUntilDeleted();
+  // TODO(https://crbug.com/964950): PostMessage called from an unloading frame
+  // must work. A1 must received 'B2 message'. This is not the case here.
+  EXPECT_EQ("nothing received", EvalJs(A1, "received_message"));
+}
+
+// Test that an unloading child can PostMessage its same-process parent.
+IN_PROC_BROWSER_TEST_F(SitePerProcessBrowserTest,
+                       UnloadPostMessageToParentSameProcess) {
+  GURL main_url(embedded_test_server()->GetURL(
+      "a.com", "/cross_site_iframe_factory.html?a(a)"));
+  EXPECT_TRUE(NavigateToURL(shell(), main_url));
+  RenderFrameHostImpl* A1 = web_contents()->GetMainFrame();
+  RenderFrameHostImpl* A2 = A1->child_at(0)->current_frame_host();
+  RenderFrameDeletedObserver delete_A1(A2);
+  EXPECT_TRUE(ExecJs(A2, R"(
+    window.addEventListener("unload", function() {
+      window.parent.postMessage("A2 message", "*");
+    });
+  )"));
+  EXPECT_TRUE(ExecJs(A1, R"(
+    window.received_message = "nothing received";
+    var received = false;
+    window.addEventListener('message', function(event) {
+      received_message = event.data;
+    });
+    document.querySelector('iframe').remove();
+  )"));
+  delete_A1.WaitUntilDeleted();
+  EXPECT_EQ("A2 message", EvalJs(A1, "received_message"));
+}
+
+// Related to issue https://crbug.com/950625.
+//
+// 1. Start from A1(B1)
+// 2. Navigate A1 to A3, same-process.
+// 3. A1 requests the browser to detach B1, but this message is dropped.
+// 4. The browser must be resilient and detach B1 when A3 commits.
+IN_PROC_BROWSER_TEST_F(SitePerProcessBrowserTest,
+                       SameProcessNavigationResilientToDetachDropped) {
+  GURL A1_url(embedded_test_server()->GetURL(
+      "a.com", "/cross_site_iframe_factory.html?a(b)"));
+  GURL A3_url(embedded_test_server()->GetURL("a.com", "/title1.html"));
+
+  EXPECT_TRUE(NavigateToURL(shell(), A1_url));
+  RenderFrameHostImpl* A1 = web_contents()->GetMainFrame();
+  RenderFrameHostImpl* B1 = A1->child_at(0)->current_frame_host();
+
+  auto detach_filter = base::MakeRefCounted<DropMessageFilter>(
+      FrameMsgStart, FrameHostMsg_Detach::ID);
+  A1->GetProcess()->AddFilter(detach_filter.get());
+  RenderFrameDeletedObserver delete_B1(B1);
+  shell()->LoadURL(A3_url);
+  delete_B1.WaitUntilDeleted();
+}
+
+// After a same-origin iframe navigation, check that gradchild iframe are
+// properly deleted and their unload handler executed.
+IN_PROC_BROWSER_TEST_F(SitePerProcessBrowserTest,
+                       NestedSubframeWithUnloadHandler) {
+  GURL main_url = embedded_test_server()->GetURL(
+      "a.com", "/cross_site_iframe_factory.html?a(b(b,c))");
+  GURL iframe_new_url = embedded_test_server()->GetURL("b.com", "/title1.html");
+  EXPECT_TRUE(NavigateToURL(shell(), main_url));
+
+  // In the document tree: A1(B2(B3,C4)) navigate B2 to B5.
+  RenderFrameHostImpl* A1 = web_contents()->GetMainFrame();
+  RenderFrameHostImpl* B2 = A1->child_at(0)->current_frame_host();
+  RenderFrameHostImpl* B3 = B2->child_at(0)->current_frame_host();
+  RenderFrameHostImpl* C4 = B2->child_at(1)->current_frame_host();
+
+  RenderFrameDeletedObserver delete_B2(B2);
+  RenderFrameDeletedObserver delete_B3(B3);
+  RenderFrameDeletedObserver delete_C4(C4);
+
+  UnloadPrint(B2, "B2");
+  UnloadPrint(B3, "B3");
+  UnloadPrint(C4, "C4");
+
+  // Navigate the iframe same-process.
+  ExecuteScriptAsync(B2, JsReplace("location.href = $1", iframe_new_url));
+
+  DOMMessageQueue dom_message_queue(
+      WebContents::FromRenderFrameHost(web_contents()->GetMainFrame()));
+
+  // All the documents must be properly deleted:
+  if (CreateNewHostForSameSiteSubframe())
+    delete_B2.WaitUntilDeleted();
+  delete_B3.WaitUntilDeleted();
+  delete_C4.WaitUntilDeleted();
+
+  // The unload handlers must have run:
+  std::string message;
+  std::vector<std::string> messages;
+  for (int i = 0; i < 3; ++i) {
+    EXPECT_TRUE(dom_message_queue.WaitForMessage(&message));
+    base::TrimString(message, "\"", &message);
+    messages.push_back(message);
+  }
+  EXPECT_FALSE(dom_message_queue.PopMessage(&message));
+  EXPECT_THAT(messages, WhenSorted(ElementsAre("B2", "B3", "C4")));
+}
+
+// Some tests need an https server because third-party cookies are used, and
+// SameSite=None cookies must be Secure. This is a separate fixture due to
+// kIgnoreCertificateErrors flag.
+class SitePerProcessSSLBrowserTest : public SitePerProcessBrowserTest {
+ protected:
+  SitePerProcessSSLBrowserTest()
+      : https_server_(net::EmbeddedTestServer::TYPE_HTTPS) {}
+
+  void SetUpCommandLine(base::CommandLine* command_line) override {
+    SitePerProcessBrowserTest::SetUpCommandLine(command_line);
+    // This is necessary to use https with arbitrary hostnames.
+    command_line->AppendSwitch(switches::kIgnoreCertificateErrors);
+  }
+
+  void SetUpOnMainThread() override {
+    https_server()->AddDefaultHandlers(GetTestDataFilePath());
+    ASSERT_TRUE(https_server()->Start());
+    SitePerProcessBrowserTest::SetUpOnMainThread();
+  }
+
+  net::EmbeddedTestServer* https_server() { return &https_server_; }
+
+ private:
+  net::EmbeddedTestServer https_server_;
+};
+
+// Unload handlers should be able to do things that might require for instance
+// the RenderFrameHostImpl to stay alive.
+// - use console.log (handled via RFHI::DidAddMessageToConsole).
+// - use history.replaceState (handled via RFHI::OnUpdateState).
+// - use document.cookie
+// - use localStorage
+//
+// Test case:
+//  1. Start on A1(B2). B2 has an unload handler.
+//  2. Go to A3.
+//  3. Go back to A4(B5).
+//
+// TODO(https://crbug.com/960976): history.replaceState is broken in OOPIFs.
+//
+// This test is similar to UnloadHandlersArePowerfulGrandChild, but with a
+// different frame hierarchy.
+IN_PROC_BROWSER_TEST_F(SitePerProcessSSLBrowserTest,
+                       UnloadHandlersArePowerful) {
+  // Navigate to a page hosting a cross-origin frame.
+  GURL url =
+      https_server()->GetURL("a.com", "/cross_site_iframe_factory.html?a(b)");
+  EXPECT_TRUE(NavigateToURL(shell(), url));
+
+  RenderFrameHostImpl* A1 = web_contents()->GetMainFrame();
+  RenderFrameHostImpl* B2 = A1->child_at(0)->current_frame_host();
+
+  // Increase Unload timeout to prevent the previous document from
+  // being deleleted before it has finished running B2 unload handler.
+  A1->DisableUnloadTimerForTesting();
+  B2->SetSubframeUnloadTimeoutForTesting(base::TimeDelta::FromSeconds(30));
+
+  // Add an unload handler to the subframe and try in that handler to preserve
+  // state that we will try to recover later.
+  ASSERT_TRUE(ExecJs(B2, R"(
+    window.addEventListener("unload", function() {
+      // Waiting for 100ms, to give more time for browser-side things to go bad
+      // and delete RenderFrameHostImpl prematurely.
+      var start = (new Date()).getTime();
+      do {
+        curr = (new Date()).getTime();
+      } while (start + 100 > curr);
+
+      // Test that various RFHI-dependent things work fine in an unload handler.
+      stateObj = { "history_test_key": "history_test_value" }
+      history.replaceState(stateObj, 'title', window.location.href);
+      console.log('console.log() sent');
+
+      // As a sanity check, test that RFHI-independent things also work fine.
+      localStorage.localstorage_test_key = 'localstorage_test_value';
+      document.cookie = 'cookie_test_key=' +
+                        'cookie_test_value; SameSite=none; Secure';
+    });
+  )"));
+
+  // Navigate A1(B2) to A3.
+  {
+    // Prepare observers.
+    ConsoleObserverDelegate console(web_contents(), "console.log() sent");
+    web_contents()->SetDelegate(&console);
+    RenderFrameDeletedObserver B2_deleted(B2);
+
+    // Navigate
+    GURL away_url(https_server()->GetURL("a.com", "/title1.html"));
+    ASSERT_TRUE(ExecJs(A1, JsReplace("location = $1", away_url)));
+
+    // Observers must be reached.
+    B2_deleted.WaitUntilDeleted();
+    console.Wait();
+  }
+
+  // Navigate back from A3 to A4(B5).
+  web_contents()->GetController().GoBack();
+  EXPECT_TRUE(WaitForLoadStop(shell()->web_contents()));
+
+  RenderFrameHostImpl* A4 = web_contents()->GetMainFrame();
+  RenderFrameHostImpl* B5 = A4->child_at(0)->current_frame_host();
+
+  // Verify that we can recover the data that should have been persisted by the
+  // unload handler.
+  EXPECT_EQ("localstorage_test_value",
+            EvalJs(B5, "localStorage.localstorage_test_key"));
+  EXPECT_EQ("cookie_test_key=cookie_test_value", EvalJs(B5, "document.cookie"));
+
+  // TODO(lukasza): https://crbug.com/960976: Make the verification below
+  // unconditional, once the bug is fixed.
+  if (!AreAllSitesIsolatedForTesting()) {
+    EXPECT_EQ("history_test_value",
+              EvalJs(B5, "history.state.history_test_key"));
+  }
+}
+
+// Unload handlers should be able to do things that might require for instance
+// the RenderFrameHostImpl to stay alive.
+// - use console.log (handled via RFHI::DidAddMessageToConsole).
+// - use history.replaceState (handled via RFHI::OnUpdateState).
+// - use document.cookie
+// - use localStorage
+//
+// Test case:
+//  1. Start on A1(B2(C3)). C3 has an unload handler.
+//  2. Go to A4.
+//  3. Go back to A5(B6(C7)).
+//
+// TODO(https://crbug.com/960976): history.replaceState is broken in OOPIFs.
+//
+// This test is similar to UnloadHandlersArePowerful, but with a different frame
+// hierarchy.
+IN_PROC_BROWSER_TEST_F(SitePerProcessSSLBrowserTest,
+                       UnloadHandlersArePowerfulGrandChild) {
+  // Navigate to a page hosting a cross-origin frame.
+  GURL url = https_server()->GetURL("a.com",
+                                    "/cross_site_iframe_factory.html?a(b(c))");
+  EXPECT_TRUE(NavigateToURL(shell(), url));
+
+  RenderFrameHostImpl* A1 = web_contents()->GetMainFrame();
+  RenderFrameHostImpl* B2 = A1->child_at(0)->current_frame_host();
+  RenderFrameHostImpl* C3 = B2->child_at(0)->current_frame_host();
+
+  // Increase Unload timeout to prevent the previous document from
+  // being deleleted before it has finished running C3 unload handler.
+  A1->DisableUnloadTimerForTesting();
+  B2->SetSubframeUnloadTimeoutForTesting(base::TimeDelta::FromSeconds(30));
+  C3->SetSubframeUnloadTimeoutForTesting(base::TimeDelta::FromSeconds(30));
+
+  // Add an unload handler to the subframe and try in that handler to preserve
+  // state that we will try to recover later.
+  ASSERT_TRUE(ExecJs(C3, R"(
+    window.addEventListener("unload", function() {
+      // Waiting for 100ms, to give more time for browser-side things to go bad
+      // and delete RenderFrameHostImpl prematurely.
+      var start = (new Date()).getTime();
+      do {
+        curr = (new Date()).getTime();
+      } while (start + 100 > curr);
+
+      // Test that various RFHI-dependent things work fine in an unload handler.
+      stateObj = { "history_test_key": "history_test_value" }
+      history.replaceState(stateObj, 'title', window.location.href);
+      console.log('console.log() sent');
+
+      // As a sanity check, test that RFHI-independent things also work fine.
+      localStorage.localstorage_test_key = 'localstorage_test_value';
+      document.cookie = 'cookie_test_key=' +
+                        'cookie_test_value; SameSite=none; Secure';
+    });
+  )"));
+
+  // Navigate A1(B2(C3) to A4.
+  {
+    // Prepare observers.
+    ConsoleObserverDelegate console(web_contents(), "console.log() sent");
+    web_contents()->SetDelegate(&console);
+    RenderFrameDeletedObserver B2_deleted(B2);
+    RenderFrameDeletedObserver C3_deleted(C3);
+
+    // Navigate
+    GURL away_url(https_server()->GetURL("a.com", "/title1.html"));
+    ASSERT_TRUE(ExecJs(A1, JsReplace("location = $1", away_url)));
+
+    // Observers must be reached.
+    B2_deleted.WaitUntilDeleted();
+    C3_deleted.WaitUntilDeleted();
+    console.Wait();
+  }
+
+  // Navigate back from A4 to A5(B6(C7))
+  web_contents()->GetController().GoBack();
+  EXPECT_TRUE(WaitForLoadStop(shell()->web_contents()));
+
+  RenderFrameHostImpl* A5 = web_contents()->GetMainFrame();
+  RenderFrameHostImpl* B6 = A5->child_at(0)->current_frame_host();
+  RenderFrameHostImpl* C7 = B6->child_at(0)->current_frame_host();
+
+  // Verify that we can recover the data that should have been persisted by the
+  // unload handler.
+  EXPECT_EQ("localstorage_test_value",
+            EvalJs(C7, "localStorage.localstorage_test_key"));
+  EXPECT_EQ("cookie_test_key=cookie_test_value", EvalJs(C7, "document.cookie"));
+
+  // TODO(lukasza): https://crbug.com/960976: Make the verification below
+  // unconditional, once the bug is fixed.
+  if (!AreAllSitesIsolatedForTesting()) {
+    EXPECT_EQ("history_test_value",
+              EvalJs(C7, "history.state.history_test_key"));
   }
 }
 

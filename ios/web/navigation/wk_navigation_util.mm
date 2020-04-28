@@ -10,7 +10,7 @@
 #include "base/strings/sys_string_conversions.h"
 #include "base/values.h"
 #include "ios/web/common/features.h"
-#import "ios/web/public/navigation_item.h"
+#import "ios/web/public/navigation/navigation_item.h"
 #import "ios/web/public/web_client.h"
 #include "net/base/escape.h"
 #include "net/base/url_util.h"
@@ -32,6 +32,7 @@ const int kMaxSessionSize = 75;
 const char kRestoreSessionSessionHashPrefix[] = "session=";
 const char kRestoreSessionTargetUrlHashPrefix[] = "targetUrl=";
 const char kOriginalUrlKey[] = "for";
+NSString* const kReferrerHeaderName = @"Referer";
 
 namespace {
 // Returns begin and end iterators and an updated last committed index for the
@@ -59,7 +60,7 @@ int GetSafeItemIterators(
     return last_committed_item_index;
   }
 
-  if (items.size() - last_committed_item_index < kMaxSessionSize / 2) {
+  if (items.size() - last_committed_item_index <= kMaxSessionSize / 2) {
     // Items which are the furthest to |last_committed_item_index| are located
     // on the left side of the vector. Trim those.
     *begin = items.end() - kMaxSessionSize;
@@ -78,14 +79,23 @@ int GetSafeItemIterators(
 }
 
 bool IsWKInternalUrl(const GURL& url) {
-  return IsPlaceholderUrl(url) || IsRestoreSessionUrl(url);
+  return (!base::FeatureList::IsEnabled(web::features::kUseJSForErrorPage) &&
+          IsPlaceholderUrl(url)) ||
+         IsRestoreSessionUrl(url);
+}
+
+bool IsWKInternalUrl(NSURL* url) {
+  return (!base::FeatureList::IsEnabled(web::features::kUseJSForErrorPage) &&
+          IsPlaceholderUrl(url)) ||
+         IsRestoreSessionUrl(url);
 }
 
 bool URLNeedsUserAgentType(const GURL& url) {
   if (web::GetWebClient()->IsAppSpecificURL(url))
     return false;
 
-  if (url.SchemeIs(url::kAboutScheme) && IsPlaceholderUrl(url)) {
+  if (!base::FeatureList::IsEnabled(web::features::kUseJSForErrorPage) &&
+      url.SchemeIs(url::kAboutScheme) && IsPlaceholderUrl(url)) {
     return !web::GetWebClient()->IsAppSpecificURL(
         ExtractUrlFromPlaceholderUrl(url));
   }
@@ -131,18 +141,10 @@ void CreateRestoreSessionUrl(
   // string to be included in the query parameter.
   base::Value restored_urls(base::Value::Type::LIST);
   base::Value restored_titles(base::Value::Type::LIST);
-  restored_urls.GetList().reserve(new_size);
-  restored_titles.GetList().reserve(new_size);
   for (auto it = begin; it != end; ++it) {
     NavigationItem* item = (*it).get();
-    GURL original_url = item->GetURL();
-    GURL restored_url = original_url;
-    if (!web::features::WebUISchemeHandlingEnabled() &&
-        web::GetWebClient()->IsAppSpecificURL(original_url)) {
-      restored_url = CreatePlaceholderUrlForUrl(original_url);
-    }
-    restored_urls.GetList().push_back(base::Value(restored_url.spec()));
-    restored_titles.GetList().push_back(base::Value(item->GetTitle()));
+    restored_urls.Append(item->GetURL().spec());
+    restored_titles.Append(item->GetTitle());
   }
   base::Value session(base::Value::Type::DICTIONARY);
   int offset = new_last_committed_item_index + 1 - new_size;
@@ -165,6 +167,13 @@ bool IsRestoreSessionUrl(const GURL& url) {
   return url.SchemeIsFile() && url.path() == GetRestoreSessionBaseUrl().path();
 }
 
+bool IsRestoreSessionUrl(NSURL* url) {
+  return
+      [url.scheme isEqual:@"file"] &&
+      [url.path
+          isEqual:base::SysUTF8ToNSString(GetRestoreSessionBaseUrl().path())];
+}
+
 GURL CreateRedirectUrl(const GURL& target_url) {
   GURL::Replacements replacements;
   std::string ref =
@@ -184,22 +193,29 @@ bool ExtractTargetURL(const GURL& restore_session_url, GURL* target_url) {
   if (success) {
     std::string encoded_target_url = restore_session_url.ref().substr(
         strlen(kRestoreSessionTargetUrlHashPrefix));
-    net::UnescapeRule::Type unescape_rules =
-        net::UnescapeRule::URL_SPECIAL_CHARS_EXCEPT_PATH_SEPARATORS |
-        net::UnescapeRule::SPACES | net::UnescapeRule::PATH_SEPARATORS;
-    *target_url =
-        GURL(net::UnescapeURLComponent(encoded_target_url, unescape_rules));
+    *target_url = GURL(net::UnescapeBinaryURLComponent(encoded_target_url));
   }
 
   return success;
 }
 
 bool IsPlaceholderUrl(const GURL& url) {
+  DCHECK(!base::FeatureList::IsEnabled(web::features::kUseJSForErrorPage));
   return url.IsAboutBlank() && base::StartsWith(url.query(), kOriginalUrlKey,
                                                 base::CompareCase::SENSITIVE);
 }
 
+bool IsPlaceholderUrl(NSURL* url) {
+  DCHECK(!base::FeatureList::IsEnabled(web::features::kUseJSForErrorPage));
+  // about:blank NSURLs don't have nil host and query, so use absolute string
+  // matching.
+  return [url.scheme isEqual:@"about"] &&
+         ([url.absoluteString hasPrefix:@"about:blank?for="] ||
+          [url.absoluteString hasPrefix:@"about://blank?for="]);
+}
+
 GURL CreatePlaceholderUrlForUrl(const GURL& original_url) {
+  DCHECK(!base::FeatureList::IsEnabled(web::features::kUseJSForErrorPage));
   if (!original_url.is_valid())
     return GURL::EmptyGURL();
 
@@ -210,6 +226,7 @@ GURL CreatePlaceholderUrlForUrl(const GURL& original_url) {
 }
 
 GURL ExtractUrlFromPlaceholderUrl(const GURL& url) {
+  DCHECK(!base::FeatureList::IsEnabled(web::features::kUseJSForErrorPage));
   std::string value;
   if (IsPlaceholderUrl(url) &&
       net::GetValueForKeyInQuery(url, kOriginalUrlKey, &value)) {

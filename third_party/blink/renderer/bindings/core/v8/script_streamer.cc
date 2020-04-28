@@ -11,6 +11,7 @@
 #include "base/threading/scoped_blocking_call.h"
 #include "base/threading/thread_restrictions.h"
 #include "mojo/public/cpp/system/wait.h"
+#include "third_party/blink/public/common/features.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_code_cache.h"
 #include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/dom/element.h"
@@ -19,17 +20,16 @@
 #include "third_party/blink/renderer/core/inspector/inspector_trace_events.h"
 #include "third_party/blink/renderer/core/loader/resource/script_resource.h"
 #include "third_party/blink/renderer/platform/bindings/v8_per_isolate_data.h"
-#include "third_party/blink/renderer/platform/cross_thread_functional.h"
 #include "third_party/blink/renderer/platform/instrumentation/tracing/trace_event.h"
 #include "third_party/blink/renderer/platform/loader/fetch/cached_metadata.h"
 #include "third_party/blink/renderer/platform/loader/fetch/resource.h"
 #include "third_party/blink/renderer/platform/loader/fetch/response_body_loader.h"
-#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "third_party/blink/renderer/platform/scheduler/public/post_cross_thread_task.h"
 #include "third_party/blink/renderer/platform/scheduler/public/thread_scheduler.h"
 #include "third_party/blink/renderer/platform/scheduler/public/worker_pool.h"
-#include "third_party/blink/renderer/platform/shared_buffer.h"
+#include "third_party/blink/renderer/platform/wtf/cross_thread_functional.h"
 #include "third_party/blink/renderer/platform/wtf/deque.h"
+#include "third_party/blink/renderer/platform/wtf/shared_buffer.h"
 #include "third_party/blink/renderer/platform/wtf/text/text_encoding_registry.h"
 
 namespace blink {
@@ -102,7 +102,7 @@ class SourceStream : public v8::ScriptCompiler::ExternalSourceStream {
           memcpy(copy_for_resource.get(), buffer, num_bytes);
           PostCrossThreadTask(
               *loading_task_runner_, FROM_HERE,
-              CrossThreadBind(
+              CrossThreadBindOnce(
                   NotifyClientDidReceiveData, response_body_loader_client_,
                   WTF::Passed(std::move(copy_for_resource)), num_bytes));
 
@@ -114,11 +114,24 @@ class SourceStream : public v8::ScriptCompiler::ExternalSourceStream {
 
         case MOJO_RESULT_SHOULD_WAIT: {
           {
+            TRACE_EVENT_END0(
+                "v8,devtools.timeline," TRACE_DISABLED_BY_DEFAULT("v8.compile"),
+                "v8.parseOnBackgroundParsing");
+            TRACE_EVENT_BEGIN0(
+                "v8,devtools.timeline," TRACE_DISABLED_BY_DEFAULT("v8.compile"),
+                "v8.parseOnBackgroundWaiting");
             base::ScopedAllowBaseSyncPrimitives
                 scoped_allow_base_sync_primitives;
             base::ScopedBlockingCall scoped_blocking_call(
                 FROM_HERE, base::BlockingType::WILL_BLOCK);
+
             result = mojo::Wait(data_pipe_.get(), MOJO_HANDLE_SIGNAL_READABLE);
+            TRACE_EVENT_END0(
+                "v8,devtools.timeline," TRACE_DISABLED_BY_DEFAULT("v8.compile"),
+                "v8.parseOnBackgroundWaiting");
+            TRACE_EVENT_BEGIN0(
+                "v8,devtools.timeline," TRACE_DISABLED_BY_DEFAULT("v8.compile"),
+                "v8.parseOnBackgroundParsing");
           }
 
           if (result != MOJO_RESULT_OK) {
@@ -233,7 +246,7 @@ class SourceStream : public v8::ScriptCompiler::ExternalSourceStream {
     CHECK(!finished_);
     PostCrossThreadTask(
         *loading_task_runner_, FROM_HERE,
-        CrossThreadBind(callback, response_body_loader_client_));
+        CrossThreadBindOnce(callback, response_body_loader_client_));
     finished_ = true;
   }
 
@@ -297,8 +310,8 @@ void ScriptStreamer::StreamingCompleteOnBackgroundThread() {
   // notifyFinished might already be called, or it might be called in the
   // future (if the parsing finishes earlier because of a parse error).
   PostCrossThreadTask(*loading_task_runner_, FROM_HERE,
-                      CrossThreadBind(&ScriptStreamer::StreamingComplete,
-                                      WrapCrossThreadPersistent(this)));
+                      CrossThreadBindOnce(&ScriptStreamer::StreamingComplete,
+                                          WrapCrossThreadPersistent(this)));
 
   // The task might be the only remaining reference to the ScriptStreamer, and
   // there's no way to guarantee that this function has returned before the task
@@ -333,12 +346,16 @@ void RunScriptStreamingTask(
     std::unique_ptr<v8::ScriptCompiler::ScriptStreamingTask> task,
     ScriptStreamer* streamer,
     SourceStream* stream) {
-  TRACE_EVENT_WITH_FLOW1(
+  // TODO(leszeks): Add flow event data again
+  TRACE_EVENT_BEGIN1(
       "v8,devtools.timeline," TRACE_DISABLED_BY_DEFAULT("v8.compile"),
-      "v8.parseOnBackground", streamer,
-      TRACE_EVENT_FLAG_FLOW_IN | TRACE_EVENT_FLAG_FLOW_OUT, "data",
+      "v8.parseOnBackground", "data",
       inspector_parse_script_event::Data(streamer->ScriptResourceIdentifier(),
                                          streamer->ScriptURLString()));
+
+  TRACE_EVENT_BEGIN0(
+      "v8,devtools.timeline," TRACE_DISABLED_BY_DEFAULT("v8.compile"),
+      "v8.parseOnBackgroundParsing");
   // Running the task can and will block: SourceStream::GetSomeData will get
   // called and it will block and wait for data from the network.
   task->Run();
@@ -348,14 +365,32 @@ void RunScriptStreamingTask(
   // TODO(leszeks): This could be done asynchronously, using a mojo watcher.
   stream->DrainRemainingDataWithoutStreaming();
 
+  TRACE_EVENT_END0(
+      "v8,devtools.timeline," TRACE_DISABLED_BY_DEFAULT("v8.compile"),
+      "v8.parseOnBackgroundParsing");
+
   streamer->StreamingCompleteOnBackgroundThread();
+
+  TRACE_EVENT_END0(
+      "v8,devtools.timeline," TRACE_DISABLED_BY_DEFAULT("v8.compile"),
+      "v8.parseOnBackground");
+
+  // TODO(crbug.com/1021571); Remove this once the last event stops being
+  // dropped.
+  TRACE_EVENT_END0(
+      "v8,devtools.timeline," TRACE_DISABLED_BY_DEFAULT("v8.compile"),
+      "v8.parseOnBackground2");
 }
 
 }  // namespace
 
 bool ScriptStreamer::HasEnoughDataForStreaming(size_t resource_buffer_size) {
-  // Only stream larger scripts.
-  return resource_buffer_size >= small_script_threshold_;
+  if (base::FeatureList::IsEnabled(features::kSmallScriptStreaming)) {
+    return resource_buffer_size >= kMaximumLengthOfBOM;
+  } else {
+    // Only stream larger scripts.
+    return resource_buffer_size >= small_script_threshold_;
+  }
 }
 
 // Try to start streaming the script from the given datapipe, taking ownership
@@ -431,11 +466,12 @@ bool ScriptStreamer::TryStartStreaming(
 
   DCHECK(!stream_);
   DCHECK(!source_);
-  stream_ = new SourceStream;
+  auto stream_ptr = std::make_unique<SourceStream>();
+  stream_ = stream_ptr.get();
   // |source_| takes ownership of |stream_|, and will keep |stream_| alive until
   // |source_| is destructed.
-  source_ =
-      std::make_unique<v8::ScriptCompiler::StreamedSource>(stream_, encoding_);
+  source_ = std::make_unique<v8::ScriptCompiler::StreamedSource>(
+      std::move(stream_ptr), encoding_);
 
   std::unique_ptr<v8::ScriptCompiler::ScriptStreamingTask>
       script_streaming_task(
@@ -463,14 +499,13 @@ bool ScriptStreamer::TryStartStreaming(
   // Script streaming tasks are high priority, as they can block the parser,
   // and they can (and probably will) block during their own execution as
   // they wait for more input.
-  //
   // TODO(leszeks): Decrease the priority of these tasks where possible.
-  worker_pool::PostTaskWithTraits(
+  worker_pool::PostTask(
       FROM_HERE, {base::TaskPriority::USER_BLOCKING, base::MayBlock()},
-      CrossThreadBind(RunScriptStreamingTask,
-                      WTF::Passed(std::move(script_streaming_task)),
-                      WrapCrossThreadPersistent(this),
-                      WTF::CrossThreadUnretained(stream_)));
+      CrossThreadBindOnce(RunScriptStreamingTask,
+                          WTF::Passed(std::move(script_streaming_task)),
+                          WrapCrossThreadPersistent(this),
+                          WTF::CrossThreadUnretained(stream_)));
 
   return true;
 }
@@ -518,7 +553,7 @@ void ScriptStreamer::Prefinalize() {
   prefinalizer_called_ = true;
 }
 
-void ScriptStreamer::Trace(blink::Visitor* visitor) {
+void ScriptStreamer::Trace(Visitor* visitor) {
   visitor->Trace(script_resource_);
 }
 

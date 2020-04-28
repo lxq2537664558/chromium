@@ -18,7 +18,7 @@ void RecordDownloadSource(ChromeDownloadSource source) {
 
 void RecordDangerousDownloadWarningShown(
     download::DownloadDangerType danger_type) {
-  UMA_HISTOGRAM_ENUMERATION("Download.DownloadWarningShown", danger_type,
+  UMA_HISTOGRAM_ENUMERATION("Download.ShowedDownloadWarning", danger_type,
                             download::DOWNLOAD_DANGER_TYPE_MAX);
 }
 
@@ -65,25 +65,3 @@ void RecordDownloadShelfDragEvent(DownloadShelfDragEvent drag_event) {
                             DownloadShelfDragEvent::COUNT);
 }
 
-#if defined(OS_ANDROID)
-void RecordMediaParserEvent(MediaParserEvent event) {
-  UMA_HISTOGRAM_ENUMERATION("Download.MediaParser.Event", event,
-                            MediaParserEvent::kCount);
-}
-
-void RecordMediaParserCompletionTime(const base::TimeDelta& duration) {
-  UMA_HISTOGRAM_CUSTOM_TIMES("Download.MediaParser.CompletionTime", duration,
-                             base::TimeDelta::FromMilliseconds(10),
-                             base::TimeDelta::FromSeconds(60), 50);
-}
-
-void RecordMediaMetadataEvent(MediaMetadataEvent event) {
-  UMA_HISTOGRAM_ENUMERATION("Download.MediaMetadata.Event", event,
-                            MediaMetadataEvent::kCount);
-}
-
-void RecordVideoThumbnailEvent(VideoThumbnailEvent event) {
-  UMA_HISTOGRAM_ENUMERATION("Download.VideoThumbnail.Event", event,
-                            VideoThumbnailEvent::kCount);
-}
-#endif

@@ -77,7 +77,7 @@ TEST_F(QuicCommandLineFlagTest, NotSpecified) {
 TEST_F(QuicCommandLineFlagTest, BoolFlag) {
   for (const char* s :
        {"--foo", "--foo=1", "--foo=t", "--foo=True", "--foo=Y", "--foo=yes"}) {
-    SetQuicFlag(&FLAGS_foo, false);
+    SetQuicFlag(FLAGS_foo, false);
     const char* argv[]{"argv0", s};
     auto parse_result = QuicParseCommandLineFlagsForTest(
         "usage message", base::size(argv), argv);
@@ -88,7 +88,7 @@ TEST_F(QuicCommandLineFlagTest, BoolFlag) {
 
   for (const char* s :
        {"--foo=0", "--foo=f", "--foo=False", "--foo=N", "--foo=no"}) {
-    SetQuicFlag(&FLAGS_foo, true);
+    SetQuicFlag(FLAGS_foo, true);
     const char* argv[]{"argv0", s};
     auto parse_result = QuicParseCommandLineFlagsForTest(
         "usage message", base::size(argv), argv);
@@ -98,7 +98,7 @@ TEST_F(QuicCommandLineFlagTest, BoolFlag) {
   }
 
   for (const char* s : {"--foo=7", "--foo=abc", "--foo=trueish"}) {
-    SetQuicFlag(&FLAGS_foo, false);
+    SetQuicFlag(FLAGS_foo, false);
     const char* argv[]{"argv0", s};
 
     testing::internal::CaptureStderr();
@@ -117,7 +117,7 @@ TEST_F(QuicCommandLineFlagTest, BoolFlag) {
 
 TEST_F(QuicCommandLineFlagTest, Int32Flag) {
   for (const int i : {-1, 0, 100, 38239832}) {
-    SetQuicFlag(&FLAGS_bar, 0);
+    SetQuicFlag(FLAGS_bar, 0);
     std::string flag_str = base::StringPrintf("--bar=%d", i);
     const char* argv[]{"argv0", flag_str.c_str()};
     auto parse_result = QuicParseCommandLineFlagsForTest(
@@ -128,7 +128,7 @@ TEST_F(QuicCommandLineFlagTest, Int32Flag) {
   }
 
   for (const char* s : {"--bar", "--bar=a", "--bar=9999999999999"}) {
-    SetQuicFlag(&FLAGS_bar, 0);
+    SetQuicFlag(FLAGS_bar, 0);
     const char* argv[]{"argv0", s};
 
     testing::internal::CaptureStderr();
@@ -147,7 +147,7 @@ TEST_F(QuicCommandLineFlagTest, Int32Flag) {
 
 TEST_F(QuicCommandLineFlagTest, StringFlag) {
   {
-    SetQuicFlag(&FLAGS_baz, "whee");
+    SetQuicFlag(FLAGS_baz, "whee");
     const char* argv[]{"argv0", "--baz"};
     auto parse_result = QuicParseCommandLineFlagsForTest(
         "usage message", base::size(argv), argv);
@@ -157,7 +157,7 @@ TEST_F(QuicCommandLineFlagTest, StringFlag) {
   }
 
   for (const char* s : {"", "12345", "abcdefg"}) {
-    SetQuicFlag(&FLAGS_baz, "qux");
+    SetQuicFlag(FLAGS_baz, "qux");
     std::string flag_str = base::StrCat({"--baz=", s});
     const char* argv[]{"argv0", flag_str.c_str()};
     auto parse_result = QuicParseCommandLineFlagsForTest(
@@ -180,6 +180,80 @@ TEST_F(QuicCommandLineFlagTest, PrintHelp) {
   EXPECT_THAT(captured_stdout,
               testing::ContainsRegex("--bar +A frog jumps into the pond,"));
   EXPECT_THAT(captured_stdout, testing::ContainsRegex("--baz +Silence again."));
+}
+
+class QuicFlagsTest : public QuicTest {};
+
+TEST_F(QuicFlagsTest, SetQuicFlagByName_bool) {
+  FLAGS_quic_enforce_single_packet_chlo = true;
+  SetQuicFlagByName("FLAGS_quic_enforce_single_packet_chlo", "false");
+  EXPECT_FALSE(FLAGS_quic_enforce_single_packet_chlo);
+  SetQuicFlagByName("FLAGS_quic_enforce_single_packet_chlo", "true");
+  EXPECT_TRUE(FLAGS_quic_enforce_single_packet_chlo);
+  SetQuicFlagByName("FLAGS_quic_enforce_single_packet_chlo", "False");
+  EXPECT_FALSE(FLAGS_quic_enforce_single_packet_chlo);
+  SetQuicFlagByName("FLAGS_quic_enforce_single_packet_chlo", "True");
+  EXPECT_TRUE(FLAGS_quic_enforce_single_packet_chlo);
+}
+
+TEST_F(QuicFlagsTest, SetQuicFlagByName_double) {
+  FLAGS_quic_bbr_cwnd_gain = 3.0;
+  SetQuicFlagByName("FLAGS_quic_bbr_cwnd_gain", "1.5");
+  EXPECT_EQ(1.5, FLAGS_quic_bbr_cwnd_gain);
+}
+
+TEST_F(QuicFlagsTest, SetQuicFlagByName_double_invalid) {
+  FLAGS_quic_bbr_cwnd_gain = 3.0;
+  SetQuicFlagByName("FLAGS_quic_bbr_cwnd_gain", "true");
+  EXPECT_EQ(3.0, FLAGS_quic_bbr_cwnd_gain);
+}
+
+TEST_F(QuicFlagsTest, SetQuicFlagByName_int64_t) {
+  FLAGS_quic_max_tracked_packet_count = 100;
+  SetQuicFlagByName("FLAGS_quic_max_tracked_packet_count", "5");
+  EXPECT_EQ(5, FLAGS_quic_max_tracked_packet_count);
+}
+
+TEST_F(QuicFlagsTest, SetQuicFlagByName_int64_t_invalid) {
+  FLAGS_quic_max_tracked_packet_count = 100;
+  SetQuicFlagByName("FLAGS_quic_max_tracked_packet_count", "false");
+  EXPECT_EQ(100, FLAGS_quic_max_tracked_packet_count);
+}
+
+TEST_F(QuicFlagsTest, SetQuicFlagByName_uint32_t) {
+  FLAGS_quic_send_buffer_max_data_slice_size = 4096;
+  SetQuicFlagByName("FLAGS_quic_send_buffer_max_data_slice_size", "1024");
+  EXPECT_EQ(1024u, FLAGS_quic_send_buffer_max_data_slice_size);
+}
+
+TEST_F(QuicFlagsTest, SetQuicFlagByName_uint32_t_invalid) {
+  FLAGS_quic_send_buffer_max_data_slice_size = 4096;
+  SetQuicFlagByName("FLAGS_quic_send_buffer_max_data_slice_size", "false");
+  EXPECT_EQ(4096u, FLAGS_quic_send_buffer_max_data_slice_size);
+}
+
+TEST_F(QuicFlagsTest, SetQuicFlagByName_uint32_t_negative) {
+  FLAGS_quic_send_buffer_max_data_slice_size = 4096;
+  SetQuicFlagByName("FLAGS_quic_send_buffer_max_data_slice_size", "-1");
+  EXPECT_EQ(4096u, FLAGS_quic_send_buffer_max_data_slice_size);
+}
+
+TEST_F(QuicFlagsTest, SetQuicFlagByName_uint32_t_too_large) {
+  FLAGS_quic_send_buffer_max_data_slice_size = 4096;
+  SetQuicFlagByName("FLAGS_quic_send_buffer_max_data_slice_size", "4294967297");
+  EXPECT_EQ(4096u, FLAGS_quic_send_buffer_max_data_slice_size);
+}
+
+TEST_F(QuicFlagsTest, SetQuicFlagByName_int32_t) {
+  FLAGS_quic_lumpy_pacing_size = 1;
+  SetQuicFlagByName("FLAGS_quic_lumpy_pacing_size", "10");
+  EXPECT_EQ(10, FLAGS_quic_lumpy_pacing_size);
+}
+
+TEST_F(QuicFlagsTest, SetQuicFlagByName_int32_t_invalid) {
+  FLAGS_quic_lumpy_pacing_size = 1;
+  SetQuicFlagByName("FLAGS_quic_lumpy_pacing_size", "false");
+  EXPECT_EQ(1, FLAGS_quic_lumpy_pacing_size);
 }
 
 }  // namespace test

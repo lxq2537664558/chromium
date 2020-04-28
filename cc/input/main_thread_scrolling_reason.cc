@@ -5,20 +5,23 @@
 #include "cc/input/main_thread_scrolling_reason.h"
 
 #include "base/stl_util.h"
+#include "base/strings/string_util.h"
 #include "base/trace_event/traced_value.h"
 
 namespace cc {
 
 std::string MainThreadScrollingReason::AsText(uint32_t reasons) {
-  base::trace_event::TracedValue traced_value;
+  base::trace_event::TracedValueJSON traced_value;
   AddToTracedValue(reasons, traced_value);
-  std::string result = traced_value.ToString();
+  std::string result = traced_value.ToJSON();
   // Remove '{main_thread_scrolling_reasons:[', ']}', and any '"' chars.
   size_t array_start_pos = result.find('[');
   size_t array_end_pos = result.find(']');
   result =
       result.substr(array_start_pos + 1, array_end_pos - array_start_pos - 1);
   base::Erase(result, '\"');
+  // Add spaces after all commas.
+  base::ReplaceChars(result, ",", ", ", &result);
   return result;
 }
 
@@ -39,16 +42,12 @@ void MainThreadScrollingReason::AddToTracedValue(
     traced_value.AppendString("Frame overlay");
   if (reasons & kHandlingScrollFromMainThread)
     traced_value.AppendString("Handling scroll from main thread");
-  if (reasons & kHasOpacityAndLCDText)
-    traced_value.AppendString("Has opacity and LCD text");
   if (reasons & kHasTransformAndLCDText)
     traced_value.AppendString("Has transform and LCD text");
   if (reasons & kBackgroundNotOpaqueInRectAndLCDText)
     traced_value.AppendString("Background is not opaque in rect and LCD text");
   if (reasons & kHasClipRelatedProperty)
     traced_value.AppendString("Has clip related property");
-  if (reasons & kHasBoxShadowFromNonRootLayer)
-    traced_value.AppendString("Has box shadow from non-root layer");
   if (reasons & kIsNotStackingContextAndLCDText)
     traced_value.AppendString("Is not stacking context and LCD text");
 

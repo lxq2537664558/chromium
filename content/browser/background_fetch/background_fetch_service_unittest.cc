@@ -26,7 +26,7 @@
 #include "content/browser/service_worker/service_worker_context_wrapper.h"
 #include "content/browser/storage_partition_impl.h"
 #include "content/common/background_fetch/background_fetch_types.h"
-#include "content/common/service_worker/service_worker_types.h"
+#include "content/test/fake_mojo_message_dispatch_context.h"
 #include "mojo/core/embedder/embedder.h"
 #include "mojo/public/cpp/bindings/message.h"
 #include "mojo/public/cpp/test_support/test_utils.h"
@@ -66,18 +66,6 @@ bool ContainsHeader(const base::flat_map<std::string, std::string>& headers,
                       });
 }
 
-class FakeMojoMessageDispatchContext {
- public:
-  FakeMojoMessageDispatchContext()
-      : dummy_message_(0, 0, 0, 0, nullptr), context_(&dummy_message_) {}
-
- private:
-  mojo::Message dummy_message_;
-  mojo::internal::MessageDispatchContext context_;
-
-  DISALLOW_COPY_AND_ASSIGN(FakeMojoMessageDispatchContext);
-};
-
 std::vector<blink::mojom::FetchAPIRequestPtr> CloneRequestVector(
     const std::vector<blink::mojom::FetchAPIRequestPtr>& requests) {
   std::vector<blink::mojom::FetchAPIRequestPtr> request_cp;
@@ -93,7 +81,7 @@ class BackgroundFetchServiceTest
     : public BackgroundFetchTestBase,
       public BackgroundFetchDataManagerObserver,
       public ServiceWorkerContextCoreObserver,
-      public DevToolsBackgroundServicesContext::EventObserver {
+      public DevToolsBackgroundServicesContextImpl::EventObserver {
  public:
   BackgroundFetchServiceTest() = default;
   ~BackgroundFetchServiceTest() override = default;
@@ -117,7 +105,7 @@ class BackgroundFetchServiceTest
   };
 
   // Synchronous wrapper for BackgroundFetchServiceImpl::Fetch().
-  blink::mojom::BackgroundFetchRegistrationServicePtr Fetch(
+  mojo::Remote<blink::mojom::BackgroundFetchRegistrationService> Fetch(
       int64_t service_worker_registration_id,
       const std::string& developer_id,
       std::vector<blink::mojom::FetchAPIRequestPtr> requests,
@@ -141,11 +129,11 @@ class BackgroundFetchServiceTest
 
     if (*out_error != blink::mojom::BackgroundFetchError::NONE) {
       DCHECK(!(*out_registration)->registration_interface);
-      return nullptr;
+      return mojo::Remote<blink::mojom::BackgroundFetchRegistrationService>();
     }
 
     DCHECK((*out_registration)->registration_interface);
-    return blink::mojom::BackgroundFetchRegistrationServicePtr(
+    return mojo::Remote<blink::mojom::BackgroundFetchRegistrationService>(
         std::move((*out_registration)->registration_interface));
   }
 
@@ -196,7 +184,7 @@ class BackgroundFetchServiceTest
 
   // Synchronous wrapper for BackgroundFetchServiceImpl::MatchRequests.
   void MatchAllRequests(
-      const blink::mojom::BackgroundFetchRegistrationServicePtr&
+      const mojo::Remote<blink::mojom::BackgroundFetchRegistrationService>&
           registration_service,
       std::vector<blink::mojom::BackgroundFetchSettledFetchPtr>* out_fetches) {
     DCHECK(registration_service);
@@ -212,10 +200,11 @@ class BackgroundFetchServiceTest
   }
 
   // Synchronous wrapper for BackgroundFetchServiceImpl::UpdateUI().
-  void UpdateUI(const blink::mojom::BackgroundFetchRegistrationServicePtr&
-                    registration_service,
-                const std::string& title,
-                blink::mojom::BackgroundFetchError* out_error) {
+  void UpdateUI(
+      const mojo::Remote<blink::mojom::BackgroundFetchRegistrationService>&
+          registration_service,
+      const std::string& title,
+      blink::mojom::BackgroundFetchError* out_error) {
     DCHECK(registration_service);
     DCHECK(out_error);
 
@@ -229,9 +218,10 @@ class BackgroundFetchServiceTest
   }
 
   // Synchronous wrapper for BackgroundFetchServiceImpl::Abort().
-  void Abort(const blink::mojom::BackgroundFetchRegistrationServicePtr&
-                 registration_service,
-             blink::mojom::BackgroundFetchError* out_error) {
+  void Abort(
+      const mojo::Remote<blink::mojom::BackgroundFetchRegistrationService>&
+          registration_service,
+      blink::mojom::BackgroundFetchError* out_error) {
     DCHECK(registration_service);
     DCHECK(out_error);
 
@@ -296,7 +286,7 @@ class BackgroundFetchServiceTest
     embedded_worker_test_helper()->context_wrapper()->AddObserver(this);
     devtools_context()->AddObserver(this);
 
-    context_->InitializeOnIOThread();
+    context_->InitializeOnCoreThread();
     service_ = std::make_unique<BackgroundFetchServiceImpl>(
         context_, origin(),
         /* render_frame_tree_node_id= */ 0,
@@ -610,7 +600,8 @@ TEST_F(BackgroundFetchServiceTest, FetchSuccessEventDispatch) {
 
   // Create the registration with the given |requests|.
   blink::mojom::BackgroundFetchRegistrationPtr registration;
-  blink::mojom::BackgroundFetchRegistrationServicePtr registration_service;
+  mojo::Remote<blink::mojom::BackgroundFetchRegistrationService>
+      registration_service;
   auto options = blink::mojom::BackgroundFetchOptions::New();
   blink::mojom::BackgroundFetchError error;
 
@@ -717,7 +708,8 @@ TEST_F(BackgroundFetchServiceTest, FetchFailEventDispatch) {
 
   // Create the registration with the given |requests|.
   blink::mojom::BackgroundFetchRegistrationPtr registration;
-  blink::mojom::BackgroundFetchRegistrationServicePtr registration_service;
+  mojo::Remote<blink::mojom::BackgroundFetchRegistrationService>
+      registration_service;
 
   {
     auto options = blink::mojom::BackgroundFetchOptions::New();
@@ -885,7 +877,8 @@ TEST_F(BackgroundFetchServiceTest, AbortEventDispatch) {
           .Build()));
 
   // Create the registration with the given |requests|.
-  blink::mojom::BackgroundFetchRegistrationServicePtr registration_service;
+  mojo::Remote<blink::mojom::BackgroundFetchRegistrationService>
+      registration_service;
   {
     auto options = blink::mojom::BackgroundFetchOptions::New();
 
@@ -1192,7 +1185,7 @@ TEST_F(BackgroundFetchServiceTest, JobsInitializedOnBrowserRestart) {
 
   // Simulate browser restart by re-creating |context_| and |service_|.
   context_->Shutdown();
-  thread_bundle_.RunUntilIdle();
+  task_environment_.RunUntilIdle();
   TearDown();
   SetUp();
 
@@ -1206,7 +1199,7 @@ TEST_F(BackgroundFetchServiceTest, JobsInitializedOnBrowserRestart) {
   {
     EXPECT_CALL(*this, OnRegistrationLoadedAtStartup(_, _, _, _, _, _, _));
     // Allow restart process to go through.
-    thread_bundle_.RunUntilIdle();
+    task_environment_.RunUntilIdle();
   }
 
   // Check that the registration is not in the DB, which means it completed.

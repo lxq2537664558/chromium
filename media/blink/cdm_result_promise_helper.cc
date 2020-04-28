@@ -4,8 +4,8 @@
 
 #include "media/blink/cdm_result_promise_helper.h"
 
-#include "base/logging.h"
 #include "base/metrics/histogram_functions.h"
+#include "base/notreached.h"
 
 namespace media {
 
@@ -65,9 +65,15 @@ blink::WebEncryptedMediaKeyInformation::KeyStatus ConvertCdmKeyStatus(
   return blink::WebEncryptedMediaKeyInformation::KeyStatus::kInternalError;
 }
 
-void ReportCdmResultUMA(const std::string& uma_name, CdmResultForUMA result) {
+void ReportCdmResultUMA(const std::string& uma_name,
+                        uint32_t system_code,
+                        CdmResultForUMA result) {
   if (uma_name.empty())
     return;
+
+  // Only report system code on promise rejection.
+  if (result != CdmResultForUMA::SUCCESS)
+    base::UmaHistogramSparse(uma_name + ".SystemCode", system_code);
 
   base::UmaHistogramEnumeration(uma_name, result, NUM_RESULT_CODES);
 }

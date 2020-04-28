@@ -6,6 +6,7 @@
 
 #include <memory>
 #include <set>
+#include <utility>
 #include <vector>
 
 #include "base/macros.h"
@@ -22,9 +23,11 @@
 #include "ui/events/event_utils.h"
 #include "ui/events/keycodes/keyboard_codes.h"
 #include "ui/events/test/event_generator.h"
+#include "ui/events/types/event_type.h"
 #include "ui/gfx/geometry/point.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/render_text.h"
+#include "ui/views/context_menu_controller.h"
 #include "ui/views/controls/editable_combobox/editable_combobox_listener.h"
 #include "ui/views/controls/menu/menu_runner.h"
 #include "ui/views/controls/textfield/textfield.h"
@@ -56,6 +59,27 @@ class DummyListener : public EditableComboboxListener {
   DISALLOW_COPY_AND_ASSIGN(DummyListener);
 };
 
+// No-op test double of a ContextMenuController
+class TestContextMenuController : public ContextMenuController {
+ public:
+  TestContextMenuController() = default;
+  ~TestContextMenuController() override = default;
+
+  // ContextMenuController:
+  void ShowContextMenuForViewImpl(View* source,
+                                  const gfx::Point& point,
+                                  ui::MenuSourceType source_type) override {
+    opened_menu_ = true;
+  }
+
+  bool opened_menu() const { return opened_menu_; }
+
+ private:
+  bool opened_menu_ = false;
+
+  DISALLOW_COPY_AND_ASSIGN(TestContextMenuController);
+};
+
 class EditableComboboxTest : public ViewsTestBase {
  public:
   EditableComboboxTest() { views::test::DisableMenuClosureAnimations(); }
@@ -80,6 +104,8 @@ class EditableComboboxTest : public ViewsTestBase {
  protected:
   void ClickArrow();
   void ClickMenuItem(int index);
+  void ClickTextfield();
+  void DragMouseTo(const gfx::Point& location);
   bool IsMenuOpen();
   void PerformMouseEvent(Widget* widget,
                          const gfx::Point& point,
@@ -98,6 +124,10 @@ class EditableComboboxTest : public ViewsTestBase {
   EditableCombobox* combobox_ = nullptr;
   View* dummy_focusable_view_ = nullptr;
 
+  // We make |combobox_| a child of another View to test different removal
+  // scenarios.
+  View* parent_of_combobox_ = nullptr;
+
   // Listener for our EditableCombobox.
   std::unique_ptr<DummyListener> listener_;
 
@@ -108,6 +138,10 @@ class EditableComboboxTest : public ViewsTestBase {
 };
 
 void EditableComboboxTest::TearDown() {
+  if (IsMenuOpen()) {
+    combobox_->GetMenuRunnerForTest()->Cancel();
+    WaitForMenuClosureAnimation();
+  }
   if (widget_)
     widget_->Close();
   ViewsTestBase::TearDown();
@@ -118,9 +152,8 @@ void EditableComboboxTest::InitEditableCombobox(const int item_count,
                                                 const bool filter_on_edit,
                                                 const bool show_on_empty) {
   std::vector<base::string16> items;
-  for (int i = 0; i < item_count; ++i) {
+  for (int i = 0; i < item_count; ++i)
     items.push_back(ASCIIToUTF16(base::StringPrintf("item[%i]", i)));
-  }
   InitEditableCombobox(items, filter_on_edit, show_on_empty);
 }
 
@@ -130,19 +163,19 @@ void EditableComboboxTest::InitEditableCombobox(
     const bool filter_on_edit,
     const bool show_on_empty,
     const EditableCombobox::Type type) {
+  parent_of_combobox_ = new View();
+  parent_of_combobox_->SetID(1);
   combobox_ =
       new EditableCombobox(std::make_unique<ui::SimpleComboboxModel>(items),
                            filter_on_edit, show_on_empty, type);
   listener_ = std::make_unique<DummyListener>();
   combobox_->set_listener(listener_.get());
-  combobox_->set_id(1);
+  combobox_->SetID(2);
   dummy_focusable_view_ = new View();
   dummy_focusable_view_->SetFocusBehavior(View::FocusBehavior::ALWAYS);
-  dummy_focusable_view_->set_id(2);
+  dummy_focusable_view_->SetID(3);
 
   InitWidget();
-  combobox_->RequestFocus();
-  combobox_->SizeToPreferredSize();
 }
 
 // Initializes the widget where the combobox and the dummy control live.
@@ -150,13 +183,29 @@ void EditableComboboxTest::InitWidget() {
   widget_ = new Widget();
   Widget::InitParams params =
       CreateParams(Widget::InitParams::TYPE_WINDOW_FRAMELESS);
-  params.bounds = gfx::Rect(200, 200, 200, 200);
-  widget_->Init(params);
+  params.bounds = gfx::Rect(0, 0, 1000, 1000);
+  parent_of_combobox_->SetBoundsRect(gfx::Rect(0, 0, 500, 40));
+  combobox_->SetBoundsRect(gfx::Rect(0, 0, 500, 40));
+
+  widget_->Init(std::move(params));
   View* container = new View();
   widget_->SetContentsView(container);
-  container->AddChildView(combobox_);
+  container->AddChildView(parent_of_combobox_);
+  parent_of_combobox_->AddChildView(combobox_);
   container->AddChildView(dummy_focusable_view_);
   widget_->Show();
+
+#if defined(OS_MACOSX)
+  // The event loop needs to be flushed here, otherwise in various tests:
+  // 1. The actual showing of the native window backing the widget gets delayed
+  //    until a spin of the event loop.
+  // 2. The combobox menu object is triggered, and it starts listening for the
+  //    "window did become key" notification as a sign that it lost focus and
+  //    should close.
+  // 3. The event loop is spun, and the actual showing of the native window
+  //    triggers the close of the menu opened from within the window.
+  base::RunLoop().RunUntilIdle();
+#endif
 
   event_generator_ =
       std::make_unique<ui::test::EventGenerator>(GetRootWindow(widget_));
@@ -183,17 +232,28 @@ void EditableComboboxTest::ClickMenuItem(const int index) {
   PerformClick(*child_widgets.begin(), middle_of_item);
 }
 
+void EditableComboboxTest::ClickTextfield() {
+  const gfx::Point textfield(combobox_->x() + 1, combobox_->y() + 1);
+  PerformClick(widget_, textfield);
+}
+
+void EditableComboboxTest::DragMouseTo(const gfx::Point& location) {
+  ui::MouseEvent drag(ui::ET_MOUSE_DRAGGED, location, location,
+                      ui::EventTimeForNow(), ui::EF_LEFT_MOUSE_BUTTON, 0);
+  combobox_->GetTextfieldForTest()->OnMouseDragged(drag);
+}
+
 bool EditableComboboxTest::IsMenuOpen() {
-  return combobox_->GetMenuRunnerForTest() &&
+  return combobox_ && combobox_->GetMenuRunnerForTest() &&
          combobox_->GetMenuRunnerForTest()->IsRunning();
 }
 
 void EditableComboboxTest::PerformMouseEvent(Widget* widget,
                                              const gfx::Point& point,
                                              const ui::EventType type) {
-  ui::MouseEvent event =
-      ui::MouseEvent(type, point, point, ui::EventTimeForNow(),
-                     ui::EF_LEFT_MOUSE_BUTTON, ui::EF_LEFT_MOUSE_BUTTON);
+  ui::MouseEvent event = ui::MouseEvent(
+      type, point, point, ui::EventTimeForNow(),
+      ui::EF_LEFT_MOUSE_BUTTON | ui::EF_NUM_LOCK_ON, ui::EF_LEFT_MOUSE_BUTTON);
   widget->OnMouseEvent(&event);
 }
 
@@ -222,22 +282,77 @@ void EditableComboboxTest::SendKeyEvent(ui::KeyboardCode key_code,
   event_generator_->PressKey(key_code, flags);
 }
 
-TEST_F(EditableComboboxTest, FocusOnTextfieldOpensMenu) {
+TEST_F(EditableComboboxTest, FocusOnTextfieldDoesntOpenMenu) {
   InitEditableCombobox();
   EXPECT_FALSE(IsMenuOpen());
   combobox_->GetTextfieldForTest()->RequestFocus();
+  EXPECT_FALSE(IsMenuOpen());
+}
+
+TEST_F(EditableComboboxTest, ArrowDownOpensMenu) {
+  InitEditableCombobox();
+  EXPECT_FALSE(IsMenuOpen());
+  combobox_->GetTextfieldForTest()->RequestFocus();
+  SendKeyEvent(ui::VKEY_DOWN);
   EXPECT_TRUE(IsMenuOpen());
 }
 
 TEST_F(EditableComboboxTest, TabMovesToOtherViewAndClosesMenu) {
   InitEditableCombobox();
-  combobox_->GetTextfieldForTest()->RequestFocus();
+  ClickArrow();
   EXPECT_TRUE(IsMenuOpen());
   EXPECT_TRUE(combobox_->GetTextfieldForTest()->HasFocus());
   SendKeyEvent(ui::VKEY_TAB);
   EXPECT_FALSE(combobox_->GetTextfieldForTest()->HasFocus());
   EXPECT_TRUE(dummy_focusable_view_->HasFocus());
+  WaitForMenuClosureAnimation();
   EXPECT_FALSE(IsMenuOpen());
+}
+
+TEST_F(EditableComboboxTest,
+       ClickOutsideEditableComboboxWithoutLosingFocusClosesMenu) {
+  InitEditableCombobox();
+  ClickArrow();
+  EXPECT_TRUE(IsMenuOpen());
+  EXPECT_TRUE(combobox_->GetTextfieldForTest()->HasFocus());
+
+  const gfx::Point outside_point(combobox_->x() + combobox_->width() + 1,
+                                 combobox_->y() + 1);
+  PerformClick(widget_, outside_point);
+
+  WaitForMenuClosureAnimation();
+  EXPECT_FALSE(IsMenuOpen());
+  EXPECT_TRUE(combobox_->GetTextfieldForTest()->HasFocus());
+}
+
+TEST_F(EditableComboboxTest, ClickTextfieldDoesntCloseMenu) {
+  InitEditableCombobox();
+  ClickArrow();
+  EXPECT_TRUE(IsMenuOpen());
+
+  MenuRunner* menu_runner1 = combobox_->GetMenuRunnerForTest();
+  ClickTextfield();
+  MenuRunner* menu_runner2 = combobox_->GetMenuRunnerForTest();
+  EXPECT_TRUE(IsMenuOpen());
+
+  // Making sure the menu didn't close and reopen (causing a flicker).
+  EXPECT_EQ(menu_runner1, menu_runner2);
+}
+
+TEST_F(EditableComboboxTest, RemovingControlWhileMenuOpenClosesMenu) {
+  InitEditableCombobox();
+  ClickArrow();
+  EXPECT_TRUE(IsMenuOpen());
+  parent_of_combobox_->RemoveChildView(combobox_);
+  EXPECT_EQ(nullptr, combobox_->GetMenuRunnerForTest());
+}
+
+TEST_F(EditableComboboxTest, RemovingParentOfControlWhileMenuOpenClosesMenu) {
+  InitEditableCombobox();
+  ClickArrow();
+  EXPECT_TRUE(IsMenuOpen());
+  widget_->GetContentsView()->RemoveChildView(parent_of_combobox_);
+  EXPECT_EQ(nullptr, combobox_->GetMenuRunnerForTest());
 }
 
 TEST_F(EditableComboboxTest, LeftOrRightKeysMoveInTextfield) {
@@ -254,7 +369,13 @@ TEST_F(EditableComboboxTest, LeftOrRightKeysMoveInTextfield) {
   EXPECT_EQ(ASCIIToUTF16("abcde"), combobox_->GetText());
 }
 
-TEST_F(EditableComboboxTest, UpOrDownKeysMoveInMenu) {
+#if defined(OS_WIN)
+// Flaky on Windows. https://crbug.com/965601
+#define MAYBE_UpOrDownKeysMoveInMenu DISABLED_UpOrDownKeysMoveInMenu
+#else
+#define MAYBE_UpOrDownKeysMoveInMenu UpOrDownKeysMoveInMenu
+#endif
+TEST_F(EditableComboboxTest, MAYBE_UpOrDownKeysMoveInMenu) {
   InitEditableCombobox();
   combobox_->GetTextfieldForTest()->RequestFocus();
   SendKeyEvent(ui::VKEY_A);
@@ -390,7 +511,16 @@ TEST_F(EditableComboboxTest, EnterClosesMenuWhileSelectingHighlightedMenuItem) {
   EXPECT_EQ(ASCIIToUTF16("item[0]"), combobox_->GetText());
 }
 
-TEST_F(EditableComboboxTest, F4ClosesMenuWhileSelectingHighlightedMenuItem) {
+#if defined(OS_WIN)
+// Flaky on Windows. https://crbug.com/965601
+#define MAYBE_F4ClosesMenuWhileSelectingHighlightedMenuItem \
+  DISABLED_F4ClosesMenuWhileSelectingHighlightedMenuItem
+#else
+#define MAYBE_F4ClosesMenuWhileSelectingHighlightedMenuItem \
+  F4ClosesMenuWhileSelectingHighlightedMenuItem
+#endif
+TEST_F(EditableComboboxTest,
+       MAYBE_F4ClosesMenuWhileSelectingHighlightedMenuItem) {
   InitEditableCombobox();
   combobox_->GetTextfieldForTest()->RequestFocus();
   SendKeyEvent(ui::VKEY_A);
@@ -409,6 +539,7 @@ TEST_F(EditableComboboxTest, EscClosesMenuWithoutSelectingHighlightedMenuItem) {
   SendKeyEvent(ui::VKEY_DOWN);
   EXPECT_TRUE(IsMenuOpen());
   SendKeyEvent(ui::VKEY_ESCAPE);
+  WaitForMenuClosureAnimation();
   EXPECT_FALSE(IsMenuOpen());
   EXPECT_EQ(ASCIIToUTF16("a"), combobox_->GetText());
 }
@@ -426,8 +557,8 @@ TEST_F(EditableComboboxTest, TypingInTextfieldUnhighlightsMenuItem) {
 
 TEST_F(EditableComboboxTest, ClickOnMenuItemSelectsItAndClosesMenu) {
   InitEditableCombobox();
-  combobox_->GetTextfieldForTest()->RequestFocus();
-  EXPECT_TRUE(IsMenuOpen());
+  ClickArrow();
+  ASSERT_TRUE(IsMenuOpen());
 
   ClickMenuItem(/*index=*/0);
   WaitForMenuClosureAnimation();
@@ -447,15 +578,22 @@ TEST_F(EditableComboboxTest, SpaceIsReflectedInTextfield) {
   EXPECT_EQ(ASCIIToUTF16("a  b"), combobox_->GetText());
 }
 
+#if defined(OS_WIN)
+// Flaky on Windows. https://crbug.com/965601
+#define MAYBE_MenuCanAdaptToContentChange DISABLED_MenuCanAdaptToContentChange
+#else
+#define MAYBE_MenuCanAdaptToContentChange MenuCanAdaptToContentChange
+#endif
 // We test that the menu can adapt to content change by using an
 // EditableCombobox with |filter_on_edit| set to true, which will change the
 // menu's content as the user types.
-TEST_F(EditableComboboxTest, MenuCanAdaptToContentChange) {
+TEST_F(EditableComboboxTest, MAYBE_MenuCanAdaptToContentChange) {
   std::vector<base::string16> items = {ASCIIToUTF16("abc"), ASCIIToUTF16("abd"),
                                        ASCIIToUTF16("bac"),
                                        ASCIIToUTF16("bad")};
   InitEditableCombobox(items, /*filter_on_edit=*/true);
-  combobox_->GetTextfieldForTest()->RequestFocus();
+  ClickArrow();
+  ASSERT_TRUE(IsMenuOpen());
 
   SendKeyEvent(ui::VKEY_DOWN);
   SendKeyEvent(ui::VKEY_RETURN);
@@ -498,7 +636,7 @@ TEST_F(EditableComboboxTest, RefocusingReopensMenuBasedOnLatestContent) {
   // "bac", the selected item, instead of showing completions of "b", what we
   // had typed.
   dummy_focusable_view_->RequestFocus();
-  combobox_->GetTextfieldForTest()->RequestFocus();
+  ClickArrow();
   EXPECT_TRUE(IsMenuOpen());
   ASSERT_EQ(2, combobox_->GetItemCountForTest());
 }
@@ -627,6 +765,8 @@ TEST_F(EditableComboboxTest, PasswordCanBeHiddenAndRevealed) {
 
 TEST_F(EditableComboboxTest, ArrowButtonOpensAndClosesMenu) {
   InitEditableCombobox();
+  dummy_focusable_view_->RequestFocus();
+  WaitForMenuClosureAnimation();
   EXPECT_FALSE(IsMenuOpen());
 
   ClickArrow();
@@ -636,24 +776,71 @@ TEST_F(EditableComboboxTest, ArrowButtonOpensAndClosesMenu) {
   EXPECT_FALSE(IsMenuOpen());
 }
 
-TEST_F(EditableComboboxTest, ShowMenuOnNextFocusBehavior) {
+TEST_F(EditableComboboxTest, ShowContextMenuOnMouseRelease) {
   std::vector<base::string16> items = {ASCIIToUTF16("item0"),
                                        ASCIIToUTF16("item1")};
   InitEditableCombobox(items, /*filter_on_edit=*/false,
                        /*show_on_empty=*/true);
-
-  dummy_focusable_view_->RequestFocus();
-  combobox_->set_show_menu_on_next_focus(true);
-  combobox_->GetTextfieldForTest()->RequestFocus();
-  EXPECT_TRUE(IsMenuOpen());
-
-  dummy_focusable_view_->RequestFocus();
-  combobox_->set_show_menu_on_next_focus(false);
-  combobox_->GetTextfieldForTest()->RequestFocus();
   EXPECT_FALSE(IsMenuOpen());
+  TestContextMenuController context_menu_controller;
+  combobox_->GetTextfieldForTest()->set_context_menu_controller(
+      &context_menu_controller);
+  const gfx::Point textfield_point(combobox_->x() + 1, combobox_->y() + 1);
+  ui::MouseEvent click_mouse_event(ui::ET_MOUSE_PRESSED, textfield_point,
+                                   textfield_point, ui::EventTimeForNow(),
+                                   ui::EF_RIGHT_MOUSE_BUTTON,
+                                   ui::EF_RIGHT_MOUSE_BUTTON);
+  widget_->OnMouseEvent(&click_mouse_event);
+  EXPECT_FALSE(IsMenuOpen());
+  ui::MouseEvent release_mouse_event(ui::ET_MOUSE_RELEASED, textfield_point,
+                                     textfield_point, ui::EventTimeForNow(),
+                                     ui::EF_RIGHT_MOUSE_BUTTON,
+                                     ui::EF_RIGHT_MOUSE_BUTTON);
+  widget_->OnMouseEvent(&release_mouse_event);
+  // The context menu should appear, not the combobox dropdown.
+  EXPECT_FALSE(IsMenuOpen());
+  EXPECT_TRUE(context_menu_controller.opened_menu());
+}
+
+TEST_F(EditableComboboxTest, DragToSelectDoesntOpenTheMenu) {
+  std::vector<base::string16> items = {ASCIIToUTF16("item0"),
+                                       ASCIIToUTF16("item1")};
+  InitEditableCombobox(items, /*filter_on_edit=*/false,
+                       /*show_on_empty=*/true);
+  combobox_->SetText(ASCIIToUTF16("abc"));
   dummy_focusable_view_->RequestFocus();
-  combobox_->GetTextfieldForTest()->RequestFocus();
-  EXPECT_TRUE(IsMenuOpen());
+  WaitForMenuClosureAnimation();
+  EXPECT_FALSE(IsMenuOpen());
+
+  const int kCursorXStart = 0;
+  const int kCursorXEnd = combobox_->x() + combobox_->width();
+  const int kCursorY = combobox_->y() + 1;
+  gfx::Point start_point(kCursorXStart, kCursorY);
+  gfx::Point end_point(kCursorXEnd, kCursorY);
+
+  PerformMouseEvent(widget_, start_point, ui::ET_MOUSE_PRESSED);
+  EXPECT_TRUE(combobox_->GetTextfieldForTest()->GetSelectedText().empty());
+
+  DragMouseTo(end_point);
+  ASSERT_EQ(ASCIIToUTF16("abc"),
+            combobox_->GetTextfieldForTest()->GetSelectedText());
+  EXPECT_FALSE(IsMenuOpen());
+
+  PerformMouseEvent(widget_, end_point, ui::ET_MOUSE_RELEASED);
+  ASSERT_EQ(ASCIIToUTF16("abc"),
+            combobox_->GetTextfieldForTest()->GetSelectedText());
+  EXPECT_FALSE(IsMenuOpen());
+}
+
+TEST_F(EditableComboboxTest, NoCrashWithoutWidget) {
+  std::vector<base::string16> items = {ASCIIToUTF16("item0"),
+                                       ASCIIToUTF16("item1")};
+  auto combobox = std::make_unique<EditableCombobox>(
+      std::make_unique<ui::SimpleComboboxModel>(items),
+      /*filter_on_edit=*/false,
+      /*show_on_empty=*/true, EditableCombobox::Type::kPassword);
+  // Showing the dropdown should silently fail.
+  combobox->RevealPasswords(true);
 }
 
 }  // namespace

@@ -6,10 +6,12 @@
 
 #include "base/bind.h"
 #include "base/bind_helpers.h"
+#include "base/feature_list.h"
 #include "base/macros.h"
 #include "base/optional.h"
 #include "base/stl_util.h"
 #include "base/strings/stringprintf.h"
+#include "content/public/common/content_features.h"
 #include "extensions/common/api/messaging/message.h"
 #include "extensions/common/api/messaging/port_id.h"
 #include "extensions/renderer/bindings/api_binding_test.h"
@@ -18,7 +20,6 @@
 #include "gin/data_object_builder.h"
 #include "gin/handle.h"
 #include "testing/gmock/include/gmock/gmock.h"
-#include "third_party/blink/public/web/web_scoped_user_gesture.h"
 
 namespace extensions {
 
@@ -197,6 +198,8 @@ TEST_F(GinPortTest, TestPostMessage) {
     const char kFunction[] =
         "(function(port) { port.postMessage({data: [42]}); })";
     test_post_message(kFunction, port_id, Message(R"({"data":[42]})", false));
+
+    // TODO(mustaq): We need a test with Message.user_gesture == true.
   }
 
   {
@@ -218,14 +221,6 @@ TEST_F(GinPortTest, TestPostMessage) {
     const char kFunction[] =
         "(function(port) { port.postMessage(undefined); })";
     test_post_message(kFunction, port_id, Message("null", false));
-  }
-
-  {
-    // Simple message with user gesture; should succeed.
-    const char kFunction[] =
-        "(function(port) { port.postMessage({data: [42]}); })";
-    blink::WebScopedUserGesture user_gesture(nullptr);
-    test_post_message(kFunction, port_id, Message(R"({"data":[42]})", true));
   }
 
   {

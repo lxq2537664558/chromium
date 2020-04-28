@@ -13,6 +13,7 @@
 #include "base/metrics/histogram_macros.h"
 #include "base/strings/stringprintf.h"
 #include "base/trace_event/memory_usage_estimator.h"
+#include "components/sync/base/client_tag_hash.h"
 #include "components/sync/base/sync_base_switches.h"
 #include "components/sync/base/time.h"
 #include "components/sync/engine/non_blocking_sync_common.h"
@@ -38,12 +39,12 @@ std::string HashSpecifics(const sync_pb::EntitySpecifics& specifics) {
 
 std::unique_ptr<ProcessorEntity> ProcessorEntity::CreateNew(
     const std::string& storage_key,
-    const std::string& client_tag_hash,
+    const ClientTagHash& client_tag_hash,
     const std::string& id,
     base::Time creation_time) {
   // Initialize metadata
   sync_pb::EntityMetadata metadata;
-  metadata.set_client_tag_hash(client_tag_hash);
+  metadata.set_client_tag_hash(client_tag_hash.value());
   if (!id.empty())
     metadata.set_server_id(id);
   metadata.set_sequence_number(0);
@@ -88,7 +89,8 @@ void ProcessorEntity::ClearStorageKey() {
 void ProcessorEntity::SetCommitData(std::unique_ptr<EntityData> data) {
   DCHECK(data);
   // Update data's fields from metadata.
-  data->client_tag_hash = metadata_.client_tag_hash();
+  data->client_tag_hash =
+      ClientTagHash::FromHashed(metadata_.client_tag_hash());
   if (!metadata_.server_id().empty())
     data->id = metadata_.server_id();
   data->creation_time = ProtoTimeToTime(metadata_.creation_time());
@@ -105,7 +107,7 @@ void ProcessorEntity::CacheCommitData(std::unique_ptr<EntityData> data) {
 }
 
 bool ProcessorEntity::HasCommitData() const {
-  return commit_data_ && !commit_data_->client_tag_hash.empty();
+  return commit_data_ && !commit_data_->client_tag_hash.value().empty();
 }
 
 bool ProcessorEntity::MatchesData(const EntityData& data) const {
@@ -154,7 +156,7 @@ bool ProcessorEntity::UpdateIsReflection(int64_t update_version) const {
 }
 
 void ProcessorEntity::RecordEntityUpdateLatency(int64_t update_version,
-                                                const ModelType& type) {
+                                                ModelType type) {
   auto first_greater =
       unsynced_time_per_committed_server_version_.upper_bound(update_version);
   if (first_greater == unsynced_time_per_committed_server_version_.begin()) {
@@ -177,8 +179,8 @@ void ProcessorEntity::RecordEntityUpdateLatency(int64_t update_version,
 
 void ProcessorEntity::RecordIgnoredUpdate(const UpdateResponseData& update) {
   DCHECK(metadata_.server_id().empty() ||
-         metadata_.server_id() == update.entity->id);
-  metadata_.set_server_id(update.entity->id);
+         metadata_.server_id() == update.entity.id);
+  metadata_.set_server_id(update.entity.id);
   metadata_.set_server_version(update.response_version);
   // Either these already matched, acked was just bumped to squash a pending
   // commit and this should follow, or the pending commit needs to be requeued.
@@ -194,10 +196,10 @@ void ProcessorEntity::RecordIgnoredUpdate(const UpdateResponseData& update) {
 void ProcessorEntity::RecordAcceptedUpdate(const UpdateResponseData& update) {
   DCHECK(!IsUnsynced());
   RecordIgnoredUpdate(update);
-  metadata_.set_is_deleted(update.entity->is_deleted());
+  metadata_.set_is_deleted(update.entity.is_deleted());
   metadata_.set_modification_time(
-      TimeToProtoTime(update.entity->modification_time));
-  UpdateSpecificsHash(update.entity->specifics);
+      TimeToProtoTime(update.entity.modification_time));
+  UpdateSpecificsHash(update.entity.specifics);
 }
 
 void ProcessorEntity::RecordForcedUpdate(const UpdateResponseData& update) {
@@ -255,14 +257,16 @@ bool ProcessorEntity::Delete() {
 void ProcessorEntity::InitializeCommitRequestData(CommitRequestData* request) {
   if (!metadata_.is_deleted()) {
     DCHECK(HasCommitData());
-    DCHECK_EQ(commit_data_->client_tag_hash, metadata_.client_tag_hash());
+    DCHECK_EQ(commit_data_->client_tag_hash.value(),
+              metadata_.client_tag_hash());
     DCHECK_EQ(commit_data_->id, metadata_.server_id());
     request->entity = std::move(commit_data_);
   } else {
     // Make an EntityData with empty specifics to indicate deletion. This is
     // done lazily here to simplify loading a pending deletion on startup.
     auto data = std::make_unique<syncer::EntityData>();
-    data->client_tag_hash = metadata_.client_tag_hash();
+    data->client_tag_hash =
+        ClientTagHash::FromHashed(metadata_.client_tag_hash());
     data->id = metadata_.server_id();
     data->creation_time = ProtoTimeToTime(metadata_.creation_time());
     data->modification_time = ProtoTimeToTime(metadata_.modification_time());
@@ -277,8 +281,9 @@ void ProcessorEntity::InitializeCommitRequestData(CommitRequestData* request) {
 }
 
 void ProcessorEntity::ReceiveCommitResponse(const CommitResponseData& data,
-                                            bool commit_only) {
-  DCHECK_EQ(metadata_.client_tag_hash(), data.client_tag_hash);
+                                            bool commit_only,
+                                            ModelType type_for_uma) {
+  DCHECK_EQ(metadata_.client_tag_hash(), data.client_tag_hash.value());
   DCHECK_GT(data.sequence_number, metadata_.acked_sequence_number());
   // Version is not valid for commit only types, as it's stripped before being
   // sent to the server, so it cannot behave correctly.
@@ -310,6 +315,15 @@ void ProcessorEntity::ReceiveCommitResponse(const CommitResponseData& data,
       commit_data_->id = metadata_.server_id();
     }
   }
+
+  // |unsynced_time_| can be null if the commit spanned a browser restart,
+  // since we don't currently persist this field. In such cases, we assume
+  // it takes longer than 3 minutes (saturation bucket).
+  base::UmaHistogramMediumTimes(std::string("Sync.CommitLatency.") +
+                                    ModelTypeToHistogramSuffix(type_for_uma),
+                                unsynced_time_.is_null()
+                                    ? base::TimeDelta::Max()
+                                    : base::Time::Now() - unsynced_time_);
 }
 
 void ProcessorEntity::ClearTransientSyncState() {

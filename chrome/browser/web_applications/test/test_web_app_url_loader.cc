@@ -26,7 +26,7 @@ void TestWebAppUrlLoader::ProcessLoadUrlRequests() {
     std::tie(url, callback) = std::move(pending_requests_.front());
     pending_requests_.pop();
 
-    DCHECK(base::ContainsKey(next_result_map_, url));
+    DCHECK(base::Contains(next_result_map_, url));
     auto result = next_result_map_[url];
     next_result_map_.erase(url);
 
@@ -35,24 +35,30 @@ void TestWebAppUrlLoader::ProcessLoadUrlRequests() {
 }
 
 void TestWebAppUrlLoader::SetNextLoadUrlResult(const GURL& url, Result result) {
-  DCHECK(!base::ContainsKey(next_result_map_, url)) << url;
+  DCHECK(!base::Contains(next_result_map_, url)) << url;
   next_result_map_[url] = result;
 }
 
 void TestWebAppUrlLoader::LoadUrl(const GURL& url,
                                   content::WebContents* web_contents,
+                                  UrlComparison url_comparison,
                                   ResultCallback callback) {
   if (should_save_requests_) {
     pending_requests_.emplace(url, std::move(callback));
     return;
   }
 
-  DCHECK(base::ContainsKey(next_result_map_, url)) << url;
+  DCHECK(base::Contains(next_result_map_, url)) << url;
   auto result = next_result_map_[url];
   next_result_map_.erase(url);
 
   base::ThreadTaskRunnerHandle::Get()->PostTask(
       FROM_HERE, base::BindOnce(std::move(callback), result));
+}
+
+void TestWebAppUrlLoader::SetAboutBlankResultLoaded() {
+  SetNextLoadUrlResult(GURL("about:blank"),
+                       WebAppUrlLoader::Result::kUrlLoaded);
 }
 
 }  // namespace web_app

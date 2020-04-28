@@ -5,7 +5,8 @@
 #include "net/socket/websocket_transport_connect_sub_job.h"
 
 #include "base/bind.h"
-#include "base/logging.h"
+#include "base/check_op.h"
+#include "base/notreached.h"
 #include "net/base/ip_endpoint.h"
 #include "net/base/net_errors.h"
 #include "net/log/net_log_with_source.h"
@@ -241,7 +242,7 @@ int WebSocketTransportConnectSubJob::DoTransportConnect() {
       one_address, nullptr, net_log().net_log(), net_log().source());
   // This use of base::Unretained() is safe because transport_socket_ is
   // destroyed in the destructor.
-  return transport_socket_->Connect(base::Bind(
+  return transport_socket_->Connect(base::BindOnce(
       &WebSocketTransportConnectSubJob::OnIOComplete, base::Unretained(this)));
 }
 

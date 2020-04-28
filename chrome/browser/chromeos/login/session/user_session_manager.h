@@ -5,6 +5,7 @@
 #ifndef CHROME_BROWSER_CHROMEOS_LOGIN_SESSION_USER_SESSION_MANAGER_H_
 #define CHROME_BROWSER_CHROMEOS_LOGIN_SESSION_USER_SESSION_MANAGER_H_
 
+#include <bitset>
 #include <map>
 #include <memory>
 #include <set>
@@ -27,7 +28,9 @@
 #include "chrome/browser/chromeos/login/oobe_screen.h"
 #include "chrome/browser/chromeos/login/signin/oauth2_login_manager.h"
 #include "chrome/browser/chromeos/login/signin/token_handle_util.h"
+#include "chrome/browser/chromeos/release_notes/release_notes_notification.h"
 #include "chrome/browser/chromeos/settings/cros_settings.h"
+#include "chrome/browser/chromeos/u2f_notification.h"
 #include "chromeos/dbus/session_manager/session_manager_client.h"
 #include "chromeos/login/auth/authenticator.h"
 #include "chromeos/login/auth/user_context.h"
@@ -43,6 +46,7 @@ class PrefRegistrySimple;
 class PrefService;
 class Profile;
 class TokenHandleFetcher;
+class TurnSyncOnHelper;
 
 namespace base {
 class CommandLine;
@@ -128,16 +132,19 @@ class UserSessionManager
     kPolicyAndFlagsAndKioskControl
   };
 
-  // Parameters to use when initializing the RLZ library.  These fields need
-  // to be retrieved from a blocking task and this structure is used to pass
-  // the data.
-  struct RlzInitParams {
-    // Set to true if RLZ is disabled.
-    bool disabled;
+  // To keep track of which systems need the login password to be stored in the
+  // kernel keyring.
+  enum class PasswordConsumingService {
+    // Shill needs the login password if ${PASSWORD} is specified somewhere in
+    // the OpenNetworkConfiguration policy.
+    kNetwork = 0,
 
-    // The elapsed time since the device went through the OOBE.  This can
-    // be a very long time.
-    base::TimeDelta time_since_oobe_completion;
+    // The Kerberos service needs the login password if ${PASSWORD} is specified
+    // somewhere in the KerberosAccounts policy.
+    kKerberos = 1,
+
+    // Should be last. All enum values must be consecutive starting from 0.
+    kCount = 2,
   };
 
   // Returns UserSessionManager instance.
@@ -149,9 +156,10 @@ class UserSessionManager
   // Registers session related preferences.
   static void RegisterPrefs(PrefRegistrySimple* registry);
 
-  // Appends additional command switches to the given command line if
-  // SitePerProcess/IsolateOrigins policy is present.
-  static void MaybeAppendPolicySwitches(PrefService* user_profile_prefs,
+  // Applies user policies to |user_flags| .
+  // This could mean removing command-line switchis that have been added by the
+  // flag handling logic or appending additional switches due to policy.
+  static void ApplyUserPolicyToSwitches(PrefService* user_profile_prefs,
                                         base::CommandLine* user_flags);
 
   // Invoked after the tmpfs is successfully mounted.
@@ -199,20 +207,19 @@ class UserSessionManager
   // user sessions restoration is in progress.
   bool UserSessionsRestoreInProgress() const;
 
-  // Initialize RLZ.
-  void InitRlz(Profile* profile);
+  // Send the notification before creating the browser so additional objects
+  // that need the profile (e.g. the launcher) can be created first.
+  void NotifyUserProfileLoaded(Profile* profile,
+                               const user_manager::User* user);
 
-  // Get the NSS cert database for the user represented with |profile|
-  // and start certificate loader with it.
-  void InitializeCerts(Profile* profile);
+  // Start the Tether service if it is ready.
+  void StartTetherServiceIfPossible(Profile* profile);
 
-  // Starts loading CRL set.
-  void InitializeCRLSetFetcher(const user_manager::User* user);
+  // Show various notifications if applicable.
+  void ShowNotificationsIfNeeded(Profile* profile);
 
-  // Starts loading CT-related components, which are the EV Certificates
-  // whitelist and the STHSet.
-  void InitializeCertificateTransparencyComponents(
-      const user_manager::User* user);
+  // Launch various setting pages (or dialogs) if applicable.
+  void MaybeLaunchSettings(Profile* profile);
 
   // Invoked when the user is logging in for the first time, or is logging in to
   // an ephemeral session type, such as guest or a public session.
@@ -260,7 +267,7 @@ class UserSessionManager
   void AddSessionStateObserver(chromeos::UserSessionStateObserver* observer);
   void RemoveSessionStateObserver(chromeos::UserSessionStateObserver* observer);
 
-  void ActiveUserChanged(const user_manager::User* active_user) override;
+  void ActiveUserChanged(user_manager::User* active_user) override;
 
   // This method will be called when user have obtained oauth2 tokens.
   void OnOAuth2TokensFetched(UserContext context);
@@ -271,7 +278,7 @@ class UserSessionManager
 
   // Check to see if given profile should show EndOfLife Notification
   // and show the message accordingly.
-  void CheckEolStatus(Profile* profile);
+  void CheckEolInfo(Profile* profile);
 
   // Starts migrating accounts to Chrome OS Account Manager.
   void StartAccountManagerMigration(Profile* profile);
@@ -307,20 +314,37 @@ class UserSessionManager
                           CommandLineSwitchesType switches_type,
                           const std::vector<std::string>& switches);
 
-  // Called when the user network policy has been parsed. If |send_password| is
-  // true, the user's password will be sent over dbus to the session manager to
-  // save in a keyring. Before the function exits, it will clear the user
-  // password from the UserContext regardless of the value of |send_password|.
-  void OnUserNetworkPolicyParsed(bool send_password);
+  // Notify whether |service| wants session manager to save the user's login
+  // password. If |save_password| is true, the login password is sent over D-Bus
+  // to the session manager to save in a keyring. Once this method has been
+  // called from all services defined in |PasswordConsumingService|, or if
+  // |save_password| is true, the method clears the user password from the
+  // UserContext before exiting.
+  // Should be called for each |service| in |PasswordConsumingService| as soon
+  // as the service knows whether it needs the login password. Must be called
+  // before user_context_.ClearSecrets() (see .cc), where Chrome 'forgets' the
+  // password.
+  void VoteForSavingLoginPassword(PasswordConsumingService service,
+                                  bool save_password);
+
+  UserContext* mutable_user_context_for_testing() { return &user_context_; }
+
+  // Shows U2F notification if necessary.
+  void MaybeShowU2FNotification();
+
+  // Shows Release Notes notification if necessary.
+  void MaybeShowReleaseNotesNotification(Profile* profile);
+
+ protected:
+  // Protected for testability reasons.
+  UserSessionManager();
+  ~UserSessionManager() override;
 
  private:
   friend class test::UserSessionManagerTestApi;
   friend struct base::DefaultSingletonTraits<UserSessionManager>;
 
   typedef std::set<std::string> SigninSessionRestoreStateSet;
-
-  UserSessionManager();
-  ~UserSessionManager() override;
 
   void SetNetworkConnectionTracker(
       network::NetworkConnectionTracker* network_connection_tracker);
@@ -363,8 +387,10 @@ class UserSessionManager
   // PrepareProfile().
   void UpdateArcFileSystemCompatibilityAndPrepareProfile();
 
+  void InitializeAccountManager();
+
   void StartCrosSession();
-  void PrepareProfile();
+  void PrepareProfile(const base::FilePath& profile_path);
 
   // Callback for asynchronous profile creation.
   void OnProfileCreated(const UserContext& user_context,
@@ -403,14 +429,11 @@ class UserSessionManager
   // profile is ready.
   void InitializeBrowser(Profile* profile);
 
-  // Initialize child user profile services that depend on the policy.
-  void InitializeChildUserServices(Profile* profile);
-
   // Starts out-of-box flow with the specified screen.
-  void ActivateWizard(OobeScreen screen);
+  void ActivateWizard(OobeScreenId screen);
 
-  // Adds first-time login URLs.
-  void InitializeStartUrls() const;
+  // Launches the Help App depending on flags / prefs / user.
+  void MaybeLaunchHelpApp(Profile* profile) const;
 
   // Perform session initialization and either move to additional login flows
   // such as TOS (public sessions), priority pref sync UI (new users) or
@@ -424,9 +447,6 @@ class UserSessionManager
 
   // Restores GAIA auth cookies for the created user profile from OAuth2 token.
   void RestoreAuthSessionImpl(Profile* profile, bool restore_from_auth_cookies);
-
-  // Initializes RLZ. If |disabled| is true, RLZ pings are disabled.
-  void InitRlzImpl(Profile* profile, const RlzInitParams& params);
 
   // If |user| is not a kiosk app, sets session type as seen by extensions
   // feature system according to |user|'s type.
@@ -573,10 +593,17 @@ class UserSessionManager
   std::map<Profile*, std::unique_ptr<EolNotification>, ProfileCompare>
       eol_notification_handler_;
 
-  // Maps command-line switch types to the currently set command-line switches
-  // for that type. Note: This is not per Profile/AccountId, because session
-  // manager currently doesn't support setting command-line switches per
-  // AccountId.
+  // Keeps track of which password-requiring-service has already told us whether
+  // they need the login password or not.
+  std::bitset<static_cast<size_t>(PasswordConsumingService::kCount)>
+      password_service_voted_;
+  // Whether the login password was saved in the kernel keyring.
+  bool password_was_saved_ = false;
+
+  // Maps command-line switch types to the currently set command-line
+  // switches for that type. Note: This is not per Profile/AccountId,
+  // because session manager currently doesn't support setting command-line
+  // switches per AccountId.
   base::flat_map<CommandLineSwitchesType, std::vector<std::string>>
       command_line_switches_;
 
@@ -612,7 +639,13 @@ class UserSessionManager
 
   std::unique_ptr<ChildPolicyObserver> child_policy_observer_;
 
-  base::WeakPtrFactory<UserSessionManager> weak_factory_;
+  std::unique_ptr<U2FNotification> u2f_notification_;
+
+  std::unique_ptr<ReleaseNotesNotification> release_notes_notification_;
+
+  std::unique_ptr<TurnSyncOnHelper> turn_sync_on_helper_;
+
+  base::WeakPtrFactory<UserSessionManager> weak_factory_{this};
 
   DISALLOW_COPY_AND_ASSIGN(UserSessionManager);
 };

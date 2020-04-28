@@ -5,11 +5,11 @@
 #include "ui/base/ime/fuchsia/input_method_fuchsia.h"
 
 #include <fuchsia/ui/input/cpp/fidl.h>
+#include <lib/sys/cpp/component_context.h>
 #include <memory>
 #include <utility>
 
-#include "base/bind_helpers.h"
-#include "base/fuchsia/service_directory_client.h"
+#include "base/fuchsia/default_context.h"
 #include "ui/base/ime/text_input_client.h"
 #include "ui/events/base_event_utils.h"
 #include "ui/events/keycodes/dom/dom_code.h"
@@ -17,12 +17,14 @@
 
 namespace ui {
 
-InputMethodFuchsia::InputMethodFuchsia(internal::InputMethodDelegate* delegate)
+InputMethodFuchsia::InputMethodFuchsia(internal::InputMethodDelegate* delegate,
+                                       gfx::AcceleratedWidget widget)
     : InputMethodBase(delegate),
       event_converter_(this),
       ime_client_binding_(this),
-      ime_service_(base::fuchsia::ServiceDirectoryClient::ForCurrentProcess()
-                       ->ConnectToService<fuchsia::ui::input::ImeService>()),
+      ime_service_(base::fuchsia::ComponentContextForCurrentProcess()
+                       ->svc()
+                       ->Connect<fuchsia::ui::input::ImeService>()),
       virtual_keyboard_controller_(ime_service_.get()) {}
 
 InputMethodFuchsia::~InputMethodFuchsia() {}
@@ -43,11 +45,10 @@ ui::EventDispatchDetails InputMethodFuchsia::DispatchKeyEvent(
 
   // If no text input client, do nothing.
   if (!GetTextInputClient())
-    return DispatchKeyEventPostIME(event, base::NullCallback());
+    return DispatchKeyEventPostIME(event);
 
   // Insert the character.
-  ui::EventDispatchDetails dispatch_details =
-      DispatchKeyEventPostIME(event, base::NullCallback());
+  ui::EventDispatchDetails dispatch_details = DispatchKeyEventPostIME(event);
   if (!event->stopped_propagation() && !dispatch_details.dispatcher_destroyed &&
       event->type() == ET_KEY_PRESSED && GetTextInputClient()) {
     const uint16_t ch = event->GetCharacter();
@@ -89,6 +90,13 @@ void InputMethodFuchsia::OnBlur() {
 void InputMethodFuchsia::DidUpdateState(
     fuchsia::ui::input::TextInputState state,
     std::unique_ptr<fuchsia::ui::input::InputEvent> input_event) {
+  // The FIDL protocol for DidUpdateState allows it to be null, and so we may
+  // receive state updates that have no associated key. Since we're only
+  // interested in extracting out input events from this stream for now, we can
+  // just ignore state updates with no input event.
+  if (!input_event)
+    return;
+
   if (input_event->is_keyboard())
     event_converter_.ProcessEvent(*input_event);
   else

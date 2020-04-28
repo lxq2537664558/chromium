@@ -11,9 +11,10 @@
 #include "content/browser/media/session/media_session_impl.h"
 #include "content/browser/web_contents/web_contents_android.h"
 #include "content/browser/web_contents/web_contents_impl.h"
+#include "content/public/android/content_jni_headers/MediaSessionImpl_jni.h"
 #include "content/public/browser/media_session.h"
-#include "jni/MediaSessionImpl_jni.h"
 #include "services/media_session/public/cpp/media_image.h"
+#include "services/media_session/public/cpp/media_position.h"
 #include "services/media_session/public/mojom/audio_focus.mojom.h"
 
 namespace content {
@@ -41,9 +42,7 @@ MediaSessionAndroid::MediaSessionAndroid(MediaSessionImpl* session)
   if (contents_android)
     contents_android->SetMediaSession(j_media_session);
 
-  media_session::mojom::MediaSessionObserverPtr observer;
-  observer_binding_.Bind(mojo::MakeRequest(&observer));
-  session->AddObserver(std::move(observer));
+  session->AddObserver(observer_receiver_.BindNewPipeAndPassRemote());
 }
 
 MediaSessionAndroid::~MediaSessionAndroid() {
@@ -81,11 +80,23 @@ void MediaSessionAndroid::MediaSessionInfoChanged(
   if (j_local_session.is_null())
     return;
 
+  bool is_paused = session_info->playback_state ==
+                   media_session::mojom::MediaPlaybackState::kPaused;
+
+  // The media session info changed event might be called more often than we
+  // need to notify Android since we only need a couple of bits of data.
+  // Therefore, we only notify Android if the bits have changed.
+  if (is_paused == is_paused_ &&
+      is_controllable_ == session_info->is_controllable) {
+    return;
+  }
+
+  is_paused_ = is_paused;
+  is_controllable_ = session_info->is_controllable;
+
   JNIEnv* env = base::android::AttachCurrentThread();
   Java_MediaSessionImpl_mediaSessionStateChanged(
-      env, j_local_session, session_info->is_controllable,
-      session_info->playback_state ==
-          media_session::mojom::MediaPlaybackState::kPaused);
+      env, j_local_session, session_info->is_controllable, is_paused);
 }
 
 void MediaSessionAndroid::MediaSessionMetadataChanged(
@@ -145,6 +156,23 @@ void MediaSessionAndroid::MediaSessionImagesChanged(
       media_session::MediaImage::ToJavaArray(env, it->second));
 }
 
+void MediaSessionAndroid::MediaSessionPositionChanged(
+    const base::Optional<media_session::MediaPosition>& position) {
+  ScopedJavaLocalRef<jobject> j_local_session = GetJavaObject();
+  if (j_local_session.is_null())
+    return;
+
+  JNIEnv* env = base::android::AttachCurrentThread();
+
+  if (position) {
+    Java_MediaSessionImpl_mediaSessionPositionChanged(
+        env, j_local_session, position->CreateJavaObject(env));
+  } else {
+    Java_MediaSessionImpl_mediaSessionPositionChanged(env, j_local_session,
+                                                      nullptr);
+  }
+}
+
 void MediaSessionAndroid::Resume(
     JNIEnv* env,
     const base::android::JavaParamRef<jobject>& j_obj) {
@@ -174,6 +202,15 @@ void MediaSessionAndroid::Seek(
   DCHECK_NE(millis, 0)
       << "Attempted to seek by a missing number of milliseconds";
   media_session_->Seek(base::TimeDelta::FromMilliseconds(millis));
+}
+
+void MediaSessionAndroid::SeekTo(
+    JNIEnv* env,
+    const base::android::JavaParamRef<jobject>& j_obj,
+    const jlong millis) {
+  DCHECK(media_session_);
+  DCHECK_GT(millis, 0) << "Attempted to seek to a negative position";
+  media_session_->SeekTo(base::TimeDelta::FromMilliseconds(millis));
 }
 
 void MediaSessionAndroid::DidReceiveAction(JNIEnv* env,

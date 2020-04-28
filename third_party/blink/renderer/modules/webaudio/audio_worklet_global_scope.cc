@@ -24,7 +24,6 @@
 #include "third_party/blink/renderer/core/workers/global_scope_creation_params.h"
 #include "third_party/blink/renderer/core/workers/worker_thread.h"
 #include "third_party/blink/renderer/modules/webaudio/audio_buffer.h"
-#include "third_party/blink/renderer/modules/webaudio/audio_param_descriptor.h"
 #include "third_party/blink/renderer/modules/webaudio/audio_worklet_processor.h"
 #include "third_party/blink/renderer/modules/webaudio/audio_worklet_processor_definition.h"
 #include "third_party/blink/renderer/modules/webaudio/audio_worklet_processor_error_state.h"
@@ -40,7 +39,13 @@ AudioWorkletGlobalScope::AudioWorkletGlobalScope(
     WorkerThread* thread)
     : WorkletGlobalScope(std::move(creation_params),
                          thread->GetWorkerReportingProxy(),
-                         thread) {}
+                         thread) {
+  // Audio is prone to jank introduced by e.g. the garbage collector. Workers
+  // are generally put in a background mode (as they are non-visible). Audio is
+  // an exception here, requiring low-latency behavior similar to any visible
+  // state.
+  GetIsolate()->IsolateInForegroundNotification();
+}
 
 AudioWorkletGlobalScope::~AudioWorkletGlobalScope() = default;
 
@@ -153,7 +158,7 @@ AudioWorkletProcessor* AudioWorkletGlobalScope::CreateProcessor(
           std::make_unique<ProcessorCreationParams>(
               name, std::move(message_port_channel)));
 
-  ScriptValue options(script_state,
+  ScriptValue options(isolate,
                       ToV8(node_options->Deserialize(isolate), script_state));
 
   ScriptValue instance;
@@ -174,7 +179,7 @@ AudioWorkletProcessor* AudioWorkletGlobalScope::CreateProcessor(
 
 bool AudioWorkletGlobalScope::Process(
     AudioWorkletProcessor* processor,
-    Vector<AudioBus*>* input_buses,
+    Vector<scoped_refptr<AudioBus>>* input_buses,
     Vector<AudioBus*>* output_buses,
     HashMap<String, std::unique_ptr<AudioFloatArray>>* param_value_map) {
   CHECK_GE(input_buses->size(), 0u);
@@ -200,11 +205,10 @@ bool AudioWorkletGlobalScope::Process(
   // 1st arg of JS callback: inputs
   v8::Local<v8::Array> inputs = v8::Array::New(isolate, input_buses->size());
   uint32_t input_bus_index = 0;
-  for (auto* const input_bus : *input_buses) {
-    // If |input_bus| is null, then the input is not connected, and
-    // the array for that input should have one channel and a length
-    // of 0.
-    unsigned number_of_channels = input_bus ? input_bus->NumberOfChannels() : 1;
+  for (auto input_bus : *input_buses) {
+    // If |input_bus| is null, it means the input port is not connected, and
+    // the corresponding array for that input port should have zero channel.
+    unsigned number_of_channels = input_bus ? input_bus->NumberOfChannels() : 0;
     size_t bus_length = input_bus ? input_bus->length() : 0;
 
     v8::Local<v8::Array> channels = v8::Array::New(isolate, number_of_channels);
@@ -237,15 +241,15 @@ bool AudioWorkletGlobalScope::Process(
   // 2nd arg of JS callback: outputs
   v8::Local<v8::Array> outputs = v8::Array::New(isolate, output_buses->size());
   uint32_t output_bus_counter = 0;
-  // |js_output_raw_ptrs| stores raw pointers to underlying array buffers so
-  // that we can copy them back to |output_buses|. The raw pointers are valid
-  // as long as the v8::ArrayBuffers are alive, i.e. as long as |outputs| is
-  // holding v8::ArrayBuffers.
-  Vector<Vector<void*>> js_output_raw_ptrs;
-  js_output_raw_ptrs.ReserveInitialCapacity(output_buses->size());
+
+  // |output_array_buffers| stores underlying array buffers so that we can copy
+  // them back to |output_buses|.
+  Vector<Vector<v8::Local<v8::ArrayBuffer>>> output_array_buffers;
+  output_array_buffers.ReserveInitialCapacity(output_buses->size());
+
   for (auto* const output_bus : *output_buses) {
-    js_output_raw_ptrs.UncheckedAppend(Vector<void*>());
-    js_output_raw_ptrs.back().ReserveInitialCapacity(
+    output_array_buffers.UncheckedAppend(Vector<v8::Local<v8::ArrayBuffer>>());
+    output_array_buffers.back().ReserveInitialCapacity(
         output_bus->NumberOfChannels());
     v8::Local<v8::Array> channels =
         v8::Array::New(isolate, output_bus->NumberOfChannels());
@@ -268,8 +272,7 @@ bool AudioWorkletGlobalScope::Process(
                .To(&success)) {
         return false;
       }
-      const v8::ArrayBuffer::Contents& contents = array_buffer->GetContents();
-      js_output_raw_ptrs.back().UncheckedAppend(contents.Data());
+      output_array_buffers.back().UncheckedAppend(array_buffer);
     }
   }
 
@@ -311,9 +314,9 @@ bool AudioWorkletGlobalScope::Process(
   // wrapper of v8::Object instance.
   ScriptValue result;
   if (!definition->ProcessFunction()
-           ->Invoke(processor, ScriptValue(script_state, inputs),
-                    ScriptValue(script_state, outputs),
-                    ScriptValue(script_state, param_values))
+           ->Invoke(processor, ScriptValue(isolate, inputs),
+                    ScriptValue(isolate, outputs),
+                    ScriptValue(isolate, param_values))
            .To(&result)) {
     // process() method call failed for some reason or an exception was thrown
     // by the user supplied code. Disable the processor to exclude it from the
@@ -322,19 +325,23 @@ bool AudioWorkletGlobalScope::Process(
     return false;
   }
 
-  // TODO(hongchan): Sanity check on length, number of channels, and object
-  // type.
-
   // Copy |sequence<sequence<Float32Array>>| back to the original
-  // |Vector<AudioBus*>|.
+  // |Vector<AudioBus*>|. While iterating, we also check if the size of backing
+  // array buffer is changed. When the size does not match, silence the buffer.
   for (uint32_t output_bus_index = 0; output_bus_index < output_buses->size();
        ++output_bus_index) {
     AudioBus* output_bus = (*output_buses)[output_bus_index];
     for (uint32_t channel_index = 0;
          channel_index < output_bus->NumberOfChannels(); ++channel_index) {
-      memcpy(output_bus->Channel(channel_index)->MutableData(),
-             js_output_raw_ptrs[output_bus_index][channel_index],
-             output_bus->length() * sizeof(float));
+      const v8::ArrayBuffer::Contents& contents =
+          output_array_buffers[output_bus_index][channel_index]->GetContents();
+      const size_t size = output_bus->length() * sizeof(float);
+      if (contents.ByteLength() == size) {
+        memcpy(output_bus->Channel(channel_index)->MutableData(),
+               contents.Data(), size);
+      } else {
+        memset(output_bus->Channel(channel_index)->MutableData(), 0, size);
+      }
     }
   }
 
@@ -384,7 +391,7 @@ double AudioWorkletGlobalScope::currentTime() const {
         : 0.0;
 }
 
-void AudioWorkletGlobalScope::Trace(blink::Visitor* visitor) {
+void AudioWorkletGlobalScope::Trace(Visitor* visitor) {
   visitor->Trace(processor_definition_map_);
   visitor->Trace(processor_instances_);
   WorkletGlobalScope::Trace(visitor);

@@ -7,6 +7,7 @@
 #include "base/bind.h"
 #include "base/location.h"
 #include "base/logging.h"
+#include "base/threading/thread_task_runner_handle.h"
 #include "base/time/time.h"
 #include "base/trace_event/trace_event.h"
 #include "base/values.h"
@@ -64,6 +65,10 @@ bool WebSocketTransportConnectJob::HasEstablishedConnection() const {
   return false;
 }
 
+ResolveErrorInfo WebSocketTransportConnectJob::GetResolveErrorInfo() const {
+  return resolve_error_info_;
+}
+
 void WebSocketTransportConnectJob::OnIOComplete(int result) {
   result = DoLoop(result);
   if (result != ERR_IO_PENDING)
@@ -108,8 +113,10 @@ int WebSocketTransportConnectJob::DoResolveHost() {
 
   HostResolver::ResolveHostParameters parameters;
   parameters.initial_priority = priority();
-  request_ = host_resolver()->CreateRequest(params_->destination(), net_log(),
-                                            parameters);
+  DCHECK(!params_->disable_secure_dns());
+  request_ = host_resolver()->CreateRequest(params_->destination(),
+                                            params_->network_isolation_key(),
+                                            net_log(), parameters);
 
   return request_->Start(base::BindOnce(
       &WebSocketTransportConnectJob::OnIOComplete, base::Unretained(this)));
@@ -122,20 +129,28 @@ int WebSocketTransportConnectJob::DoResolveHostComplete(int result) {
   // Overwrite connection start time, since for connections that do not go
   // through proxies, |connect_start| should not include dns lookup time.
   connect_timing_.connect_start = connect_timing_.dns_end;
+  resolve_error_info_ = request_->GetResolveErrorInfo();
 
   if (result != OK)
     return result;
   DCHECK(request_->GetAddressResults());
 
-  // Invoke callback, and abort if it fails.
+  next_state_ = STATE_TRANSPORT_CONNECT;
+
+  // Invoke callback.  If it indicates |this| may be slated for deletion, then
+  // only continue after a PostTask.
   if (!params_->host_resolution_callback().is_null()) {
-    result = params_->host_resolution_callback().Run(
-        request_->GetAddressResults().value(), net_log());
-    if (result != OK)
-      return result;
+    OnHostResolutionCallbackResult callback_result =
+        params_->host_resolution_callback().Run(
+            params_->destination(), request_->GetAddressResults().value());
+    if (callback_result == OnHostResolutionCallbackResult::kMayBeDeletedAsync) {
+      base::ThreadTaskRunnerHandle::Get()->PostTask(
+          FROM_HERE, base::BindOnce(&WebSocketTransportConnectJob::OnIOComplete,
+                                    weak_ptr_factory_.GetWeakPtr(), OK));
+      return ERR_IO_PENDING;
+    }
   }
 
-  next_state_ = STATE_TRANSPORT_CONNECT;
   return result;
 }
 
@@ -191,8 +206,8 @@ int WebSocketTransportConnectJob::DoTransportConnect() {
               FROM_HERE,
               base::TimeDelta::FromMilliseconds(
                   TransportConnectJob::kIPv6FallbackTimerInMs),
-              base::Bind(&WebSocketTransportConnectJob::StartIPv4JobAsync,
-                         base::Unretained(this)));
+              base::BindOnce(&WebSocketTransportConnectJob::StartIPv4JobAsync,
+                             base::Unretained(this)));
         }
         return result;
 

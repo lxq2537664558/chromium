@@ -4,6 +4,8 @@
 
 /**
  * The root of the file manager's view managing the DOM of the Files app.
+ * @implements {ActionModelUI}
+ * @implements {A11yAnnounce}
  */
 class FileManagerUI {
   /**
@@ -39,13 +41,6 @@ class FileManagerUI {
      * @private {!Array<!Element>}
      */
     this.separators_ = [].slice.call(document.querySelectorAll('cr-menu > hr'));
-
-    /**
-     * Error dialog.
-     * @type {!ErrorDialog}
-     * @const
-     */
-    this.errorDialog = new ErrorDialog(this.element);
 
     /**
      * Alert dialog.
@@ -86,13 +81,6 @@ class FileManagerUI {
     this.copyConfirmDialog.setOkLabel(str('CONFIRM_COPY_BUTTON_LABEL'));
 
     /**
-     * Multi-profile share dialog.
-     * @type {!MultiProfileShareDialog}
-     * @const
-     */
-    this.multiProfileShareDialog = new MultiProfileShareDialog(this.element);
-
-    /**
      * Default task picker.
      * @type {!cr.filebrowser.DefaultTaskDialog}
      * @const
@@ -116,11 +104,28 @@ class FileManagerUI {
         new cr.filebrowser.InstallLinuxPackageDialog(this.element);
 
     /**
+     * Dialog for import Crostini Image Files (.tini)
+     * @type {!cr.filebrowser.ImportCrostiniImageDialog}
+     * @const
+     */
+    this.importCrostiniImageDialog =
+        new cr.filebrowser.ImportCrostiniImageDialog(this.element);
+
+    /**
+     * Dialog for formatting
+     * @const {!HTMLElement}
+     */
+    this.formatDialog = queryRequiredElement('#format-dialog');
+
+    /**
      * The container element of the dialog.
      * @type {!HTMLElement}
      */
     this.dialogContainer =
         queryRequiredElement('.dialog-container', this.element);
+    this.dialogContainer.addEventListener('relayout', (event) => {
+      this.layoutChanged_();
+    });
 
     /**
      * Context menu for texts.
@@ -166,6 +171,7 @@ class FileManagerUI {
      */
     this.searchBox = new SearchBox(
         queryRequiredElement('#search-box', this.element),
+        queryRequiredElement('#search-wrapper', this.element),
         queryRequiredElement('#search-button', this.element));
 
     /**
@@ -185,11 +191,11 @@ class FileManagerUI {
 
     /**
      * The button to sort the file list.
-     * @type {!cr.ui.MenuButton}
+     * @type {!cr.ui.MultiMenuButton}
      * @const
      */
     this.sortButton =
-        util.queryDecoratedElement('#sort-button', cr.ui.MenuButton);
+        util.queryDecoratedElement('#sort-button', cr.ui.MultiMenuButton);
 
     /**
      * Ripple effect of sort button.
@@ -225,11 +231,11 @@ class FileManagerUI {
 
     /**
      * The button to open context menu in the check-select mode.
-     * @type {!cr.ui.MenuButton}
+     * @type {!cr.ui.MultiMenuButton}
      * @const
      */
-    this.selectionMenuButton =
-        util.queryDecoratedElement('#selection-menu-button', cr.ui.MenuButton);
+    this.selectionMenuButton = util.queryDecoratedElement(
+        '#selection-menu-button', cr.ui.MultiMenuButton);
 
     /**
      * Directory tree.
@@ -246,10 +252,18 @@ class FileManagerUI {
         queryRequiredElement('#progress-center', this.element));
 
     /**
-     * List container.
-     * @type {ListContainer}
+     * Activity feedback panel.
+     * @type {!HTMLElement}
+     * @const
      */
-    this.listContainer = null;
+    this.activityProgressPanel =
+        queryRequiredElement('#progress-panel', this.element);
+
+    /**
+     * List container.
+     * @type {!ListContainer}
+     */
+    this.listContainer;
 
     /**
      * @type {!HTMLElement}
@@ -360,7 +374,6 @@ class FileManagerUI {
      */
     this.a11yMessage_ = queryRequiredElement('#a11y-msg', this.element);
 
-
     if (window.IN_TEST) {
       /**
        * Stores all a11y announces to be checked in tests.
@@ -394,19 +407,21 @@ class FileManagerUI {
    *
    * @param {!FileTable} table
    * @param {!FileGrid} grid
-   * @param {!LocationLine} locationLine
+   * @param {!VolumeManager} volumeManager
    */
-  initAdditionalUI(table, grid, locationLine) {
+  initAdditionalUI(table, grid, volumeManager) {
     // List container.
     this.listContainer = new ListContainer(
         queryRequiredElement('#list-container', this.element), table, grid);
 
+    // Location line.
+    this.locationLine = new LocationLine(
+        queryRequiredElement('#location-breadcrumbs', this.element),
+        volumeManager, this.listContainer);
+
     // Splitter.
     this.decorateSplitter_(
         queryRequiredElement('#navigation-list-splitter', this.element));
-
-    // Location line.
-    this.locationLine = locationLine;
 
     // Init context menus.
     cr.ui.contextMenuHandler.setContextMenu(grid, this.fileContextMenu);
@@ -414,8 +429,20 @@ class FileManagerUI {
     cr.ui.contextMenuHandler.setContextMenu(
         queryRequiredElement('.drive-welcome.page'), this.fileContextMenu);
 
-    // Add handlers.
+    // Add window resize handler.
     document.defaultView.addEventListener('resize', this.relayout.bind(this));
+
+    // Add global pointer-active handler.
+    const rootElement = document.documentElement;
+    let pointerActive = ['pointerdown', 'pointerup', 'dragend', 'touchend'];
+    if (window.IN_TEST) {
+      pointerActive = pointerActive.concat(['mousedown', 'mouseup']);
+    }
+    pointerActive.forEach((eventType) => {
+      document.addEventListener(eventType, (e) => {
+        rootElement.classList.toggle('pointer-active', /down$/.test(e.type));
+      }, true);
+    });
   }
 
   /**
@@ -450,6 +477,8 @@ class FileManagerUI {
         util.queryDecoratedElement('#roots-context-menu', cr.ui.Menu);
     this.directoryTree.contextMenuForSubitems =
         util.queryDecoratedElement('#directory-tree-context-menu', cr.ui.Menu);
+    this.directoryTree.disabledContextMenu =
+        util.queryDecoratedElement('#disabled-context-menu', cr.ui.Menu);
 
     // Visible height of the directory tree depends on the size of progress
     // center panel. When the size of progress center panel changes, directory
@@ -477,8 +506,11 @@ class FileManagerUI {
    * Attaches files tooltip.
    */
   attachFilesTooltip() {
-    assertInstanceof(document.querySelector('files-tooltip'), FilesTooltip)
-        .addTargets(document.querySelectorAll('[has-tooltip]'));
+    const filesTooltip =
+        assertInstanceof(document.querySelector('files-tooltip'), FilesTooltip);
+    filesTooltip.addTargets(document.querySelectorAll('[has-tooltip]'));
+
+    this.locationLine.filesTooltip = filesTooltip;
   }
 
   /**
@@ -509,6 +541,48 @@ class FileManagerUI {
     if (this.directoryTree) {
       this.directoryTree.relayout();
     }
+  }
+
+  /**
+   * Handles the 'relayout' event to set sizing of the dialog main panel.
+   *
+   * @private
+   */
+  layoutChanged_() {
+    if (this.scrollRAFActive_ === true) {
+      return;
+    }
+
+    /**
+     * True if a scroll RAF is active: scroll events are frequent and serviced
+     * using RAF to throttle our processing of these events.
+     * @type {boolean}
+     */
+    this.scrollRAFActive_ = true;
+
+    window.requestAnimationFrame(() => {
+      this.scrollRAFActive_ = false;
+
+      const mainWindow = document.querySelector('.dialog-container');
+      const navigationList = document.querySelector('.dialog-navigation-list');
+      const splitter = document.querySelector('.splitter');
+      const dialogMain = document.querySelector('.dialog-main');
+
+      // Check the width of the tree and splitter and set the main panel width
+      // to the remainder if it's too wide.
+      const mainWindowWidth = mainWindow.offsetWidth;
+      const navListWidth = navigationList.offsetWidth;
+      const splitStyle = window.getComputedStyle(splitter);
+      const splitMargin = parseInt(splitStyle.marginRight, 10) +
+          parseInt(splitStyle.marginLeft, 10);
+      const splitWidth = splitter.offsetWidth + splitMargin;
+      const dialogMainWidth = dialogMain.offsetWidth;
+      if (!dialogMain.style.width ||
+          (navListWidth + splitWidth + dialogMainWidth) > mainWindowWidth) {
+        dialogMain.style.width =
+            (mainWindowWidth - navListWidth - splitWidth) + 'px';
+      }
+    });
   }
 
   /**

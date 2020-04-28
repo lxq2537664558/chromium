@@ -8,8 +8,9 @@
 #include "base/macros.h"
 #include "base/memory/weak_ptr.h"
 #include "chrome/browser/chromeos/app_mode/arc/arc_kiosk_app_service.h"
-#include "chrome/browser/chromeos/login/screens/arc_kiosk_splash_screen_view.h"
+#include "chrome/browser/chromeos/app_mode/kiosk_app_manager_base.h"
 #include "chrome/browser/chromeos/login/session/user_session_manager.h"
+#include "chrome/browser/ui/webui/chromeos/login/app_launch_splash_screen_handler.h"
 #include "chromeos/login/auth/login_performer.h"
 
 class AccountId;
@@ -31,7 +32,7 @@ class UserContext;
 class ArcKioskController : public LoginPerformer::Delegate,
                            public UserSessionManagerDelegate,
                            public ArcKioskAppService::Delegate,
-                           public ArcKioskSplashScreenView::Delegate {
+                           public AppLaunchSplashScreenView::Delegate {
  public:
   ArcKioskController(LoginDisplayHost* host, OobeUI* oobe_ui);
 
@@ -57,17 +58,22 @@ class ArcKioskController : public LoginPerformer::Delegate,
   void OnProfilePrepared(Profile* profile, bool browser_launched) override;
 
   // ArcKioskAppService::Delegate implementation:
+  void OnAppDataUpdated() override;
   void OnAppStarted() override;
   void OnAppWindowLaunched() override;
 
-  // ArcKioskSplashScreenView::Delegate implementation:
-  void OnCancelArcKioskLaunch() override;
+  // AppLaunchSplashScreenView::Delegate implementation:
+  KioskAppManagerBase::App GetAppData() override;
+  void OnCancelAppLaunch() override;
   void OnDeletingSplashScreenView() override;
+
+  // Accound id of the app we are currently running.
+  AccountId account_id_;
 
   // LoginDisplayHost owns itself.
   LoginDisplayHost* const host_;
   // Owned by OobeUI.
-  ArcKioskSplashScreenView* arc_kiosk_splash_screen_view_;
+  AppLaunchSplashScreenView* arc_kiosk_splash_screen_view_;
   // Not owning here.
   Profile* profile_ = nullptr;
 
@@ -77,7 +83,7 @@ class ArcKioskController : public LoginPerformer::Delegate,
   // A timer to ensure the app splash is shown for a minimum amount of time.
   base::OneShotTimer splash_wait_timer_;
   bool launched_ = false;
-  base::WeakPtrFactory<ArcKioskController> weak_ptr_factory_;
+  base::WeakPtrFactory<ArcKioskController> weak_ptr_factory_{this};
 
   DISALLOW_COPY_AND_ASSIGN(ArcKioskController);
 };

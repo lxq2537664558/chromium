@@ -17,15 +17,15 @@
 #include "content/public/browser/render_widget_host.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_test_utils.h"
+#include "content/public/test/test_utils.h"
 #include "ui/aura/window_event_dispatcher.h"
 #include "ui/aura/window_tree_host.h"
 #include "ui/base/ime/init/input_method_factory.h"
 
 namespace chromeos {
 
-void TextInputTestBase::SetUpInProcessBrowserTestFixture() {
-  ui::SetUpInputMethodFactoryForTesting();
-}
+TextInputTestBase::TextInputTestBase() = default;
+TextInputTestBase::~TextInputTestBase() = default;
 
 ui::InputMethod* TextInputTestBase::GetInputMethod() const {
   return browser()->window()->GetNativeWindow()->GetHost()->GetInputMethod();
@@ -199,7 +199,8 @@ bool TextInputTestHelper::ClickElement(const std::string& id,
     return false;
 
   blink::WebMouseEvent mouse_event(
-      blink::WebInputEvent::kMouseDown, blink::WebInputEvent::kNoModifiers,
+      blink::WebInputEvent::Type::kMouseDown,
+      blink::WebInputEvent::kNoModifiers,
       blink::WebInputEvent::GetStaticTimeStampForTests());
   mouse_event.button = blink::WebMouseEvent::Button::kLeft;
   mouse_event.SetPositionInWidget(rect.CenterPoint().x(),
@@ -207,7 +208,7 @@ bool TextInputTestHelper::ClickElement(const std::string& id,
   mouse_event.click_count = 1;
   tab->GetRenderViewHost()->GetWidget()->ForwardMouseEvent(mouse_event);
 
-  mouse_event.SetType(blink::WebInputEvent::kMouseUp);
+  mouse_event.SetType(blink::WebInputEvent::Type::kMouseUp);
   tab->GetRenderViewHost()->GetWidget()->ForwardMouseEvent(mouse_event);
   return true;
 }

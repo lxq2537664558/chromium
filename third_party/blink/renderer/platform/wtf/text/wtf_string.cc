@@ -27,11 +27,11 @@
 #include <algorithm>
 #include "base/strings/string_util.h"
 #include "build/build_config.h"
-#include "third_party/blink/renderer/platform/wtf/dtoa/dtoa.h"
+#include "third_party/blink/renderer/platform/wtf/dtoa.h"
 #include "third_party/blink/renderer/platform/wtf/math_extras.h"
 #include "third_party/blink/renderer/platform/wtf/text/ascii_ctype.h"
+#include "third_party/blink/renderer/platform/wtf/text/case_map.h"
 #include "third_party/blink/renderer/platform/wtf/text/character_names.h"
-#include "third_party/blink/renderer/platform/wtf/text/cstring.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_builder.h"
 #include "third_party/blink/renderer/platform/wtf/text/unicode.h"
 #include "third_party/blink/renderer/platform/wtf/text/utf8.h"
@@ -65,13 +65,13 @@ String::String(const char* characters, size_t length)
     : String(characters, SafeCast<unsigned>(length)) {}
 #endif  // defined(ARCH_CPU_64_BITS)
 
-int CodePointCompare(const String& a, const String& b) {
-  return CodePointCompare(a.Impl(), b.Impl());
+int CodeUnitCompare(const String& a, const String& b) {
+  return CodeUnitCompare(a.Impl(), b.Impl());
 }
 
-int CodePointCompareIgnoringASCIICase(const String& a, const char* b) {
-  return CodePointCompareIgnoringASCIICase(a.Impl(),
-                                           reinterpret_cast<const LChar*>(b));
+int CodeUnitCompareIgnoringASCIICase(const String& a, const char* b) {
+  return CodeUnitCompareIgnoringASCIICase(a.Impl(),
+                                          reinterpret_cast<const LChar*>(b));
 }
 
 UChar32 String::CharacterStartingAt(unsigned i) const {
@@ -110,19 +110,7 @@ String String::Substring(unsigned pos, unsigned len) const {
 String String::DeprecatedLower() const {
   if (!impl_)
     return String();
-  return impl_->LowerUnicode();
-}
-
-String String::LowerUnicode(const AtomicString& locale_identifier) const {
-  if (!impl_)
-    return String();
-  return impl_->LowerUnicode(locale_identifier);
-}
-
-String String::UpperUnicode(const AtomicString& locale_identifier) const {
-  if (!impl_)
-    return String();
-  return impl_->UpperUnicode(locale_identifier);
+  return CaseMap::FastToLowerInvariant(impl_.get());
 }
 
 String String::LowerASCII() const {
@@ -307,6 +295,15 @@ unsigned String::HexToUIntStrict(bool* ok) const {
   return impl_->HexToUIntStrict(ok);
 }
 
+uint64_t String::HexToUInt64Strict(bool* ok) const {
+  if (!impl_) {
+    if (ok)
+      *ok = false;
+    return 0;
+  }
+  return impl_->HexToUInt64Strict(ok);
+}
+
 int64_t String::ToInt64Strict(bool* ok) const {
   if (!impl_) {
     if (ok)
@@ -403,67 +400,55 @@ void String::Split(UChar separator,
     result.push_back(Substring(start_pos));
 }
 
-CString String::Ascii() const {
+std::string String::Ascii() const {
   // Printable ASCII characters 32..127 and the null character are
   // preserved, characters outside of this range are converted to '?'.
 
   unsigned length = this->length();
-  if (!length) {
-    char* character_buffer;
-    return CString::CreateUninitialized(length, character_buffer);
-  }
+  if (!length)
+    return std::string();
 
+  std::string ascii(length, '\0');
   if (this->Is8Bit()) {
     const LChar* characters = this->Characters8();
 
-    char* character_buffer;
-    CString result = CString::CreateUninitialized(length, character_buffer);
-
     for (unsigned i = 0; i < length; ++i) {
       LChar ch = characters[i];
-      character_buffer[i] = ch && (ch < 0x20 || ch > 0x7f) ? '?' : ch;
+      ascii[i] = ch && (ch < 0x20 || ch > 0x7f) ? '?' : ch;
     }
-
-    return result;
+    return ascii;
   }
 
   const UChar* characters = this->Characters16();
-
-  char* character_buffer;
-  CString result = CString::CreateUninitialized(length, character_buffer);
-
   for (unsigned i = 0; i < length; ++i) {
     UChar ch = characters[i];
-    character_buffer[i] =
-        ch && (ch < 0x20 || ch > 0x7f) ? '?' : static_cast<char>(ch);
+    ascii[i] = ch && (ch < 0x20 || ch > 0x7f) ? '?' : static_cast<char>(ch);
   }
 
-  return result;
+  return ascii;
 }
 
-CString String::Latin1() const {
+std::string String::Latin1() const {
   // Basic Latin1 (ISO) encoding - Unicode characters 0..255 are
   // preserved, characters outside of this range are converted to '?'.
-
   unsigned length = this->length();
 
   if (!length)
-    return CString("", 0);
+    return std::string();
 
-  if (Is8Bit())
-    return CString(reinterpret_cast<const char*>(this->Characters8()), length);
-
-  const UChar* characters = this->Characters16();
-
-  char* character_buffer;
-  CString result = CString::CreateUninitialized(length, character_buffer);
-
-  for (unsigned i = 0; i < length; ++i) {
-    UChar ch = characters[i];
-    character_buffer[i] = ch > 0xff ? '?' : static_cast<char>(ch);
+  if (Is8Bit()) {
+    return std::string(reinterpret_cast<const char*>(this->Characters8()),
+                       length);
   }
 
-  return result;
+  const UChar* characters = this->Characters16();
+  std::string latin1(length, '\0');
+  for (unsigned i = 0; i < length; ++i) {
+    UChar ch = characters[i];
+    latin1[i] = ch > 0xff ? '?' : static_cast<char>(ch);
+  }
+
+  return latin1;
 }
 
 // Helper to write a three-byte UTF-8 code point to the buffer, caller must
@@ -475,24 +460,24 @@ static inline void PutUTF8Triple(char*& buffer, UChar ch) {
   *buffer++ = static_cast<char>((ch & 0x3F) | 0x80);
 }
 
-CString String::Utf8(UTF8ConversionMode mode) const {
+std::string String::Utf8(UTF8ConversionMode mode) const {
   unsigned length = this->length();
 
   if (!length)
-    return CString("", 0);
+    return std::string();
 
   // Allocate a buffer big enough to hold all the characters
   // (an individual UTF-16 UChar can only expand to 3 UTF-8 bytes).
   // Optimization ideas, if we find this function is hot:
-  //  * We could speculatively create a CStringImpl to contain 'length'
+  //  * We could speculatively create a std::string to contain 'length'
   //    characters, and resize if necessary (i.e. if the buffer contains
   //    non-ascii characters). (Alternatively, scan the buffer first for
   //    ascii characters, so we know this will be sufficient).
-  //  * We could allocate a CStringImpl with an appropriate size to
+  //  * We could allocate a std::string with an appropriate size to
   //    have a good chance of being able to write the string into the
   //    buffer without reallocing (say, 1.5 x length).
   if (length > std::numeric_limits<unsigned>::max() / 3)
-    return CString();
+    return std::string();
   Vector<char, 1024> buffer_vector(length * 3);
 
   char* buffer = buffer_vector.data();
@@ -540,13 +525,13 @@ CString String::Utf8(UTF8ConversionMode mode) const {
       // Only produced from strict conversion.
       if (result == unicode::kSourceIllegal) {
         DCHECK(strict);
-        return CString();
+        return std::string();
       }
 
       // Check for an unconverted high surrogate.
       if (result == unicode::kSourceExhausted) {
         if (strict)
-          return CString();
+          return std::string();
         // This should be one unpaired high surrogate. Treat it the same
         // was as an unpaired high surrogate would have been handled in
         // the middle of a string with non-strict conversion - which is
@@ -562,7 +547,7 @@ CString String::Utf8(UTF8ConversionMode mode) const {
     }
   }
 
-  return CString(buffer_vector.data(), buffer - buffer_vector.data());
+  return std::string(buffer_vector.data(), buffer - buffer_vector.data());
 }
 
 String String::Make8BitFrom16BitSource(const UChar* source, wtf_size_t length) {
@@ -624,8 +609,8 @@ String String::FromUTF8(const LChar* string) {
   return FromUTF8(string, strlen(reinterpret_cast<const char*>(string)));
 }
 
-String String::FromUTF8(const CString& s) {
-  return FromUTF8(s.data());
+String String::FromUTF8(base::StringPiece s) {
+  return FromUTF8(reinterpret_cast<const LChar*>(s.data()), s.size());
 }
 
 String String::FromUTF8WithLatin1Fallback(const LChar* string, size_t size) {
@@ -636,7 +621,7 @@ String String::FromUTF8WithLatin1Fallback(const LChar* string, size_t size) {
 }
 
 std::ostream& operator<<(std::ostream& out, const String& string) {
-  return out << string.EncodeForDebugging().Utf8().data();
+  return out << string.EncodeForDebugging().Utf8();
 }
 
 #ifndef NDEBUG

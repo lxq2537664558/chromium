@@ -4,20 +4,24 @@
 
 #include "device/vr/windows_mixed_reality/mixed_reality_input_helper.h"
 
-#include <SpatialInteractionManagerInterop.h>
-#include <windows.perception.h>
-#include <windows.perception.spatial.h>
-#include <windows.ui.input.spatial.h>
-
-#include <wrl.h>
 #include <wrl/event.h>
 
-#include <unordered_map>
+#include <utility>
 #include <vector>
 
-#include "base/win/core_winrt_util.h"
-#include "base/win/scoped_hstring.h"
-#include "base/win/typed_event_handler.h"
+#include "base/threading/thread_task_runner_handle.h"
+#include "device/gamepad/public/cpp/gamepads.h"
+#include "device/vr/util/xr_standard_gamepad_builder.h"
+#include "device/vr/windows_mixed_reality/mixed_reality_renderloop.h"
+#include "device/vr/windows_mixed_reality/wrappers/wmr_input_location.h"
+#include "device/vr/windows_mixed_reality/wrappers/wmr_input_manager.h"
+#include "device/vr/windows_mixed_reality/wrappers/wmr_input_source.h"
+#include "device/vr/windows_mixed_reality/wrappers/wmr_input_source_state.h"
+#include "device/vr/windows_mixed_reality/wrappers/wmr_origins.h"
+#include "device/vr/windows_mixed_reality/wrappers/wmr_pointer_pose.h"
+#include "device/vr/windows_mixed_reality/wrappers/wmr_pointer_source_pose.h"
+#include "device/vr/windows_mixed_reality/wrappers/wmr_timestamp.h"
+#include "device/vr/windows_mixed_reality/wrappers/wmr_wrapper_factories.h"
 #include "ui/gfx/transform.h"
 #include "ui/gfx/transform_util.h"
 
@@ -32,41 +36,74 @@ using Handedness =
 using PressKind = ABI::Windows::UI::Input::Spatial::SpatialInteractionPressKind;
 using SourceKind =
     ABI::Windows::UI::Input::Spatial::SpatialInteractionSourceKind;
+using PositionAccuracy =
+    ABI::Windows::UI::Input::Spatial::SpatialInteractionSourcePositionAccuracy;
 
-using ABI::Windows::Foundation::IReference;
-using ABI::Windows::Foundation::ITypedEventHandler;
-using ABI::Windows::Foundation::Collections::IVectorView;
-using ABI::Windows::Perception::IPerceptionTimestamp;
-using ABI::Windows::Perception::People::IHeadPose;
-using ABI::Windows::Perception::Spatial::ISpatialCoordinateSystem;
-using ABI::Windows::UI::Input::Spatial::ISpatialInteractionManager;
-using ABI::Windows::UI::Input::Spatial::ISpatialInteractionSource;
-using ABI::Windows::UI::Input::Spatial::ISpatialInteractionSource2;
-using ABI::Windows::UI::Input::Spatial::ISpatialInteractionSource3;
-using ABI::Windows::UI::Input::Spatial::ISpatialInteractionSourceEventArgs;
-using ABI::Windows::UI::Input::Spatial::ISpatialInteractionSourceEventArgs2;
-using ABI::Windows::UI::Input::Spatial::ISpatialInteractionSourceLocation;
-using ABI::Windows::UI::Input::Spatial::ISpatialInteractionSourceLocation2;
-using ABI::Windows::UI::Input::Spatial::ISpatialInteractionSourceLocation3;
-using ABI::Windows::UI::Input::Spatial::ISpatialInteractionSourceProperties;
-using ABI::Windows::UI::Input::Spatial::ISpatialInteractionSourceState;
-using ABI::Windows::UI::Input::Spatial::ISpatialPointerInteractionSourcePose;
-using ABI::Windows::UI::Input::Spatial::ISpatialPointerInteractionSourcePose2;
-using ABI::Windows::UI::Input::Spatial::ISpatialPointerPose;
-using ABI::Windows::UI::Input::Spatial::ISpatialPointerPose2;
-using ABI::Windows::UI::Input::Spatial::SpatialInteractionManager;
-using ABI::Windows::UI::Input::Spatial::SpatialInteractionSourceEventArgs;
-using ABI::Windows::UI::Input::Spatial::SpatialInteractionSourceState;
-using Microsoft::WRL::Callback;
-using Microsoft::WRL::ComPtr;
-
-typedef ITypedEventHandler<SpatialInteractionManager*,
-                           SpatialInteractionSourceEventArgs*>
-    SpatialInteractionSourceEventHandler;
+MixedRealityInputHelper::ControllerState::ControllerState() = default;
+MixedRealityInputHelper::ControllerState::~ControllerState() = default;
 
 namespace {
-gfx::Transform CreateTransform(WFN::Vector3 position,
-                               WFN::Quaternion rotation) {
+base::Optional<Gamepad> GetWebXRGamepad(const WMRInputSourceState* source_state,
+                                        const mojom::XRHandedness& handedness) {
+  XRStandardGamepadBuilder builder(handedness);
+
+  // Add the Select button
+  GamepadBuilder::ButtonData data = {};
+  data.pressed = source_state->IsSelectPressed();
+  data.touched = data.pressed;
+  data.value = source_state->SelectPressedValue();
+  data.type = GamepadBuilder::ButtonData::Type::kButton;
+  builder.SetPrimaryButton(data);
+
+  // Add the grip button
+  data = {};
+  data.pressed = source_state->IsGrasped();
+  data.touched = data.pressed;
+  data.value = data.pressed ? 1.0 : 0.0;
+  data.type = GamepadBuilder::ButtonData::Type::kButton;
+  builder.SetSecondaryButton(data);
+
+  // Select and grip are the only two required buttons, if we can't get the
+  // others, we can safely return just them.
+  if (!source_state->SupportsControllerProperties())
+    return builder.GetGamepad();
+
+  // Add the Thumbstick
+  data = {};
+  data.pressed = source_state->IsThumbstickPressed();
+  data.touched = data.pressed;
+  data.value = data.pressed ? 1.0 : 0.0;
+
+  // Invert the y axis because -1 is up in the Gamepad API, but down in WMR.
+  data.type = GamepadBuilder::ButtonData::Type::kThumbstick;
+  data.x_axis = source_state->ThumbstickX();
+  data.y_axis = -source_state->ThumbstickY();
+  builder.SetThumbstickData(data);
+
+  // Add the Touchpad
+  data = {};
+  data.pressed = source_state->IsTouchpadPressed();
+  data.touched = source_state->IsTouchpadTouched() || data.pressed;
+  data.value = data.pressed ? 1.0 : 0.0;
+
+  // The Touchpad does have Axes, but if it's not touched, they are 0.
+  data.type = GamepadBuilder::ButtonData::Type::kTouchpad;
+  if (data.touched) {
+    // Invert the y axis because -1 is up in the Gamepad API, but down in WMR.
+    data.x_axis = source_state->TouchpadX();
+    data.y_axis = -source_state->TouchpadY();
+  } else {
+    data.x_axis = 0;
+    data.y_axis = 0;
+  }
+
+  builder.SetTouchpadData(data);
+
+  return builder.GetGamepad();
+}
+
+gfx::Transform CreateTransform(const WFN::Vector3& position,
+                               const WFN::Quaternion& rotation) {
   gfx::DecomposedTransform decomposed_transform;
   decomposed_transform.translate[0] = position.X;
   decomposed_transform.translate[1] = position.Y;
@@ -77,152 +114,86 @@ gfx::Transform CreateTransform(WFN::Vector3 position,
   return gfx::ComposeTransform(decomposed_transform);
 }
 
-bool TryGetGripFromLocation(
-    ComPtr<ISpatialInteractionSourceLocation> location_in_origin,
-    gfx::Transform* origin_from_grip) {
-  DCHECK(origin_from_grip);
-  *origin_from_grip = gfx::Transform();
-
-  if (!location_in_origin)
-    return false;
-
-  ComPtr<IReference<WFN::Vector3>> pos_ref;
-  HRESULT hr = location_in_origin->get_Position(&pos_ref);
-  DCHECK(SUCCEEDED(hr));
-
-  if (!pos_ref)
-    return false;
-
-  WFN::Vector3 pos;
-  hr = pos_ref->get_Value(&pos);
-  DCHECK(SUCCEEDED(hr));
-
-  ComPtr<ISpatialInteractionSourceLocation2> location_in_origin2;
-  hr = location_in_origin.As(&location_in_origin2);
-  if (FAILED(hr))
-    return false;
-
-  ComPtr<IReference<WFN::Quaternion>> quat_ref;
-  hr = location_in_origin2->get_Orientation(&quat_ref);
-  DCHECK(SUCCEEDED(hr));
-
-  if (!quat_ref)
-    return false;
-
-  WFN::Quaternion quat;
-  hr = quat_ref->get_Value(&quat);
-  DCHECK(SUCCEEDED(hr));
-
-  *origin_from_grip = CreateTransform(pos, quat);
-  return true;
-}
-
-bool TryGetPointerOffset(ComPtr<ISpatialInteractionSourceState> state,
-                         ComPtr<ISpatialInteractionSource> source,
-                         ComPtr<ISpatialCoordinateSystem> origin,
-                         gfx::Transform origin_from_grip,
-                         gfx::Transform* grip_from_pointer) {
-  DCHECK(grip_from_pointer);
-  *grip_from_pointer = gfx::Transform();
-
-  if (!state || !source || !origin)
-    return false;
+base::Optional<gfx::Transform> TryGetGripFromPointer(
+    const WMRInputSourceState* state,
+    const WMRInputSource* source,
+    const WMRCoordinateSystem* origin,
+    gfx::Transform origin_from_grip) {
+  if (!origin)
+    return base::nullopt;
 
   // We can get the pointer position, but we'll need to transform it to an
   // offset from the grip position.  If we can't get an inverse of that,
   // then go ahead and bail early.
   gfx::Transform grip_from_origin;
   if (!origin_from_grip.GetInverse(&grip_from_origin))
-    return false;
+    return base::nullopt;
 
-  ComPtr<ISpatialInteractionSource2> source2;
-  HRESULT hr = source.As(&source2);
-  if (FAILED(hr))
-    return false;
+  bool pointing_supported = source->IsPointingSupported();
 
-  boolean pointing_supported = false;
-  hr = source2->get_IsPointingSupported(&pointing_supported);
-  DCHECK(SUCCEEDED(hr));
-
-  ComPtr<ISpatialPointerPose> pointer_pose;
-  hr = state->TryGetPointerPose(origin.Get(), &pointer_pose);
-  if (FAILED(hr) || !pointer_pose)
-    return false;
+  std::unique_ptr<WMRPointerPose> pointer_pose =
+      state->TryGetPointerPose(origin);
+  if (!pointer_pose)
+    return base::nullopt;
 
   WFN::Vector3 pos;
   WFN::Quaternion rot;
   if (pointing_supported) {
-    ComPtr<ISpatialPointerPose2> pointer_pose2;
-    hr = pointer_pose.As(&pointer_pose2);
-    if (FAILED(hr))
-      return false;
+    std::unique_ptr<WMRPointerSourcePose> pointer_source_pose =
+        pointer_pose->TryGetInteractionSourcePose(source);
+    if (!pointer_source_pose)
+      return base::nullopt;
 
-    ComPtr<ISpatialPointerInteractionSourcePose> pointer_source_pose;
-    hr = pointer_pose2->TryGetInteractionSourcePose(source.Get(),
-                                                    &pointer_source_pose);
-    if (FAILED(hr) || !pointer_source_pose)
-      return false;
-
-    hr = pointer_source_pose->get_Position(&pos);
-    DCHECK(SUCCEEDED(hr));
-
-    ComPtr<ISpatialPointerInteractionSourcePose2> pointer_source_pose2;
-    hr = pointer_source_pose.As(&pointer_source_pose2);
-    if (FAILED(hr))
-      return false;
-
-    hr = pointer_source_pose2->get_Orientation(&rot);
-    DCHECK(SUCCEEDED(hr));
+    pos = pointer_source_pose->Position();
+    rot = pointer_source_pose->Orientation();
   } else {
-    ComPtr<IHeadPose> head;
-    hr = pointer_pose->get_Head(&head);
-    DCHECK(SUCCEEDED(hr));
-
-    hr = head->get_ForwardDirection(&pos);
-    DCHECK(SUCCEEDED(hr));
+    pos = pointer_pose->HeadForward();
   }
 
   gfx::Transform origin_from_pointer = CreateTransform(pos, rot);
-  *grip_from_pointer = (grip_from_origin * origin_from_pointer);
-  return true;
+  return (grip_from_origin * origin_from_pointer);
 }
 
-device::mojom::XRHandedness WindowsToMojoHandedness(Handedness handedness) {
+mojom::XRHandedness WindowsToMojoHandedness(Handedness handedness) {
   switch (handedness) {
     case Handedness::SpatialInteractionSourceHandedness_Left:
-      return device::mojom::XRHandedness::LEFT;
+      return mojom::XRHandedness::LEFT;
     case Handedness::SpatialInteractionSourceHandedness_Right:
-      return device::mojom::XRHandedness::RIGHT;
+      return mojom::XRHandedness::RIGHT;
     default:
-      return device::mojom::XRHandedness::NONE;
+      return mojom::XRHandedness::NONE;
   }
 }
 
-uint32_t GetSourceId(ComPtr<ISpatialInteractionSource> source) {
-  uint32_t id;
-  HRESULT hr = source->get_Id(&id);
-  DCHECK(SUCCEEDED(hr));
+uint32_t GetSourceId(const WMRInputSource* source) {
+  uint32_t id = source->Id();
 
   // Voice's ID seems to be coming through as 0, which will cause a DCHECK in
   // the hash table used on the blink side.  To ensure that we don't have any
   // collisions with other ids, increment all of the ids by one.
   id++;
-  DCHECK(id != 0);
+  DCHECK_NE(id, 0u);
 
   return id;
 }
+
+const uint16_t kSamsungVendorId = 1118;
+const uint16_t kSamsungOdysseyProductId = 1629;
+
 }  // namespace
 
-MixedRealityInputHelper::MixedRealityInputHelper(HWND hwnd) : hwnd_(hwnd) {
-  pressed_token_.value = 0;
-  released_token_.value = 0;
-}
+MixedRealityInputHelper::MixedRealityInputHelper(
+    HWND hwnd,
+    const base::WeakPtr<MixedRealityRenderLoop>& weak_render_loop)
+    : hwnd_(hwnd),
+      task_runner_(base::ThreadTaskRunnerHandle::Get()),
+      weak_render_loop_(weak_render_loop) {}
 
 MixedRealityInputHelper::~MixedRealityInputHelper() {
   // Dispose must be called before destruction, which ensures that we're
   // unsubscribed from events.
-  DCHECK(pressed_token_.value == 0);
-  DCHECK(released_token_.value == 0);
+  DCHECK(pressed_subscription_ == nullptr);
+  DCHECK(released_subscription_ == nullptr);
 }
 
 void MixedRealityInputHelper::Dispose() {
@@ -230,25 +201,15 @@ void MixedRealityInputHelper::Dispose() {
 }
 
 bool MixedRealityInputHelper::EnsureSpatialInteractionManager() {
-  if (spatial_interaction_manager_)
+  if (input_manager_)
     return true;
 
   if (!hwnd_)
     return false;
 
-  ComPtr<ISpatialInteractionManagerInterop> spatial_interaction_interop;
-  base::win::ScopedHString spatial_interaction_interop_string =
-      base::win::ScopedHString::Create(
-          RuntimeClass_Windows_UI_Input_Spatial_SpatialInteractionManager);
-  HRESULT hr = base::win::RoGetActivationFactory(
-      spatial_interaction_interop_string.get(),
-      IID_PPV_ARGS(&spatial_interaction_interop));
-  if (FAILED(hr))
-    return false;
+  input_manager_ = WMRInputManagerFactory::GetForWindow(hwnd_);
 
-  hr = spatial_interaction_interop->GetForWindow(
-      hwnd_, IID_PPV_ARGS(&spatial_interaction_manager_));
-  if (FAILED(hr))
+  if (!input_manager_)
     return false;
 
   SubscribeEvents();
@@ -256,63 +217,35 @@ bool MixedRealityInputHelper::EnsureSpatialInteractionManager() {
 }
 
 std::vector<mojom::XRInputSourceStatePtr>
-MixedRealityInputHelper::GetInputState(ComPtr<ISpatialCoordinateSystem> origin,
-                                       ComPtr<IPerceptionTimestamp> timestamp) {
+MixedRealityInputHelper::GetInputState(const WMRCoordinateSystem* origin,
+                                       const WMRTimestamp* timestamp) {
   std::vector<mojom::XRInputSourceStatePtr> input_states;
 
   if (!timestamp || !origin || !EnsureSpatialInteractionManager())
     return input_states;
 
-  ComPtr<IVectorView<SpatialInteractionSourceState*>> source_states;
-  if (FAILED(spatial_interaction_manager_->GetDetectedSourcesAtTimestamp(
-          timestamp.Get(), &source_states)))
-    return input_states;
+  auto source_states =
+      input_manager_->GetDetectedSourcesAtTimestamp(timestamp->GetRawPtr());
 
-  unsigned int size;
-  HRESULT hr = source_states->get_Size(&size);
-  DCHECK(SUCCEEDED(hr));
+  for (const auto& state : source_states) {
+    auto parsed_source_state = ParseWindowsSourceState(state.get(), origin);
 
-  base::AutoLock scoped_lock(lock_);
-
-  for (unsigned int i = 0; i < size; i++) {
-    ComPtr<ISpatialInteractionSourceState> state;
-    if (FAILED(source_states->GetAt(i, &state)))
-      continue;
-
-    mojom::XRInputSourceStatePtr source_state =
-        LockedParseWindowsSourceState(state, origin);
-
-    if (source_state)
-      input_states.push_back(std::move(source_state));
+    if (parsed_source_state) {
+      input_states.push_back(std::move(parsed_source_state));
+    }
   }
-
-  for (unsigned int i = 0; i < pending_voice_states_.size(); i++) {
-    mojom::XRInputSourceStatePtr source_state =
-        LockedParseWindowsSourceState(pending_voice_states_[i], origin);
-
-    if (source_state)
-      input_states.push_back(std::move(source_state));
-  }
-
-  pending_voice_states_.clear();
 
   return input_states;
 }
 
-mojom::XRInputSourceStatePtr
-MixedRealityInputHelper::LockedParseWindowsSourceState(
-    ComPtr<ISpatialInteractionSourceState> state,
-    ComPtr<ISpatialCoordinateSystem> origin) {
-  if (!(state && origin))
+mojom::XRInputSourceStatePtr MixedRealityInputHelper::ParseWindowsSourceState(
+    const WMRInputSourceState* state,
+    const WMRCoordinateSystem* origin) {
+  if (!origin)
     return nullptr;
 
-  ComPtr<ISpatialInteractionSource> source;
-  HRESULT hr = state->get_Source(&source);
-  DCHECK(SUCCEEDED(hr));
-
-  SourceKind source_kind;
-  hr = source->get_Kind(&source_kind);
-  DCHECK(SUCCEEDED(hr));
+  std::unique_ptr<WMRInputSource> source = state->GetSource();
+  SourceKind source_kind = source->Kind();
 
   bool is_controller =
       (source_kind == SourceKind::SpatialInteractionSourceKind_Controller);
@@ -322,176 +255,179 @@ MixedRealityInputHelper::LockedParseWindowsSourceState(
   if (!(is_controller || is_voice))
     return nullptr;
 
-  // Note that if this is from voice input, we're not supposed to send up the
-  // "grip" position, so this will be left as identity and let us still use
-  // the same code paths, as any transformations by it will leave the original
-  // item unaffected.
-  gfx::Transform origin_from_grip;
-  if (is_controller) {
-    ComPtr<ISpatialInteractionSourceProperties> props;
-    hr = state->get_Properties(&props);
-    DCHECK(SUCCEEDED(hr));
-    ComPtr<ISpatialInteractionSourceLocation> location_in_origin;
-    if (FAILED(props->TryGetLocation(origin.Get(), &location_in_origin)) ||
-        !location_in_origin)
-      return nullptr;
-
-    if (!TryGetGripFromLocation(location_in_origin, &origin_from_grip))
-      return nullptr;
-  }
-
-  gfx::Transform grip_from_pointer;
-  if (!TryGetPointerOffset(state, source, origin, origin_from_grip,
-                           &grip_from_pointer))
-    return nullptr;
-
-  // Now that we know we have tracking for the object, we'll start building.
-  device::mojom::XRInputSourceStatePtr source_state =
-      device::mojom::XRInputSourceState::New();
-
   // Hands may not have the same id especially if they are lost but since we
   // are only tracking controllers/voice, this id should be consistent.
-  uint32_t id = GetSourceId(source);
+  uint32_t id = GetSourceId(source.get());
 
-  source_state->source_id = id;
-  source_state->primary_input_pressed = controller_states_[id].pressed;
-  source_state->primary_input_clicked = controller_states_[id].clicked;
-  controller_states_[id].clicked = false;
-
-  // Grip position should *only* be specified for a controller.
+  // Note that if this is untracked we're not supposed to send up the "grip"
+  // position, so this will be left as identity and let us still use the same
+  // code paths. Any transformations will leave the original item unaffected.
+  // Voice input is always untracked.
+  gfx::Transform origin_from_grip;
+  bool is_tracked = false;
+  bool emulated_position = false;
+  uint16_t product_id = 0;
+  uint16_t vendor_id = 0;
   if (is_controller) {
-    source_state->grip = origin_from_grip;
+    std::unique_ptr<WMRInputLocation> location_in_origin =
+        state->TryGetLocation(origin);
+    if (location_in_origin) {
+      WFN::Vector3 pos;
+      WFN::Quaternion rot;
+      if (location_in_origin->TryGetPosition(&pos) &&
+          location_in_origin->TryGetOrientation(&rot)) {
+        origin_from_grip = CreateTransform(pos, rot);
+        is_tracked = true;
+      }
+
+      PositionAccuracy position_accuracy;
+      if (location_in_origin->TryGetPositionAccuracy(&position_accuracy) &&
+          (position_accuracy ==
+           PositionAccuracy::
+               SpatialInteractionSourcePositionAccuracy_Approximate)) {
+        // Controller lost precise tracking or has its position estimated.
+        emulated_position = true;
+      }
+    }
+
+    std::unique_ptr<WMRController> controller = source->Controller();
+    if (controller) {
+      product_id = controller->ProductId();
+      vendor_id = controller->VendorId();
+    }
   }
 
-  device::mojom::XRInputSourceDescriptionPtr description =
-      device::mojom::XRInputSourceDescription::New();
+  base::Optional<gfx::Transform> grip_from_pointer =
+      TryGetGripFromPointer(state, source.get(), origin, origin_from_grip);
 
-  // If we've gotten this far we've gotten the real position.
-  description->emulated_position = false;
-  description->pointer_offset = grip_from_pointer;
+  // If we failed to get grip_from_pointer, see if it is cached.  If we did get
+  // it, update the cache.
+  if (!grip_from_pointer) {
+    grip_from_pointer = controller_states_[id].grip_from_pointer;
+  } else {
+    controller_states_[id].grip_from_pointer = grip_from_pointer;
+  }
+
+  // Now that we have calculated information for the object, build it.
+  mojom::XRInputSourceStatePtr input_state = mojom::XRInputSourceState::New();
+
+  input_state->source_id = id;
+  input_state->primary_input_pressed = controller_states_[id].pressed;
+  input_state->primary_input_clicked = controller_states_[id].clicked;
+
+  // Grip position should *only* be specified if the controller is tracked.
+  if (is_tracked)
+    input_state->mojo_from_input = origin_from_grip;
+
+  mojom::XRInputSourceDescriptionPtr description =
+      mojom::XRInputSourceDescription::New();
+
+  input_state->emulated_position = emulated_position;
+  description->input_from_pointer = grip_from_pointer;
 
   if (is_voice) {
-    description->target_ray_mode = device::mojom::XRTargetRayMode::GAZING;
-    description->handedness = device::mojom::XRHandedness::NONE;
+    description->target_ray_mode = mojom::XRTargetRayMode::GAZING;
+    description->handedness = mojom::XRHandedness::NONE;
   } else if (is_controller) {
-    description->target_ray_mode = device::mojom::XRTargetRayMode::POINTING;
+    description->target_ray_mode = mojom::XRTargetRayMode::POINTING;
+    description->handedness = WindowsToMojoHandedness(source->Handedness());
 
-    ComPtr<ISpatialInteractionSource3> source3;
-    hr = source.As(&source3);
-    if (FAILED(hr))
-      return nullptr;
+    // If we know the particular headset/controller model, add this to the
+    // profiles array.
+    if (vendor_id == kSamsungVendorId &&
+        product_id == kSamsungOdysseyProductId) {
+      description->profiles.push_back("samsung-odyssey");
+    }
 
-    Handedness handedness;
-    hr = source3->get_Handedness(&handedness);
-    DCHECK(SUCCEEDED(hr));
+    description->profiles.push_back("windows-mixed-reality");
 
-    description->handedness = WindowsToMojoHandedness(handedness);
+    // This makes it clear that the controller actually has a grip button and
+    // touchpad and thumbstick input. Otherwise, it's ambiguous whether slots
+    // like the touchpad buttons + axes are hooked up vs just placeholders.
+    description->profiles.push_back(
+        "generic-trigger-squeeze-touchpad-thumbstick");
+
+    input_state->gamepad = GetWebXRGamepad(state, description->handedness);
   } else {
     NOTREACHED();
   }
 
-  source_state->description = std::move(description);
-
-  return source_state;
+  input_state->description = std::move(description);
+  return input_state;
 }
 
-HRESULT MixedRealityInputHelper::OnSourcePressed(
-    ISpatialInteractionManager* sender,
-    ISpatialInteractionSourceEventArgs* args) {
-  return ProcessSourceEvent(args, true /* is_pressed */);
+void MixedRealityInputHelper::OnSourcePressed(
+    const WMRInputSourceEventArgs& args) {
+  task_runner_->PostTask(
+      FROM_HERE,
+      base::BindOnce(&MixedRealityInputHelper::ProcessSourceEvent,
+                     weak_ptr_factory_.GetWeakPtr(), args.PressKind(),
+                     args.State(), true /* is_pressed */));
 }
 
-HRESULT MixedRealityInputHelper::OnSourceReleased(
-    ISpatialInteractionManager* sender,
-    ISpatialInteractionSourceEventArgs* args) {
-  return ProcessSourceEvent(args, false /* is_pressed */);
+void MixedRealityInputHelper::OnSourceReleased(
+    const WMRInputSourceEventArgs& args) {
+  task_runner_->PostTask(
+      FROM_HERE,
+      base::BindOnce(&MixedRealityInputHelper::ProcessSourceEvent,
+                     weak_ptr_factory_.GetWeakPtr(), args.PressKind(),
+                     args.State(), false /* is_pressed */));
 }
 
-HRESULT MixedRealityInputHelper::ProcessSourceEvent(
-    ISpatialInteractionSourceEventArgs* raw_args,
+void MixedRealityInputHelper::ProcessSourceEvent(
+    PressKind press_kind,
+    std::unique_ptr<WMRInputSourceState> state,
     bool is_pressed) {
-  base::AutoLock scoped_lock(lock_);
-  ComPtr<ISpatialInteractionSourceEventArgs> args(raw_args);
-  ComPtr<ISpatialInteractionSourceEventArgs2> args2;
-  HRESULT hr = args.As(&args2);
-  if (FAILED(hr))
-    return S_OK;
-
-  PressKind press_kind;
-  hr = args2->get_PressKind(&press_kind);
-  DCHECK(SUCCEEDED(hr));
-
   if (press_kind != PressKind::SpatialInteractionPressKind_Select)
-    return S_OK;
+    return;
 
-  ComPtr<ISpatialInteractionSourceState> state;
-  hr = args->get_State(&state);
-  DCHECK(SUCCEEDED(hr));
-
-  ComPtr<ISpatialInteractionSource> source;
-  hr = state->get_Source(&source);
-  DCHECK(SUCCEEDED(hr));
-
-  SourceKind source_kind;
-  hr = source->get_Kind(&source_kind);
-  DCHECK(SUCCEEDED(hr));
+  std::unique_ptr<WMRInputSource> source = state->GetSource();
+  SourceKind source_kind = source->Kind();
 
   if (source_kind != SourceKind::SpatialInteractionSourceKind_Controller &&
       source_kind != SourceKind::SpatialInteractionSourceKind_Voice)
-    return S_OK;
+    return;
 
-  uint32_t id = GetSourceId(source);
+  uint32_t id = GetSourceId(source.get());
 
   bool wasPressed = controller_states_[id].pressed;
-  bool wasClicked = controller_states_[id].clicked;
   controller_states_[id].pressed = is_pressed;
-  controller_states_[id].clicked = wasClicked || (wasPressed && !is_pressed);
+  controller_states_[id].clicked = (wasPressed && !is_pressed);
 
-  // Tracked controllers show up when we poll for DetectedSources, but voice
-  // does not.
-  if (source_kind == SourceKind::SpatialInteractionSourceKind_Voice &&
-      !is_pressed)
-    pending_voice_states_.push_back(state);
-  return S_OK;
+  if (!weak_render_loop_)
+    return;
+
+  auto* origin = weak_render_loop_->GetOrigin();
+  if (!origin)
+    return;
+
+  auto parsed_source_state = ParseWindowsSourceState(state.get(), origin);
+  if (parsed_source_state) {
+    weak_render_loop_->OnInputSourceEvent(std::move(parsed_source_state));
+  }
+
+  // We've sent up the click, so clear it.
+  controller_states_[id].clicked = false;
 }
 
 void MixedRealityInputHelper::SubscribeEvents() {
-  DCHECK(spatial_interaction_manager_);
-  DCHECK(pressed_token_.value == 0);
-  DCHECK(released_token_.value == 0);
+  DCHECK(input_manager_);
+  DCHECK(pressed_subscription_ == nullptr);
+  DCHECK(released_subscription_ == nullptr);
 
-  // The destructor ensures that we're unsubscribed so raw this is fine.
-  auto pressed_callback = Callback<SpatialInteractionSourceEventHandler>(
-      this, &MixedRealityInputHelper::OnSourcePressed);
-  HRESULT hr = spatial_interaction_manager_->add_SourcePressed(
-      pressed_callback.Get(), &pressed_token_);
-  DCHECK(SUCCEEDED(hr));
-
-  // The destructor ensures that we're unsubscribed so raw this is fine.
-  auto released_callback = Callback<SpatialInteractionSourceEventHandler>(
-      this, &MixedRealityInputHelper::OnSourceReleased);
-  hr = spatial_interaction_manager_->add_SourceReleased(released_callback.Get(),
-                                                        &released_token_);
-  DCHECK(SUCCEEDED(hr));
+  // Unretained is safe since we explicitly get disposed and unsubscribe before
+  // destruction
+  pressed_subscription_ =
+      input_manager_->AddPressedCallback(base::BindRepeating(
+          &MixedRealityInputHelper::OnSourcePressed, base::Unretained(this)));
+  released_subscription_ =
+      input_manager_->AddReleasedCallback(base::BindRepeating(
+          &MixedRealityInputHelper::OnSourceReleased, base::Unretained(this)));
 }
 
 void MixedRealityInputHelper::UnsubscribeEvents() {
-  base::AutoLock scoped_lock(lock_);
-  if (!spatial_interaction_manager_)
-    return;
-
-  HRESULT hr = S_OK;
-  if (pressed_token_.value != 0) {
-    hr = spatial_interaction_manager_->remove_SourcePressed(pressed_token_);
-    pressed_token_.value = 0;
-    DCHECK(SUCCEEDED(hr));
-  }
-
-  if (released_token_.value != 0) {
-    hr = spatial_interaction_manager_->remove_SourceReleased(released_token_);
-    released_token_.value = 0;
-    DCHECK(SUCCEEDED(hr));
-  }
+  pressed_subscription_ = nullptr;
+  released_subscription_ = nullptr;
 }
 
 }  // namespace device

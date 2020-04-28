@@ -33,11 +33,8 @@ class DEVICE_BLUETOOTH_EXPORT BluetoothAdapterWin
     : public BluetoothAdapter,
       public BluetoothTaskManagerWin::Observer {
  public:
-  static base::WeakPtr<BluetoothAdapter> CreateAdapter(
-      InitCallback init_callback);
-
-  static base::WeakPtr<BluetoothAdapter> CreateClassicAdapter(
-      InitCallback init_callback);
+  static scoped_refptr<BluetoothAdapter> CreateAdapter();
+  static scoped_refptr<BluetoothAdapter> CreateClassicAdapter();
 
   static bool UseNewBLEWinImplementation();
 
@@ -112,26 +109,22 @@ class DEVICE_BLUETOOTH_EXPORT BluetoothAdapterWin
     DISCOVERY_STOPPING
   };
 
-  explicit BluetoothAdapterWin(InitCallback init_callback);
+  BluetoothAdapterWin();
   ~BluetoothAdapterWin() override;
 
   // BluetoothAdapter:
+  base::WeakPtr<BluetoothAdapter> GetWeakPtr() override;
   bool SetPoweredImpl(bool powered) override;
-  void AddDiscoverySession(
-      BluetoothDiscoveryFilter* discovery_filter,
-      const base::Closure& callback,
-      DiscoverySessionErrorCallback error_callback) override;
-  void RemoveDiscoverySession(
-      BluetoothDiscoveryFilter* discovery_filter,
-      const base::Closure& callback,
-      DiscoverySessionErrorCallback error_callback) override;
-  void SetDiscoveryFilter(
+  void UpdateFilter(std::unique_ptr<BluetoothDiscoveryFilter> discovery_filter,
+                    DiscoverySessionResultCallback callback) override;
+  void StartScanWithFilter(
       std::unique_ptr<BluetoothDiscoveryFilter> discovery_filter,
-      const base::Closure& callback,
-      DiscoverySessionErrorCallback error_callback) override;
+      DiscoverySessionResultCallback callback) override;
+  void StopScan(DiscoverySessionResultCallback callback) override;
 
-  void Init();
+  void Initialize(base::OnceClosure callback) override;
   void InitForTest(
+      base::OnceClosure init_callback,
       std::unique_ptr<win::BluetoothClassicWrapper> classic_wrapper,
       std::unique_ptr<win::BluetoothLowEnergyWrapper> le_wrapper,
       scoped_refptr<base::SingleThreadTaskRunner> ui_task_runner,
@@ -140,7 +133,7 @@ class DEVICE_BLUETOOTH_EXPORT BluetoothAdapterWin
   void MaybePostStartDiscoveryTask();
   void MaybePostStopDiscoveryTask();
 
-  InitCallback init_callback_;
+  base::OnceClosure init_callback_;
   std::string address_;
   std::string name_;
   bool initialized_;
@@ -148,10 +141,7 @@ class DEVICE_BLUETOOTH_EXPORT BluetoothAdapterWin
   DiscoveryStatus discovery_status_;
   std::unordered_set<std::string> discovered_devices_;
 
-  std::vector<std::pair<base::Closure, DiscoverySessionErrorCallback>>
-      on_start_discovery_callbacks_;
-  std::vector<base::Closure> on_stop_discovery_callbacks_;
-  size_t num_discovery_listeners_;
+  DiscoverySessionResultCallback discovery_changed_callback_;
 
   scoped_refptr<BluetoothSocketThread> socket_thread_;
   scoped_refptr<BluetoothTaskManagerWin> task_manager_;
@@ -163,7 +153,7 @@ class DEVICE_BLUETOOTH_EXPORT BluetoothAdapterWin
 
   // NOTE: This should remain the last member so it'll be destroyed and
   // invalidate its weak pointers before any other members are destroyed.
-  base::WeakPtrFactory<BluetoothAdapterWin> weak_ptr_factory_;
+  base::WeakPtrFactory<BluetoothAdapterWin> weak_ptr_factory_{this};
 
   DISALLOW_COPY_AND_ASSIGN(BluetoothAdapterWin);
 };

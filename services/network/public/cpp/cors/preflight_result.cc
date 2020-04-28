@@ -4,14 +4,18 @@
 
 #include "services/network/public/cpp/cors/preflight_result.h"
 
+#include "base/feature_list.h"
 #include "base/memory/ptr_util.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_split.h"
+#include "base/strings/string_util.h"
 #include "base/time/default_tick_clock.h"
 #include "base/time/tick_clock.h"
 #include "base/time/time.h"
 #include "net/http/http_request_headers.h"
+#include "net/http/http_util.h"
 #include "services/network/public/cpp/cors/cors.h"
+#include "services/network/public/cpp/features.h"
 
 namespace network {
 
@@ -28,12 +32,7 @@ constexpr base::TimeDelta kDefaultTimeout = base::TimeDelta::FromSeconds(5);
 // Maximum cache expiry time. Even if a CORS-preflight response contains
 // Access-Control-Max-Age header that specifies a longer expiry time, this
 // maximum time is applied.
-//
-// Note: Should be short enough to minimize the risk of using a poisoned cache
-// after switching to a secure network.
-// TODO(toyoshim): Consider to invalidate all entries when network configuration
-// is changed. See also discussion at https://crbug.com/131368.
-constexpr base::TimeDelta kMaxTimeout = base::TimeDelta::FromSeconds(600);
+constexpr base::TimeDelta kMaxTimeout = base::TimeDelta::FromHours(2);
 
 // Holds TickClock instance to overwrite TimeTicks::Now() for testing.
 const base::TickClock* tick_clock_for_testing = nullptr;
@@ -61,7 +60,13 @@ bool ParseAccessControlMaxAge(const base::Optional<std::string>& max_age,
   return true;
 }
 
-// At this moment, this function always succeeds.
+// Parses |string| as a Access-Control-Allow-* header value, storing the result
+// in |set|.
+//
+// If the |kStrictAccessControlAllowListCheck| feature is enabled,
+// this function returns false when |string| does not satisfy the syntax
+// here: https://fetch.spec.whatwg.org/#http-new-header-syntax.
+// The function always succeeds if the feature is disabled.
 bool ParseAccessControlAllowList(const base::Optional<std::string>& string,
                                  base::flat_set<std::string>* set,
                                  bool insert_in_lower_case) {
@@ -70,11 +75,18 @@ bool ParseAccessControlAllowList(const base::Optional<std::string>& string,
   if (!string)
     return true;
 
-  for (const auto& value : base::SplitString(
-           *string, ",", base::TRIM_WHITESPACE, base::SPLIT_WANT_NONEMPTY)) {
-    // TODO(toyoshim): Strict ABNF header field checks want to be applied, e.g.
-    // strict VCHAR check of RFC-7230.
-    set->insert(insert_in_lower_case ? base::ToLowerASCII(value) : value);
+  const bool enable_strict_check = base::FeatureList::IsEnabled(
+      features::kStrictAccessControlAllowListCheck);
+
+  net::HttpUtil::ValuesIterator it(string->begin(), string->end(), ',', true);
+  while (it.GetNext()) {
+    base::StringPiece value = it.value_piece();
+    if (enable_strict_check && !net::HttpUtil::IsToken(value)) {
+      set->clear();
+      return false;
+    }
+    set->insert(insert_in_lower_case ? base::ToLowerASCII(value)
+                                     : value.as_string());
   }
   return true;
 }
@@ -89,7 +101,7 @@ void PreflightResult::SetTickClockForTesting(
 
 // static
 std::unique_ptr<PreflightResult> PreflightResult::Create(
-    const mojom::FetchCredentialsMode credentials_mode,
+    const mojom::CredentialsMode credentials_mode,
     const base::Optional<std::string>& allow_methods_header,
     const base::Optional<std::string>& allow_headers_header,
     const base::Optional<std::string>& max_age_header,
@@ -106,9 +118,8 @@ std::unique_ptr<PreflightResult> PreflightResult::Create(
   return result;
 }
 
-PreflightResult::PreflightResult(
-    const mojom::FetchCredentialsMode credentials_mode)
-    : credentials_(credentials_mode == mojom::FetchCredentialsMode::kInclude) {}
+PreflightResult::PreflightResult(const mojom::CredentialsMode credentials_mode)
+    : credentials_(credentials_mode == mojom::CredentialsMode::kInclude) {}
 
 PreflightResult::~PreflightResult() = default;
 
@@ -133,7 +144,8 @@ base::Optional<CorsErrorStatus> PreflightResult::EnsureAllowedCrossOriginMethod(
 base::Optional<CorsErrorStatus>
 PreflightResult::EnsureAllowedCrossOriginHeaders(
     const net::HttpRequestHeaders& headers,
-    bool is_revalidating) const {
+    bool is_revalidating,
+    const base::flat_set<std::string>& extra_safelisted_header_names) const {
   if (!credentials_ && headers_.find("*") != headers_.end())
     return base::nullopt;
 
@@ -141,7 +153,8 @@ PreflightResult::EnsureAllowedCrossOriginHeaders(
   // beforehand. But user-agents may add these headers internally, and it's
   // fine.
   for (const auto& name : CorsUnsafeNotForbiddenRequestHeaderNames(
-           headers.GetHeaderVector(), is_revalidating)) {
+           headers.GetHeaderVector(), is_revalidating,
+           extra_safelisted_header_names)) {
     // Header list check is performed in case-insensitive way. Here, we have a
     // parsed header list set in lower case, and search each header in lower
     // case.
@@ -153,16 +166,16 @@ PreflightResult::EnsureAllowedCrossOriginHeaders(
   return base::nullopt;
 }
 
+bool PreflightResult::IsExpired() const {
+  return absolute_expiry_time_ <= Now();
+}
+
 bool PreflightResult::EnsureAllowedRequest(
-    mojom::FetchCredentialsMode credentials_mode,
+    mojom::CredentialsMode credentials_mode,
     const std::string& method,
     const net::HttpRequestHeaders& headers,
     bool is_revalidating) const {
-  if (absolute_expiry_time_ <= Now())
-    return false;
-
-  if (!credentials_ &&
-      credentials_mode == mojom::FetchCredentialsMode::kInclude) {
+  if (!credentials_ && credentials_mode == mojom::CredentialsMode::kInclude) {
     return false;
   }
 

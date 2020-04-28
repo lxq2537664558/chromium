@@ -18,17 +18,28 @@ namespace device {
 FidoDevice::FidoDevice() = default;
 FidoDevice::~FidoDevice() = default;
 
+void FidoDevice::TryWink(base::OnceClosure callback) {
+  std::move(callback).Run();
+}
+
 base::string16 FidoDevice::GetDisplayName() const {
   const auto id = GetId();
   return base::string16(id.begin(), id.end());
 }
 
 bool FidoDevice::IsInPairingMode() const {
+  NOTREACHED();
   return false;
 }
 
 bool FidoDevice::IsPaired() const {
+  NOTREACHED();
   return false;
+}
+
+bool FidoDevice::RequiresBlePairingPin() const {
+  NOTREACHED();
+  return true;
 }
 
 void FidoDevice::DiscoverSupportedProtocolAndDeviceInfo(
@@ -36,7 +47,7 @@ void FidoDevice::DiscoverSupportedProtocolAndDeviceInfo(
   // Set the protocol version to CTAP2 for the purpose of sending the GetInfo
   // request. The correct value will be set in the callback based on the
   // device response.
-  supported_protocol_ = ProtocolVersion::kCtap;
+  supported_protocol_ = ProtocolVersion::kCtap2;
   FIDO_LOG(DEBUG)
       << "Sending CTAP2 AuthenticatorGetInfo request to authenticator.";
   DeviceTransact(AuthenticatorGetInfoRequest().Serialize(),
@@ -46,7 +57,7 @@ void FidoDevice::DiscoverSupportedProtocolAndDeviceInfo(
 
 bool FidoDevice::SupportedProtocolIsInitialized() {
   return (supported_protocol_ == ProtocolVersion::kU2f && !device_info_) ||
-         (supported_protocol_ == ProtocolVersion::kCtap && device_info_);
+         (supported_protocol_ == ProtocolVersion::kCtap2 && device_info_);
 }
 
 void FidoDevice::OnDeviceInfoReceived(
@@ -59,12 +70,13 @@ void FidoDevice::OnDeviceInfoReceived(
   state_ = FidoDevice::State::kReady;
   base::Optional<AuthenticatorGetInfoResponse> get_info_response =
       response ? ReadCTAPGetInfoResponse(*response) : base::nullopt;
-  if (!get_info_response || !base::ContainsKey(get_info_response->versions(),
-                                               ProtocolVersion::kCtap)) {
+  if (!get_info_response ||
+      !base::Contains(get_info_response->versions, ProtocolVersion::kCtap2)) {
     supported_protocol_ = ProtocolVersion::kU2f;
+    needs_explicit_wink_ = true;
     FIDO_LOG(DEBUG) << "The device only supports the U2F protocol.";
   } else {
-    supported_protocol_ = ProtocolVersion::kCtap;
+    supported_protocol_ = ProtocolVersion::kCtap2;
     device_info_ = std::move(*get_info_response);
     FIDO_LOG(DEBUG) << "The device supports the CTAP2 protocol.";
   }

@@ -5,8 +5,9 @@ package org.chromium.chrome.browser.ntp.snippets;
 
 import android.annotation.SuppressLint;
 import android.graphics.drawable.Drawable;
-import android.support.annotation.ColorInt;
-import android.support.annotation.Nullable;
+
+import androidx.annotation.ColorInt;
+import androidx.annotation.Nullable;
 
 import org.chromium.base.DiscardableReferencePool.DiscardableReference;
 import org.chromium.chrome.browser.ntp.cards.NewTabPageViewHolder.PartialBindCallback;
@@ -182,11 +183,6 @@ public class SnippetArticle
     /** @return whether a snippet is a remote suggestion. */
     public boolean isArticle() {
         return mCategory == KnownCategories.ARTICLES;
-    }
-
-    /** @return whether a snippet is a contextual suggestion. */
-    public boolean isContextual() {
-        return mCategory == KnownCategories.CONTEXTUAL;
     }
 
     @Override

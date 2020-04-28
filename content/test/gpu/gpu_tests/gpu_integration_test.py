@@ -3,13 +3,13 @@
 # found in the LICENSE file.
 
 import logging
+import re
+import sys
 
 from telemetry.testing import serially_executed_browser_test_case
 from telemetry.util import screenshot
 from typ import json_results
 
-from gpu_tests import exception_formatter
-from gpu_tests import gpu_test_expectations
 from gpu_tests import gpu_helper
 
 _START_BROWSER_RETRIES = 3
@@ -20,9 +20,9 @@ ResultType = json_results.ResultType
 _SUPPORTED_WIN_VERSIONS = ['win7', 'win10']
 _SUPPORTED_WIN_VERSIONS_WITH_DIRECT_COMPOSITION = ['win10']
 _SUPPORTED_WIN_GPU_VENDORS = [0x8086, 0x10de, 0x1002]
-_SUPPORTED_WIN_INTEL_GPUS = [0x5912]
-_SUPPORTED_WIN_INTEL_GPUS_WITH_YUY2_OVERLAYS = [0x5912]
-_SUPPORTED_WIN_INTEL_GPUS_WITH_NV12_OVERLAYS = [0x5912]
+_SUPPORTED_WIN_INTEL_GPUS = [0x5912, 0x3e92]
+_SUPPORTED_WIN_INTEL_GPUS_WITH_YUY2_OVERLAYS = [0x5912, 0x3e92]
+_SUPPORTED_WIN_INTEL_GPUS_WITH_NV12_OVERLAYS = [0x5912, 0x3e92]
 
 class GpuIntegrationTest(
     serially_executed_browser_test_case.SeriallyExecutedBrowserTestCase):
@@ -59,11 +59,6 @@ class GpuIntegrationTest(
     Subclasses overriding this method must invoke the superclass's
     version!"""
     parser.add_option(
-      '--also-run-disabled-tests',
-      dest='also_run_disabled_tests',
-      action='store_true', default=False,
-      help='Run disabled tests, ignoring Skip expectations')
-    parser.add_option(
       '--disable-log-uploads',
       dest='disable_log_uploads',
       action='store_true', default=False,
@@ -84,13 +79,6 @@ class GpuIntegrationTest(
     # If requested, disable uploading of failure logs to cloud storage.
     if cls._disable_log_uploads:
       browser_options.logs_cloud_bucket = None
-
-    # A non-sandboxed, 15-seconds-delayed gpu process is currently running in
-    # the browser to collect gpu info. A command line switch is added here to
-    # skip this gpu process for all gpu integration tests to prevent any
-    # interference with the test results.
-    browser_args.append(
-      '--disable-gpu-process-for-dx12-vulkan-info-collection')
 
     # Append the new arguments.
     browser_options.AppendExtraBrowserArgs(browser_args)
@@ -122,7 +110,6 @@ class GpuIntegrationTest(
 
   @classmethod
   def GenerateTestCases__RunGpuTest(cls, options):
-    cls._also_run_disabled_tests = options.also_run_disabled_tests
     cls._disable_log_uploads = options.disable_log_uploads
     for test_name, url, args in cls.GenerateGpuTests(options):
       yield test_name, (url, test_name, args)
@@ -163,13 +150,21 @@ class GpuIntegrationTest(
   @classmethod
   def _RestartBrowser(cls, reason):
     logging.warning('Restarting browser due to '+ reason)
-    cls.StopBrowser()
-    cls.SetBrowserOptions(cls._finder_options)
-    cls.StartBrowser()
+    # The Browser may be None at this point if all attempts to start it failed.
+    # This can occur if there is a consistent startup crash. For example caused
+    # by a bad combination of command-line arguments. So reset to the original
+    # options in attempt to successfully launch a browser.
+    if cls.browser is None:
+      cls.SetBrowserOptions(cls._original_finder_options)
+      cls.StartBrowser()
+    else:
+      cls.StopBrowser()
+      cls.SetBrowserOptions(cls._finder_options)
+      cls.StartBrowser()
 
-  def _RunGpuTestWithExpectationsFiles(self, url, test_name, *args):
+  def _RunGpuTest(self, url, test_name, *args):
     expected_results, should_retry_on_failure = (
-        self.GetExpectationsForTest())
+        self.GetExpectationsForTest()[:2])
     try:
       # TODO(nednguyen): For some reason the arguments are getting wrapped
       # in another tuple sometimes (like in the WebGL extension tests).
@@ -177,26 +172,28 @@ class GpuIntegrationTest(
       # generator?
       if len(args) == 1 and isinstance(args[0], tuple):
         args = args[0]
+      expected_crashes = self.GetExpectedCrashes(args)
       self.RunActualGpuTest(url, *args)
     except Exception:
       if ResultType.Failure in expected_results or should_retry_on_failure:
+        # We don't check the return value here since we'll be raising the
+        # caught exception already.
+        self._ClearExpectedCrashes(expected_crashes)
         if should_retry_on_failure:
+          logging.exception('Exception while running flaky test %s', test_name)
           # For robustness, shut down the browser and restart it
           # between flaky test failures, to make sure any state
           # doesn't propagate to the next iteration.
           self._RestartBrowser('flaky test failure')
         else:
-          msg = 'Expected exception while running %s' % test_name
-          exception_formatter.PrintFormattedException(msg=msg)
+          logging.exception('Expected exception while running %s', test_name)
           # Even though this is a known failure, the browser might still
           # be in a bad state; for example, certain kinds of timeouts
           # will affect the next test. Restart the browser to prevent
           # these kinds of failures propagating to the next test.
           self._RestartBrowser('expected test failure')
       else:
-        # This is not an expected exception or test failure, so print
-        # the detail to the console.
-        exception_formatter.PrintFormattedException()
+        logging.exception('Unexpected exception while running %s', test_name)
         # Symbolize any crash dump (like from the GPU process) that
         # might have happened but wasn't detected above. Note we don't
         # do this for either 'fail' or 'flaky' expectations because
@@ -204,100 +201,106 @@ class GpuIntegrationTest(
         # expectations, and since minidump symbolization is slow
         # (upwards of one minute on a fast laptop), symbolizing all the
         # stacks could slow down the tests' running time unacceptably.
-        self.browser.LogSymbolizedUnsymbolizedMinidumps(logging.ERROR)
+        # We also don't do this if the browser failed to startup.
+        if self.browser is not None:
+          self.browser.CollectDebugData(logging.ERROR)
         # This failure might have been caused by a browser or renderer
         # crash, so restart the browser to make sure any state doesn't
         # propagate to the next test iteration.
         self._RestartBrowser('unexpected test failure')
-      self.fail()
+      raise
     else:
+      # We always want to clear any expected crashes, but we don't bother
+      # failing the test if it's expected to fail.
+      actual_and_expected_crashes_match = self._ClearExpectedCrashes(
+          expected_crashes)
       if ResultType.Failure in expected_results:
         logging.warning(
           '%s was expected to fail, but passed.\n', test_name)
-
-  def _RunGpuTest(self, url, test_name, *args):
-    cls = self.__class__
-    if cls.ExpectationsFiles():
-      self._RunGpuTestWithExpectationsFiles(url, test_name, *args)
-      return
-    expectations = cls.GetExpectations()
-    expectation = expectations.GetExpectationForTest(
-      self.browser, url, test_name)
-    if expectation == 'skip':
-      if self.__class__._also_run_disabled_tests:
-        # Ignore test expectations if the user has requested it.
-        expectation = 'pass'
       else:
-        # skipTest in Python's unittest harness raises an exception, so
-        # aborts the control flow here.
-        self.skipTest('SKIPPING TEST due to test expectations')
-    try:
-      # TODO(nednguyen): For some reason the arguments are getting wrapped
-      # in another tuple sometimes (like in the WebGL extension tests).
-      # Perhaps only if multiple arguments are yielded in the test
-      # generator?
-      if len(args) == 1 and isinstance(args[0], tuple):
-        args = args[0]
-      self.RunActualGpuTest(url, *args)
-    except Exception:
-      if expectation == 'pass':
-        # This is not an expected exception or test failure, so print
-        # the detail to the console.
-        exception_formatter.PrintFormattedException()
-        # Symbolize any crash dump (like from the GPU process) that
-        # might have happened but wasn't detected above. Note we don't
-        # do this for either 'fail' or 'flaky' expectations because
-        # there are still quite a few flaky failures in the WebGL test
-        # expectations, and since minidump symbolization is slow
-        # (upwards of one minute on a fast laptop), symbolizing all the
-        # stacks could slow down the tests' running time unacceptably.
-        self.browser.LogSymbolizedUnsymbolizedMinidumps(logging.ERROR)
-        # This failure might have been caused by a browser or renderer
-        # crash, so restart the browser to make sure any state doesn't
-        # propagate to the next test iteration.
-        self._RestartBrowser('unexpected test failure')
-        raise
-      elif expectation == 'fail':
-        msg = 'Expected exception while running %s' % test_name
-        exception_formatter.PrintFormattedException(msg=msg)
-        # Even though this is a known failure, the browser might still
-        # be in a bad state; for example, certain kinds of timeouts
-        # will affect the next test. Restart the browser to prevent
-        # these kinds of failures propagating to the next test.
-        self._RestartBrowser('expected test failure')
-        return
-      if expectation != 'flaky':
-        logging.warning(
-          'Unknown expectation %s while handling exception for %s',
-          expectation, test_name)
-        raise
-      # Flaky tests are handled here.
-      num_retries = expectations.GetFlakyRetriesForTest(
-        self.browser, url, test_name)
-      if not num_retries:
-        # Re-raise the exception.
-        raise
-      # Re-run the test up to |num_retries| times.
-      for ii in xrange(0, num_retries):
-        print 'FLAKY TEST FAILURE, retrying: ' + test_name
-        try:
-          # For robustness, shut down the browser and restart it
-          # between flaky test failures, to make sure any state
-          # doesn't propagate to the next iteration.
-          self._RestartBrowser('flaky test failure')
-          self.RunActualGpuTest(url, *args)
-          break
-        except Exception:
-          # Squelch any exceptions from any but the last retry.
-          if ii == num_retries - 1:
-            # Restart the browser after the last failure to make sure
-            # any state doesn't propagate to the next iteration.
-            self._RestartBrowser('excessive flaky test failures')
-            raise
-    else:
-      if expectation == 'fail':
-        logging.warning(
-            '%s was expected to fail, but passed.\n', test_name)
+        if not actual_and_expected_crashes_match:
+          raise RuntimeError('Actual and expected crashes did not match')
+
+  def _IsIntel(self, vendor_id):
+    return vendor_id == 0x8086
+
+  def _IsIntelGPUActive(self):
+    gpu = self.browser.GetSystemInfo().gpu
+    # The implementation of GetSystemInfo guarantees that the first entry in the
+    # GPU devices list is the active GPU.
+    return self._IsIntel(gpu.devices[0].vendor_id)
+
+  def _IsDualGPUMacLaptop(self):
+    if sys.platform != 'darwin':
+      return False
+    system_info = self.browser.GetSystemInfo()
+    if not system_info:
+      self.fail("Browser doesn't support GetSystemInfo")
+    gpu = system_info.gpu
+    if not gpu:
+      self.fail('Target machine must have a GPU')
+    if len(gpu.devices) != 2:
+      return False
+    if (self._IsIntel(gpu.devices[0].vendor_id) and not
+        self._IsIntel(gpu.devices[1].vendor_id)):
+      return True
+    if (not self._IsIntel(gpu.devices[0].vendor_id) and
+        self._IsIntel(gpu.devices[1].vendor_id)):
+      return True
+    return False
+
+  def _ClearExpectedCrashes(self, expected_crashes):
+    """Clears any expected crash minidumps so they're not caught later.
+
+    Args:
+      expected_crashes: A dictionary mapping crash types as strings to the
+          number of expected crashes of that type.
+
+    Returns:
+      True if the actual number of crashes matched the expected number,
+      otherwise False.
+    """
+    # We can't get crashes if we don't have a browser.
+    if self.browser is None:
+      return True
+    # TODO(crbug.com/1006331): Properly match type once we have a way of
+    # checking the crashed process type without symbolizing the minidump.
+    total_expected_crashes = sum(expected_crashes.values())
+    # The Telemetry-wide cleanup will handle any remaining minidumps, so early
+    # return here since we don't expect any, which saves us a bit of work.
+    if total_expected_crashes == 0:
+      return True
+    unsymbolized_minidumps = self.browser.GetAllUnsymbolizedMinidumpPaths()
+    total_unsymbolized_minidumps = len(unsymbolized_minidumps)
+
+    if total_expected_crashes == total_unsymbolized_minidumps:
+      for path in unsymbolized_minidumps:
+        self.browser.IgnoreMinidump(path)
+      return True
+
+    logging.error(
+        'Found %d unsymbolized minidumps when we expected %d. Expected '
+        'crash breakdown: %s', total_unsymbolized_minidumps,
+        total_expected_crashes, expected_crashes)
+    return False
+
+  def GetExpectedCrashes(self, args):
+    """Returns which crashes, per process type, to expect for the current test.
+
+    Should be overridden by child classes to actually return valid data if
+    available.
+
+    Args:
+      args: The list passed to _RunGpuTest()
+
+    Returns:
+      A dictionary mapping crash types as strings to the number of expected
+      crashes of that type. Examples include 'gpu' for the GPU process,
+      'renderer' for the renderer process, and 'browser' for the browser
+      process.
+    """
+    del args
+    return {}
 
   @classmethod
   def GenerateGpuTests(cls, options):
@@ -340,8 +343,8 @@ class GpuIntegrationTest(
     config = {
       'direct_composition': False,
       'supports_overlays': False,
-      'overlay_cap_yuy2': 'NONE',
-      'overlay_cap_nv12': 'NONE',
+      'yuy2_overlay_support': 'NONE',
+      'nv12_overlay_support': 'NONE',
     }
     assert os_version in _SUPPORTED_WIN_VERSIONS
     assert gpu_vendor_id in _SUPPORTED_WIN_GPU_VENDORS
@@ -351,28 +354,45 @@ class GpuIntegrationTest(
         config['supports_overlays'] = True
         assert gpu_device_id in _SUPPORTED_WIN_INTEL_GPUS
         if gpu_device_id in _SUPPORTED_WIN_INTEL_GPUS_WITH_YUY2_OVERLAYS:
-          config['overlay_cap_yuy2'] = 'SCALING'
+          config['yuy2_overlay_support'] = 'SCALING'
         if gpu_device_id in _SUPPORTED_WIN_INTEL_GPUS_WITH_NV12_OVERLAYS:
-          config['overlay_cap_nv12'] = 'SCALING'
+          config['nv12_overlay_support'] = 'SCALING'
     return config
 
-  @classmethod
-  def GetExpectations(cls):
-    if not cls._cached_expectations:
-      cls._cached_expectations = cls._CreateExpectations()
-    if not isinstance(cls._cached_expectations,
-                      gpu_test_expectations.GpuTestExpectations):
-      raise Exception(
-          'gpu_integration_test requires use of GpuTestExpectations')
-    return cls._cached_expectations
+  def GetDx12VulkanBotConfig(self):
+    """Returns expected bot config for DX12 and Vulkan support.
 
-  @classmethod
-  def _CreateExpectations(cls):
-    # Subclasses **must** override this in order to provide their test
-    # expectations to the harness.
-    #
-    # Do not call this directly. Call GetExpectations where necessary.
-    raise NotImplementedError
+    This configuration is collected on Windows platform only.
+    The rules to determine bot config are:
+      1) DX12: Win7 doesn't support DX12. Only Win10 supports DX12
+      2) Vulkan: All bots support Vulkan.
+    """
+    if self.browser is None:
+      raise Exception("Browser doesn't exist")
+    system_info = self.browser.GetSystemInfo()
+    if system_info is None:
+      raise Exception("Browser doesn't support GetSystemInfo")
+    gpu = system_info.gpu.devices[0]
+    if gpu is None:
+      raise Exception("System Info doesn't have a gpu")
+    gpu_vendor_id = gpu.vendor_id
+    assert gpu_vendor_id in _SUPPORTED_WIN_GPU_VENDORS
+
+    os_version = self.browser.platform.GetOSVersionName()
+    if os_version is None:
+      raise Exception("browser.platform.GetOSVersionName() returns None")
+    os_version = os_version.lower()
+    assert os_version in _SUPPORTED_WIN_VERSIONS
+
+    config = {
+      'supports_dx12': True,
+      'supports_vulkan': True,
+    }
+
+    if os_version == 'win7':
+      config['supports_dx12'] = False
+
+    return config
 
   @classmethod
   def GenerateTags(cls, finder_options, possible_browser):
@@ -397,30 +417,59 @@ class GpuIntegrationTest(
     tags = super(GpuIntegrationTest, cls).GetPlatformTags(browser)
     system_info = browser.GetSystemInfo()
     if system_info:
+      gpu_tags = []
       gpu_info = system_info.gpu
-      gpu_vendor = gpu_helper.GetGpuVendorString(gpu_info)
-      gpu_device_id = gpu_helper.GetGpuDeviceId(gpu_info)
-      # The gpu device id tag will contain both the vendor and device id
-      # separated by a '-'.
-      try:
-        # If the device id is an integer then it will be added as
-        # a hexadecimal to the tag
-        gpu_device_tag = '%s-0x%x' % (gpu_vendor, gpu_device_id)
-      except TypeError:
-        # if the device id is not an integer it will be added as
-        # a string to the tag.
-        gpu_device_tag = '%s-%s' % (gpu_vendor, gpu_device_id)
-      angle_renderer = gpu_helper.GetANGLERenderer(gpu_info)
-      cmd_decoder = gpu_helper.GetCommandDecoder(gpu_info)
-      # all spaces in the tag will be replaced by '-', and all letters will
-      # be converted to its lower case form.
-      tags.extend([tag.lower().replace(' ', '-').replace('_', '-') for tag in [
-          gpu_vendor, gpu_device_tag, angle_renderer, cmd_decoder]])
+      # On the dual-GPU MacBook Pros, surface the tags of the secondary GPU if
+      # it's the discrete GPU, so that test expectations can be written that
+      # target the discrete GPU.
+      gpu_tags.append(gpu_helper.GetANGLERenderer(gpu_info))
+      gpu_tags.append(gpu_helper.GetSwiftShaderGLRenderer(gpu_info))
+      gpu_tags.append(gpu_helper.GetCommandDecoder(gpu_info))
+      if gpu_info and gpu_info.devices:
+        for ii in xrange(0, len(gpu_info.devices)):
+          gpu_vendor = gpu_helper.GetGpuVendorString(gpu_info, ii)
+          gpu_device_id = gpu_helper.GetGpuDeviceId(gpu_info, ii)
+          # The gpu device id tag will contain both the vendor and device id
+          # separated by a '-'.
+          try:
+            # If the device id is an integer then it will be added as
+            # a hexadecimal to the tag
+            gpu_device_tag = '%s-0x%x' % (gpu_vendor, gpu_device_id)
+          except TypeError:
+            # if the device id is not an integer it will be added as
+            # a string to the tag.
+            gpu_device_tag = '%s-%s' % (gpu_vendor, gpu_device_id)
+          if ii == 0 or gpu_vendor != 'intel':
+            gpu_tags.extend([gpu_vendor, gpu_device_tag])
+      # all spaces and underscores in the tag will be replaced by dashes
+      tags.extend([re.sub('[ _]', '-', tag) for tag in gpu_tags])
+    # If additional options have been set via '--extra-browser-args' check for
+    # those which map to expectation tags. The '_browser_backend' attribute may
+    # not exist in unit tests.
+    if (hasattr(browser, '_browser_backend') and
+        browser._browser_backend.browser_options.extra_browser_args):
+      skia_renderer = gpu_helper.GetSkiaRenderer(\
+          browser._browser_backend.browser_options.extra_browser_args)
+      tags.extend([skia_renderer])
+      use_gl = gpu_helper.GetGL(\
+          browser._browser_backend.browser_options.extra_browser_args)
+      tags.extend([use_gl])
+      use_vulkan = gpu_helper.GetVulkan(\
+          browser._browser_backend.browser_options.extra_browser_args)
+      tags.extend([use_vulkan])
     return tags
 
   @classmethod
   def _EnsureTabIsAvailable(cls):
     try:
+      # If there is no browser, the previous run may have failed an additional
+      # time, while trying to recover from an initial failure.
+      # ChromeBrowserBackend._GetDevToolsClient can cause this if there is a
+      # crash during browser startup. If this has occurred, reset the options,
+      # and attempt to bring up a browser for this test. Otherwise failures
+      # begin to cascade between tests. https://crbug.com/993379
+      if cls.browser is None:
+        cls._RestartBrowser('failure in previous shutdown')
       cls.tab = cls.browser.tabs[0]
     except Exception:
       # restart the browser to make sure a failure in a test doesn't
@@ -435,6 +484,7 @@ class GpuIntegrationTest(
   @staticmethod
   def GetJSONResultsDelimiter():
     return '/'
+
 
 def LoadAllTestsInModule(module):
   # Just delegates to serially_executed_browser_test_case to reduce the

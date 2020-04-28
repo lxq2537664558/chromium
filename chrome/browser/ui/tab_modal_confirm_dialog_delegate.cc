@@ -10,6 +10,7 @@
 #include "content/public/browser/notification_source.h"
 #include "content/public/browser/web_contents.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/base/ui_base_types.h"
 
 using content::NavigationController;
 using content::WebContents;
@@ -79,6 +80,10 @@ gfx::Image* TabModalConfirmDialogDelegate::GetIcon() {
   return NULL;
 }
 
+int TabModalConfirmDialogDelegate::GetDialogButtons() const {
+  return ui::DIALOG_BUTTON_OK | ui::DIALOG_BUTTON_CANCEL;
+}
+
 base::string16 TabModalConfirmDialogDelegate::GetAcceptButtonTitle() {
   return l10n_util::GetStringUTF16(IDS_OK);
 }
@@ -111,4 +116,14 @@ void TabModalConfirmDialogDelegate::OnClosed() {}
 void TabModalConfirmDialogDelegate::CloseDialog() {
   if (close_delegate_)
     close_delegate_->CloseDialog();
+}
+
+base::Optional<int> TabModalConfirmDialogDelegate::GetDefaultDialogButton() {
+  // Use the default, don't override.
+  return base::nullopt;
+}
+
+base::Optional<int> TabModalConfirmDialogDelegate::GetInitiallyFocusedButton() {
+  // Use the default, don't override.
+  return base::nullopt;
 }

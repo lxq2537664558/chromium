@@ -10,6 +10,7 @@ module.exports = {
   },
   'parserOptions': {
     'ecmaVersion': 2017,
+    'sourceType': 'module',
   },
   'rules': {
     // Enabled checks.
@@ -27,7 +28,30 @@ module.exports = {
             'from chrome://resources/js/util.js instead of ' +
             'document.getElementById(\'id\')',
       },
+      {
+        'property': '__lookupGetter__',
+        'message': 'Use Object.getOwnPropertyDescriptor',
+      },
+      {
+        'property': '__lookupSetter__',
+        'message': 'Use Object.getOwnPropertyDescriptor',
+      },
+      {
+        'property': '__defineGetter__',
+        'message': 'Use Object.defineProperty',
+      },
+      {
+        'property': '__defineSetter__',
+        'message': 'Use Object.defineProperty',
+      },
+      {
+        'object': 'cr',
+        'property': 'exportPath',
+        'message': 'Use ES modules or cr.define() instead',
+      },
     ],
+    'no-var': 'error',
+    'prefer-const': 'error',
     'semi': ['error', 'always'],
 
     // TODO(dpapad): Add more checks according to our styleguide.

@@ -10,13 +10,12 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/android/tab_model/tab_model.h"
 #include "chrome/browser/ui/android/tab_model/tab_model_list.h"
-#include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_finder.h"
 #include "components/sessions/content/content_serialized_navigation_builder.h"
 #include "components/sessions/core/session_types.h"
 #include "content/public/browser/navigation_entry.h"
 #include "content/public/browser/restore_type.h"
 #include "content/public/browser/web_contents.h"
+#include "content/public/browser/web_contents_delegate.h"
 
 // The android implementation does not do anything "foreign session" specific.
 // We use it to restore tabs from "recently closed" too.
@@ -44,8 +43,7 @@ content::WebContents* SessionRestore::RestoreForeignSessionTab(
   TabAndroid* current_tab = TabAndroid::FromWebContents(web_contents);
   DCHECK(current_tab);
   if (disposition == WindowOpenDisposition::CURRENT_TAB) {
-    web_contents->GetDelegate()->SwapWebContents(
-        web_contents, std::move(new_web_contents), false, false);
+    current_tab->SwapWebContents(std::move(new_web_contents), false, false);
   } else {
     DCHECK(disposition == WindowOpenDisposition::NEW_FOREGROUND_TAB ||
            disposition == WindowOpenDisposition::NEW_BACKGROUND_TAB);

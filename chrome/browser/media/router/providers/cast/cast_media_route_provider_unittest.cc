@@ -14,11 +14,11 @@
 #include "chrome/common/media_router/test/test_helper.h"
 #include "components/cast_channel/cast_test_util.h"
 #include "content/public/browser/browser_task_traits.h"
-#include "content/public/test/test_browser_thread_bundle.h"
-#include "services/data_decoder/data_decoder_service.h"
-#include "services/data_decoder/public/mojom/constants.mojom.h"
-#include "services/service_manager/public/cpp/connector.h"
-#include "services/service_manager/public/cpp/test/test_connector_factory.h"
+#include "content/public/test/browser_task_environment.h"
+#include "mojo/public/cpp/bindings/pending_remote.h"
+#include "mojo/public/cpp/bindings/receiver.h"
+#include "mojo/public/cpp/bindings/remote.h"
+#include "services/data_decoder/public/cpp/test_support/in_process_data_decoder.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -27,6 +27,7 @@ using ::testing::_;
 namespace media_router {
 
 namespace {
+static constexpr char kAppId[] = "ABCDEFGH";
 static constexpr char kCastSource[] = "cast:ABCDEFGH?clientId=123";
 static constexpr char kPresentationId[] = "presentationId";
 static constexpr char kOrigin[] = "https://www.youtube.com";
@@ -38,28 +39,26 @@ static constexpr base::TimeDelta kRouteTimeout =
 class CastMediaRouteProviderTest : public testing::Test {
  public:
   CastMediaRouteProviderTest()
-      : data_decoder_service_(connector_factory_.RegisterInstance(
-            data_decoder::mojom::kServiceName)),
-        socket_service_(base::CreateSingleThreadTaskRunnerWithTraits(
-            {content::BrowserThread::UI})),
+      : socket_service_(
+            base::CreateSingleThreadTaskRunner({content::BrowserThread::UI})),
         message_handler_(&socket_service_) {}
   ~CastMediaRouteProviderTest() override = default;
 
   void SetUp() override {
-    mojom::MediaRouterPtr router_ptr;
-    router_binding_ = std::make_unique<mojo::Binding<mojom::MediaRouter>>(
-        &mock_router_, mojo::MakeRequest(&router_ptr));
+    mojo::PendingRemote<mojom::MediaRouter> router_remote;
+    router_receiver_ = std::make_unique<mojo::Receiver<mojom::MediaRouter>>(
+        &mock_router_, router_remote.InitWithNewPipeAndPassReceiver());
 
-    CastSessionTracker::SetInstanceForTest(
+    session_tracker_ = std::unique_ptr<CastSessionTracker>(
         new CastSessionTracker(&media_sink_service_, &message_handler_,
                                socket_service_.task_runner()));
+    CastSessionTracker::SetInstanceForTest(session_tracker_.get());
 
     EXPECT_CALL(mock_router_, OnSinkAvailabilityUpdated(_, _));
     provider_ = std::make_unique<CastMediaRouteProvider>(
-        mojo::MakeRequest(&provider_ptr_), router_ptr.PassInterface(),
+        provider_remote_.BindNewPipeAndPassReceiver(), std::move(router_remote),
         &media_sink_service_, &app_discovery_service_, &message_handler_,
-        connector_factory_.GetDefaultConnector(), "hash-token",
-        base::SequencedTaskRunnerHandle::Get());
+        "hash-token", base::SequencedTaskRunnerHandle::Get());
 
     base::RunLoop().RunUntilIdle();
   }
@@ -67,6 +66,7 @@ class CastMediaRouteProviderTest : public testing::Test {
   void TearDown() override {
     provider_.reset();
     CastSessionTracker::SetInstanceForTest(nullptr);
+    session_tracker_.reset();
   }
 
   void ExpectCreateRouteSuccessAndSetRoute(
@@ -100,17 +100,17 @@ class CastMediaRouteProviderTest : public testing::Test {
   }
 
  protected:
-  content::TestBrowserThreadBundle thread_bundle_;
-  service_manager::TestConnectorFactory connector_factory_;
-  data_decoder::DataDecoderService data_decoder_service_;
+  content::BrowserTaskEnvironment task_environment_;
+  data_decoder::test::InProcessDataDecoder in_process_data_decoder_;
 
-  mojom::MediaRouteProviderPtr provider_ptr_;
+  mojo::Remote<mojom::MediaRouteProvider> provider_remote_;
   MockMojoMediaRouter mock_router_;
-  std::unique_ptr<mojo::Binding<mojom::MediaRouter>> router_binding_;
+  std::unique_ptr<mojo::Receiver<mojom::MediaRouter>> router_receiver_;
 
   cast_channel::MockCastSocketService socket_service_;
   cast_channel::MockCastMessageHandler message_handler_;
 
+  std::unique_ptr<CastSessionTracker> session_tracker_;
   TestMediaSinkService media_sink_service_;
   MockCastAppDiscoveryService app_discovery_service_;
   std::unique_ptr<CastMediaRouteProvider> provider_;
@@ -179,7 +179,10 @@ TEST_F(CastMediaRouteProviderTest, CreateRoute) {
   MediaSinkInternal sink = CreateCastSink(1);
   media_sink_service_.AddOrUpdateSink(sink);
 
-  EXPECT_CALL(message_handler_, LaunchSession(_, _, _, _));
+  std::vector<std::string> default_supported_app_types = {"WEB"};
+  EXPECT_CALL(message_handler_, LaunchSession(sink.cast_data().cast_channel_id,
+                                              kAppId, kDefaultLaunchTimeout,
+                                              default_supported_app_types, _));
   provider_->CreateRoute(
       kCastSource, sink.sink().id(), kPresentationId, origin_, kTabId,
       kRouteTimeout, /* incognito */ false,
@@ -192,7 +195,7 @@ TEST_F(CastMediaRouteProviderTest, TerminateRoute) {
   MediaSinkInternal sink = CreateCastSink(1);
   media_sink_service_.AddOrUpdateSink(sink);
 
-  EXPECT_CALL(message_handler_, LaunchSession(_, _, _, _));
+  EXPECT_CALL(message_handler_, LaunchSession(_, _, _, _, _));
   provider_->CreateRoute(
       kCastSource, sink.sink().id(), kPresentationId, origin_, kTabId,
       kRouteTimeout, /* incognito */ false,
@@ -205,6 +208,40 @@ TEST_F(CastMediaRouteProviderTest, TerminateRoute) {
       route_->media_route_id(),
       base::BindOnce(&CastMediaRouteProviderTest::ExpectTerminateRouteSuccess,
                      base::Unretained(this)));
+}
+
+TEST_F(CastMediaRouteProviderTest, GetState) {
+  MediaSinkInternal sink = CreateCastSink(1);
+  media_sink_service_.AddOrUpdateSink(sink);
+  session_tracker_->HandleReceiverStatusMessage(sink, base::test::ParseJson(R"({
+    "status": {
+      "applications": [{
+        "appId": "ABCDEFGH",
+        "displayName": "App display name",
+        "namespaces": [
+          {"name": "urn:x-cast:com.google.cast.media"},
+          {"name": "urn:x-cast:com.google.foo"}
+        ],
+        "sessionId": "theSessionId",
+        "statusText":"App status",
+        "transportId":"theTransportId"
+      }]
+    }
+  })"));
+
+  provider_->GetState(base::BindOnce([](mojom::ProviderStatePtr state) {
+    ASSERT_TRUE(state);
+    ASSERT_TRUE(state->is_cast_provider_state());
+    const mojom::CastProviderState& cast_state =
+        *(state->get_cast_provider_state());
+    ASSERT_EQ(cast_state.session_state.size(), 1UL);
+    const mojom::CastSessionState& session_state =
+        *(cast_state.session_state[0]);
+    EXPECT_EQ(session_state.sink_id, "cast:<id1>");
+    EXPECT_EQ(session_state.app_id, "ABCDEFGH");
+    EXPECT_EQ(session_state.session_id, "theSessionId");
+    EXPECT_EQ(session_state.route_description, "App status");
+  }));
 }
 
 }  // namespace media_router

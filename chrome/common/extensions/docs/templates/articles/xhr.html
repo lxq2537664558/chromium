@@ -6,12 +6,17 @@ Regular web pages can use the
 <a href="https://www.w3.org/TR/XMLHttpRequest/">XMLHttpRequest</a>
 object to send and receive data from remote servers,
 but they're limited by the
-<a href="https://en.wikipedia.org/wiki/Same_origin_policy">same origin policy</a>
-(and since Chrome 73 <a href="content_scripts">content scripts</a> are also
-subject to the same restrictions as the web page they are injected into).
-Extensions aren't so limited - a script executing in an
-extension's origin can talk to remote servers outside of its origin,
-as long as the extension requests cross-origin permissions.</p>
+<a href="https://en.wikipedia.org/wiki/Same_origin_policy">same origin policy</a>.
+<a href="content_scripts">Content scripts</a> initiate requests on
+behalf of the web origin that the content script has been injected into
+and therefore content scripts are also subject to the
+<a href="https://en.wikipedia.org/wiki/Same_origin_policy">same origin policy</a>.
+(Content scripts have been subject to
+<a href="https://www.chromium.org/Home/chromium-security/extension-content-script-fetches"
+  >CORB since Chrome 73 and CORS since Chrome 83</a>.)
+Extension origins aren't so limited - a script executing in an extension's
+background page or foreground tab can talk to remote servers outside of its
+origin, as long as the extension requests cross-origin permissions.</p>
 
 <h2 id="extension-origin">Extension origin</h2>
 <p>Each running extension exists within its own separate security origin.
@@ -150,9 +155,10 @@ xhr.send();
 
 <p>
 When performing cross-origin requests on behalf of a content script, be careful
-to guard against a malicious webpage that might try to impersonate a content
-script.  In particular, do not allow content scripts to request an arbitrary
-URL.
+to <a href="security#content_scripts"
+  >guard against malicious web pages</a> that might try to impersonate a
+content script.  In particular, do not allow content scripts to request an
+arbitrary URL.
 </p>
 
 <p>
@@ -166,7 +172,7 @@ fetched by the background page.
 chrome.runtime.onMessage.addListener(
     function(request, sender, sendResponse) {
       if (request.contentScriptQuery == 'fetchUrl') {
-        // WARNING: SECURITY PROBLEM - a malicious webpage may abuse
+        // WARNING: SECURITY PROBLEM - a malicious web page may abuse
         // the message handler to get access to arbitrary cross-origin
         // resources.
         fetch(request.url)
@@ -188,7 +194,7 @@ chrome.runtime.sendMessage(
 
 <p>
 In the approach above, the content script can ask the extension to fetch any
-URL that the extension has access to.  A malicious website may be able to forge
+URL that the extension has access to.  A malicious web page may be able to forge
 such messages and trick the extension into giving access to cross-origin
 resources.
 </p>

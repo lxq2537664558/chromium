@@ -28,12 +28,11 @@
 #include "ui/accessibility/ax_node.h"
 #include "ui/accessibility/ax_node_data.h"
 #include "ui/aura/window.h"
-#include "ui/base/ui_base_features.h"
 #include "ui/gfx/canvas.h"
 #include "ui/views/background.h"
 #include "ui/views/layout/fill_layout.h"
 
-namespace app_list {
+namespace ash {
 
 namespace {
 
@@ -122,14 +121,11 @@ class SearchResultAnswerCardView::AnswerCardResultView
     params->background_color = SK_ColorTRANSPARENT;
     contents_ = std::make_unique<content::NavigableContents>(
         contents_factory_.get(), std::move(params));
-    if (features::IsUsingWindowService())
-      contents_->ForceUseWindowService();
     contents_->AddObserver(this);
   }
 
   ~AnswerCardResultView() override {
     contents_->RemoveObserver(this);
-    ClearResult();
   }
 
   bool has_valid_answer_card() const {
@@ -189,11 +185,11 @@ class SearchResultAnswerCardView::AnswerCardResultView
   // views::Button overrides:
   const char* GetClassName() const override { return "AnswerCardResultView"; }
 
-  void OnBlur() override { SetBackgroundHighlighted(false); }
+  void OnBlur() override { SetSelected(false, base::nullopt); }
 
   void OnFocus() override {
     ScrollRectToVisible(GetLocalBounds());
-    SetBackgroundHighlighted(true);
+    SetSelected(true, base::nullopt);
   }
 
   bool OnKeyPressed(const ui::KeyEvent& event) override {
@@ -201,8 +197,8 @@ class SearchResultAnswerCardView::AnswerCardResultView
       // Shouldn't eat Space; we want Space to go to the search box.
       return false;
     }
-
-    return Button::OnKeyPressed(event);
+    ActivateResult(event.flags(), false /* by_button_press */);
+    return true;
   }
 
   void GetAccessibleNodeData(ui::AXNodeData* node_data) override {
@@ -213,25 +209,29 @@ class SearchResultAnswerCardView::AnswerCardResultView
   }
 
   void PaintButtonContents(gfx::Canvas* canvas) override {
-    if (background_highlighted())
+    if (selected())
       canvas->FillRect(GetContentsBounds(), kAnswerCardSelectedColor);
   }
 
   // views::ButtonListener overrides:
   void ButtonPressed(views::Button* sender, const ui::Event& event) override {
     DCHECK(sender == this);
+    ActivateResult(event.flags(), true /* by_button_press */);
+  }
+
+ private:
+  void ActivateResult(int event_flags, bool by_button_press) {
     if (result()) {
       RecordSearchResultOpenSource(result(), view_delegate_->GetModel(),
                                    view_delegate_->GetSearchModel());
       view_delegate_->OpenSearchResult(
-          result()->id(), event.flags(),
-          ash::mojom::AppListLaunchedFrom::kLaunchedFromSearchBox,
-          ash::mojom::AppListLaunchType::kSearchResult,
-          -1 /* suggestion_index */);
+          result()->id(), event_flags,
+          AppListLaunchedFrom::kLaunchedFromSearchBox,
+          AppListLaunchType::kSearchResult, -1 /* suggestion_index */,
+          !by_button_press && is_default_result() /* launch_as_default */);
     }
   }
 
- private:
   // content::NavigableContentsObserver overrides:
   void DidFinishNavigation(
       const GURL& url,
@@ -302,6 +302,9 @@ class SearchResultAnswerCardView::AnswerCardResultView
     base::RecordAction(base::UserMetricsAction("SearchAnswer_OpenedUrl"));
   }
 
+  void FocusedNodeChanged(bool is_editable_node,
+                          const gfx::Rect& node_bounds_in_screen) override {}
+
   SearchResultContainerView* const container_;  // Not owned.
   AppListViewDelegate* const view_delegate_;    // Not owned.
   mojo::Remote<content::mojom::NavigableContentsFactory> contents_factory_;
@@ -342,7 +345,7 @@ int SearchResultAnswerCardView::GetYSize() {
 int SearchResultAnswerCardView::DoUpdate() {
   std::vector<SearchResult*> display_results =
       SearchModel::FilterSearchResultsByDisplayType(
-          results(), ash::SearchResultDisplayType::kCard, /*excludes=*/{}, 1);
+          results(), SearchResultDisplayType::kCard, /*excludes=*/{}, 1);
   SearchResult* top_result =
       display_results.empty() ? nullptr : display_results.front();
 
@@ -352,7 +355,7 @@ int SearchResultAnswerCardView::DoUpdate() {
   parent()->SetVisible(has_valid_answer_card);
 
   set_container_score(
-      has_valid_answer_card && top_result ? top_result->display_score() : 0);
+      has_valid_answer_card && top_result ? top_result->display_score() : -1);
   if (top_result)
     top_result->set_is_visible(has_valid_answer_card);
 
@@ -370,6 +373,12 @@ SearchResultBaseView* SearchResultAnswerCardView::GetFirstResultView() {
   return num_results() <= 0 ? nullptr : search_answer_container_view_;
 }
 
+SearchResultBaseView* SearchResultAnswerCardView::GetResultViewAt(
+    size_t index) {
+  DCHECK_EQ(index, 0u);
+  return search_answer_container_view_;
+}
+
 views::View* SearchResultAnswerCardView::GetAnswerCardResultViewForTest()
     const {
   return search_answer_container_view_;
@@ -382,11 +391,10 @@ SearchResultAnswerCardView::CreateAnswerCardResponseHeadersForTest(
     const std::string& title) {
   auto headers =
       base::MakeRefCounted<net::HttpResponseHeaders>("HTTP/1.1 200 OK");
-  headers->AddHeader(base::StrCat({kSearchAnswerHasResult, ": true"}));
-  headers->AddHeader(base::StrCat({kSearchAnswerTitle, ": ", title.c_str()}));
-  headers->AddHeader(
-      base::StrCat({kSearchAnswerIssuedQuery, ": ", query.c_str()}));
+  headers->SetHeader(kSearchAnswerHasResult, "true");
+  headers->SetHeader(kSearchAnswerTitle, title);
+  headers->SetHeader(kSearchAnswerIssuedQuery, query);
   return headers;
 }
 
-}  // namespace app_list
+}  // namespace ash

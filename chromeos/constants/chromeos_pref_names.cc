@@ -38,6 +38,10 @@ const char kAudioVolumePercent[] = "settings.audio.volume_percent";
 // as the active one for audio I/O, or it's a new plugged device.
 const char kAudioDevicesState[] = "settings.audio.device_state";
 
+// A string pref storing an identifier that is getting sent with parental
+// consent in EDU account addition flow.
+const char kEduCoexistenceId[] = "account_manager.edu_coexistence_id";
+
 // A dictionary of info for Quirks Client/Server interaction, mostly last server
 // request times, keyed to display product_id's.
 const char kQuirksClientLastServerCheck[] = "quirks_client.last_server_check";
@@ -51,6 +55,18 @@ const char kDeviceWiFiFastTransitionEnabled[] =
 // Account additions are allowed by default.
 const char kSecondaryGoogleAccountSigninAllowed[] =
     "account_manager.secondary_google_account_signin_allowed";
+
+// The following SAML-related prefs are not settings that the domain admin can
+// set, but information that the SAML Identity Provider can send us:
+
+// A time pref - when the SAML password was last set, according to the SAML IdP.
+const char kSamlPasswordModifiedTime[] = "saml.password_modified_time";
+// A time pref - when the SAML password did expire, or will expire, according to
+// the SAML IDP.
+const char kSamlPasswordExpirationTime[] = "saml.password_expiration_time";
+// A string pref - the URL where the user can update their password, according
+// to the SAML IdP.
+const char kSamlPasswordChangeUrl[] = "saml.password_change_url";
 
 }  // namespace prefs
 }  // namespace chromeos

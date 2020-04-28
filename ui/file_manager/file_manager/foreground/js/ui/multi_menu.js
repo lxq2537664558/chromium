@@ -2,34 +2,110 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-cr.exportPath('cr.ui');
-
 cr.define('cr.ui', () => {
-  /** @const */
-  const Menu = cr.ui.Menu;
-
   /** @const */
   const HideType = cr.ui.HideType;
 
-  /** @const */
-  const positionPopupAroundElement = cr.ui.positionPopupAroundElement;
-
   /**
    * Creates a new menu button element.
-   * @param {Object=} opt_propertyBag Optional properties.
-   * @constructor
    * @extends {HTMLButtonElement}
    * @implements {EventListener}
    */
-  const MultiMenuButton = cr.ui.define('button');
+  class MultiMenuButton {
+    constructor() {
+      /**
+       * Whether to show the menu on press of the Up or Down arrow keys.
+       * @private {boolean}
+       */
+      this.respondToArrowKeys = true;
 
-  MultiMenuButton.prototype = {
-    __proto__: HTMLButtonElement.prototype,
+      /**
+       * Whether a sub-menu is positioned on the left of its parent.
+       * @private {boolean|null} Used to direct the arrow key navigation.
+       */
+      this.subMenuOnLeft = null;
+
+      /**
+       * Property that hosts sub-menus for filling with overflow items.
+       * @public {cr.ui.Menu|null} Used for menu-items that overflow parent
+       * menu.
+       */
+      this.overflow = null;
+
+      /**
+       * Reference to the menu that the user is currently navigating.
+       * @private {cr.ui.Menu|null} Used to route events to the correct menu.
+       */
+      this.currentMenu = null;
+
+      /**
+       * Padding used when restricting menu height when the window is too small
+       * to show the entire menu.
+       * @private {number}
+       */
+      this.menuEndGap_ = 0;  // padding on cr.menu + 2px
+
+      /** @private {boolean} */
+      this.invertLeftRight = false;
+
+      /** @private {cr.ui.AnchorType} */
+      this.anchorType = cr.ui.AnchorType.BELOW;
+
+      /** @private {?Date|?number} */
+      this.hideTimestamp_ = null;
+
+      /** @private {?EventTracker} */
+      this.showingEvents_ = null;
+
+      /** @private {?cr.ui.Menu} */
+      this.menu_ = null;
+
+      /** @private {?ResizeObserver} */
+      this.observer_ = null;
+
+      /** @private {?Element} */
+      this.observedElement_ = null;
+
+      throw new Error('Designed to decorate elements');
+    }
+
+    /**
+     * Decorates the element.
+     * @param {!Element} element Element to be decorated.
+     * @return {!cr.ui.MultiMenuButton} Decorated element.
+     */
+    static decorate(element) {
+      // Add the MultiMenuButton methods to the element we're
+      // decorating, leaving it's prototype chain intact.
+      // Don't copy 'constructor' or property get/setters.
+      Object.getOwnPropertyNames(MultiMenuButton.prototype).forEach(name => {
+        if (name !== 'constructor' &&
+            !Object.getOwnPropertyDescriptor(element, name)) {
+          element[name] = MultiMenuButton.prototype[name];
+        }
+      });
+      // Set up the 'menu' property & setter/getter.
+      Object.defineProperty(element, 'menu', {
+        get() {
+          return this.menu_;
+        },
+        set(menu) {
+          this.setMenu_(menu);
+        },
+        enumerable: true,
+        configurable: true
+      });
+      element = /** @type {!cr.ui.MultiMenuButton} */ (element);
+      element.decorate();
+      return element;
+    }
 
     /**
      * Initializes the menu button.
      */
-    decorate: function() {
+    decorate() {
+      this.setAttribute('aria-expanded', 'false');
+
       // Listen to the touch events on the document so that we can handle it
       // before cancelled by other UI components.
       this.ownerDocument.addEventListener('touchstart', this, {passive: true});
@@ -37,6 +113,9 @@ cr.define('cr.ui', () => {
       this.addEventListener('keydown', this);
       this.addEventListener('dblclick', this);
       this.addEventListener('blur', this);
+
+      this.menuEndGap_ = 18;  // padding on cr.menu + 2px
+      this.respondToArrowKeys = true;
 
       // Adding the 'custom-appearance' class prevents widgets.css from
       // changing the appearance of this element.
@@ -48,13 +127,19 @@ cr.define('cr.ui', () => {
         this.menu = menu;
       }
 
+      // Align the menu if the button moves. When the button moves, the parent
+      // container resizes.
+      this.observer_ = new ResizeObserver(() => {
+        this.positionMenu_();
+      });
+
       // An event tracker for events we only connect to while the menu is
       // displayed.
       this.showingEvents_ = new EventTracker();
 
       this.anchorType = cr.ui.AnchorType.BELOW;
       this.invertLeftRight = false;
-    },
+    }
 
     /**
      * The menu associated with the menu button.
@@ -62,11 +147,11 @@ cr.define('cr.ui', () => {
      */
     get menu() {
       return this.menu_;
-    },
-    set menu(menu) {
+    }
+    setMenu_(menu) {
       if (typeof menu == 'string' && menu[0] == '#') {
-        menu = assert(this.ownerDocument.getElementById(menu.slice(1)));
-        cr.ui.decorate(menu, Menu);
+        menu = assert(this.ownerDocument.body.querySelector(menu));
+        cr.ui.decorate(menu, cr.ui.Menu);
       }
 
       this.menu_ = menu;
@@ -75,41 +160,10 @@ cr.define('cr.ui', () => {
           this.setAttribute('menu', '#' + menu.id);
         }
       }
-    },
-
-    /**
-     * Whether to show the menu on press of the Up or Down arrow keys.
-     */
-    respondToArrowKeys: true,
-
-    /**
-     * Whether a sub-menu is positioned on the left of its parent.
-     * @type {boolean|null} Used to direct the arrow key navigation.
-     * @private
-     */
-    subMenuOnLeft: null,
-
-    /**
-     * Property that hosts sub-menus for filling with overflow items.
-     * @type {cr.ui.Menu|null} Used for menu-items that overflow parent menu.
-     * @public
-     */
-    overflow: null,
-
-    /**
-     * Reference to the menu that the user is currently navigating.
-     * @type {cr.ui.Menu|null} Used to route events to the correct menu.
-     * @private
-     */
-    currentMenu: null,
-
-    /**
-     * Padding used when restricting menu height when the window is too small
-     * to show the entire menu.
-     * @type {number}
-     * @private
-     */
-    menuEndGap_: 18,  // padding on cr.menu + 2px
+    }
+    set menu(menu) {
+      this.setMenu_(menu);
+    }
 
     /**
      * Checks if the menu(s) should be closed based on the target of a mouse
@@ -118,7 +172,7 @@ cr.define('cr.ui', () => {
      * @return {boolean}
      * @private
      */
-    shouldDismissMenu_: function(e) {
+    shouldDismissMenu_(e) {
       // All menus are dismissed when clicking outside the menus. If we are
       // showing a sub-menu, we need to detect if the target is the top
       // level menu, or in the sub menu when the sub menu is being shown.
@@ -127,14 +181,14 @@ cr.define('cr.ui', () => {
       return e.target instanceof Node && !this.contains(e.target) &&
           !this.menu.contains(e.target) &&
           !(this.menu.subMenu && this.menu.subMenu.contains(e.target));
-    },
+    }
 
     /**
      * Position the sub menu adjacent to the cr-menu-item that triggered it.
      * @param {cr.ui.MenuItem} item The menu item to position against.
      * @param {cr.ui.Menu} subMenu The child (sub) menu to be positioned.
      */
-    positionSubMenu_: function(item, subMenu) {
+    positionSubMenu_(item, subMenu) {
       // The sub-menu needs to sit aligned to the top and side of
       // the menu-item passed in. It also needs to fit inside the viewport
       const itemRect = item.getBoundingClientRect();
@@ -157,20 +211,16 @@ cr.define('cr.ui', () => {
       // allows the menu height to grow crbug/934207
       style.maxHeight =
           (viewportHeight - itemRect.top - this.menuEndGap_) + 'px';
-      if ((itemRect.top + childRect.height + this.menuEndGap_) >
-          viewportHeight) {
-        style.overflowY = 'scroll';
-      } else {
-        style.overflowY = 'auto';
-      }
-    },
+      // Let the browser deal with scroll bar generation.
+      style.overflowY = 'auto';
+    }
 
     /**
      * Get the subMenu hanging off a menu-item if it exists.
      * @param {cr.ui.MenuItem} item The menu item.
      * @return {cr.ui.Menu|null}
      */
-    getSubMenuFromItem: function(item) {
+    getSubMenuFromItem(item) {
       if (!item) {
         return null;
       }
@@ -180,12 +230,12 @@ cr.define('cr.ui', () => {
       }
       return /** @type {!cr.ui.Menu|null} */ (
           document.querySelector(subMenuId));
-    },
+    }
 
     /**
      * Display any sub-menu hanging off the current selection.
      */
-    showSubMenu: function() {
+    showSubMenu() {
       if (!this.isMenuShown()) {
         return;
       }
@@ -199,13 +249,13 @@ cr.define('cr.ui', () => {
         subMenu.parentMenuItem = item;
         this.moveSelectionToSubMenu_(subMenu);
       }
-    },
+    }
 
     /**
      * Find any sub-menu hanging off the event target and show/hide it.
      * @param {Event} e The event object.
      */
-    manageSubMenu: function(e) {
+    manageSubMenu(e) {
       const item = this.menu.findMenuItem_(e.target);
       const subMenu = this.getSubMenuFromItem(item);
       if (!subMenu) {
@@ -232,7 +282,7 @@ cr.define('cr.ui', () => {
           this.currentMenu = this.menu;
           break;
       }
-    },
+    }
 
     /**
      * Change the selection from the top level menu to the first item
@@ -240,31 +290,31 @@ cr.define('cr.ui', () => {
      * @param {cr.ui.Menu} subMenu sub-menu that should take selection.
      * @private
      */
-    moveSelectionToSubMenu_: function(subMenu) {
+    moveSelectionToSubMenu_(subMenu) {
       this.menu.selectedItem = null;
       this.currentMenu = subMenu;
       subMenu.selectedIndex = 0;
       subMenu.focusSelectedItem();
-    },
+    }
 
     /**
      * Change the selection from the sub menu to the top level menu.
      * @param {cr.ui.Menu} subMenu sub-menu that should lose selection.
      * @private
      */
-    moveSelectionToTopMenu_: function(subMenu) {
+    moveSelectionToTopMenu_(subMenu) {
       subMenu.selectedItem = null;
       this.currentMenu = this.menu;
       this.menu.selectedItem = subMenu.parentMenuItem;
       this.menu.focusSelectedItem();
-    },
+    }
 
     /**
      * Do we have a menu visible to handle a keyboard event.
      * @return {boolean} True if there's a visible menu.
      * @private
      */
-    hasVisibleMenu_: function() {
+    hasVisibleMenu_() {
       if (this.currentMenu == this.menu && this.isMenuShown()) {
         return true;
       } else if (this.currentMenu) {
@@ -273,13 +323,13 @@ cr.define('cr.ui', () => {
         }
       }
       return false;
-    },
+    }
 
     /**
      * Handles event callbacks.
      * @param {Event} e The event object.
      */
-    handleEvent: function(e) {
+    handleEvent(e) {
       if (!this.menu) {
         return;
       }
@@ -305,9 +355,14 @@ cr.define('cr.ui', () => {
             } else if (e.button == 0) {  // Only show the menu when using left
                                          // mouse button.
               this.showMenu(false, {x: e.screenX, y: e.screenY});
-
-              // Prevent the button from stealing focus on mousedown.
-              e.preventDefault();
+              // Prevent the button from stealing focus on mousedown unless
+              // focus is on another button or cr-input element.
+              if (!(document.hasFocus() &&
+                    (document.activeElement.tagName === 'BUTTON' ||
+                     document.activeElement.tagName === 'CR-BUTTON' ||
+                     document.activeElement.tagName === 'CR-INPUT'))) {
+                e.preventDefault();
+              }
             }
           }
 
@@ -413,12 +468,12 @@ cr.define('cr.ui', () => {
           this.manageSubMenu(e);
           break;
       }
-    },
+    }
 
     /**
      * Add event listeners to any sub menus.
      */
-    addSubMenuListeners: function() {
+    addSubMenuListeners() {
       const items = this.menu.querySelectorAll('cr-menu-item[sub-menu]');
       items.forEach((menuItem) => {
         const subMenuId = menuItem.getAttribute('sub-menu');
@@ -429,7 +484,7 @@ cr.define('cr.ui', () => {
           }
         }
       });
-    },
+    }
 
     /**
      * Shows the menu.
@@ -438,7 +493,7 @@ cr.define('cr.ui', () => {
      * @param {{x: number, y: number}=} opt_mousePos The position of the mouse
      *     when shown (in screen coordinates).
      */
-    showMenu: function(shouldSetFocus, opt_mousePos) {
+    showMenu(shouldSetFocus, opt_mousePos) {
       this.hideMenu();
 
       this.menu.updateCommands(this);
@@ -449,9 +504,15 @@ cr.define('cr.ui', () => {
         return;
       }
 
+      // Track element for which menu was opened so that command events are
+      // dispatched to the correct element.
+      this.menu.contextElement = this;
       this.menu.show(opt_mousePos);
 
+      // Toggle aria and open state.
+      this.setAttribute('aria-expanded', 'true');
       this.setAttribute('menu-shown', '');
+
       // Handle mouse-over to trigger sub menu opening on hover.
       this.showingEvents_.add(this.menu, 'mouseover', this);
       this.showingEvents_.add(this.menu, 'mouseout', this);
@@ -459,7 +520,7 @@ cr.define('cr.ui', () => {
 
       // When the menu is shown we steal all keyboard events.
       const doc = this.ownerDocument;
-      const win = doc.defaultView;
+      const win = assert(doc.defaultView);
       this.showingEvents_.add(doc, 'keydown', this, true);
       this.showingEvents_.add(doc, 'mousedown', this, true);
       this.showingEvents_.add(doc, 'focus', this, true);
@@ -468,18 +529,20 @@ cr.define('cr.ui', () => {
       this.showingEvents_.add(win, 'resize', this);
       this.showingEvents_.add(this.menu, 'contextmenu', this);
       this.showingEvents_.add(this.menu, 'activate', this);
+      this.observedElement_ = this.parentElement;
+      this.observer_.observe(this.observedElement_);
       this.positionMenu_();
 
       if (shouldSetFocus) {
         this.menu.focusSelectedItem();
       }
       this.currentMenu = this.menu;
-    },
+    }
 
     /**
      * Hides any sub-menu that is active.
      */
-    hideSubMenu_: function() {
+    hideSubMenu_() {
       const items =
           this.menu.querySelectorAll('cr-menu-item[sub-menu][sub-menu-shown]');
       items.forEach((menuItem) => {
@@ -494,7 +557,7 @@ cr.define('cr.ui', () => {
         }
       });
       this.currentMenu = this.menu;
-    },
+    }
 
     /**
      * Hides the menu. If your menu can go out of scope, make sure to call this
@@ -502,9 +565,9 @@ cr.define('cr.ui', () => {
      * @param {cr.ui.HideType=} opt_hideType Type of hide.
      *     default: cr.ui.HideType.INSTANT.
      */
-    hideMenu: function(opt_hideType) {
+    hideMenu(opt_hideType) {
       this.hideMenuInternal_(true, opt_hideType);
-    },
+    }
 
     /**
      * Hides the menu. If your menu can go out of scope, make sure to call this
@@ -512,9 +575,9 @@ cr.define('cr.ui', () => {
      * @param {cr.ui.HideType=} opt_hideType Type of hide.
      *     default: cr.ui.HideType.INSTANT.
      */
-    hideMenuWithoutTakingFocus_: function(opt_hideType) {
+    hideMenuWithoutTakingFocus_(opt_hideType) {
       this.hideMenuInternal_(false, opt_hideType);
-    },
+    }
 
     /**
      * Hides the menu. If your menu can go out of scope, make sure to call this
@@ -523,7 +586,7 @@ cr.define('cr.ui', () => {
      * @param {cr.ui.HideType=} opt_hideType Type of hide.
      *     default: cr.ui.HideType.INSTANT.
      */
-    hideMenuInternal_: function(shouldTakeFocus, opt_hideType) {
+    hideMenuInternal_(shouldTakeFocus, opt_hideType) {
       if (!this.isMenuShown()) {
         return;
       }
@@ -531,7 +594,10 @@ cr.define('cr.ui', () => {
       // Hide any visible sub-menus first
       this.hideSubMenu_();
 
+      // Toggle aria and open state.
+      this.setAttribute('aria-expanded', 'false');
       this.removeAttribute('menu-shown');
+
       if (opt_hideType == HideType.DELAYED) {
         this.menu.classList.add('hide-delayed');
       } else {
@@ -544,6 +610,8 @@ cr.define('cr.ui', () => {
         this.focus();
       }
 
+      this.observer_.unobserve(this.observedElement_);
+
       const event = new UIEvent(
           'menuhide', {bubbles: true, cancelable: false, view: window});
       this.dispatchEvent(event);
@@ -553,50 +621,45 @@ cr.define('cr.ui', () => {
       // to be shown again.
       this.hideTimestamp_ = cr.isWindows ? Date.now() : 0;
       this.currentMenu = null;
-    },
+    }
 
     /**
      * Whether the menu is shown.
      */
-    isMenuShown: function() {
+    isMenuShown() {
       return this.hasAttribute('menu-shown');
-    },
+    }
 
     /**
      * Positions the menu below the menu button. We check the menu fits
      * in the viewport, and enable scrolling if required.
      * @private
      */
-    positionMenu_: function() {
-      positionPopupAroundElement(
+    positionMenu_() {
+      const style = this.menu.style;
+      // Clear any maxHeight we've set from previous calls into here.
+      style.maxHeight = 'none';
+      cr.ui.positionPopupAroundElement(
           this, this.menu, this.anchorType, this.invertLeftRight);
-      // Check if menu is larger than the viewport and adjust its height
-      // and enable scrolling if so. Note: style.bottom would have been set to
-      // 0.
+      // Check if menu is larger than the viewport and adjust its height to
+      // enable scrolling if so. Note: style.bottom would have been set to 0.
       const viewportHeight = window.innerHeight;
       const menuRect = this.menu.getBoundingClientRect();
-      const style = this.menu.style;
-      // Make sure the top of the menu is in the viewport.
-      let top = menuRect.top;
-      if (top < 0) {
-        top = 0;
-      }
       // Limit the height to fit in the viewport.
-      style.maxHeight = (viewportHeight - top - this.menuEndGap_) + 'px';
-      // Make the menu scrollable if needed.
-      if ((top + menuRect.height + this.menuEndGap_) > viewportHeight) {
-        style.overflowY = 'scroll';
-        style.top = '0';
-        style.bottom = 'auto';
-      } else {
-        style.overflowY = 'auto';
+      style.maxHeight = (viewportHeight - this.menuEndGap_) + 'px';
+      // If the menu is too tall, position 2px from the bottom of the viewport
+      // so users can see the end of the menu (helps when scroll is needed).
+      if ((menuRect.height + this.menuEndGap_) > viewportHeight) {
+        style.bottom = '2px';
       }
-    },
+      // Let the browser deal with scroll bar generation.
+      style.overflowY = 'auto';
+    }
 
     /**
      * Handles the keydown event for the menu button.
      */
-    handleKeyDown: function(e) {
+    handleKeyDown(e) {
       switch (e.key) {
         case 'ArrowDown':
         case 'ArrowUp':
@@ -620,10 +683,10 @@ cr.define('cr.ui', () => {
           break;
       }
     }
-  };
+  }
+
+  MultiMenuButton.prototype.__proto__ = HTMLButtonElement.prototype;
 
   // Export
-  return {
-    MultiMenuButton: MultiMenuButton,
-  };
+  return {MultiMenuButton};
 });

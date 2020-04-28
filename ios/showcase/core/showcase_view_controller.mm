@@ -59,14 +59,13 @@ NSString* const kUseCaseKey = @"useCase";
   [super viewDidLoad];
 
   self.title = @"SC";
-  self.tableView.tableFooterView = [[UIView alloc] init];
   self.tableView.rowHeight = 70.0;
   self.tableView.accessibilityIdentifier = @"showcase_home_collection";
 
   self.searchController =
       [[UISearchController alloc] initWithSearchResultsController:nil];
   self.searchController.searchResultsUpdater = self;
-  self.searchController.dimsBackgroundDuringPresentation = NO;
+  self.searchController.obscuresBackgroundDuringPresentation = NO;
   self.tableView.tableHeaderView = self.searchController.searchBar;
   self.navigationController.navigationBar.translucent = NO;
 

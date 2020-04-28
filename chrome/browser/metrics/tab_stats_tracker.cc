@@ -13,10 +13,12 @@
 #include "base/metrics/histogram_macros.h"
 #include "base/power_monitor/power_monitor.h"
 #include "base/stl_util.h"
+#include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/resource_coordinator/lifecycle_unit.h"
 #include "chrome/browser/resource_coordinator/lifecycle_unit_observer.h"
+#include "chrome/browser/resource_coordinator/tab_lifecycle_unit_external.h"
 #include "chrome/browser/resource_coordinator/tab_manager.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_list.h"
@@ -38,7 +40,7 @@ namespace {
 // The interval at which the DailyEvent::CheckInterval function should be
 // called.
 constexpr base::TimeDelta kDailyEventIntervalTimeDelta =
-    base::TimeDelta::FromMilliseconds(60 * 30);
+    base::TimeDelta::FromMinutes(30);
 
 // The intervals at which we report the number of unused tabs. This is used for
 // all the tab usage histograms listed below.
@@ -65,7 +67,7 @@ TabStatsTracker* g_tab_stats_tracker_instance = nullptr;
 // Ensure that an interval is a valid one (i.e. listed in
 // |kTabUsageReportingIntervals|).
 bool IsValidInterval(base::TimeDelta interval) {
-  return base::ContainsValue(kTabUsageReportingIntervals, interval);
+  return base::Contains(kTabUsageReportingIntervals, interval);
 }
 
 }  // namespace
@@ -102,17 +104,25 @@ const char
     TabStatsTracker::UmaStatsReportingDelegate::kWindowCountHistogramName[] =
         "Tabs.WindowCount";
 
+const char TabStatsTracker::UmaStatsReportingDelegate::
+    kFrozenTabPercentageHistogramNameBase[] = "Tabs.FrozenTabPercentage";
+const char TabStatsTracker::UmaStatsReportingDelegate::
+    kFrozenTabPercentage1To5HiddenTabsHistogramName[] = "1To5HiddenTabs";
+const char TabStatsTracker::UmaStatsReportingDelegate::
+    kFrozenTabPercentage6To20HiddenTabsHistogramName[] = "6To20HiddenTabs";
+const char TabStatsTracker::UmaStatsReportingDelegate::
+    kFrozenTabPercentageMoreThan20HiddenTabsHistogramName[] =
+        "MoreThan20HiddenTabs";
+
 // Tab discard and reload histogram names in the same order as in discard reason
 // enum.
 const char* kTabDiscardCountHistogramNames[] = {
     "Discarding.DiscardsPer10Minutes.Extension",
-    "Discarding.DiscardsPer10Minutes.Proactive",
     "Discarding.DiscardsPer10Minutes.Urgent",
 };
 
 const char* kTabReloadCountHistogramNames[] = {
     "Discarding.ReloadsPer10Minutes.Extension",
-    "Discarding.ReloadsPer10Minutes.Proactive",
     "Discarding.ReloadsPer10Minutes.Urgent",
 };
 
@@ -153,9 +163,7 @@ TabStatsTracker::TabStatsTracker(PrefService* pref_service)
   }
 
   browser_list->AddObserver(this);
-  base::PowerMonitor* power_monitor = base::PowerMonitor::Get();
-  if (power_monitor)
-    power_monitor->AddObserver(this);
+  base::PowerMonitor::AddObserver(this);
 
   daily_event_->AddObserver(std::make_unique<TabStatsDailyObserver>(
       reporting_delegate_.get(), tab_stats_data_store_.get()));
@@ -203,15 +211,9 @@ TabStatsTracker::TabStatsTracker(PrefService* pref_service)
 
 TabStatsTracker::~TabStatsTracker() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  BrowserList* browser_list = BrowserList::GetInstance();
-  for (Browser* browser : *browser_list)
-    browser->tab_strip_model()->RemoveObserver(this);
+  BrowserList::GetInstance()->RemoveObserver(this);
 
-  browser_list->RemoveObserver(this);
-
-  base::PowerMonitor* power_monitor = base::PowerMonitor::Get();
-  if (power_monitor)
-    power_monitor->RemoveObserver(this);
+  base::PowerMonitor::RemoveObserver(this);
 }
 
 // static
@@ -301,8 +303,8 @@ void TabStatsTracker::OnTabStripModelChanged(
     const TabStripSelectionChange& selection) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   if (change.type() == TabStripModelChange::kInserted) {
-    for (const auto& delta : change.deltas())
-      OnInitialOrInsertedTab(delta.insert.contents);
+    for (const auto& contents : change.GetInsert()->contents)
+      OnInitialOrInsertedTab(contents.contents);
 
     tab_stats_data_store_->UpdateMaxTabsPerWindowIfNeeded(
         static_cast<size_t>(tab_strip_model->count()));
@@ -311,15 +313,13 @@ void TabStatsTracker::OnTabStripModelChanged(
   }
 
   if (change.type() == TabStripModelChange::kReplaced) {
-    for (const auto& delta : change.deltas()) {
-      content::WebContents* old_contents = delta.replace.old_contents;
-      content::WebContents* new_contents = delta.replace.new_contents;
-      tab_stats_data_store_->OnTabReplaced(old_contents, new_contents);
-      web_contents_usage_observers_.insert(std::make_pair(
-          new_contents,
-          std::make_unique<WebContentsUsageObserver>(new_contents, this)));
-      web_contents_usage_observers_.erase(old_contents);
-    }
+    auto* replace = change.GetReplace();
+    tab_stats_data_store_->OnTabReplaced(replace->old_contents,
+                                         replace->new_contents);
+    web_contents_usage_observers_.insert(std::make_pair(
+        replace->new_contents, std::make_unique<WebContentsUsageObserver>(
+                                   replace->new_contents, this)));
+    web_contents_usage_observers_.erase(replace->old_contents);
   }
 }
 
@@ -383,7 +383,7 @@ void TabStatsTracker::OnInitialOrInsertedTab(
   // If we already have a WebContentsObserver for this tab then it means that
   // it's already tracked and it's being dragged into a new window, there's
   // nothing to do here.
-  if (!base::ContainsKey(web_contents_usage_observers_, web_contents)) {
+  if (!base::Contains(web_contents_usage_observers_, web_contents)) {
     tab_stats_data_store_->OnTabAdded(web_contents);
     web_contents_usage_observers_.insert(std::make_pair(
         web_contents,
@@ -394,7 +394,7 @@ void TabStatsTracker::OnInitialOrInsertedTab(
 void TabStatsTracker::OnWebContentsDestroyed(
     content::WebContents* web_contents) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  DCHECK(base::ContainsKey(web_contents_usage_observers_, web_contents));
+  DCHECK(base::Contains(web_contents_usage_observers_, web_contents));
   web_contents_usage_observers_.erase(
       web_contents_usage_observers_.find(web_contents));
   tab_stats_data_store_->OnTabRemoved(web_contents);
@@ -438,6 +438,59 @@ void TabStatsTracker::UmaStatsReportingDelegate::ReportHeartbeatMetrics(
 
   UMA_HISTOGRAM_COUNTS_10000(kTabCountHistogramName, tab_stats.total_tab_count);
   UMA_HISTOGRAM_COUNTS_10000(kWindowCountHistogramName, tab_stats.window_count);
+  ReportFrozenTabPercentage();
+}
+
+void TabStatsTracker::UmaStatsReportingDelegate::ReportFrozenTabPercentage() {
+  int frozen_tab_count = 0;
+  int hidden_tab_count = 0;
+
+  BrowserList* browser_list = BrowserList::GetInstance();
+  for (Browser* browser : *browser_list) {
+    for (int i = 0; i < browser->tab_strip_model()->count(); ++i) {
+      content::WebContents* web_contents =
+          browser->tab_strip_model()->GetWebContentsAt(i);
+      auto* tab_lifecycle_unit_external =
+          resource_coordinator::TabLifecycleUnitExternal::FromWebContents(
+              web_contents);
+
+      if (!tab_lifecycle_unit_external)
+        continue;
+
+      if (tab_lifecycle_unit_external->IsFrozen())
+        ++frozen_tab_count;
+
+      if (web_contents->GetVisibility() == content::Visibility::HIDDEN)
+        ++hidden_tab_count;
+    }
+  }
+
+  if (!hidden_tab_count)
+    return;
+
+  int frozen_tab_percentage = (100 * frozen_tab_count) / hidden_tab_count;
+
+  std::string frozen_tab_percentage_histogram_suffix;
+  if (hidden_tab_count > 20) {
+    UMA_HISTOGRAM_PERCENTAGE(
+        base::JoinString(
+            {kFrozenTabPercentageHistogramNameBase,
+             kFrozenTabPercentageMoreThan20HiddenTabsHistogramName},
+            "."),
+        frozen_tab_percentage);
+  } else if (hidden_tab_count > 5) {
+    UMA_HISTOGRAM_PERCENTAGE(
+        base::JoinString({kFrozenTabPercentageHistogramNameBase,
+                          kFrozenTabPercentage6To20HiddenTabsHistogramName},
+                         "."),
+        frozen_tab_percentage);
+  } else {
+    UMA_HISTOGRAM_PERCENTAGE(
+        base::JoinString({kFrozenTabPercentageHistogramNameBase,
+                          kFrozenTabPercentage1To5HiddenTabsHistogramName},
+                         "."),
+        frozen_tab_percentage);
+  }
 }
 
 void TabStatsTracker::UmaStatsReportingDelegate::ReportUsageDuringInterval(

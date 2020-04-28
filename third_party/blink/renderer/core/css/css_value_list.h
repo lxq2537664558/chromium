@@ -60,6 +60,7 @@ class CORE_EXPORT CSSValueList : public CSSValue {
 
   wtf_size_t length() const { return values_.size(); }
   const CSSValue& Item(wtf_size_t index) const { return *values_[index]; }
+  const CSSValue& Last() const { return *values_.back(); }
 
   void Append(const CSSValue& value) { values_.push_back(value); }
   bool RemoveAll(const CSSValue&);
@@ -74,7 +75,7 @@ class CORE_EXPORT CSSValueList : public CSSValue {
   bool MayContainUrl() const;
   void ReResolveUrl(const Document&) const;
 
-  void TraceAfterDispatch(blink::Visitor*);
+  void TraceAfterDispatch(blink::Visitor*) const;
 
  private:
   HeapVector<Member<const CSSValue>, 4> values_;

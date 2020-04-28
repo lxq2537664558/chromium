@@ -23,7 +23,7 @@ namespace {
 // dumpstate routine to avoid calling an executable during an automated test.
 // This value should not be mutated through any other function except
 // CrashUtil::SetDumpStateCbForTest().
-static base::Callback<int(const std::string&)>* g_dumpstate_cb = nullptr;
+static base::OnceCallback<int(const std::string&)>* g_dumpstate_cb = nullptr;
 
 }  // namespace
 
@@ -35,33 +35,31 @@ uint64_t CrashUtil::GetCurrentTimeMs() {
 // static
 bool CrashUtil::RequestUploadCrashDump(
     const std::string& existing_minidump_path,
-    const std::string& crashed_process_name,
+    uint64_t crashed_pid,
     uint64_t crashed_process_start_time_ms) {
   // Remove IO restrictions from this thread. Chromium IO functions must be used
   // to access the file system and upload information to the crash server.
   const bool io_allowed = base::ThreadRestrictions::SetIOAllowed(true);
 
   LOG(INFO) << "Request to upload crash dump " << existing_minidump_path
-            << " for process " << crashed_process_name;
+            << " for process " << crashed_pid;
 
   uint64_t uptime_ms = GetCurrentTimeMs() - crashed_process_start_time_ms;
-  MinidumpParams params(crashed_process_name,
-                        uptime_ms,
-                        "",  // suffix
-                        AppStateTracker::GetPreviousApp(),
-                        AppStateTracker::GetCurrentApp(),
-                        AppStateTracker::GetLastLaunchedApp(),
-                        CAST_BUILD_RELEASE,
-                        CAST_BUILD_INCREMENTAL,
-                        ""  /* reason */);
+  MinidumpParams params(
+      uptime_ms,
+      "",  // suffix
+      AppStateTracker::GetPreviousApp(), AppStateTracker::GetCurrentApp(),
+      AppStateTracker::GetLastLaunchedApp(), CAST_BUILD_RELEASE,
+      CAST_BUILD_INCREMENTAL, "", /* reason */
+      AppStateTracker::GetStadiaSessionId());
   DummyMinidumpGenerator minidump_generator(existing_minidump_path);
 
   base::FilePath filename = base::FilePath(existing_minidump_path).BaseName();
 
   std::unique_ptr<MinidumpWriter> writer;
   if (g_dumpstate_cb) {
-    writer.reset(new MinidumpWriter(
-        &minidump_generator, filename.value(), params, *g_dumpstate_cb));
+    writer.reset(new MinidumpWriter(&minidump_generator, filename.value(),
+                                    params, std::move(*g_dumpstate_cb)));
   } else {
     writer.reset(
         new MinidumpWriter(&minidump_generator, filename.value(), params));
@@ -88,9 +86,10 @@ bool CrashUtil::RequestUploadCrashDump(
 }
 
 void CrashUtil::SetDumpStateCbForTest(
-    const base::Callback<int(const std::string&)>& cb) {
+    base::OnceCallback<int(const std::string&)> cb) {
   DCHECK(!g_dumpstate_cb);
-  g_dumpstate_cb = new base::Callback<int(const std::string&)>(cb);
+  g_dumpstate_cb =
+      new base::OnceCallback<int(const std::string&)>(std::move(cb));
 }
 
 }  // namespace chromecast

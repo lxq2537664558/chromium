@@ -18,6 +18,8 @@
 #include "components/sync/protocol/entity_metadata.pb.h"
 
 namespace syncer {
+
+class ClientTagHash;
 struct CommitRequestData;
 struct CommitResponseData;
 struct UpdateResponseData;
@@ -31,7 +33,7 @@ class ProcessorEntity {
   // Construct an instance representing a new locally-created item.
   static std::unique_ptr<ProcessorEntity> CreateNew(
       const std::string& storage_key,
-      const std::string& client_tag_hash,
+      const ClientTagHash& client_tag_hash,
       const std::string& id,
       base::Time creation_time);
 
@@ -45,7 +47,6 @@ class ProcessorEntity {
   const std::string& storage_key() const { return storage_key_; }
   const sync_pb::EntityMetadata& metadata() const { return metadata_; }
   const EntityData& commit_data() { return *commit_data_; }
-  base::Time unsynced_time() const { return unsynced_time_; }
 
   // Returns true if this data is out of sync with the server.
   // A commit may or may not be in progress at this time.
@@ -70,7 +71,7 @@ class ProcessorEntity {
   // Returns true if the specified update version does not contain new data.
   bool UpdateIsReflection(int64_t update_version) const;
 
-  void RecordEntityUpdateLatency(int64_t update_version, const ModelType& type);
+  void RecordEntityUpdateLatency(int64_t update_version, ModelType type);
 
   // Records that an update from the server was received but ignores its data.
   void RecordIgnoredUpdate(const UpdateResponseData& response_data);
@@ -101,7 +102,9 @@ class ProcessorEntity {
   // unset IsUnsynced().  If many local changes occur in quick succession, it's
   // possible that the committed item was already out of date by the time it
   // reached the server.
-  void ReceiveCommitResponse(const CommitResponseData& data, bool commit_only);
+  void ReceiveCommitResponse(const CommitResponseData& data,
+                             bool commit_only,
+                             ModelType type_for_uma);
 
   // Clears any in-memory sync state associated with outstanding commits.
   void ClearTransientSyncState();

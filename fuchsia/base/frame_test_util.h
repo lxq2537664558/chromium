@@ -7,15 +7,29 @@
 
 #include <fuchsia/web/cpp/fidl.h>
 
+#include "base/optional.h"
+#include "base/strings/string_piece.h"
+#include "base/values.h"
+
 namespace cr_fuchsia {
 
 // Uses |navigation_controller| to load |url| with |load_url_params|. Returns
 // after the load is completed. Returns true if the load was successful, false
 // otherwise.
 bool LoadUrlAndExpectResponse(
-    fuchsia::web::NavigationControllerPtr* navigation_controller,
+    fuchsia::web::NavigationController* navigation_controller,
     fuchsia::web::LoadUrlParams load_url_params,
-    std::string url);
+    base::StringPiece url);
+
+// Executes |script| in the context of |frame|'s top-level document.
+// Returns an un-set |base::Optional<>| on failure.
+base::Optional<base::Value> ExecuteJavaScript(fuchsia::web::Frame* frame,
+                                              base::StringPiece script);
+
+// Creates and returns a LoadUrlParams with was_user_activated set to true.
+// This allows user actions to propagate to the frame, allowing features such as
+// autoplay to be used, which is used by many media tests.
+fuchsia::web::LoadUrlParams CreateLoadUrlParamsWithUserActivation();
 
 }  // namespace cr_fuchsia
 

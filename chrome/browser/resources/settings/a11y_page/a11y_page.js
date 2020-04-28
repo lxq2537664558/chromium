@@ -8,8 +8,35 @@
  * a link to the web store accessibility page on most platforms, and
  * a subpage with lots of other settings on Chrome OS.
  */
+import 'chrome://resources/cr_elements/cr_link_row/cr_link_row.m.js';
+import '../settings_page/settings_animated_pages.m.js';
+import '../settings_shared_css.m.js';
+
+// <if expr="not is_macosx and not chromeos">
+import './captions_subpage.m.js';
+import '../settings_page/settings_subpage.m.js';
+// </if>
+
+// <if expr="not chromeos">
+import '../controls/settings_toggle_button.m.js';
+// </if>
+
+import {WebUIListenerBehavior} from 'chrome://resources/js/web_ui_listener_behavior.m.js';
+import {html, Polymer} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
+
+import {loadTimeData} from '../i18n_setup.m.js';
+import {routes} from '../route.m.js';
+import {Router} from '../router.m.js';
+
+// <if expr="is_win or is_macosx">
+import {CaptionsBrowserProxyImpl} from './captions_browser_proxy.js';
+// </if>
+
+
 Polymer({
   is: 'settings-a11y-page',
+
+  _template: html`{__html_template__}`,
 
   behaviors: [WebUIListenerBehavior],
 
@@ -31,6 +58,16 @@ Polymer({
     },
 
     /**
+     * Returns true if the 'LiveCaption' media switch is enabled.
+     */
+    enableLiveCaption_: {
+      type: Boolean,
+      value: function() {
+        return loadTimeData.getBoolean('enableLiveCaption');
+      },
+    },
+
+    /**
      * Whether to show accessibility labels settings.
      */
     showAccessibilityLabelsSetting_: {
@@ -41,35 +78,38 @@ Polymer({
     /** @private {!Map<string, string>} */
     focusConfig_: {
       type: Object,
-      value: function() {
+      value() {
         const map = new Map();
-        // <if expr="chromeos">
-        if (settings.routes.MANAGE_ACCESSIBILITY) {
-          map.set(
-              settings.routes.MANAGE_ACCESSIBILITY.path, '#subpage-trigger');
+        if (routes.CAPTIONS) {
+          map.set(routes.CAPTIONS.path, '#captions');
         }
-        // </if>
         return map;
       },
     },
 
-    // <if expr="chromeos">
     /**
-     * Whether to show experimental accessibility features.
-     * Only used in Chrome OS.
+     * Whether the caption settings link opens externally.
      * @private {boolean}
      */
-    showExperimentalFeatures_: {
+    captionSettingsOpensExternally_: {
       type: Boolean,
-      value: function() {
-        return loadTimeData.getBoolean('showExperimentalA11yFeatures');
+      value() {
+        let opensExternally = false;
+        // <if expr="is_macosx">
+        opensExternally = true;
+        // </if>
+
+        // <if expr="is_win">
+        opensExternally = loadTimeData.getBoolean('isWindows10OrNewer');
+        // </if>
+
+        return opensExternally;
       },
     },
-    // </if>
   },
 
   /** @override */
-  ready: function() {
+  ready() {
     this.addWebUIListener(
         'screen-reader-state-changed',
         this.onScreenReaderStateChanged_.bind(this));
@@ -80,14 +120,14 @@ Polymer({
    * @private
    * @param {boolean} hasScreenReader Whether a screen reader is enabled.
    */
-  onScreenReaderStateChanged_: function(hasScreenReader) {
+  onScreenReaderStateChanged_(hasScreenReader) {
     // TODO(katie): Remove showExperimentalA11yLabels flag before launch.
     this.showAccessibilityLabelsSetting_ = hasScreenReader &&
         loadTimeData.getBoolean('showExperimentalA11yLabels');
   },
 
   /** @private */
-  onToggleAccessibilityImageLabels_: function() {
+  onToggleAccessibilityImageLabels_() {
     const a11yImageLabelsOn = this.$.a11yImageLabels.checked;
     if (a11yImageLabelsOn) {
       chrome.send('confirmA11yImageLabels');
@@ -99,14 +139,38 @@ Polymer({
 
   // <if expr="chromeos">
   /** @private */
-  onManageAccessibilityFeaturesTap_: function() {
-    settings.navigateTo(settings.routes.MANAGE_ACCESSIBILITY);
+  onManageSystemAccessibilityFeaturesTap_() {
+    window.location.href = 'chrome://os-settings/manageAccessibility';
   },
   // </if>
 
   /** private */
-  onMoreFeaturesLinkClick_: function() {
+  onMoreFeaturesLinkClick_() {
     window.open(
         'https://chrome.google.com/webstore/category/collection/accessibility');
+  },
+
+  /** @private */
+  onCaptionsClick_() {
+    // Open the system captions dialog for Mac.
+    // <if expr="is_macosx">
+    CaptionsBrowserProxyImpl.getInstance().openSystemCaptionsDialog();
+    // </if>
+
+    // Open the system captions dialog for Windows 10+ or navigate to the
+    // caption settings page for older versions of Windows
+    // <if expr="is_win">
+    if (loadTimeData.getBoolean('isWindows10OrNewer')) {
+      CaptionsBrowserProxyImpl.getInstance().openSystemCaptionsDialog();
+    } else {
+      Router.getInstance().navigateTo(routes.CAPTIONS);
+    }
+    // </if>
+
+    // Navigate to the caption settings page for Linux as they do not have
+    // system caption settings.
+    // <if expr="is_linux">
+    Router.getInstance().navigateTo(routes.CAPTIONS);
+    // </if>
   },
 });

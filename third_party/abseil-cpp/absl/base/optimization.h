@@ -163,13 +163,53 @@
 // Compilers can use the information that a certain branch is not likely to be
 // taken (for instance, a CHECK failure) to optimize for the common case in
 // the absence of better information (ie. compiling gcc with `-fprofile-arcs`).
+//
+// Recommendation: Modern CPUs dynamically predict branch execution paths,
+// typically with accuracy greater than 97%. As a result, annotating every
+// branch in a codebase is likely counterproductive; however, annotating
+// specific branches that are both hot and consistently mispredicted is likely
+// to yield performance improvements.
 #if ABSL_HAVE_BUILTIN(__builtin_expect) || \
     (defined(__GNUC__) && !defined(__clang__))
 #define ABSL_PREDICT_FALSE(x) (__builtin_expect(x, 0))
-#define ABSL_PREDICT_TRUE(x) (__builtin_expect(!!(x), 1))
+#define ABSL_PREDICT_TRUE(x) (__builtin_expect(false || (x), true))
 #else
 #define ABSL_PREDICT_FALSE(x) (x)
 #define ABSL_PREDICT_TRUE(x) (x)
+#endif
+
+// ABSL_INTERNAL_ASSUME(cond)
+// Informs the compiler than a condition is always true and that it can assume
+// it to be true for optimization purposes. The call has undefined behavior if
+// the condition is false.
+// In !NDEBUG mode, the condition is checked with an assert().
+// NOTE: The expression must not have side effects, as it will only be evaluated
+// in some compilation modes and not others.
+//
+// Example:
+//
+//   int x = ...;
+//   ABSL_INTERNAL_ASSUME(x >= 0);
+//   // The compiler can optimize the division to a simple right shift using the
+//   // assumption specified above.
+//   int y = x / 16;
+//
+#if !defined(NDEBUG)
+#define ABSL_INTERNAL_ASSUME(cond) assert(cond)
+#elif ABSL_HAVE_BUILTIN(__builtin_assume)
+#define ABSL_INTERNAL_ASSUME(cond) __builtin_assume(cond)
+#elif defined(__GNUC__) || ABSL_HAVE_BUILTIN(__builtin_unreachable)
+#define ABSL_INTERNAL_ASSUME(cond)        \
+  do {                                    \
+    if (!(cond)) __builtin_unreachable(); \
+  } while (0)
+#elif defined(_MSC_VER)
+#define ABSL_INTERNAL_ASSUME(cond) __assume(cond)
+#else
+#define ABSL_INTERNAL_ASSUME(cond)      \
+  do {                                  \
+    static_cast<void>(false && (cond)); \
+  } while (0)
 #endif
 
 #endif  // ABSL_BASE_OPTIMIZATION_H_

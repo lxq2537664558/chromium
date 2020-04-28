@@ -4,7 +4,7 @@
 
 'use strict';
 
-/** @type {snippetsInternals.mojom.PageHandlerProxy} */
+/** @type {snippetsInternals.mojom.PageHandlerRemote} */
 let pageHandler = null;
 
 /** @type {snippetsInternals.mojom.PageInterface} */
@@ -102,13 +102,6 @@ function getCategoryRankerProperties() {
   });
 }
 
-/* Check if pushing dummy suggestions is possible. */
-function checkIfPushingDummySuggestionPossible() {
-  pageHandler.isPushingDummySuggestionPossible().then(function(response) {
-    $('push-dummy-suggestion').disabled = !response.result;
-  });
-}
-
 /* Retrieve the remote content suggestions properties. */
 function getRemoteContentSuggestionsProperties() {
   pageHandler.getRemoteContentSuggestionsProperties().then(function(response) {
@@ -194,7 +187,6 @@ function refreshContent() {
   getUserClassifierProperties();
   getCategoryRankerProperties();
   getRemoteContentSuggestionsProperties();
-  checkIfPushingDummySuggestionPossible();
 }
 
 /* Setup buttons and other event listeners. */
@@ -205,16 +197,6 @@ function setupEventListeners() {
 
   $('reload-suggestions').addEventListener('click', function(event) {
     pageHandler.reloadSuggestions();
-  });
-
-  $('debug-log-dump').addEventListener('click', function(event) {
-    pageHandler.getDebugLog().then(function(response) {
-      let logs = response.debugLog;
-      if (logs === '') {
-        logs = 'No data yet. Have you enabled debug logging in chrome://flags?';
-      }
-      downloadData('debug_log.txt', 'text/plain', logs);
-    });
   });
 
   $('clear-cached-suggestions').addEventListener('click', function(event) {
@@ -230,14 +212,6 @@ function setupEventListeners() {
 
       // After we've fetched, update the page.
       getRemoteContentSuggestionsProperties();
-    });
-  });
-
-  $('push-dummy-suggestion').addEventListener('click', function(event) {
-    const content = $('push-dummy-suggestion').textContent;
-    $('push-dummy-suggestion').textContent = '...';
-    pageHandler.pushDummySuggestionInBackground(10).then(function(response) {
-      $('push-dummy-suggestion').textContent = content;
     });
   });
 
@@ -259,16 +233,6 @@ function setupEventListeners() {
     });
   });
 
-  $('reset-notifications-state-button')
-      .addEventListener('click', function(event) {
-        pageHandler.resetNotificationState();
-      });
-
-  $('reset-notifications-state-button')
-      .addEventListener('click', function(event) {
-        pageHandler.resetNotificationState();
-      });
-
   $('submit-dump').addEventListener('click', function(event) {
     pageHandler.getSuggestionsByCategory().then(function(response) {
       downloadJson('snippets.json', JSON.stringify(response.categories));
@@ -281,6 +245,17 @@ function setupEventListeners() {
 /* Represents the js-side of the IPC link. Backend talks to this. */
 /** @implements {snippetsInternals.mojom.PageInterface} */
 class SnippetsInternalsPageImpl {
+  constructor() {
+    this.receiver_ = new snippetsInternals.mojom.PageReceiver(this);
+  }
+
+  /**
+   * @return {!snippetsInternals.mojom.PageRemote}
+   */
+  bindNewPipeAndPassRemote() {
+    return this.receiver_.$.bindNewPipeAndPassRemote();
+  }
+
   /* Callback for when suggestions change on the backend. */
   onSuggestionsChanged() {
     getSuggestionsByCategory();
@@ -290,25 +265,24 @@ class SnippetsInternalsPageImpl {
 /* Main entry point. */
 document.addEventListener('DOMContentLoaded', function() {
   // Setup frontend mojo.
-  page = new SnippetsInternalsPageImpl;
+  page = new SnippetsInternalsPageImpl();
 
   // Setup backend mojo.
   const pageHandlerFactory =
-      snippetsInternals.mojom.PageHandlerFactory.getProxy();
+      snippetsInternals.mojom.PageHandlerFactory.getRemote();
 
   // Give backend mojo a reference to frontend mojo.
-  const client = new snippetsInternals.mojom.Page(page).createProxy();
-  pageHandlerFactory.createPageHandler(client).then((response) => {
+  pageHandlerFactory.createPageHandler(page.bindNewPipeAndPassRemote())
+      .then((response) => {
+        pageHandler = response.handler;
 
-    pageHandler = response.handler;
+        // Populate value fields.
+        refreshContent();
+        getSuggestionsByCategory();
+        setInterval(refreshContent, 2000);
 
-    // Populate value fields.
-    refreshContent();
-    getSuggestionsByCategory();
-    setInterval(refreshContent, 2000);
-
-    // Setup events.
-    setupEventListeners();
-  });
+        // Setup events.
+        setupEventListeners();
+      });
 });
 }());

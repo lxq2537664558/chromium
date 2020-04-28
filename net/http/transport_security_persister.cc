@@ -219,15 +219,14 @@ TransportSecurityPersister::TransportSecurityPersister(
     : transport_security_state_(state),
       writer_(profile_path.AppendASCII("TransportSecurity"), background_runner),
       foreground_runner_(base::ThreadTaskRunnerHandle::Get()),
-      background_runner_(background_runner),
-      weak_ptr_factory_(this) {
+      background_runner_(background_runner) {
   transport_security_state_->SetDelegate(this);
 
   base::PostTaskAndReplyWithResult(
       background_runner_.get(), FROM_HERE,
-      base::Bind(&LoadState, writer_.path()),
-      base::Bind(&TransportSecurityPersister::CompleteLoad,
-                 weak_ptr_factory_.GetWeakPtr()));
+      base::BindOnce(&LoadState, writer_.path()),
+      base::BindOnce(&TransportSecurityPersister::CompleteLoad,
+                     weak_ptr_factory_.GetWeakPtr()));
 }
 
 TransportSecurityPersister::~TransportSecurityPersister() {

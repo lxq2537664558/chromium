@@ -37,7 +37,7 @@
 #include "third_party/blink/renderer/core/dom/events/event.h"
 #include "third_party/blink/renderer/core/dom/node_traversal.h"
 #include "third_party/blink/renderer/core/frame/settings.h"
-#include "third_party/blink/renderer/core/frame/use_counter.h"
+#include "third_party/blink/renderer/core/frame/web_feature.h"
 #include "third_party/blink/renderer/core/html/html_div_element.h"
 #include "third_party/blink/renderer/core/html/track/text_track.h"
 #include "third_party/blink/renderer/core/html/track/text_track_cue_list.h"
@@ -48,6 +48,8 @@
 #include "third_party/blink/renderer/core/layout/layout_vtt_cue.h"
 #include "third_party/blink/renderer/platform/bindings/exception_messages.h"
 #include "third_party/blink/renderer/platform/bindings/exception_state.h"
+#include "third_party/blink/renderer/platform/heap/heap.h"
+#include "third_party/blink/renderer/platform/instrumentation/use_counter.h"
 #include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "third_party/blink/renderer/platform/text/bidi_resolver.h"
 #include "third_party/blink/renderer/platform/text/text_run_iterator.h"
@@ -132,19 +134,24 @@ static bool IsInvalidPercentage(double value, ExceptionState& exception_state) {
   return false;
 }
 
-// Sets inline CSS properties on passed in element if value is not an empty
-// string.
-static void SetInlineStylePropertyIfNotEmpty(Element& element,
-                                             CSSPropertyID property_id,
-                                             const String& value) {
-  if (!value.IsEmpty())
-    element.SetInlineStyleProperty(property_id, value);
-}
-
 VTTCueBox::VTTCueBox(Document& document)
     : HTMLDivElement(document),
       snap_to_lines_position_(std::numeric_limits<float>::quiet_NaN()) {
   SetShadowPseudoId(AtomicString("-webkit-media-text-track-display"));
+}
+
+VTTCueBackgroundBox::VTTCueBackgroundBox(Document& document)
+    : HTMLDivElement(document) {
+  SetShadowPseudoId(TextTrackCue::CueShadowPseudoId());
+}
+
+void VTTCueBackgroundBox::Trace(Visitor* visitor) {
+  visitor->Trace(track_);
+  HTMLDivElement::Trace(visitor);
+}
+
+void VTTCueBackgroundBox::SetTrack(TextTrack* track) {
+  track_ = track;
 }
 
 void VTTCueBox::ApplyCSSProperties(
@@ -230,6 +237,7 @@ LayoutObject* VTTCueBox::CreateLayoutObject(const ComputedStyle& style,
   if (style.GetPosition() == EPosition::kRelative)
     return HTMLDivElement::CreateLayoutObject(style, legacy);
 
+  UseCounter::Count(GetDocument(), WebFeature::kLegacyLayoutByVTTCue);
   return new LayoutVTTCue(this, snap_to_lines_position_);
 }
 
@@ -245,11 +253,10 @@ VTTCue::VTTCue(Document& document,
       writing_direction_(kHorizontal),
       cue_alignment_(kCenter),
       vtt_node_tree_(nullptr),
-      cue_background_box_(HTMLDivElement::Create(document)),
+      cue_background_box_(MakeGarbageCollected<VTTCueBackgroundBox>(document)),
       snap_to_lines_(true),
       display_tree_should_change_(true) {
   UseCounter::Count(document, WebFeature::kVTTCue);
-  cue_background_box_->SetShadowPseudoId(CueShadowPseudoId());
 }
 
 VTTCue::~VTTCue() = default;
@@ -257,8 +264,8 @@ VTTCue::~VTTCue() = default;
 #ifndef NDEBUG
 String VTTCue::ToString() const {
   return String::Format("%p id=%s interval=%f-->%f cue=%s)", this,
-                        id().Utf8().data(), startTime(), endTime(),
-                        text().Utf8().data());
+                        id().Utf8().c_str(), startTime(), endTime(),
+                        text().Utf8().c_str());
 }
 #endif
 
@@ -448,23 +455,25 @@ void VTTCue::setText(const String& text) {
 }
 
 void VTTCue::CreateVTTNodeTree() {
-  if (!vtt_node_tree_)
-    vtt_node_tree_ =
-        VTTParser::CreateDocumentFragmentFromCueText(GetDocument(), text_);
+  if (!vtt_node_tree_) {
+    vtt_node_tree_ = VTTParser::CreateDocumentFragmentFromCueText(
+        GetDocument(), text_, this->track());
+    cue_background_box_->SetTrack(this->track());
+  }
 }
 
 void VTTCue::CopyVTTNodeToDOMTree(ContainerNode* vtt_node,
                                   ContainerNode* parent) {
   for (Node* node = vtt_node->firstChild(); node; node = node->nextSibling()) {
     Node* cloned_node;
-    if (node->IsVTTElement())
-      cloned_node =
-          ToVTTElement(node)->CreateEquivalentHTMLElement(GetDocument());
+    if (auto* vtt_element = DynamicTo<VTTElement>(node))
+      cloned_node = vtt_element->CreateEquivalentHTMLElement(GetDocument());
     else
       cloned_node = node->cloneNode(false);
     parent->AppendChild(cloned_node);
-    if (node->IsContainerNode())
-      CopyVTTNodeToDOMTree(ToContainerNode(node), ToContainerNode(cloned_node));
+    auto* container_node = DynamicTo<ContainerNode>(node);
+    if (container_node)
+      CopyVTTNodeToDOMTree(container_node, To<ContainerNode>(cloned_node));
   }
 }
 
@@ -571,8 +580,8 @@ static CSSValueID DetermineTextDirection(DocumentFragment* vtt_root) {
           DetermineDirectionality(node->nodeValue(), has_strong_directionality);
       if (has_strong_directionality)
         break;
-    } else if (node->IsVTTElement()) {
-      if (ToVTTElement(node)->WebVTTNodeType() == kVTTNodeTypeRubyText) {
+    } else if (auto* vtt_element = DynamicTo<VTTElement>(node)) {
+      if (vtt_element->WebVTTNodeType() == kVTTNodeTypeRubyText) {
         node = NodeTraversal::NextSkippingChildren(*node);
         continue;
       }
@@ -781,11 +790,11 @@ void VTTCue::UpdatePastAndFutureNodes(double movie_time) {
         is_past_node = false;
     }
 
-    if (child.IsVTTElement()) {
-      ToVTTElement(child).SetIsPastNode(is_past_node);
+    if (auto* child_vtt_element = DynamicTo<VTTElement>(child)) {
+      child_vtt_element->SetIsPastNode(is_past_node);
       // Make an elemenet id match a cue id for style matching purposes.
       if (!id().IsEmpty())
-        ToElement(child).SetIdAttribute(id());
+        To<Element>(child).SetIdAttribute(id());
     }
   }
 }
@@ -794,20 +803,14 @@ VTTCueBox* VTTCue::GetDisplayTree() {
   DCHECK(track() && track()->IsRendered() && IsActive());
 
   if (!display_tree_) {
-    display_tree_ = VTTCueBox::Create(GetDocument());
+    display_tree_ = MakeGarbageCollected<VTTCueBox>(GetDocument());
     display_tree_->AppendChild(cue_background_box_);
   }
 
   DCHECK_EQ(display_tree_->firstChild(), cue_background_box_);
 
-  if (!display_tree_should_change_) {
-    // Apply updated user style overrides for text tracks when display tree
-    // doesn't change.  This ensures that the track settings are refreshed when
-    // the video is replayed or when the user slides back to an already rendered
-    // track.
-    ApplyUserOverrideCSSProperties();
+  if (!display_tree_should_change_)
     return display_tree_;
-  }
 
   CreateVTTNodeTree();
 
@@ -821,9 +824,6 @@ VTTCueBox* VTTCue::GetDisplayTree() {
     display_tree_->SetInlineStyleProperty(CSSPropertyID::kPosition,
                                           CSSValueID::kRelative);
   }
-
-  // Apply user override settings for text tracks
-  ApplyUserOverrideCSSProperties();
 
   display_tree_should_change_ = false;
 
@@ -1101,33 +1101,6 @@ void VTTCue::ParseSettings(const VTTRegionMap* region_map,
     // Make sure the entire run is consumed.
     input.SkipRun(value_run);
   }
-}
-
-void VTTCue::ApplyUserOverrideCSSProperties() {
-  Settings* settings = GetDocument().GetSettings();
-  if (!settings)
-    return;
-
-  SetInlineStylePropertyIfNotEmpty(*cue_background_box_,
-                                   CSSPropertyID::kBackgroundColor,
-                                   settings->GetTextTrackBackgroundColor());
-  SetInlineStylePropertyIfNotEmpty(*cue_background_box_,
-                                   CSSPropertyID::kFontFamily,
-                                   settings->GetTextTrackFontFamily());
-  SetInlineStylePropertyIfNotEmpty(*cue_background_box_,
-                                   CSSPropertyID::kFontStyle,
-                                   settings->GetTextTrackFontStyle());
-  SetInlineStylePropertyIfNotEmpty(*cue_background_box_,
-                                   CSSPropertyID::kFontVariant,
-                                   settings->GetTextTrackFontVariant());
-  SetInlineStylePropertyIfNotEmpty(*cue_background_box_, CSSPropertyID::kColor,
-                                   settings->GetTextTrackTextColor());
-  SetInlineStylePropertyIfNotEmpty(*cue_background_box_,
-                                   CSSPropertyID::kTextShadow,
-                                   settings->GetTextTrackTextShadow());
-  SetInlineStylePropertyIfNotEmpty(*cue_background_box_,
-                                   CSSPropertyID::kFontSize,
-                                   settings->GetTextTrackTextSize());
 }
 
 ExecutionContext* VTTCue::GetExecutionContext() const {

@@ -5,19 +5,21 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <fuzzer/FuzzedDataProvider.h>
+
 #include <memory>
 #include <vector>
 
 #include "base/bind.h"
-#include "base/logging.h"
+#include "base/check_op.h"
 #include "base/run_loop.h"
-#include "base/test/fuzzed_data_provider.h"
-#include "base/test/scoped_task_environment.h"
+#include "base/test/task_environment.h"
 #include "net/base/address_family.h"
 #include "net/base/address_list.h"
 #include "net/base/net_errors.h"
 #include "net/base/request_priority.h"
-#include "net/dns/fuzzed_context_host_resolver.h"
+#include "net/dns/context_host_resolver.h"
+#include "net/dns/fuzzed_host_resolver_util.h"
 #include "net/dns/host_resolver.h"
 #include "net/log/net_log_with_source.h"
 #include "net/log/test_net_log.h"
@@ -31,7 +33,7 @@ const char* kHostNames[] = {"foo", "foo.com",   "a.foo.com",
 class DnsRequest {
  public:
   DnsRequest(net::HostResolver* host_resolver,
-             base::FuzzedDataProvider* data_provider,
+             FuzzedDataProvider* data_provider,
              std::vector<std::unique_ptr<DnsRequest>>* dns_requests)
       : host_resolver_(host_resolver),
         data_provider_(data_provider),
@@ -43,7 +45,7 @@ class DnsRequest {
   // doesn't complete synchronously, adds it to |dns_requests|.
   static void CreateRequest(
       net::HostResolver* host_resolver,
-      base::FuzzedDataProvider* data_provider,
+      FuzzedDataProvider* data_provider,
       std::vector<std::unique_ptr<DnsRequest>>* dns_requests) {
     std::unique_ptr<DnsRequest> dns_request(
         new DnsRequest(host_resolver, data_provider, dns_requests));
@@ -55,7 +57,7 @@ class DnsRequest {
   // If |dns_requests| is non-empty, waits for a randomly chosen one of the
   // requests to complete and removes it from |dns_requests|.
   static void WaitForRequestComplete(
-      base::FuzzedDataProvider* data_provider,
+      FuzzedDataProvider* data_provider,
       std::vector<std::unique_ptr<DnsRequest>>* dns_requests) {
     if (dns_requests->empty())
       return;
@@ -74,7 +76,7 @@ class DnsRequest {
   // complete, just removes it from the list.
   static void CancelRequest(
       net::HostResolver* host_resolver,
-      base::FuzzedDataProvider* data_provider,
+      FuzzedDataProvider* data_provider,
       std::vector<std::unique_ptr<DnsRequest>>* dns_requests) {
     if (dns_requests->empty())
       return;
@@ -175,7 +177,7 @@ class DnsRequest {
   void Cancel() { request_.reset(); }
 
   net::HostResolver* host_resolver_;
-  base::FuzzedDataProvider* data_provider_;
+  FuzzedDataProvider* data_provider_;
   std::vector<std::unique_ptr<DnsRequest>>* dns_requests_;
 
   // Non-null only while running.
@@ -198,16 +200,17 @@ class DnsRequest {
 //     async resolver while lookups are active as a result of the change.
 extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
   {
-    base::FuzzedDataProvider data_provider(data, size);
-    net::TestNetLog net_log;
+    FuzzedDataProvider data_provider(data, size);
+    net::RecordingTestNetLog net_log;
 
-    net::HostResolver::Options options;
+    net::HostResolver::ManagerOptions options;
     options.max_concurrent_resolves =
         data_provider.ConsumeIntegralInRange(1, 8);
-    options.enable_caching = data_provider.ConsumeBool();
-    net::FuzzedContextHostResolver host_resolver(options, &net_log,
-                                                 &data_provider);
-    host_resolver.SetDnsClientEnabled(data_provider.ConsumeBool());
+    options.insecure_dns_client_enabled = data_provider.ConsumeBool();
+    bool enable_caching = data_provider.ConsumeBool();
+    std::unique_ptr<net::ContextHostResolver> host_resolver =
+        net::CreateFuzzedContextHostResolver(options, &net_log, &data_provider,
+                                             enable_caching);
 
     std::vector<std::unique_ptr<DnsRequest>> dns_requests;
     bool done = false;
@@ -218,14 +221,14 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
           done = true;
           break;
         case 1:
-          DnsRequest::CreateRequest(&host_resolver, &data_provider,
+          DnsRequest::CreateRequest(host_resolver.get(), &data_provider,
                                     &dns_requests);
           break;
         case 2:
           DnsRequest::WaitForRequestComplete(&data_provider, &dns_requests);
           break;
         case 3:
-          DnsRequest::CancelRequest(&host_resolver, &data_provider,
+          DnsRequest::CancelRequest(host_resolver.get(), &data_provider,
                                     &dns_requests);
           break;
       }

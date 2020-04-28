@@ -20,7 +20,7 @@ namespace content {
 
 struct WebTestPermissionManager::Subscription {
   PermissionDescription permission;
-  base::Callback<void(blink::mojom::PermissionStatus)> callback;
+  base::RepeatingCallback<void(blink::mojom::PermissionStatus)> callback;
   blink::mojom::PermissionStatus current_value;
 };
 
@@ -59,10 +59,10 @@ int WebTestPermissionManager::RequestPermission(
     RenderFrameHost* render_frame_host,
     const GURL& requesting_origin,
     bool user_gesture,
-    const base::Callback<void(blink::mojom::PermissionStatus)>& callback) {
+    base::OnceCallback<void(blink::mojom::PermissionStatus)> callback) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
 
-  callback.Run(
+  std::move(callback).Run(
       GetPermissionStatus(permission, requesting_origin,
                           WebContents::FromRenderFrameHost(render_frame_host)
                               ->GetLastCommittedURL()
@@ -75,8 +75,8 @@ int WebTestPermissionManager::RequestPermissions(
     content::RenderFrameHost* render_frame_host,
     const GURL& requesting_origin,
     bool user_gesture,
-    const base::Callback<
-        void(const std::vector<blink::mojom::PermissionStatus>&)>& callback) {
+    base::OnceCallback<void(const std::vector<blink::mojom::PermissionStatus>&)>
+        callback) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
 
   std::vector<blink::mojom::PermissionStatus> result;
@@ -90,7 +90,7 @@ int WebTestPermissionManager::RequestPermissions(
         GetPermissionStatus(permission, requesting_origin, embedding_origin));
   }
 
-  callback.Run(result);
+  std::move(callback).Run(result);
   return PermissionController::kNoPendingOperation;
 }
 
@@ -151,7 +151,7 @@ int WebTestPermissionManager::SubscribePermissionStatusChange(
     PermissionType permission,
     RenderFrameHost* render_frame_host,
     const GURL& requesting_origin,
-    const base::Callback<void(blink::mojom::PermissionStatus)>& callback) {
+    base::RepeatingCallback<void(blink::mojom::PermissionStatus)> callback) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
 
   // If the request is from a worker, it won't have a RFH.
@@ -165,7 +165,7 @@ int WebTestPermissionManager::SubscribePermissionStatusChange(
   auto subscription = std::make_unique<Subscription>();
   subscription->permission =
       PermissionDescription(permission, requesting_origin, embedding_origin);
-  subscription->callback = callback;
+  subscription->callback = std::move(callback);
   subscription->current_value =
       GetPermissionStatus(permission, subscription->permission.origin,
                           subscription->permission.embedding_origin);
@@ -207,6 +207,22 @@ void WebTestPermissionManager::SetPermission(
   OnPermissionChanged(description, status);
 }
 
+void WebTestPermissionManager::SetPermission(
+    blink::mojom::PermissionDescriptorPtr descriptor,
+    blink::mojom::PermissionStatus status,
+    const GURL& url,
+    const GURL& embedding_url,
+    blink::test::mojom::PermissionAutomation::SetPermissionCallback callback) {
+  auto type = PermissionDescriptorToPermissionType(descriptor);
+  if (!type) {
+    std::move(callback).Run(false);
+    return;
+  }
+
+  SetPermission(*type, status, url, embedding_url);
+  std::move(callback).Run(true);
+}
+
 void WebTestPermissionManager::ResetPermissions() {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
 
@@ -214,10 +230,16 @@ void WebTestPermissionManager::ResetPermissions() {
   permissions_.clear();
 }
 
+void WebTestPermissionManager::Bind(
+    mojo::PendingReceiver<blink::test::mojom::PermissionAutomation> receiver) {
+  receivers_.Add(this, std::move(receiver));
+}
+
 void WebTestPermissionManager::OnPermissionChanged(
     const PermissionDescription& permission,
     blink::mojom::PermissionStatus status) {
-  std::list<base::Closure> callbacks;
+  std::vector<base::OnceClosure> callbacks;
+  callbacks.reserve(subscriptions_.size());
 
   for (SubscriptionsMap::iterator iter(&subscriptions_); !iter.IsAtEnd();
        iter.Advance()) {
@@ -232,11 +254,11 @@ void WebTestPermissionManager::OnPermissionChanged(
 
     // Add the callback to |callbacks| which will be run after the loop to
     // prevent re-entrance issues.
-    callbacks.push_back(base::Bind(subscription->callback, status));
+    callbacks.push_back(base::BindOnce(subscription->callback, status));
   }
 
-  for (const auto& callback : callbacks)
-    callback.Run();
+  for (auto& callback : callbacks)
+    std::move(callback).Run();
 }
 
 }  // namespace content

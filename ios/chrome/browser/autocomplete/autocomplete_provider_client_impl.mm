@@ -11,26 +11,28 @@
 #include "components/language/core/browser/pref_names.h"
 #include "components/omnibox/browser/autocomplete_classifier.h"
 #include "components/prefs/pref_service.h"
+#include "components/signin/public/identity_manager/identity_manager.h"
 #include "components/sync/driver/sync_service.h"
 #include "components/unified_consent/url_keyed_data_collection_consent_helper.h"
 #include "ios/chrome/browser/application_context.h"
 #include "ios/chrome/browser/autocomplete/autocomplete_classifier_factory.h"
 #include "ios/chrome/browser/autocomplete/in_memory_url_index_factory.h"
+#include "ios/chrome/browser/autocomplete/remote_suggestions_service_factory.h"
 #include "ios/chrome/browser/autocomplete/shortcuts_backend_factory.h"
 #include "ios/chrome/browser/bookmarks/bookmark_model_factory.h"
 #include "ios/chrome/browser/browser_state/chrome_browser_state.h"
 #include "ios/chrome/browser/chrome_url_constants.h"
 #include "ios/chrome/browser/history/history_service_factory.h"
 #include "ios/chrome/browser/history/top_sites_factory.h"
+#import "ios/chrome/browser/main/browser.h"
+#import "ios/chrome/browser/main/browser_list.h"
+#import "ios/chrome/browser/main/browser_list_factory.h"
 #include "ios/chrome/browser/pref_names.h"
 #include "ios/chrome/browser/search_engines/template_url_service_factory.h"
 #include "ios/chrome/browser/signin/identity_manager_factory.h"
 #include "ios/chrome/browser/sync/profile_sync_service_factory.h"
-#import "ios/chrome/browser/tabs/tab_model.h"
-#import "ios/chrome/browser/tabs/tab_model_list.h"
 #import "ios/chrome/browser/web_state_list/web_state_list.h"
-#import "ios/web/public/web_state/web_state.h"
-#include "services/identity/public/cpp/identity_manager.h"
+#include "ios/components/webui/web_ui_url_constants.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
 
 #if !defined(__has_feature) || !__has_feature(objc_arc)
@@ -38,7 +40,7 @@
 #endif
 
 AutocompleteProviderClientImpl::AutocompleteProviderClientImpl(
-    ios::ChromeBrowserState* browser_state)
+    ChromeBrowserState* browser_state)
     : browser_state_(browser_state),
       url_consent_helper_(unified_consent::UrlKeyedDataCollectionConsentHelper::
                               NewPersonalizedDataCollectionConsentHelper(
@@ -99,10 +101,11 @@ AutocompleteProviderClientImpl::GetTemplateURLService() const {
   return ios::TemplateURLServiceFactory::GetForBrowserState(browser_state_);
 }
 
-ContextualSuggestionsService*
-AutocompleteProviderClientImpl::GetContextualSuggestionsService(
+RemoteSuggestionsService*
+AutocompleteProviderClientImpl::GetRemoteSuggestionsService(
     bool create_if_necessary) const {
-  return nullptr;
+  return RemoteSuggestionsServiceFactory::GetForBrowserState(
+      browser_state_, create_if_necessary);
 }
 
 DocumentSuggestionsService*
@@ -161,8 +164,9 @@ AutocompleteProviderClientImpl::GetBuiltinsToProvideAsUserTypes() {
           base::ASCIIToUTF16(kChromeUIVersionURL)};
 }
 
-base::Time AutocompleteProviderClientImpl::GetCurrentVisitTimestamp() const {
-  return base::Time();
+component_updater::ComponentUpdateService*
+AutocompleteProviderClientImpl::GetComponentUpdateService() {
+  return GetApplicationContext()->GetComponentUpdateService();
 }
 
 bool AutocompleteProviderClientImpl::IsOffTheRecord() const {
@@ -179,7 +183,7 @@ bool AutocompleteProviderClientImpl::IsPersonalizedUrlDataCollectionActive()
 }
 
 bool AutocompleteProviderClientImpl::IsAuthenticated() const {
-  identity::IdentityManager* identity_manager =
+  signin::IdentityManager* identity_manager =
       IdentityManagerFactory::GetForBrowserState(browser_state_);
   return identity_manager != nullptr && identity_manager->HasPrimaryAccount();
 }
@@ -210,17 +214,19 @@ void AutocompleteProviderClientImpl::DeleteMatchingURLsForKeywordFromHistory(
 
 void AutocompleteProviderClientImpl::PrefetchImage(const GURL& url) {}
 
-void AutocompleteProviderClientImpl::OnAutocompleteControllerResultReady(
-    AutocompleteController* controller) {
-  // iOS currently has no client for this event.
-}
-
 bool AutocompleteProviderClientImpl::IsTabOpenWithURL(
     const GURL& url,
     const AutocompleteInput* input) {
-  TabModel* tab_model =
-      TabModelList::GetLastActiveTabModelForChromeBrowserState(browser_state_);
-  WebStateList* web_state_list = tab_model.webStateList;
-  return web_state_list && web_state_list->GetIndexOfInactiveWebStateWithURL(
-                               url) != WebStateList::kInvalidIndex;
+  BrowserList* browser_list =
+      BrowserListFactory::GetForBrowserState(browser_state_);
+  std::set<Browser*> browsers = browser_state_->IsOffTheRecord()
+                                    ? browser_list->AllIncognitoBrowsers()
+                                    : browser_list->AllRegularBrowsers();
+  for (Browser* browser : browsers) {
+    if (browser->GetWebStateList()->GetIndexOfInactiveWebStateWithURL(url) !=
+        WebStateList::kInvalidIndex) {
+      return true;
+    }
+  }
+  return false;
 }

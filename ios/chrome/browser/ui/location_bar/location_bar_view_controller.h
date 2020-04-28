@@ -7,10 +7,12 @@
 
 #import <UIKit/UIKit.h>
 
+#import "ios/chrome/browser/ui/badges/badge_consumer.h"
 #import "ios/chrome/browser/ui/fullscreen/fullscreen_ui_element.h"
 #import "ios/chrome/browser/ui/location_bar/location_bar_consumer.h"
 #import "ios/chrome/browser/ui/orchestrator/location_bar_animatee.h"
 
+@class InfobarMetricsRecorder;
 @class OmniboxTextFieldIOS;
 @protocol ActivityServiceCommands;
 @protocol ApplicationCommands;
@@ -34,11 +36,15 @@
 // the omnibox textfield is displayed; in the non-editing state, the current
 // location is displayed.
 @interface LocationBarViewController
-    : UIViewController<FullscreenUIElement, LocationBarAnimatee>
+    : UIViewController <FullscreenUIElement, LocationBarAnimatee>
 
 // Sets the edit view to use in the editing state. This must be set before the
 // view of this view controller is initialized. This must only be called once.
 - (void)setEditView:(UIView*)editView;
+
+// Sets the badge view to display badges. This must be set before the
+// view of this view controller is initialized. This must only be called once.
+- (void)setBadgeView:(UIView*)badgeView;
 
 @property(nonatomic, assign) BOOL incognito;
 
@@ -66,27 +72,15 @@
 - (void)updateLocationIcon:(UIImage*)icon
         securityStatusText:(NSString*)statusText;
 // Updates the location text in the non-editing mode.
-- (void)updateLocationText:(NSString*)text;
+// |clipTail| indicates whether the tail or the head should be clipped when the
+// location text is too long.
+- (void)updateLocationText:(NSString*)text clipTail:(BOOL)clipTail;
 // Updates the location view to show a fake placeholder in the steady location
 // view and hides the trailing button if |isNTP|. Otherwise, shows the
 // location text and the button as normal.
 - (void)updateForNTP:(BOOL)isNTP;
 // Sets |enabled| of the share button.
 - (void)setShareButtonEnabled:(BOOL)enabled;
-// Displays or hides the InfobarButton.
-// TODO(crbug.com/935804): This method is currently only being used in the
-// Infobar redesign.
-- (void)displayInfobarButton:(BOOL)display;
-// If |selected| is YES applies the selected styling to the InfobarButton, if NO
-// it removes it.
-// TODO(crbug.com/935804): This method is currently only being used in the
-// Infobar redesign.
-- (void)setInfobarButtonStyleSelected:(BOOL)selected;
-// If |active| is YES applies the active styling to the InfobarButton, if NO it
-// removes it.
-// TODO(crbug.com/935804): This method is currently only being used in the
-// Infobar redesign.
-- (void)setInfobarButtonStyleActive:(BOOL)active;
 
 // Displays the voice search button instead of the share button in steady state,
 // and adds the voice search button to the empty textfield.

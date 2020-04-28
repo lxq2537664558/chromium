@@ -24,10 +24,9 @@
 #include "third_party/blink/renderer/core/workers/worklet_thread_holder.h"
 #include "third_party/blink/renderer/modules/animationworklet/animation_worklet_proxy_client.h"
 #include "third_party/blink/renderer/modules/worklet/worklet_thread_test_common.h"
-#include "third_party/blink/renderer/platform/cross_thread_functional.h"
 #include "third_party/blink/renderer/platform/loader/fetch/resource_loader_options.h"
 #include "third_party/blink/renderer/platform/testing/unit_test_helpers.h"
-#include "third_party/blink/renderer/platform/web_thread_supporting_gc.h"
+#include "third_party/blink/renderer/platform/wtf/cross_thread_functional.h"
 #include "third_party/blink/renderer/platform/wtf/text/text_position.h"
 
 namespace blink {
@@ -46,9 +45,7 @@ class AnimationAndPaintWorkletThreadTest : public PageTestBase {
  public:
   void SetUp() override {
     PageTestBase::SetUp(IntSize());
-    Document* document = &GetDocument();
-    document->SetURL(KURL("https://example.com/"));
-    document->UpdateSecurityOrigin(SecurityOrigin::Create(document->Url()));
+    NavigateTo(KURL("https://example.com/"));
     reporting_proxy_ = std::make_unique<WorkerReportingProxy>();
   }
 
@@ -56,9 +53,10 @@ class AnimationAndPaintWorkletThreadTest : public PageTestBase {
   void CheckWorkletCanExecuteScript(WorkerThread* thread) {
     std::unique_ptr<base::WaitableEvent> wait_event =
         std::make_unique<base::WaitableEvent>();
-    thread->GetWorkerBackingThread().BackingThread().PostTask(
+    PostCrossThreadTask(
+        *thread->GetWorkerBackingThread().BackingThread().GetTaskRunner(),
         FROM_HERE,
-        CrossThreadBind(
+        CrossThreadBindOnce(
             &AnimationAndPaintWorkletThreadTest::ExecuteScriptInWorklet,
             CrossThreadUnretained(this), CrossThreadUnretained(thread),
             CrossThreadUnretained(wait_event.get())));
@@ -75,14 +73,15 @@ class AnimationAndPaintWorkletThreadTest : public PageTestBase {
     EXPECT_TRUE(script_state);
     ScriptState::Scope scope(script_state);
     const KURL js_url("https://example.com/foo.js");
-    ModuleRecord module = ModuleRecord::Compile(
+    v8::Local<v8::Module> module = ModuleRecord::Compile(
         script_state->GetIsolate(), "var counter = 0; ++counter;", js_url,
         js_url, ScriptFetchOptions(), TextPosition::MinimumPosition(),
         ASSERT_NO_EXCEPTION);
-    EXPECT_FALSE(module.IsNull());
-    ScriptValue exception = module.Instantiate(script_state);
+    EXPECT_FALSE(module.IsEmpty());
+    ScriptValue exception =
+        ModuleRecord::Instantiate(script_state, module, js_url);
     EXPECT_TRUE(exception.IsEmpty());
-    ScriptValue value = module.Evaluate(script_state);
+    ScriptValue value = ModuleRecord::Evaluate(script_state, module, js_url);
     EXPECT_TRUE(value.IsEmpty());
     wait_event->Signal();
   }
@@ -104,7 +103,7 @@ TEST_F(AnimationAndPaintWorkletThreadTest, CreateSecondAndTerminateFirst) {
   std::unique_ptr<AnimationAndPaintWorkletThread> first_worklet =
       CreateThreadAndProvideAnimationWorkletProxyClient(&GetDocument(),
                                                         reporting_proxy_.get());
-  WebThreadSupportingGC* first_thread =
+  Thread* first_thread =
       &first_worklet->GetWorkerBackingThread().BackingThread();
   CheckWorkletCanExecuteScript(first_worklet.get());
   v8::Isolate* first_isolate = first_worklet->GetIsolate();
@@ -120,7 +119,7 @@ TEST_F(AnimationAndPaintWorkletThreadTest, CreateSecondAndTerminateFirst) {
 
   // Wait until the second worklet is initialized. Verify that the second
   // worklet is using the same thread and Isolate as the first worklet.
-  WebThreadSupportingGC* second_thread =
+  Thread* second_thread =
       &second_worklet->GetWorkerBackingThread().BackingThread();
   ASSERT_EQ(first_thread, second_thread);
 
@@ -142,8 +141,7 @@ TEST_F(AnimationAndPaintWorkletThreadTest, TerminateFirstAndCreateSecond) {
   std::unique_ptr<AnimationAndPaintWorkletThread> worklet =
       CreateThreadAndProvideAnimationWorkletProxyClient(&GetDocument(),
                                                         reporting_proxy_.get());
-  WebThreadSupportingGC* first_thread =
-      &worklet->GetWorkerBackingThread().BackingThread();
+  Thread* first_thread = &worklet->GetWorkerBackingThread().BackingThread();
   CheckWorkletCanExecuteScript(worklet.get());
 
   // We don't use terminateAndWait here to avoid forcible termination.
@@ -153,8 +151,7 @@ TEST_F(AnimationAndPaintWorkletThreadTest, TerminateFirstAndCreateSecond) {
   // Create the second worklet. The backing thread is same.
   worklet = CreateThreadAndProvideAnimationWorkletProxyClient(
       &GetDocument(), reporting_proxy_.get());
-  WebThreadSupportingGC* second_thread =
-      &worklet->GetWorkerBackingThread().BackingThread();
+  Thread* second_thread = &worklet->GetWorkerBackingThread().BackingThread();
   EXPECT_EQ(first_thread, second_thread);
   CheckWorkletCanExecuteScript(worklet.get());
 

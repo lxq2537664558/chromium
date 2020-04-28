@@ -60,12 +60,12 @@ void CSSSelector::CreateRareData() {
   DCHECK_NE(Match(), kTag);
   if (has_rare_data_)
     return;
-  AtomicString value(data_.value_);
-  if (data_.value_)
-    data_.value_->Release();
-  auto rare_data = RareData::Create(value);
-  rare_data->AddRef();
-  data_.rare_data_ = rare_data.get();
+  // This transitions the DataUnion from |value_| to |rare_data_| and thus needs to be careful to
+  // correctly manage explicitly destruction of |value_| followed by placement new of |rare_data_|.
+  // A straight-assignment will compile and may kinda work, but will be undefined behavior.
+  auto rare_data = RareData::Create(data_.value_);
+  data_.value_.~AtomicString();
+  new (&data_.rare_data_) scoped_refptr<RareData>(std::move(rare_data));
   has_rare_data_ = true;
 }
 
@@ -188,6 +188,10 @@ PseudoId CSSSelector::GetPseudoId(PseudoType type) {
       return kPseudoIdBefore;
     case kPseudoAfter:
       return kPseudoIdAfter;
+    case kPseudoMarker:
+      return RuntimeEnabledFeatures::CSSMarkerPseudoElementEnabled()
+                 ? kPseudoIdMarker
+                 : kPseudoIdNone;
     case kPseudoBackdrop:
       return kPseudoIdBackdrop;
     case kPseudoScrollbar:
@@ -278,6 +282,7 @@ PseudoId CSSSelector::GetPseudoId(PseudoType type) {
     case kPseudoHost:
     case kPseudoHostContext:
     case kPseudoPart:
+    case kPseudoState:
     case kPseudoShadow:
     case kPseudoFullScreen:
     case kPseudoFullScreenAncestor:
@@ -287,10 +292,12 @@ PseudoId CSSSelector::GetPseudoId(PseudoType type) {
     case kPseudoSpatialNavigationInterest:
     case kPseudoIsHtml:
     case kPseudoListBox:
+    case kPseudoMultiSelectFocus:
     case kPseudoHostHasAppearance:
     case kPseudoSlotted:
     case kPseudoVideoPersistent:
     case kPseudoVideoPersistentAncestor:
+    case kPseudoXrOverlay:
       return kPseudoIdNone;
   }
 
@@ -314,6 +321,7 @@ const static NameToPseudoStruct kPseudoTypeWithoutArgumentsMap[] = {
     {"-internal-list-box", CSSSelector::kPseudoListBox},
     {"-internal-media-controls-overlay-cast-button",
      CSSSelector::kPseudoWebKitCustomElement},
+    {"-internal-multi-select-focus", CSSSelector::kPseudoMultiSelectFocus},
     {"-internal-shadow-host-has-appearance",
      CSSSelector::kPseudoHostHasAppearance},
     {"-internal-spatial-navigation-focus",
@@ -374,6 +382,7 @@ const static NameToPseudoStruct kPseudoTypeWithoutArgumentsMap[] = {
     {"last-of-type", CSSSelector::kPseudoLastOfType},
     {"left", CSSSelector::kPseudoLeftPage},
     {"link", CSSSelector::kPseudoLink},
+    {"marker", CSSSelector::kPseudoMarker},
     {"no-button", CSSSelector::kPseudoNoButton},
     {"only-child", CSSSelector::kPseudoOnlyChild},
     {"only-of-type", CSSSelector::kPseudoOnlyOfType},
@@ -399,6 +408,7 @@ const static NameToPseudoStruct kPseudoTypeWithoutArgumentsMap[] = {
     {"vertical", CSSSelector::kPseudoVertical},
     {"visited", CSSSelector::kPseudoVisited},
     {"window-inactive", CSSSelector::kPseudoWindowInactive},
+    {"xr-overlay", CSSSelector::kPseudoXrOverlay},
 };
 
 const static NameToPseudoStruct kPseudoTypeWithArgumentsMap[] = {
@@ -415,6 +425,7 @@ const static NameToPseudoStruct kPseudoTypeWithArgumentsMap[] = {
     {"nth-of-type", CSSSelector::kPseudoNthOfType},
     {"part", CSSSelector::kPseudoPart},
     {"slotted", CSSSelector::kPseudoSlotted},
+    {"state", CSSSelector::kPseudoState},
     {"where", CSSSelector::kPseudoWhere},
 };
 
@@ -456,24 +467,31 @@ static CSSSelector::PseudoType NameToPseudoType(const AtomicString& name,
       !RuntimeEnabledFeatures::CSSPictureInPictureEnabled())
     return CSSSelector::kPseudoUnknown;
 
+  if (match->type == CSSSelector::kPseudoState &&
+      !RuntimeEnabledFeatures::CustomStatePseudoClassEnabled()) {
+    return CSSSelector::kPseudoUnknown;
+  }
+
   return static_cast<CSSSelector::PseudoType>(match->type);
 }
 
 #ifndef NDEBUG
 void CSSSelector::Show(int indent) const {
-  printf("%*sSelectorText(): %s\n", indent, "", SelectorText().Ascii().data());
+  printf("%*sSelectorText(): %s\n", indent, "", SelectorText().Ascii().c_str());
   printf("%*smatch_: %d\n", indent, "", match_);
   if (match_ != kTag)
-    printf("%*sValue(): %s\n", indent, "", Value().Ascii().data());
+    printf("%*sValue(): %s\n", indent, "", Value().Ascii().c_str());
   printf("%*sGetPseudoType(): %d\n", indent, "", GetPseudoType());
-  if (match_ == kTag)
+  if (match_ == kTag) {
     printf("%*sTagQName().LocalName(): %s\n", indent, "",
-           TagQName().LocalName().Ascii().data());
+           TagQName().LocalName().Ascii().c_str());
+  }
   printf("%*sIsAttributeSelector(): %d\n", indent, "", IsAttributeSelector());
-  if (IsAttributeSelector())
+  if (IsAttributeSelector()) {
     printf("%*sAttribute(): %s\n", indent, "",
-           Attribute().LocalName().Ascii().data());
-  printf("%*sArgument(): %s\n", indent, "", Argument().Ascii().data());
+           Attribute().LocalName().Ascii().c_str());
+  }
+  printf("%*sArgument(): %s\n", indent, "", Argument().Ascii().c_str());
   printf("%*sSpecificity(): %u\n", indent, "", Specificity());
   if (TagHistory()) {
     printf("\n%*s--> (Relation() == %d)\n", indent, "", Relation());
@@ -485,7 +503,7 @@ void CSSSelector::Show(int indent) const {
 
 void CSSSelector::Show() const {
   printf("\n******* CSSSelector::Show(\"%s\") *******\n",
-         SelectorText().Ascii().data());
+         SelectorText().Ascii().c_str());
   Show(2);
   printf("******* end *******\n");
 }
@@ -545,6 +563,7 @@ void CSSSelector::UpdatePseudoType(const AtomicString& value,
     // For pseudo elements
     case kPseudoBackdrop:
     case kPseudoCue:
+    case kPseudoMarker:
     case kPseudoPart:
     case kPseudoPlaceholder:
     case kPseudoResizer:
@@ -572,6 +591,7 @@ void CSSSelector::UpdatePseudoType(const AtomicString& value,
     case kPseudoHostHasAppearance:
     case kPseudoIsHtml:
     case kPseudoListBox:
+    case kPseudoMultiSelectFocus:
     case kPseudoSpatialNavigationFocus:
     case kPseudoSpatialNavigationInterest:
     case kPseudoVideoPersistent:
@@ -643,6 +663,7 @@ void CSSSelector::UpdatePseudoType(const AtomicString& value,
     case kPseudoScope:
     case kPseudoSingleButton:
     case kPseudoStart:
+    case kPseudoState:
     case kPseudoTarget:
     case kPseudoUnknown:
     case kPseudoValid:
@@ -650,6 +671,7 @@ void CSSSelector::UpdatePseudoType(const AtomicString& value,
     case kPseudoVisited:
     case kPseudoWebkitAnyLink:
     case kPseudoWindowInactive:
+    case kPseudoXrOverlay:
       if (match_ != kPseudoClass)
         pseudo_type_ = kPseudoUnknown;
       break;
@@ -762,8 +784,9 @@ const CSSSelector* CSSSelector::SerializeCompound(
           break;
         }
         case kPseudoLang:
+        case kPseudoState:
           builder.Append('(');
-          builder.Append(simple_selector->Argument());
+          SerializeIdentifier(simple_selector->Argument(), builder);
           builder.Append(')');
           break;
         case kPseudoNot:
@@ -780,13 +803,19 @@ const CSSSelector* CSSSelector::SerializeCompound(
       }
     } else if (simple_selector->match_ == kPseudoElement) {
       builder.Append("::");
-      builder.Append(simple_selector->SerializingValue());
+      SerializeIdentifier(simple_selector->SerializingValue(), builder);
       switch (simple_selector->GetPseudoType()) {
-        case kPseudoPart:
-          builder.Append('(');
-          builder.Append(simple_selector->Argument());
+        case kPseudoPart: {
+          char separator = '(';
+          for (AtomicString part : *simple_selector->PartNames()) {
+            builder.Append(separator);
+            if (separator == '(')
+              separator = ' ';
+            SerializeIdentifier(part, builder);
+          }
           builder.Append(')');
           break;
+        }
         default:
           break;
       }
@@ -1055,6 +1084,7 @@ bool CSSSelector::MatchesPseudoElement() const {
 bool CSSSelector::IsTreeAbidingPseudoElement() const {
   return Match() == CSSSelector::kPseudoElement &&
          (GetPseudoType() == kPseudoBefore || GetPseudoType() == kPseudoAfter ||
+          GetPseudoType() == kPseudoMarker ||
           GetPseudoType() == kPseudoPlaceholder);
 }
 
@@ -1184,6 +1214,12 @@ bool CSSSelector::RareData::MatchNth(unsigned unsigned_count) {
   if (count > NthBValue())
     return false;
   return (NthBValue() - count) % (-NthAValue()) == 0;
+}
+
+void CSSSelector::SetPartNames(
+    std::unique_ptr<Vector<AtomicString>> part_names) {
+  CreateRareData();
+  data_.rare_data_->part_names_ = std::move(part_names);
 }
 
 }  // namespace blink

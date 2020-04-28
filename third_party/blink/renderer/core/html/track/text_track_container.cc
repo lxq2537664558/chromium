@@ -50,7 +50,7 @@ class VideoElementResizeDelegate final : public ResizeObserver::Delegate {
   void OnResize(
       const HeapVector<Member<ResizeObserverEntry>>& entries) override {
     DCHECK_EQ(entries.size(), 1u);
-    DCHECK(IsHTMLVideoElement(entries[0]->target()));
+    DCHECK(IsA<HTMLVideoElement>(entries[0]->target()));
     text_track_container_->UpdateDefaultFontSize(
         entries[0]->target()->GetLayoutObject());
   }
@@ -66,23 +66,40 @@ class VideoElementResizeDelegate final : public ResizeObserver::Delegate {
 
 }  // namespace
 
-TextTrackContainer::TextTrackContainer(Document& document)
-    : HTMLDivElement(document), default_font_size_(0) {}
+TextTrackContainer::TextTrackContainer(HTMLMediaElement& media_element)
+    : HTMLDivElement(media_element.GetDocument()),
+      media_element_(&media_element),
+      default_font_size_(0) {
+  SetShadowPseudoId(AtomicString("-webkit-media-text-track-container"));
+  if (IsA<HTMLVideoElement>(*media_element_))
+    ObserveSizeChanges(*media_element_);
+}
 
 void TextTrackContainer::Trace(Visitor* visitor) {
+  visitor->Trace(media_element_);
   visitor->Trace(video_size_observer_);
   HTMLDivElement::Trace(visitor);
 }
 
-TextTrackContainer* TextTrackContainer::Create(
-    HTMLMediaElement& media_element) {
-  TextTrackContainer* element =
-      MakeGarbageCollected<TextTrackContainer>(media_element.GetDocument());
-  element->SetShadowPseudoId(
-      AtomicString("-webkit-media-text-track-container"));
-  if (IsHTMLVideoElement(media_element))
-    element->ObserveSizeChanges(media_element);
-  return element;
+Node::InsertionNotificationRequest TextTrackContainer::InsertedInto(
+    ContainerNode& root) {
+  if (!video_size_observer_ && media_element_->isConnected() &&
+      IsA<HTMLVideoElement>(*media_element_)) {
+    ObserveSizeChanges(*media_element_);
+  }
+
+  return HTMLDivElement::InsertedInto(root);
+}
+
+void TextTrackContainer::RemovedFrom(ContainerNode& insertion_point) {
+  DCHECK(!media_element_->isConnected());
+
+  HTMLDivElement::RemovedFrom(insertion_point);
+
+  if (video_size_observer_) {
+    video_size_observer_->disconnect();
+    video_size_observer_.Clear();
+  }
 }
 
 LayoutObject* TextTrackContainer::CreateLayoutObject(const ComputedStyle&,
@@ -97,13 +114,14 @@ LayoutObject* TextTrackContainer::CreateLayoutObject(const ComputedStyle&,
 
 void TextTrackContainer::ObserveSizeChanges(Element& element) {
   video_size_observer_ = ResizeObserver::Create(
-      GetDocument(), MakeGarbageCollected<VideoElementResizeDelegate>(*this));
+      GetDocument().domWindow(),
+      MakeGarbageCollected<VideoElementResizeDelegate>(*this));
   video_size_observer_->observe(&element);
 }
 
 void TextTrackContainer::UpdateDefaultFontSize(
     LayoutObject* media_layout_object) {
-  if (!media_layout_object || !media_layout_object->IsVideo())
+  if (!media_layout_object || !IsA<LayoutVideo>(media_layout_object))
     return;
   // FIXME: The video size is used to calculate the font size (a workaround
   // for lack of per-spec vh/vw support) but the whole media element is used
@@ -142,11 +160,11 @@ void TextTrackContainer::UpdateDisplay(HTMLMediaElement& media_element,
   // 1. If the media element is an audio element, or is another playback
   // mechanism with no rendering area, abort these steps. There is nothing to
   // render.
-  if (IsHTMLAudioElement(media_element))
+  if (IsA<HTMLAudioElement>(media_element))
     return;
 
   // 2. Let video be the media element or other playback mechanism.
-  HTMLVideoElement& video = ToHTMLVideoElement(media_element);
+  auto& video = To<HTMLVideoElement>(media_element);
 
   // 3. Let output be an empty list of absolutely positioned CSS block boxes.
 

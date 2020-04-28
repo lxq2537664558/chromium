@@ -12,7 +12,7 @@ namespace {
 // The distance the mouse can be dragged outside the bounds of the thumb during
 // dragging before the scrollbar will snap back to its regular position.
 static constexpr int kScrollThumbDragOutSnap = 100;
-}
+}  // namespace
 
 namespace views {
 
@@ -129,5 +129,9 @@ void BaseScrollBarThumb::OnStateChanged() {
 bool BaseScrollBarThumb::IsHorizontal() const {
   return scroll_bar_->IsHorizontal();
 }
+
+BEGIN_METADATA(BaseScrollBarThumb)
+METADATA_PARENT_CLASS(View)
+END_METADATA()
 
 }  // namespace views

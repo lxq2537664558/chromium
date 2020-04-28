@@ -5,14 +5,16 @@
 #include "chrome/browser/ui/views/ime/ime_warning_bubble_view.h"
 
 #include <string>
+#include <utility>
 
-#include "base/callback_helpers.h"
 #include "chrome/browser/extensions/api/input_ime/input_ime_api_nonchromeos.h"
 #include "chrome/browser/platform_util.h"
 #include "chrome/browser/ui/browser_dialogs.h"
 #include "chrome/browser/ui/browser_list.h"
+#include "chrome/browser/ui/ui_features.h"
 #include "chrome/browser/ui/views/chrome_layout_provider.h"
 #include "chrome/browser/ui/views/chrome_typography.h"
+#include "chrome/browser/ui/views/extensions/extensions_toolbar_container.h"
 #include "chrome/browser/ui/views/frame/app_menu_button.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/frame/toolbar_button_provider.h"
@@ -30,8 +32,9 @@ namespace {
 // The column width of the warning bubble.
 const int kColumnWidth = 285;
 
-views::Label* CreateExtensionNameLabel(const base::string16& text) {
-  views::Label* label = new views::Label(text, CONTEXT_BODY_TEXT_SMALL);
+std::unique_ptr<views::Label> CreateExtensionNameLabel(
+    const base::string16& text) {
+  auto label = std::make_unique<views::Label>(text, CONTEXT_BODY_TEXT_SMALL);
   label->SetMultiLine(true);
   label->SetHorizontalAlignment(gfx::ALIGN_LEFT);
   return label;
@@ -48,24 +51,6 @@ void ImeWarningBubbleView::ShowBubble(
   // is closed or the parent browser is destroyed.
   ImeWarningBubbleView::ime_warning_bubble_for_test_ =
       new ImeWarningBubbleView(extension, browser_view, callback);
-}
-
-bool ImeWarningBubbleView::Accept() {
-  if (never_show_checkbox_->checked()) {
-    base::ResetAndReturn(&response_callback_)
-        .Run(ImeWarningBubblePermissionStatus::GRANTED_AND_NEVER_SHOW);
-  } else {
-    base::ResetAndReturn(&response_callback_)
-        .Run(ImeWarningBubblePermissionStatus::GRANTED);
-  }
-  return true;
-}
-
-bool ImeWarningBubbleView::Cancel() {
-  if (!response_callback_.is_null())
-    base::ResetAndReturn(&response_callback_)
-        .Run(ImeWarningBubblePermissionStatus::DENIED);
-  return true;
 }
 
 void ImeWarningBubbleView::OnToolbarActionsBarAnimationEnded() {
@@ -92,15 +77,24 @@ ImeWarningBubbleView::ImeWarningBubbleView(
     : extension_(extension),
       browser_view_(browser_view),
       browser_(browser_view->browser()),
-      anchor_to_action_(false),
-      never_show_checkbox_(nullptr),
-      response_callback_(callback),
-      bubble_has_shown_(false),
-      toolbar_actions_bar_observer_(this),
-      weak_ptr_factory_(this) {
-  container_ = browser_view_->toolbar()->browser_actions();
-  toolbar_actions_bar_ = container_->toolbar_actions_bar();
+      response_callback_(callback) {
   BrowserList::AddObserver(this);
+
+  DialogDelegate::SetAcceptCallback(base::BindOnce(
+      [](ImeWarningBubbleView* bubble) {
+        const bool never_show = bubble->never_show_checkbox_->GetChecked();
+        std::move(bubble->response_callback_)
+            .Run(never_show
+                     ? ImeWarningBubblePermissionStatus::GRANTED_AND_NEVER_SHOW
+                     : ImeWarningBubblePermissionStatus::GRANTED);
+      },
+      base::Unretained(this)));
+  DialogDelegate::SetCancelCallback(base::BindOnce(
+      [](ImeWarningBubbleView* bubble) {
+        std::move(bubble->response_callback_)
+            .Run(ImeWarningBubblePermissionStatus::DENIED);
+      },
+      base::Unretained(this)));
 
   // The lifetime of this bubble is tied to the lifetime of the browser.
   set_parent_window(
@@ -108,10 +102,32 @@ ImeWarningBubbleView::ImeWarningBubbleView(
   InitAnchorView();
   InitLayout();
 
+  if (base::FeatureList::IsEnabled(features::kExtensionsToolbarMenu)) {
+    // TODO(pbos): During cleanup (default-enabling this), remove
+    // OnBrowserRemoved and stop observing the browser. The widget will now
+    // always be created and always have ownership.
+    // TODO(pbos): Move widget creation outside this class when this is being
+    // cleaned up. ::ShowBubble should create the Widget and queue showing it.
+    bubble_has_shown_ = true;
+    ExtensionsToolbarContainer* const container =
+        browser_view_->toolbar_button_provider()
+            ->GetExtensionsToolbarContainer();
+    views::Widget* const widget =
+        views::BubbleDialogDelegateView::CreateBubble(this);
+    if (container) {
+      container->ShowWidgetForExtension(widget, extension_->id());
+    } else {
+      widget->Show();
+    }
+    chrome::RecordDialogCreation(chrome::DialogIdentifier::IME_WARNING);
+    return;
+  }
+
   // If the toolbar is not animating, shows the warning bubble directly.
   // Otherwise, shows the bubble in method OnToolbarActionsBarAnimationEnded().
   if (IsToolbarAnimating()) {
-    toolbar_actions_bar_observer_.Add(toolbar_actions_bar_);
+    toolbar_actions_bar_observer_.Add(
+        browser_view_->toolbar()->browser_actions()->toolbar_actions_bar());
     return;
   }
   views::BubbleDialogDelegateView::CreateBubble(this)->Show();
@@ -121,7 +137,7 @@ ImeWarningBubbleView::ImeWarningBubbleView(
 
 ImeWarningBubbleView::~ImeWarningBubbleView() {
   if (!response_callback_.is_null()) {
-    base::ResetAndReturn(&response_callback_)
+    std::move(response_callback_)
         .Run(ImeWarningBubblePermissionStatus::ABORTED);
   }
 
@@ -129,21 +145,29 @@ ImeWarningBubbleView::~ImeWarningBubbleView() {
 }
 
 void ImeWarningBubbleView::InitAnchorView() {
-  views::View* reference_view = nullptr;
-
-  anchor_to_action_ =
-      extensions::ActionInfo::GetBrowserActionInfo(extension_) ||
-      extensions::ActionInfo::GetPageActionInfo(extension_);
+  views::View* anchor_view = nullptr;
   if (anchor_to_action_) {
-    // Anchors the bubble to the browser action of the extension.
-    reference_view = container_->GetViewForId(extension_->id());
+    ExtensionsToolbarContainer* const container =
+        browser_view_->toolbar_button_provider()
+            ->GetExtensionsToolbarContainer();
+    if (container) {
+      anchor_view = container->GetViewForId(extension_->id());
+    } else if (!base::FeatureList::IsEnabled(
+                   features::kExtensionsToolbarMenu)) {
+      BrowserActionsContainer* const browser_actions_container =
+          browser_view_->toolbar_button_provider()
+              ->GetBrowserActionsContainer();
+      ToolbarActionView* const reference_view =
+          browser_actions_container->GetViewForId(extension_->id());
+      if (reference_view && reference_view->GetVisible())
+        anchor_view = reference_view;
+    }
   }
-  if (!reference_view || !reference_view->visible()) {
-    // Anchors the bubble to the app menu.
-    reference_view =
-        browser_view_->toolbar_button_provider()->GetAppMenuButton();
+  if (!anchor_view) {
+    anchor_view = browser_view_->toolbar_button_provider()
+                      ->GetDefaultExtensionDialogAnchorView();
   }
-  SetAnchorView(reference_view);
+  SetAnchorView(anchor_view);
   SetArrow(views::BubbleBorder::TOP_RIGHT);
 }
 
@@ -162,7 +186,7 @@ void ImeWarningBubbleView::InitLayout() {
   //
 
   views::GridLayout* layout =
-      SetLayoutManager(std::make_unique<views::GridLayout>(this));
+      SetLayoutManager(std::make_unique<views::GridLayout>());
 
   int cs_id = 0;
 
@@ -178,18 +202,20 @@ void ImeWarningBubbleView::InitLayout() {
   layout->StartRow(views::GridLayout::kFixedSize, cs_id);
   base::string16 extension_name = base::UTF8ToUTF16(extension_->name());
   base::i18n::AdjustStringForLocaleDirection(&extension_name);
-  views::Label* warning = CreateExtensionNameLabel(l10n_util::GetStringFUTF16(
-      IDS_IME_API_ACTIVATED_WARNING, extension_name));
-  layout->AddView(warning);
+  std::unique_ptr<views::Label> warning =
+      CreateExtensionNameLabel(l10n_util::GetStringFUTF16(
+          IDS_IME_API_ACTIVATED_WARNING, extension_name));
+  layout->AddView(std::move(warning));
   layout->AddPaddingRow(views::GridLayout::kFixedSize, vertical_spacing);
 
   // The seconde row which shows the check box.
   layout->StartRow(views::GridLayout::kFixedSize, cs_id);
-  never_show_checkbox_ =
-      new views::Checkbox(l10n_util::GetStringUTF16(IDS_IME_API_NEVER_SHOW));
-  layout->AddView(never_show_checkbox_);
+  never_show_checkbox_ = layout->AddView(std::make_unique<views::Checkbox>(
+      l10n_util::GetStringUTF16(IDS_IME_API_NEVER_SHOW)));
 }
 
 bool ImeWarningBubbleView::IsToolbarAnimating() {
-  return anchor_to_action_ && container_->animating();
+  DCHECK(!base::FeatureList::IsEnabled(features::kExtensionsToolbarMenu));
+  return anchor_to_action_ &&
+         browser_view_->toolbar()->browser_actions()->animating();
 }

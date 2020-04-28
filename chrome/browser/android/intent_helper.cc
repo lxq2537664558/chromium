@@ -9,7 +9,7 @@
 #include "base/android/jni_android.h"
 #include "base/android/jni_string.h"
 #include "base/android/scoped_java_ref.h"
-#include "jni/IntentHelper_jni.h"
+#include "chrome/android/chrome_jni_headers/IntentHelper_jni.h"
 
 using base::android::AttachCurrentThread;
 using base::android::ConvertUTF16ToJavaString;
@@ -34,11 +34,6 @@ void SendEmail(const base::string16& d_email,
       ConvertUTF16ToJavaString(env, d_file_to_attach);
   Java_IntentHelper_sendEmail(env, j_email, j_subject, j_body, j_chooser_title,
                               j_file_to_attach);
-}
-
-void OpenDateAndTimeSettings() {
-  JNIEnv* env = AttachCurrentThread();
-  Java_IntentHelper_openDateAndTimeSettings(env);
 }
 
 }  // namespace android

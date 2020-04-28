@@ -79,7 +79,7 @@ class AutomationEventWaiter : public ui::AXEventBundleSink {
 
     node_id_to_wait_for_ = node_id;
     run_loop_->Run();
-    run_loop_.reset(new base::RunLoop);
+    run_loop_ = std::make_unique<base::RunLoop>();
   }
 
   bool WasNodeIdFocused(int node_id) {
@@ -99,7 +99,7 @@ class AutomationEventWaiter : public ui::AXEventBundleSink {
       int focused_node_id = update.tree_data.focus_id;
       focused_node_ids_.push_back(focused_node_id);
       if (focused_node_id == node_id_to_wait_for_)
-        run_loop_->QuitClosure().Run();
+        run_loop_->Quit();
     }
   }
 
@@ -166,7 +166,7 @@ IN_PROC_BROWSER_TEST_F(AutomationManagerAuraBrowserTest,
   views::Widget* widget = new views::Widget;
   views::Widget::InitParams params(views::Widget::InitParams::TYPE_WINDOW);
   params.bounds = {0, 0, 200, 200};
-  widget->Init(params);
+  widget->Init(std::move(params));
   widget->Show();
   widget->Activate();
 

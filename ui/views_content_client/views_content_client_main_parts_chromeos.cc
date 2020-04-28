@@ -4,12 +4,8 @@
 
 #include "base/macros.h"
 #include "content/public/browser/context_factory.h"
-#include "content/public/common/service_manager_connection.h"
 #include "content/shell/browser/shell_browser_context.h"
-#include "ui/aura/env.h"
-#include "ui/aura/test/test_screen.h"
 #include "ui/aura/window.h"
-#include "ui/display/screen.h"
 #include "ui/views_content_client/views_content_client.h"
 #include "ui/views_content_client/views_content_client_main_parts_aura.h"
 #include "ui/wm/test/wm_test_helper.h"
@@ -32,7 +28,6 @@ class ViewsContentClientMainPartsChromeOS
 
  private:
   // Enable a minimal set of views::corewm to be initialized.
-  std::unique_ptr<display::Screen> test_screen_;
   std::unique_ptr<::wm::WMTestHelper> wm_test_helper_;
 
   DISALLOW_COPY_AND_ASSIGN(ViewsContentClientMainPartsChromeOS);
@@ -47,18 +42,8 @@ ViewsContentClientMainPartsChromeOS::ViewsContentClientMainPartsChromeOS(
 void ViewsContentClientMainPartsChromeOS::PreMainMessageLoopRun() {
   ViewsContentClientMainPartsAura::PreMainMessageLoopRun();
 
-  gfx::Size host_size(800, 600);
-  test_screen_.reset(aura::TestScreen::Create(host_size));
-  display::Screen::SetScreenInstance(test_screen_.get());
   // Set up basic pieces of views::corewm.
-  ui::ContextFactory* ui_context_factory =
-      aura::Env::GetInstance()->mode() == aura::Env::Mode::LOCAL
-          ? content::GetContextFactory()
-          : nullptr;
-  wm_test_helper_ = std::make_unique<wm::WMTestHelper>(
-      host_size,
-      content::ServiceManagerConnection::GetForProcess()->GetConnector(),
-      ui_context_factory);
+  wm_test_helper_ = std::make_unique<wm::WMTestHelper>(gfx::Size(800, 600));
   // Ensure the X window gets mapped.
   wm_test_helper_->host()->Show();
 
@@ -70,7 +55,6 @@ void ViewsContentClientMainPartsChromeOS::PreMainMessageLoopRun() {
 
 void ViewsContentClientMainPartsChromeOS::PostMainMessageLoopRun() {
   wm_test_helper_.reset();
-  test_screen_.reset();
 
   ViewsContentClientMainPartsAura::PostMainMessageLoopRun();
 }
@@ -78,10 +62,11 @@ void ViewsContentClientMainPartsChromeOS::PostMainMessageLoopRun() {
 }  // namespace
 
 // static
-ViewsContentClientMainParts* ViewsContentClientMainParts::Create(
+std::unique_ptr<ViewsContentClientMainParts>
+ViewsContentClientMainParts::Create(
     const content::MainFunctionParams& content_params,
     ViewsContentClient* views_content_client) {
-  return new ViewsContentClientMainPartsChromeOS(
+  return std::make_unique<ViewsContentClientMainPartsChromeOS>(
       content_params, views_content_client);
 }
 

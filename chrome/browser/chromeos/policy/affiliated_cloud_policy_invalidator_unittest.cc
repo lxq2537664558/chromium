@@ -16,14 +16,14 @@
 #include "chrome/browser/policy/cloud/cloud_policy_invalidator.h"
 #include "components/invalidation/impl/fake_invalidation_service.h"
 #include "components/invalidation/public/invalidation.h"
-#include "components/invalidation/public/object_id_invalidation_map.h"
+#include "components/invalidation/public/invalidation_util.h"
+#include "components/invalidation/public/topic_invalidation_map.h"
 #include "components/policy/core/common/cloud/cloud_policy_constants.h"
 #include "components/policy/core/common/cloud/cloud_policy_core.h"
 #include "components/policy/core/common/cloud/cloud_policy_store.h"
 #include "components/policy/core/common/cloud/mock_cloud_policy_client.h"
 #include "components/policy/proto/chrome_device_policy.pb.h"
-#include "content/public/test/test_browser_thread_bundle.h"
-#include "google/cacheinvalidation/include/types.h"
+#include "content/public/test/browser_task_environment.h"
 #include "services/network/test/test_network_connection_tracker.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -38,8 +38,7 @@ namespace policy {
 
 namespace {
 
-const int kInvalidationSource = 123;
-const char kInvalidationName[] = "invalidation";
+const char kPolicyInvalidationTopic[] = "policy_invalidation_topic";
 
 class FakeCloudPolicyStore : public CloudPolicyStore {
  public:
@@ -73,7 +72,7 @@ void FakeCloudPolicyStore::Load() {
 // correctly and the highest handled invalidation version is preserved when
 // switching invalidation services.
 TEST(AffiliatedCloudPolicyInvalidatorTest, CreateUseDestroy) {
-  content::TestBrowserThreadBundle thread_bundle;
+  content::BrowserTaskEnvironment task_environment;
 
   // Set up a CloudPolicyCore backed by a simple CloudPolicyStore that does no
   // signature verification and stores policy in memory.
@@ -98,16 +97,15 @@ TEST(AffiliatedCloudPolicyInvalidatorTest, CreateUseDestroy) {
   core.StartRefreshScheduler();
 
   DevicePolicyBuilder policy;
-  policy.policy_data().set_invalidation_source(kInvalidationSource);
-  policy.policy_data().set_invalidation_name(kInvalidationName);
+
+  policy.policy_data().set_policy_invalidation_topic(kPolicyInvalidationTopic);
+
   policy.Build();
   store.Store(policy.policy());
 
   FakeAffiliatedInvalidationServiceProvider provider;
   AffiliatedCloudPolicyInvalidator affiliated_invalidator(
-      em::DeviceRegisterRequest::DEVICE,
-      &core,
-      &provider);
+      PolicyInvalidationScope::kDevice, &core, &provider);
 
   // Verify that no invalidator exists initially.
   EXPECT_FALSE(affiliated_invalidator.GetInvalidatorForTest());
@@ -131,10 +129,9 @@ TEST(AffiliatedCloudPolicyInvalidatorTest, CreateUseDestroy) {
   // milliseconds. Convert from one to the other by multiplying by 1000.
   const int64_t invalidation_version = policy.policy_data().timestamp() * 1000;
   syncer::Invalidation invalidation = syncer::Invalidation::Init(
-      invalidation::ObjectId(kInvalidationSource, kInvalidationName),
-      invalidation_version,
-      "dummy payload");
-  syncer::ObjectIdInvalidationMap invalidation_map;
+      kPolicyInvalidationTopic, invalidation_version, "dummy payload");
+
+  syncer::TopicInvalidationMap invalidation_map;
   invalidation_map.Insert(invalidation);
   invalidator->OnIncomingInvalidation(invalidation_map);
 

@@ -31,8 +31,6 @@ class SVGEllipseElement final : public SVGGeometryElement {
   DEFINE_WRAPPERTYPEINFO();
 
  public:
-  DECLARE_NODE_FACTORY(SVGEllipseElement);
-
   explicit SVGEllipseElement(Document&);
 
   Path AsPath() const override;
@@ -42,7 +40,7 @@ class SVGEllipseElement final : public SVGGeometryElement {
   SVGAnimatedLength* rx() const { return rx_.Get(); }
   SVGAnimatedLength* ry() const { return ry_.Get(); }
 
-  void Trace(blink::Visitor*) override;
+  void Trace(Visitor*) override;
 
  private:
   void CollectStyleForPresentationAttribute(

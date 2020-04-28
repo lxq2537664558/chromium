@@ -9,25 +9,32 @@
 #include <vector>
 
 #include "base/macros.h"
+#include "base/run_loop.h"
 #include "build/build_config.h"
 #include "chrome/browser/chrome_process_singleton.h"
 #include "chrome/browser/first_run/first_run.h"
 #include "chrome/browser/process_singleton.h"
 #include "chrome/browser/ui/startup/startup_browser_creator.h"
+#include "chrome/common/buildflags.h"
 #include "content/public/browser/browser_main_parts.h"
 #include "content/public/common/main_function_params.h"
 
+#if BUILDFLAG(ENABLE_DOWNGRADE_PROCESSING)
+#include "chrome/browser/downgrade/downgrade_manager.h"
+#endif
+
 class BrowserProcessImpl;
 class ChromeBrowserMainExtraParts;
-class ChromeFeatureListCreator;
-class HeapProfilerController;
+class StartupData;
 class PrefService;
 class Profile;
 class StartupBrowserCreator;
-class StartupTimeBomb;
 class ShutdownWatcherHelper;
-class ThreadProfiler;
 class WebUsbDetector;
+
+namespace base {
+class RunLoop;
+}
 
 namespace tracing {
 class TraceEventSystemStatsMonitor;
@@ -53,7 +60,7 @@ class ChromeBrowserMainParts : public content::BrowserMainParts {
 
  protected:
   ChromeBrowserMainParts(const content::MainFunctionParams& parameters,
-                         ChromeFeatureListCreator* chrome_feature_list_creator);
+                         StartupData* startup_data);
 
   // content::BrowserMainParts overrides.
   // These are called in-order by content::BrowserMainLoop.
@@ -66,8 +73,6 @@ class ChromeBrowserMainParts : public content::BrowserMainParts {
   void PostMainMessageLoopStart() override;
   int PreCreateThreads() override;
   void PostCreateThreads() override;
-  void ServiceManagerConnectionStarted(
-      content::ServiceManagerConnection* connection) override;
   void PreMainMessageLoopRun() override;
   bool MainMessageLoopRun(int* result_code) override;
   void PostMainMessageLoopRun() override;
@@ -103,7 +108,7 @@ class ChromeBrowserMainParts : public content::BrowserMainParts {
 
   // Starts recording of metrics. This can only be called after we have a file
   // thread.
-  void StartMetricsRecording();
+  static void StartMetricsRecording();
 
   // Record time from process startup to present time in an UMA histogram.
   void RecordBrowserStartupTime();
@@ -138,9 +143,6 @@ class ChromeBrowserMainParts : public content::BrowserMainParts {
   int result_code_;
 
 #if !defined(OS_ANDROID)
-  // Create StartupTimeBomb object for watching jank during startup.
-  std::unique_ptr<StartupTimeBomb> startup_watcher_;
-
   // Create ShutdownWatcherHelper object for watching jank during shutdown.
   // Please keep |shutdown_watcher| as the first object constructed, and hence
   // it is destroyed last.
@@ -152,13 +154,6 @@ class ChromeBrowserMainParts : public content::BrowserMainParts {
   // Vector of additional ChromeBrowserMainExtraParts.
   // Parts are deleted in the inverse order they are added.
   std::vector<ChromeBrowserMainExtraParts*> chrome_extra_parts_;
-
-  // A profiler that periodically samples stack traces on the UI thread.
-  std::unique_ptr<ThreadProfiler> ui_thread_profiler_;
-
-  // The controller schedules UMA heap profiles collections and forwarding down
-  // the reporting pipeline.
-  std::unique_ptr<HeapProfilerController> heap_profiler_controller_;
 
   // The system monitor instance, used by some subsystems to collect the system
   // metrics they need.
@@ -193,6 +188,10 @@ class ChromeBrowserMainParts : public content::BrowserMainParts {
   bool restart_last_session_ = false;
 #endif  // !defined(OS_ANDROID)
 
+#if BUILDFLAG(ENABLE_DOWNGRADE_PROCESSING)
+  downgrade::DowngradeManager downgrade_manager_;
+#endif
+
 #if !defined(OS_ANDROID) && !defined(OS_CHROMEOS)
   // Android's first run is done in Java instead of native. Chrome OS does not
   // use master preferences.
@@ -204,7 +203,7 @@ class ChromeBrowserMainParts : public content::BrowserMainParts {
 
   base::FilePath user_data_dir_;
 
-  ChromeFeatureListCreator* chrome_feature_list_creator_;
+  StartupData* startup_data_;
 
   DISALLOW_COPY_AND_ASSIGN(ChromeBrowserMainParts);
 };

@@ -55,7 +55,8 @@ std::unique_ptr<
     base::CallbackList<void(content::BrowserContext*)>::Subscription>
 BrowserContextDependencyManager::
     RegisterWillCreateBrowserContextServicesCallbackForTesting(
-        const base::Callback<void(content::BrowserContext*)>& callback) {
+        const base::RepeatingCallback<void(content::BrowserContext*)>&
+            callback) {
   return will_create_browser_context_services_callbacks_.Add(callback);
 }
 
@@ -90,9 +91,8 @@ void BrowserContextDependencyManager::DumpContextDependencies(
   if (base::CommandLine::ForCurrentProcess()->HasSwitch(
           kDumpBrowserContextDependencyGraphFlag)) {
     base::FilePath dot_file =
-        static_cast<const content::BrowserContext*>(context)
-            ->GetPath()
-            .AppendASCII("browser-context-dependencies.dot");
+        static_cast<content::BrowserContext*>(context)->GetPath().AppendASCII(
+            "browser-context-dependencies.dot");
     DumpDependenciesAsGraphviz("BrowserContext", dot_file);
   }
 }

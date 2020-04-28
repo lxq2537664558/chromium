@@ -8,7 +8,7 @@
 #include "base/strings/stringprintf.h"
 #include "base/test/bind_test_util.h"
 #include "base/test/metrics/histogram_tester.h"
-#include "base/test/scoped_task_environment.h"
+#include "base/test/task_environment.h"
 #include "chrome/browser/extensions/content_verifier_test_utils.h"
 #include "chrome/browser/extensions/extension_management_test_util.h"
 #include "chrome/browser/extensions/extension_service.h"
@@ -42,8 +42,8 @@ using UpdateClientEvents = update_client::UpdateClient::Observer::Events;
 
 class UpdateServiceTest : public ExtensionUpdateClientBaseTest {
  public:
-  UpdateServiceTest() : ExtensionUpdateClientBaseTest() {}
-  ~UpdateServiceTest() override {}
+  UpdateServiceTest() = default;
+  ~UpdateServiceTest() override = default;
 
   void SetUpCommandLine(base::CommandLine* command_line) override {
     ExtensionUpdateClientBaseTest::SetUpCommandLine(command_line);
@@ -78,21 +78,6 @@ IN_PROC_BROWSER_TEST_F(UpdateServiceTest, NoUpdate) {
   // UpdateService should emit a not-updated event.
   EXPECT_EQ(UpdateClientEvents::COMPONENT_NOT_UPDATED,
             WaitOnComponentUpdaterCompleteEvent(kExtensionId));
-
-  content::FetchHistogramsFromChildProcesses();
-  EXPECT_THAT(histogram_tester.GetAllSamples(
-                  "Extensions.ExtensionUpdaterRawUpdateCalls"),
-              testing::ElementsAre(base::Bucket(1, 1)));
-  EXPECT_THAT(
-      histogram_tester.GetAllSamples("Extensions.ExtensionUpdaterUpdateCalls"),
-      testing::ElementsAre(base::Bucket(1, 1)));
-  EXPECT_THAT(
-      histogram_tester.GetAllSamples(
-          "Extensions.ExtensionUpdaterUpdateResults"),
-      testing::ElementsAre(base::Bucket(
-          static_cast<int>(ExtensionUpdaterUpdateResult::NO_UPDATE), 1)));
-  histogram_tester.ExpectTotalCount(
-      "Extensions.UnifiedExtensionUpdaterUpdateCheckErrors", 0);
 
   ASSERT_EQ(1, update_interceptor_->GetCount())
       << update_interceptor_->GetRequestsAsString();
@@ -136,23 +121,6 @@ IN_PROC_BROWSER_TEST_F(UpdateServiceTest, UpdateCheckError) {
   // UpdateService should emit an error update event.
   EXPECT_EQ(UpdateClientEvents::COMPONENT_UPDATE_ERROR,
             WaitOnComponentUpdaterCompleteEvent(kExtensionId));
-
-  content::FetchHistogramsFromChildProcesses();
-  EXPECT_THAT(
-      histogram_tester.GetAllSamples("Extensions.ExtensionUpdaterUpdateCalls"),
-      testing::ElementsAre(base::Bucket(1, 1)));
-  EXPECT_THAT(histogram_tester.GetAllSamples(
-                  "Extensions.ExtensionUpdaterRawUpdateCalls"),
-              testing::ElementsAre(base::Bucket(1, 1)));
-  EXPECT_THAT(
-      histogram_tester.GetAllSamples(
-          "Extensions.ExtensionUpdaterUpdateResults"),
-      testing::ElementsAre(base::Bucket(
-          static_cast<int>(ExtensionUpdaterUpdateResult::UPDATE_CHECK_ERROR),
-          1)));
-  EXPECT_THAT(histogram_tester.GetAllSamples(
-                  "Extensions.UnifiedExtensionUpdaterUpdateCheckErrors"),
-              testing::ElementsAre(base::Bucket(403, 1)));
 
   ASSERT_EQ(1, update_interceptor_->GetCount())
       << update_interceptor_->GetRequestsAsString();
@@ -208,23 +176,6 @@ IN_PROC_BROWSER_TEST_F(UpdateServiceTest, TwoUpdateCheckErrors) {
   extension_service()->updater()->CheckNow(std::move(params));
   run_loop2.Run();
 
-  content::FetchHistogramsFromChildProcesses();
-  EXPECT_THAT(histogram_tester.GetAllSamples(
-                  "Extensions.ExtensionUpdaterRawUpdateCalls"),
-              testing::ElementsAre(base::Bucket(1, 1), base::Bucket(2, 1)));
-  EXPECT_THAT(
-      histogram_tester.GetAllSamples("Extensions.ExtensionUpdaterUpdateCalls"),
-      testing::ElementsAre(base::Bucket(1, 1), base::Bucket(2, 1)));
-  EXPECT_THAT(
-      histogram_tester.GetAllSamples(
-          "Extensions.ExtensionUpdaterUpdateResults"),
-      testing::ElementsAre(base::Bucket(
-          static_cast<int>(ExtensionUpdaterUpdateResult::UPDATE_CHECK_ERROR),
-          3)));
-  EXPECT_THAT(histogram_tester.GetAllSamples(
-                  "Extensions.UnifiedExtensionUpdaterUpdateCheckErrors"),
-              testing::ElementsAre(base::Bucket(304, 2), base::Bucket(305, 1)));
-
   ASSERT_EQ(2, update_interceptor_->GetCount())
       << update_interceptor_->GetRequestsAsString();
 
@@ -277,21 +228,6 @@ IN_PROC_BROWSER_TEST_F(UpdateServiceTest, SuccessfulUpdate) {
             WaitOnComponentUpdaterCompleteEvent(kExtensionId));
 
   run_loop.Run();
-
-  content::FetchHistogramsFromChildProcesses();
-  EXPECT_THAT(histogram_tester.GetAllSamples(
-                  "Extensions.ExtensionUpdaterRawUpdateCalls"),
-              testing::ElementsAre(base::Bucket(1, 1)));
-  EXPECT_THAT(
-      histogram_tester.GetAllSamples("Extensions.ExtensionUpdaterUpdateCalls"),
-      testing::ElementsAre(base::Bucket(1, 1)));
-  EXPECT_THAT(
-      histogram_tester.GetAllSamples(
-          "Extensions.ExtensionUpdaterUpdateResults"),
-      testing::ElementsAre(base::Bucket(
-          static_cast<int>(ExtensionUpdaterUpdateResult::UPDATE_SUCCESS), 1)));
-  histogram_tester.ExpectTotalCount(
-      "Extensions.UnifiedExtensionUpdaterUpdateCheckErrors", 0);
 
   ASSERT_EQ(1, update_interceptor_->GetCount())
       << update_interceptor_->GetRequestsAsString();
@@ -356,7 +292,7 @@ IN_PROC_BROWSER_TEST_F(UpdateServiceTest, PolicyCorrupted) {
   TestExtensionRegistryObserver registry_observer(
       ExtensionRegistry::Get(profile()), kExtensionId);
   ContentVerifier* verifier = system->content_verifier();
-  verifier->VerifyFailed(kExtensionId, ContentVerifyJob::HASH_MISMATCH);
+  verifier->VerifyFailedForTest(kExtensionId, ContentVerifyJob::HASH_MISMATCH);
 
   // Make sure the extension first got disabled due to corruption.
   EXPECT_TRUE(registry_observer.WaitForExtensionUnloaded());
@@ -437,8 +373,8 @@ IN_PROC_BROWSER_TEST_F(UpdateServiceTest, UninstallExtensionWhileUpdating) {
 class PolicyUpdateServiceTest : public ExtensionUpdateClientBaseTest,
                                 public testing::WithParamInterface<bool> {
  public:
-  PolicyUpdateServiceTest() : ExtensionUpdateClientBaseTest() {}
-  ~PolicyUpdateServiceTest() override {}
+  PolicyUpdateServiceTest() = default;
+  ~PolicyUpdateServiceTest() override = default;
 
   void SetUpCommandLine(base::CommandLine* command_line) override {
     ExtensionUpdateClientBaseTest::SetUpCommandLine(command_line);
@@ -458,7 +394,7 @@ class PolicyUpdateServiceTest : public ExtensionUpdateClientBaseTest,
     // ExtensionManagementPolicyUpdater requires a single-threaded context to
     // call RunLoop::RunUntilIdle internally, and it isn't ready at this setup
     // moment.
-    base::test::ScopedTaskEnvironment env;
+    base::test::TaskEnvironment env;
     ExtensionManagementPolicyUpdater management_policy(&policy_provider_);
     management_policy.SetIndividualExtensionAutoInstalled(
         id_, extension_urls::kChromeWebstoreUpdateURL, true /* forced */);
@@ -554,7 +490,7 @@ IN_PROC_BROWSER_TEST_F(PolicyUpdateServiceTest, FailedUpdateRetries) {
   content_verifier_test::DelayTracker delay_tracker;
   service->set_external_updates_disabled_for_test(true);
   TestExtensionRegistryObserver registry_observer(registry, id_);
-  verifier->VerifyFailed(id_, ContentVerifyJob::HASH_MISMATCH);
+  verifier->VerifyFailedForTest(id_, ContentVerifyJob::HASH_MISMATCH);
   EXPECT_TRUE(registry_observer.WaitForExtensionUnloaded());
 
   const std::vector<base::TimeDelta>& calls = delay_tracker.calls();
@@ -618,7 +554,7 @@ IN_PROC_BROWSER_TEST_F(PolicyUpdateServiceTest, Backoff) {
   const size_t iterations = 4;
   for (size_t i = 0; i < iterations; i++) {
     TestExtensionRegistryObserver registry_observer(registry, id_);
-    verifier->VerifyFailed(id_, ContentVerifyJob::HASH_MISMATCH);
+    verifier->VerifyFailedForTest(id_, ContentVerifyJob::HASH_MISMATCH);
     EXPECT_TRUE(registry_observer.WaitForExtensionUnloaded());
     // Resolve the request to |delay_tracker|, so the reinstallation can
     // proceed.
@@ -665,7 +601,7 @@ IN_PROC_BROWSER_TEST_F(PolicyUpdateServiceTest, PRE_PolicyCorruptedOnStartup) {
   // at startup in the non-PRE test.
   ContentVerifier* verifier =
       ExtensionSystem::Get(profile())->content_verifier();
-  verifier->VerifyFailed(id_, ContentVerifyJob::HASH_MISMATCH);
+  verifier->VerifyFailedForTest(id_, ContentVerifyJob::HASH_MISMATCH);
   EXPECT_TRUE(registry_observer.WaitForExtensionUnloaded());
 
   ExtensionPrefs* prefs = ExtensionPrefs::Get(profile());

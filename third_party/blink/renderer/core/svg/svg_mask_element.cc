@@ -29,7 +29,7 @@
 
 namespace blink {
 
-inline SVGMaskElement::SVGMaskElement(Document& document)
+SVGMaskElement::SVGMaskElement(Document& document)
     : SVGElement(svg_names::kMaskTag, document),
       SVGTests(this),
       // Spec: If the x/y attribute is not specified, the effect is as if a
@@ -78,7 +78,7 @@ inline SVGMaskElement::SVGMaskElement(Document& document)
   AddToPropertyMap(mask_content_units_);
 }
 
-void SVGMaskElement::Trace(blink::Visitor* visitor) {
+void SVGMaskElement::Trace(Visitor* visitor) {
   visitor->Trace(x_);
   visitor->Trace(y_);
   visitor->Trace(width_);
@@ -88,8 +88,6 @@ void SVGMaskElement::Trace(blink::Visitor* visitor) {
   SVGElement::Trace(visitor);
   SVGTests::Trace(visitor);
 }
-
-DEFINE_NODE_FACTORY(SVGMaskElement)
 
 void SVGMaskElement::CollectStyleForPresentationAttribute(
     const QualifiedName& name,
@@ -132,7 +130,7 @@ void SVGMaskElement::SvgAttributeChanged(const QualifiedName& attr_name) {
     }
 
     LayoutSVGResourceContainer* layout_object =
-        ToLayoutSVGResourceContainer(this->GetLayoutObject());
+        ToLayoutSVGResourceContainer(GetLayoutObject());
     if (layout_object)
       layout_object->InvalidateCacheAndMarkForLayout();
 
@@ -145,7 +143,7 @@ void SVGMaskElement::SvgAttributeChanged(const QualifiedName& attr_name) {
 void SVGMaskElement::ChildrenChanged(const ChildrenChange& change) {
   SVGElement::ChildrenChanged(change);
 
-  if (change.by_parser)
+  if (change.ByParser())
     return;
 
   if (LayoutObject* object = GetLayoutObject()) {

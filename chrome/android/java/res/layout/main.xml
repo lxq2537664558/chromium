@@ -21,7 +21,7 @@
             android:layout_height="match_parent"
             android:visibility="gone" />
 
-        <org.chromium.chrome.browser.snackbar.BottomContainer
+        <org.chromium.chrome.browser.ui.BottomContainer
             android:id="@+id/bottom_container"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -30,14 +30,12 @@
         <ViewStub
             android:id="@+id/keyboard_accessory_stub"
             android:inflatedId="@+id/keyboard_accessory"
-            android:layout="@layout/keyboard_accessory"
             android:layout_height="@dimen/keyboard_accessory_height_with_shadow"
             android:layout_width="match_parent"
             android:layout_gravity="start|bottom"/>
 
         <ViewStub
             android:id="@+id/keyboard_accessory_sheet_stub"
-            android:layout="@layout/keyboard_accessory_sheet"
             android:layout_height="@dimen/keyboard_accessory_sheet_height"
             android:layout_width="match_parent"
             android:layout_gravity="start|bottom"/>
@@ -92,6 +90,13 @@
             android:id="@+id/control_container_stub"
             android:layout_width="match_parent"
             android:layout_height="wrap_content" />
+
+        <ViewStub
+            android:id="@+id/status_indicator_stub"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:inflatedId="@+id/status_indicator"
+            android:layout="@layout/status_indicator_container" />
 
         <ViewStub
             android:id="@+id/empty_container_stub"

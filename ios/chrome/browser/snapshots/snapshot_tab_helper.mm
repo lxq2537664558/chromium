@@ -8,12 +8,16 @@
 #include "base/memory/ptr_util.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/task/post_task.h"
+#include "components/infobars/core/infobar.h"
+#include "components/infobars/core/infobar_delegate.h"
 #include "ios/chrome/browser/infobars/infobar_manager_impl.h"
 #import "ios/chrome/browser/snapshots/snapshot_generator.h"
+#import "ios/chrome/browser/ui/infobars/infobar_feature.h"
 #include "ios/chrome/browser/ui/util/ui_util.h"
-#import "ios/web/public/web_state/web_state.h"
-#include "ios/web/public/web_task_traits.h"
-#include "ios/web/public/web_thread.h"
+#include "ios/web/public/thread/web_task_traits.h"
+#include "ios/web/public/thread/web_thread.h"
+#import "ios/web/public/web_client.h"
+#import "ios/web/public/web_state.h"
 
 #if !defined(__has_feature) || !__has_feature(objc_arc)
 #error "This file requires ARC support."
@@ -67,11 +71,16 @@ void SnapshotTabHelper::RetrieveGreySnapshot(void (^callback)(UIImage*)) {
 void SnapshotTabHelper::UpdateSnapshotWithCallback(void (^callback)(UIImage*)) {
   was_loading_during_last_snapshot_ = web_state_->IsLoading();
 
-  if (web_state_->ContentIsHTML()) {
+  bool showing_native_content =
+      web::GetWebClient()->IsAppSpecificURL(web_state_->GetLastCommittedURL());
+  if (!showing_native_content && web_state_->CanTakeSnapshot()) {
+    // Take the snapshot using the optimized WKWebView snapshotting API for
+    // pages loaded in the web view when the WebState snapshot API is available.
     [snapshot_generator_ updateWebViewSnapshotWithCompletion:callback];
     return;
   }
-  // Native content cannot utilize the WKWebView snapshotting API.
+  // Use the UIKit-based snapshot API as a fallback when the WKWebView API is
+  // unavailable.
   UIImage* image = UpdateSnapshot();
   dispatch_async(dispatch_get_main_queue(), ^{
     if (callback)
@@ -138,7 +147,7 @@ void SnapshotTabHelper::PageLoaded(
         break;
 
       bool was_loading = was_loading_during_last_snapshot_;
-      base::PostDelayedTaskWithTraits(
+      base::PostDelayedTask(
           FROM_HERE, {web::WebThread::UI},
           base::BindOnce(
               &SnapshotTabHelper::UpdateSnapshotWithCallback,
@@ -171,17 +180,41 @@ void SnapshotTabHelper::WebStateDestroyed(web::WebState* web_state) {
 }
 
 void SnapshotTabHelper::OnInfoBarAdded(infobars::InfoBar* infobar) {
-  UpdateSnapshotWithCallback(nil);
+  // TODO(crbug.com/961343): Remove snapshotting for infobars when
+  // MessagesUI is permanent for all infobars.
+  if (!IsConfirmInfobarMessagesUIEnabled()) {
+    UpdateSnapshotWithCallback(nil);
+  }
 }
 
 void SnapshotTabHelper::OnInfoBarRemoved(infobars::InfoBar* infobar,
                                          bool animate) {
-  UpdateSnapshotWithCallback(nil);
+  // TODO(crbug.com/961343): Remove snapshotting for infobars when
+  // MessagesUI is permanent for all infobars.
+  if (!IsConfirmInfobarMessagesUIEnabled()) {
+    UpdateSnapshotWithCallback(nil);
+  }
 }
 
 void SnapshotTabHelper::OnInfoBarReplaced(infobars::InfoBar* old_infobar,
                                           infobars::InfoBar* new_infobar) {
-  UpdateSnapshotWithCallback(nil);
+  // TODO(crbug.com/961343): Remove snapshotting for infobars when
+  // MessagesUI is permanent for all infobars.
+  // TODO(crbug.com/1018285): Rapid blocking of javascript popups can cause a
+  // crash as simultaneous snapshots are triggered. Do not take snapshots when
+  // consecutive infobars are popup blocking infobars.
+  infobars::InfoBarDelegate::InfoBarIdentifier
+      popup_blocked_infobar_identifier =
+          infobars::InfoBarDelegate::POPUP_BLOCKED_INFOBAR_DELEGATE_MOBILE;
+  bool consecutive_popup_blocked_infobars =
+      old_infobar->delegate()->GetIdentifier() ==
+          popup_blocked_infobar_identifier &&
+      new_infobar->delegate()->GetIdentifier() ==
+          popup_blocked_infobar_identifier;
+  if (!consecutive_popup_blocked_infobars &&
+      !IsConfirmInfobarMessagesUIEnabled()) {
+    UpdateSnapshotWithCallback(nil);
+  }
 }
 
 void SnapshotTabHelper::OnManagerShuttingDown(

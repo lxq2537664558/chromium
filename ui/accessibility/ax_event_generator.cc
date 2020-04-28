@@ -4,19 +4,60 @@
 
 #include "ui/accessibility/ax_event_generator.h"
 
+#include <algorithm>
+
 #include "base/stl_util.h"
+#include "ui/accessibility/ax_enums.mojom.h"
 #include "ui/accessibility/ax_node.h"
 #include "ui/accessibility/ax_role_properties.h"
 
 namespace ui {
+namespace {
+
+bool IsActiveLiveRegion(const AXTreeObserver::Change& change) {
+  return change.node->data().HasStringAttribute(
+             ax::mojom::StringAttribute::kLiveStatus) &&
+         change.node->data().GetStringAttribute(
+             ax::mojom::StringAttribute::kLiveStatus) != "off";
+}
+
+bool IsContainedInLiveRegion(const AXTreeObserver::Change& change) {
+  return change.node->data().HasStringAttribute(
+             ax::mojom::StringAttribute::kContainerLiveStatus) &&
+         change.node->data().HasStringAttribute(
+             ax::mojom::StringAttribute::kName);
+}
+
+bool HasEvent(const std::set<AXEventGenerator::EventParams>& node_events,
+              AXEventGenerator::Event event) {
+  for (auto& iter : node_events) {
+    if (iter.event == event)
+      return true;
+  }
+  return false;
+}
+
+void RemoveEvent(std::set<AXEventGenerator::EventParams>* node_events,
+                 AXEventGenerator::Event event) {
+  for (auto& iter : *node_events) {
+    if (iter.event == event) {
+      node_events->erase(iter);
+      return;
+    }
+  }
+}
+
+}  // namespace
 
 AXEventGenerator::EventParams::EventParams(Event event,
                                            ax::mojom::EventFrom event_from)
     : event(event), event_from(event_from) {}
 
-AXEventGenerator::TargetedEvent::TargetedEvent(ui::AXNode* node,
+AXEventGenerator::TargetedEvent::TargetedEvent(AXNode* node,
                                                const EventParams& event_params)
-    : node(node), event_params(event_params) {}
+    : node(node), event_params(event_params) {
+  DCHECK(node);
+}
 
 bool AXEventGenerator::EventParams::operator==(const EventParams& rhs) {
   return rhs.event == event;
@@ -68,23 +109,21 @@ AXEventGenerator::AXEventGenerator() = default;
 
 AXEventGenerator::AXEventGenerator(AXTree* tree) : tree_(tree) {
   if (tree_)
-    tree_->AddObserver(this);
+    tree_event_observer_.Add(tree_);
 }
 
-AXEventGenerator::~AXEventGenerator() {
-  if (tree_)
-    tree_->RemoveObserver(this);
-}
+AXEventGenerator::~AXEventGenerator() = default;
 
 void AXEventGenerator::SetTree(AXTree* new_tree) {
   if (tree_)
-    tree_->RemoveObserver(this);
+    tree_event_observer_.Remove(tree_);
   tree_ = new_tree;
   if (tree_)
-    tree_->AddObserver(this);
+    tree_event_observer_.Add(tree_);
 }
 
 void AXEventGenerator::ReleaseTree() {
+  tree_event_observer_.RemoveAll();
   tree_ = nullptr;
 }
 
@@ -92,29 +131,19 @@ void AXEventGenerator::ClearEvents() {
   tree_events_.clear();
 }
 
-void AXEventGenerator::AddEvent(ui::AXNode* node,
-                                AXEventGenerator::Event event) {
+void AXEventGenerator::AddEvent(AXNode* node, AXEventGenerator::Event event) {
+  DCHECK(node);
+
   if (node->data().role == ax::mojom::Role::kInlineTextBox)
     return;
 
-  // A newly created live region or alert should not *also* fire a
-  // live region changed event.
-  if (event == Event::LIVE_REGION_CHANGED &&
-      (base::ContainsKey(
-           tree_events_[node],
-           EventParams(Event::ALERT, ax::mojom::EventFrom::kNone)) ||
-       base::ContainsKey(tree_events_[node],
-                         EventParams(Event::LIVE_REGION_CREATED,
-                                     ax::mojom::EventFrom::kNone)))) {
-    return;
-  }
-
-  tree_events_[node].insert(EventParams(event, event_from_));
+  std::set<EventParams>& node_events = tree_events_[node];
+  node_events.emplace(event, ax::mojom::EventFrom::kNone);
 }
 
-void AXEventGenerator::OnNodeDataWillChange(AXTree* tree,
-                                            const AXNodeData& old_node_data,
-                                            const AXNodeData& new_node_data) {
+void AXEventGenerator::OnNodeDataChanged(AXTree* tree,
+                                         const AXNodeData& old_node_data,
+                                         const AXNodeData& new_node_data) {
   DCHECK_EQ(tree_, tree);
   // Fire CHILDREN_CHANGED events when the list of children updates.
   // Internally we store inline text box nodes as children of a static text
@@ -124,8 +153,8 @@ void AXEventGenerator::OnNodeDataWillChange(AXTree* tree,
   if (new_node_data.child_ids != old_node_data.child_ids &&
       new_node_data.role != ax::mojom::Role::kStaticText) {
     AXNode* node = tree_->GetFromId(new_node_data.id);
-    tree_events_[node].insert(
-        EventParams(Event::CHILDREN_CHANGED, ax::mojom::EventFrom::kNone));
+    tree_events_[node].emplace(Event::CHILDREN_CHANGED,
+                               ax::mojom::EventFrom::kNone);
   }
 }
 
@@ -143,28 +172,34 @@ void AXEventGenerator::OnStateChanged(AXTree* tree,
                                       bool new_value) {
   DCHECK_EQ(tree_, tree);
 
-  AddEvent(node, Event::STATE_CHANGED);
+  if (state != ax::mojom::State::kIgnored)
+    AddEvent(node, Event::STATE_CHANGED);
+
   switch (state) {
     case ax::mojom::State::kExpanded:
       AddEvent(node, new_value ? Event::EXPANDED : Event::COLLAPSED);
 
-      // TODO(accessibility): tree in the midst of updates. Disallow access to
-      // |node|.
       if (node->data().role == ax::mojom::Role::kRow ||
           node->data().role == ax::mojom::Role::kTreeItem) {
-        ui::AXNode* container = node;
-        while (container && !ui::IsRowContainer(container->data().role))
+        AXNode* container = node;
+        while (container && !IsRowContainer(container->data().role))
           container = container->parent();
         if (container)
           AddEvent(container, Event::ROW_COUNT_CHANGED);
       }
       break;
     case ax::mojom::State::kIgnored: {
-      ui::AXNode* unignored_parent = node->GetUnignoredParent();
+      AXNode* unignored_parent = node->GetUnignoredParent();
       if (unignored_parent)
         AddEvent(unignored_parent, Event::CHILDREN_CHANGED);
+      AddEvent(node, Event::IGNORED_CHANGED);
+      if (!new_value)
+        AddEvent(node, Event::SUBTREE_CREATED);
       break;
     }
+    case ax::mojom::State::kMultiline:
+      AddEvent(node, Event::MULTILINE_STATE_CHANGED);
+      break;
     case ax::mojom::State::kMultiselectable:
       AddEvent(node, Event::MULTISELECTABLE_STATE_CHANGED);
       break;
@@ -205,13 +240,20 @@ void AXEventGenerator::OnStringAttributeChanged(AXTree* tree,
     case ax::mojom::StringAttribute::kLanguage:
       AddEvent(node, Event::LANGUAGE_CHANGED);
       break;
+    case ax::mojom::StringAttribute::kLiveRelevant:
+      AddEvent(node, Event::LIVE_RELEVANT_CHANGED);
+      break;
     case ax::mojom::StringAttribute::kLiveStatus:
-      // TODO(accessibility): tree in the midst of updates. Disallow access to
-      // |node|.
-      if (node->data().GetStringAttribute(
-              ax::mojom::StringAttribute::kLiveStatus) != "off" &&
-          node->data().role != ax::mojom::Role::kAlert)
-        AddEvent(node, Event::LIVE_REGION_CREATED);
+      AddEvent(node, Event::LIVE_STATUS_CHANGED);
+
+      // Fire a LIVE_REGION_CREATED if the previous value was off, and the new
+      // value is not-off.
+      if (!IsAlert(node->data().role)) {
+        bool old_state = !old_value.empty() && old_value != "off";
+        bool new_state = !new_value.empty() && new_value != "off";
+        if (!old_state && new_state)
+          AddEvent(node, Event::LIVE_REGION_CREATED);
+      }
       break;
     case ax::mojom::StringAttribute::kName:
       // If the name of the root node changes, we expect OnTreeDataChanged to
@@ -219,8 +261,6 @@ void AXEventGenerator::OnStringAttributeChanged(AXTree* tree,
       if (node != tree->root())
         AddEvent(node, Event::NAME_CHANGED);
 
-      // TODO(accessibility): tree in the midst of updates. Disallow
-      // access to |node|.
       if (node->data().HasStringAttribute(
               ax::mojom::StringAttribute::kContainerLiveStatus)) {
         FireLiveRegionEvents(node);
@@ -261,6 +301,12 @@ void AXEventGenerator::OnIntAttributeChanged(AXTree* tree,
     case ax::mojom::IntAttribute::kCheckedState:
       AddEvent(node, Event::CHECKED_STATE_CHANGED);
       break;
+    case ax::mojom::IntAttribute::kDropeffect:
+      AddEvent(node, Event::DROPEFFECT_CHANGED);
+      break;
+    case ax::mojom::IntAttribute::kHasPopup:
+      AddEvent(node, Event::HASPOPUP_CHANGED);
+      break;
     case ax::mojom::IntAttribute::kHierarchicalLevel:
       AddEvent(node, Event::HIERARCHICAL_LEVEL_CHANGED);
       break;
@@ -291,6 +337,12 @@ void AXEventGenerator::OnIntAttributeChanged(AXTree* tree,
       break;
     case ax::mojom::IntAttribute::kScrollY:
       AddEvent(node, Event::SCROLL_VERTICAL_POSITION_CHANGED);
+      break;
+    case ax::mojom::IntAttribute::kSortDirection:
+      // Ignore sort direction changes on roles other than table headers and
+      // grid headers.
+      if (IsTableHeader(node->data().role))
+        AddEvent(node, Event::SORT_CHANGED);
       break;
     case ax::mojom::IntAttribute::kImageAnnotationStatus:
       // The image annotation is reported as part of the accessible name.
@@ -339,16 +391,22 @@ void AXEventGenerator::OnBoolAttributeChanged(AXTree* tree,
 
   switch (attr) {
     case ax::mojom::BoolAttribute::kBusy:
+      AddEvent(node, Event::BUSY_CHANGED);
       // Fire an 'invalidated' event when aria-busy becomes false
       if (!new_value)
         AddEvent(node, Event::LAYOUT_INVALIDATED);
-      AddEvent(node, Event::OTHER_ATTRIBUTE_CHANGED);
+      break;
+    case ax::mojom::BoolAttribute::kGrabbed:
+      AddEvent(node, Event::GRABBED_CHANGED);
+      break;
+    case ax::mojom::BoolAttribute::kLiveAtomic:
+      AddEvent(node, Event::ATOMIC_CHANGED);
       break;
     case ax::mojom::BoolAttribute::kSelected: {
       AddEvent(node, Event::SELECTED_CHANGED);
-      ui::AXNode* container = node;
+      AXNode* container = node;
       while (container &&
-             !ui::IsContainerWithSelectableChildren(container->data().role))
+             !IsContainerWithSelectableChildren(container->data().role))
         container = container->parent();
       if (container)
         AddEvent(container, Event::SELECTED_CHILDREN_CHANGED);
@@ -395,8 +453,8 @@ void AXEventGenerator::OnIntListAttributeChanged(
 }
 
 void AXEventGenerator::OnTreeDataChanged(AXTree* tree,
-                                         const ui::AXTreeData& old_tree_data,
-                                         const ui::AXTreeData& new_tree_data) {
+                                         const AXTreeData& old_tree_data,
+                                         const AXTreeData& new_tree_data) {
   DCHECK_EQ(tree_, tree);
 
   if (new_tree_data.loaded && !old_tree_data.loaded &&
@@ -450,32 +508,28 @@ void AXEventGenerator::OnAtomicUpdateFinished(
   }
 
   for (const auto& change : changes) {
-    if ((change.type == NODE_CREATED || change.type == SUBTREE_CREATED)) {
-      if (change.node->data().HasStringAttribute(
-              ax::mojom::StringAttribute::kLiveStatus)) {
-        if (ui::IsAlert(change.node->data().role))
-          AddEvent(change.node, Event::ALERT);
-        else if (change.node->data().GetStringAttribute(
-                     ax::mojom::StringAttribute::kLiveStatus) != "off")
-          AddEvent(change.node, Event::LIVE_REGION_CREATED);
-      } else if (change.node->data().HasStringAttribute(
-                     ax::mojom::StringAttribute::kContainerLiveStatus) &&
-                 change.node->data().HasStringAttribute(
-                     ax::mojom::StringAttribute::kName)) {
-        FireLiveRegionEvents(change.node);
-      }
-      if (change.type == SUBTREE_CREATED)
-        AddEvent(change.node, Event::SUBTREE_CREATED);
-    } else {
+    if (change.type == SUBTREE_CREATED) {
+      AddEvent(change.node, Event::SUBTREE_CREATED);
+    } else if (change.type != NODE_CREATED) {
       FireRelationSourceEvents(tree, change.node);
+      continue;
     }
+
+    if (IsAlert(change.node->data().role))
+      AddEvent(change.node, Event::ALERT);
+    else if (IsActiveLiveRegion(change))
+      AddEvent(change.node, Event::LIVE_REGION_CREATED);
+    else if (IsContainedInLiveRegion(change))
+      FireLiveRegionEvents(change.node);
   }
 
   FireActiveDescendantEvents();
+
+  PostprocessEvents();
 }
 
 void AXEventGenerator::FireLiveRegionEvents(AXNode* node) {
-  ui::AXNode* live_root = node;
+  AXNode* live_root = node;
   while (live_root && !live_root->data().HasStringAttribute(
                           ax::mojom::StringAttribute::kLiveStatus))
     live_root = live_root->parent();
@@ -489,7 +543,7 @@ void AXEventGenerator::FireLiveRegionEvents(AXNode* node) {
              .GetStringAttribute(ax::mojom::StringAttribute::kName)
              .empty())
       AddEvent(node, Event::LIVE_REGION_NODE_CHANGED);
-    // Fire LIVE_REGION_NODE_CHANGED on the root of the live region.
+    // Fire LIVE_REGION_CHANGED on the root of the live region.
     AddEvent(live_root, Event::LIVE_REGION_CHANGED);
   }
 }
@@ -561,6 +615,49 @@ bool AXEventGenerator::ShouldFireLoadEvents(AXNode* node) {
          data.relative_bounds.bounds.height();
 }
 
+void AXEventGenerator::PostprocessEvents() {
+  std::vector<AXNode*> nodes_to_remove_subtree_created;
+
+  for (auto& iter : tree_events_) {
+    AXNode* node = iter.first;
+    std::set<EventParams>& node_events = iter.second;
+
+    // A newly created live region or alert should not *also* fire a
+    // live region changed event.
+    if (HasEvent(node_events, Event::ALERT) ||
+        HasEvent(node_events, Event::LIVE_REGION_CREATED)) {
+      RemoveEvent(&node_events, Event::LIVE_REGION_CHANGED);
+    }
+
+    // If a node toggled its ignored state, we shouldn't also fire
+    // children changed events on it.
+    if (HasEvent(node_events, Event::IGNORED_CHANGED))
+      RemoveEvent(&node_events, Event::CHILDREN_CHANGED);
+
+    // We shouldn't fire subtree created if the parent also has subtree
+    // created on it.
+    AXNode* parent = node->GetUnignoredParent();
+    if (parent && HasEvent(node_events, Event::SUBTREE_CREATED)) {
+      if (tree_events_.find(parent) != tree_events_.end()) {
+        std::set<EventParams>& parent_events = tree_events_[parent];
+        if (HasEvent(parent_events, Event::SUBTREE_CREATED))
+          nodes_to_remove_subtree_created.push_back(node);
+      }
+    }
+  }
+
+  for (AXNode* node : nodes_to_remove_subtree_created) {
+    std::set<EventParams>& node_events = tree_events_[node];
+    RemoveEvent(&node_events, Event::SUBTREE_CREATED);
+    // If this was the only event, remove the node entirely from the
+    // tree events. Note that this can't happen with any of the other logic
+    // above since it's all dealing with one event superseding another in
+    // the same node.
+    if (node_events.size() == 0)
+      tree_events_.erase(node);
+  }
+}
+
 // static
 void AXEventGenerator::GetRestrictionStates(ax::mojom::Restriction restriction,
                                             bool* is_enabled,
@@ -593,6 +690,142 @@ std::vector<int32_t> AXEventGenerator::ComputeIntListDifference(
                                 sorted_rhs.cbegin(), sorted_rhs.cend(),
                                 std::back_inserter(result));
   return result;
+}
+
+std::ostream& operator<<(std::ostream& os, AXEventGenerator::Event event) {
+  return os << ToString(event);
+}
+
+const char* ToString(AXEventGenerator::Event event) {
+  switch (event) {
+    case AXEventGenerator::Event::ACCESS_KEY_CHANGED:
+      return "ACCESS_KEY_CHANGED";
+    case AXEventGenerator::Event::ATOMIC_CHANGED:
+      return "ATOMIC_CHANGED";
+    case AXEventGenerator::Event::ACTIVE_DESCENDANT_CHANGED:
+      return "ACTIVE_DESCENDANT_CHANGED";
+    case AXEventGenerator::Event::ALERT:
+      return "ALERT";
+    case AXEventGenerator::Event::BUSY_CHANGED:
+      return "BUSY_CHANGED";
+    case AXEventGenerator::Event::CHECKED_STATE_CHANGED:
+      return "CHECKED_STATE_CHANGED";
+    case AXEventGenerator::Event::CHILDREN_CHANGED:
+      return "CHILDREN_CHANGED";
+    case AXEventGenerator::Event::CLASS_NAME_CHANGED:
+      return "CLASS_NAME_CHANGED";
+    case AXEventGenerator::Event::COLLAPSED:
+      return "COLLAPSED";
+    case AXEventGenerator::Event::CONTROLS_CHANGED:
+      return "CONTROLS_CHANGED";
+    case AXEventGenerator::Event::DESCRIBED_BY_CHANGED:
+      return "DESCRIBED_BY_CHANGED";
+    case AXEventGenerator::Event::DESCRIPTION_CHANGED:
+      return "DESCRIPTION_CHANGED";
+    case AXEventGenerator::Event::DOCUMENT_SELECTION_CHANGED:
+      return "DOCUMENT_SELECTION_CHANGED";
+    case AXEventGenerator::Event::DOCUMENT_TITLE_CHANGED:
+      return "DOCUMENT_TITLE_CHANGED";
+    case AXEventGenerator::Event::DROPEFFECT_CHANGED:
+      return "DROPEFFECT_CHANGED";
+    case AXEventGenerator::Event::ENABLED_CHANGED:
+      return "ENABLED_CHANGED";
+    case AXEventGenerator::Event::EXPANDED:
+      return "EXPANDED";
+    case AXEventGenerator::Event::FLOW_FROM_CHANGED:
+      return "FLOW_FROM_CHANGED";
+    case AXEventGenerator::Event::FLOW_TO_CHANGED:
+      return "FLOW_TO_CHANGED";
+    case AXEventGenerator::Event::GRABBED_CHANGED:
+      return "GRABBED_CHANGED";
+    case AXEventGenerator::Event::HASPOPUP_CHANGED:
+      return "HASPOPUP_CHANGED";
+    case AXEventGenerator::Event::HIERARCHICAL_LEVEL_CHANGED:
+      return "HIERARCHICAL_LEVEL_CHANGED";
+    case ui::AXEventGenerator::Event::IGNORED_CHANGED:
+      return "IGNORED_CHANGED";
+    case AXEventGenerator::Event::IMAGE_ANNOTATION_CHANGED:
+      return "IMAGE_ANNOTATION_CHANGED";
+    case AXEventGenerator::Event::INVALID_STATUS_CHANGED:
+      return "INVALID_STATUS_CHANGED";
+    case AXEventGenerator::Event::KEY_SHORTCUTS_CHANGED:
+      return "KEY_SHORTCUTS_CHANGED";
+    case AXEventGenerator::Event::LABELED_BY_CHANGED:
+      return "LABELED_BY_CHANGED";
+    case AXEventGenerator::Event::LANGUAGE_CHANGED:
+      return "LANGUAGE_CHANGED";
+    case AXEventGenerator::Event::LAYOUT_INVALIDATED:
+      return "LAYOUT_INVALIDATED";
+    case AXEventGenerator::Event::LIVE_REGION_CHANGED:
+      return "LIVE_REGION_CHANGED";
+    case AXEventGenerator::Event::LIVE_REGION_CREATED:
+      return "LIVE_REGION_CREATED";
+    case AXEventGenerator::Event::LIVE_REGION_NODE_CHANGED:
+      return "LIVE_REGION_NODE_CHANGED";
+    case AXEventGenerator::Event::LIVE_RELEVANT_CHANGED:
+      return "LIVE_RELEVANT_CHANGED";
+    case AXEventGenerator::Event::LIVE_STATUS_CHANGED:
+      return "LIVE_STATUS_CHANGED";
+    case AXEventGenerator::Event::LOAD_COMPLETE:
+      return "LOAD_COMPLETE";
+    case AXEventGenerator::Event::LOAD_START:
+      return "LOAD_START";
+    case AXEventGenerator::Event::MENU_ITEM_SELECTED:
+      return "MENU_ITEM_SELECTED";
+    case AXEventGenerator::Event::MULTILINE_STATE_CHANGED:
+      return "MULTILINE_STATE_CHANGED";
+    case AXEventGenerator::Event::MULTISELECTABLE_STATE_CHANGED:
+      return "MULTISELECTABLE_STATE_CHANGED";
+    case AXEventGenerator::Event::NAME_CHANGED:
+      return "NAME_CHANGED";
+    case AXEventGenerator::Event::OTHER_ATTRIBUTE_CHANGED:
+      return "OTHER_ATTRIBUTE_CHANGED";
+    case AXEventGenerator::Event::PLACEHOLDER_CHANGED:
+      return "PLACEHOLDER_CHANGED";
+    case AXEventGenerator::Event::PORTAL_ACTIVATED:
+      return "PORTAL_ACTIVATED";
+    case AXEventGenerator::Event::POSITION_IN_SET_CHANGED:
+      return "POSITION_IN_SET_CHANGED";
+    case AXEventGenerator::Event::READONLY_CHANGED:
+      return "READONLY_CHANGED";
+    case AXEventGenerator::Event::RELATED_NODE_CHANGED:
+      return "RELATED_NODE_CHANGED";
+    case AXEventGenerator::Event::REQUIRED_STATE_CHANGED:
+      return "REQUIRED_STATE_CHANGED";
+    case AXEventGenerator::Event::ROLE_CHANGED:
+      return "ROLE_CHANGED";
+    case AXEventGenerator::Event::ROW_COUNT_CHANGED:
+      return "ROW_COUNT_CHANGED";
+    case AXEventGenerator::Event::SCROLL_HORIZONTAL_POSITION_CHANGED:
+      return "SCROLL_HORIZONTAL_POSITION_CHANGED";
+    case AXEventGenerator::Event::SCROLL_VERTICAL_POSITION_CHANGED:
+      return "SCROLL_VERTICAL_POSITION_CHANGED";
+    case AXEventGenerator::Event::SELECTED_CHANGED:
+      return "SELECTED_CHANGED";
+    case AXEventGenerator::Event::SELECTED_CHILDREN_CHANGED:
+      return "SELECTED_CHILDREN_CHANGED";
+    case AXEventGenerator::Event::SET_SIZE_CHANGED:
+      return "SET_SIZE_CHANGED";
+    case AXEventGenerator::Event::STATE_CHANGED:
+      return "STATE_CHANGED";
+    case AXEventGenerator::Event::SUBTREE_CREATED:
+      return "SUBTREE_CREATED";
+    case AXEventGenerator::Event::VALUE_CHANGED:
+      return "VALUE_CHANGED";
+    case AXEventGenerator::Event::VALUE_MAX_CHANGED:
+      return "VALUE_MAX_CHANGED";
+    case AXEventGenerator::Event::VALUE_MIN_CHANGED:
+      return "VALUE_MIN_CHANGED";
+    case AXEventGenerator::Event::VALUE_STEP_CHANGED:
+      return "VALUE_STEP_CHANGED";
+    case AXEventGenerator::Event::AUTO_COMPLETE_CHANGED:
+      return "AUTO_COMPLETE_CHANGED";
+    case AXEventGenerator::Event::FOCUS_CHANGED:
+      return "FOCUS_CHANGED";
+    case AXEventGenerator::Event::SORT_CHANGED:
+      return "SORT_CHANGED";
+  }
+  NOTREACHED();
 }
 
 }  // namespace ui

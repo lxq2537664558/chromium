@@ -14,7 +14,6 @@
 #include "base/macros.h"
 #include "base/memory/ref_counted.h"
 #include "base/sequence_checker.h"
-#include "base/task/task_traits.h"
 #include "base/time/time.h"
 
 // An UploadList is an abstraction over a list of client-side data files that
@@ -60,6 +59,9 @@ class UploadList : public base::RefCountedThreadSafe<UploadList> {
 
     State state;
 
+    // Identifies where the crash comes from.
+    std::string source;
+
     // Formatted file size for locally stored data.
     base::string16 file_size;
   };
@@ -90,10 +92,6 @@ class UploadList : public base::RefCountedThreadSafe<UploadList> {
 
  protected:
   virtual ~UploadList();
-
-  // Returns the TaskTraits that should be used for LoadUploadList() and
-  // RequestSingleUpload().
-  virtual base::TaskTraits LoadingTaskTraits() = 0;
 
   // Reads the upload log and stores the entries in |uploads|.
   virtual std::vector<UploadInfo> LoadUploadList() = 0;

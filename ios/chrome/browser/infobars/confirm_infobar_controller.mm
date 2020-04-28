@@ -5,6 +5,7 @@
 #import "ios/chrome/browser/infobars/confirm_infobar_controller.h"
 
 #include "base/mac/foundation_util.h"
+#include "base/strings/string_util.h"
 #include "base/strings/sys_string_conversions.h"
 #include "components/infobars/core/confirm_infobar_delegate.h"
 #import "ios/chrome/browser/infobars/infobar_controller+protected.h"
@@ -125,10 +126,6 @@ typedef NS_ENUM(NSInteger, ConfirmInfoBarUITags) {
   }
 }
 
-- (ConfirmInfoBarView*)view {
-  return _infoBarView;
-}
-
 #pragma mark - Handling of User Events
 
 - (void)infoBarButtonDidPress:(id)sender {
@@ -163,7 +160,10 @@ typedef NS_ENUM(NSInteger, ConfirmInfoBarUITags) {
     return;
 
   DCHECK(tag == ConfirmInfoBarUITags::TITLE_LINK);
-  self.infoBarDelegate->LinkClicked(WindowOpenDisposition::NEW_FOREGROUND_TAB);
+  if (self.infoBarDelegate->LinkClicked(
+          WindowOpenDisposition::NEW_FOREGROUND_TAB)) {
+    self.delegate->RemoveInfoBar();
+  }
 }
 
 @end

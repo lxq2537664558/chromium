@@ -18,6 +18,7 @@
 #include "chrome/browser/ui/webui/ntp/core_app_launcher_handler.h"
 #include "chrome/browser/ui/webui/ntp/ntp_resource_cache.h"
 #include "chrome/browser/ui/webui/theme_handler.h"
+#include "chrome/browser/web_applications/web_app_provider.h"
 #include "chrome/common/url_constants.h"
 #include "chrome/grit/generated_resources.h"
 #include "chrome/grit/theme_resources.h"
@@ -42,9 +43,13 @@ AppLauncherPageUI::AppLauncherPageUI(content::WebUI* web_ui)
   if (!GetProfile()->IsOffTheRecord()) {
     extensions::ExtensionService* service =
         extensions::ExtensionSystem::Get(GetProfile())->extension_service();
-    // We should not be launched without an ExtensionService.
+    web_app::WebAppProvider* web_app_provider =
+        web_app::WebAppProvider::Get(GetProfile());
+    DCHECK(web_app_provider);
     DCHECK(service);
-    web_ui->AddMessageHandler(std::make_unique<AppLauncherHandler>(service));
+    // We should not be launched without an ExtensionService or WebAppProvider.
+    web_ui->AddMessageHandler(
+        std::make_unique<AppLauncherHandler>(service, web_app_provider));
     web_ui->AddMessageHandler(std::make_unique<CoreAppLauncherHandler>());
     web_ui->AddMessageHandler(std::make_unique<AppIconWebUIHandler>());
     web_ui->AddMessageHandler(std::make_unique<MetricsHandler>());
@@ -94,14 +99,14 @@ AppLauncherPageUI::HTMLSource::HTMLSource(Profile* profile)
     : profile_(profile) {
 }
 
-std::string AppLauncherPageUI::HTMLSource::GetSource() const {
+std::string AppLauncherPageUI::HTMLSource::GetSource() {
   return chrome::kChromeUIAppLauncherPageHost;
 }
 
 void AppLauncherPageUI::HTMLSource::StartDataRequest(
-    const std::string& path,
-    const content::ResourceRequestInfo::WebContentsGetter& wc_getter,
-    const content::URLDataSource::GotDataCallback& callback) {
+    const GURL& url,
+    const content::WebContents::Getter& wc_getter,
+    content::URLDataSource::GotDataCallback callback) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
 
   NTPResourceCache* resource = AppResourceCacheFactory::GetForProfile(profile_);
@@ -114,39 +119,36 @@ void AppLauncherPageUI::HTMLSource::StartDataRequest(
   scoped_refptr<base::RefCountedMemory> html_bytes(
       resource->GetNewTabHTML(win_type));
 
-  callback.Run(html_bytes.get());
+  std::move(callback).Run(html_bytes.get());
 }
 
 std::string AppLauncherPageUI::HTMLSource::GetMimeType(
-    const std::string& resource) const {
+    const std::string& resource) {
   return "text/html";
 }
 
-bool AppLauncherPageUI::HTMLSource::ShouldReplaceExistingSource() const {
+bool AppLauncherPageUI::HTMLSource::ShouldReplaceExistingSource() {
   return false;
 }
 
-bool AppLauncherPageUI::HTMLSource::AllowCaching() const {
+bool AppLauncherPageUI::HTMLSource::AllowCaching() {
   // Should not be cached to reflect dynamically-generated contents that may
   // depend on user profiles.
   return false;
 }
 
-std::string AppLauncherPageUI::HTMLSource::GetContentSecurityPolicyScriptSrc()
-    const {
+std::string AppLauncherPageUI::HTMLSource::GetContentSecurityPolicyScriptSrc() {
   // 'unsafe-inline' is added to script-src.
   return "script-src chrome://resources 'self' 'unsafe-eval' 'unsafe-inline';";
 }
 
-std::string AppLauncherPageUI::HTMLSource::GetContentSecurityPolicyStyleSrc()
-    const {
+std::string AppLauncherPageUI::HTMLSource::GetContentSecurityPolicyStyleSrc() {
   return "style-src 'self' chrome://resources chrome://theme 'unsafe-inline';";
 }
 
-std::string AppLauncherPageUI::HTMLSource::GetContentSecurityPolicyImgSrc()
-    const {
+std::string AppLauncherPageUI::HTMLSource::GetContentSecurityPolicyImgSrc() {
   return "img-src chrome://extension-icon chrome://theme chrome://resources "
       "data:;";
 }
 
-AppLauncherPageUI::HTMLSource::~HTMLSource() {}
+AppLauncherPageUI::HTMLSource::~HTMLSource() = default;

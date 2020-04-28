@@ -66,6 +66,17 @@ def _ParseArgs(args):
   parser.add_argument('--module-zips', required=True,
                       help='GN-list of module zip archives.')
   parser.add_argument(
+      '--pathmap-in-paths',
+      action='append',
+      help='List of module pathmap files.')
+  parser.add_argument(
+      '--module-name',
+      action='append',
+      dest='module_names',
+      help='List of module names.')
+  parser.add_argument(
+      '--pathmap-out-path', help='Path to combined pathmap file for bundle.')
+  parser.add_argument(
       '--rtxt-in-paths', action='append', help='GN-list of module R.txt files.')
   parser.add_argument(
       '--rtxt-out-path', help='Path to combined R.txt file for bundle.')
@@ -82,7 +93,7 @@ def _ParseArgs(args):
       help='Optional path to the base module\'s R.txt file, only used with '
       'language split dimension.')
   parser.add_argument(
-      '--base-whitelist-rtxt-path',
+      '--base-allowlist-rtxt-path',
       help='Optional path to an R.txt file, string resources '
       'listed there _and_ in --base-module-rtxt-path will '
       'be kept in the base bundle module, even if language'
@@ -94,7 +105,8 @@ def _ParseArgs(args):
 
   options = parser.parse_args(args)
   options.module_zips = build_utils.ParseGnList(options.module_zips)
-  options.rtxt_in_paths = build_utils.ExpandFileArgs(options.rtxt_in_paths)
+  options.rtxt_in_paths = build_utils.ParseGnList(options.rtxt_in_paths)
+  options.pathmap_in_paths = build_utils.ParseGnList(options.pathmap_in_paths)
 
   if len(options.module_zips) == 0:
     raise Exception('The module zip list cannot be empty.')
@@ -128,17 +140,17 @@ def _ParseArgs(args):
         parser.error('Invalid split dimension "%s" (expected one of: %s)' % (
             dim, ', '.join(x.lower() for x in _ALL_SPLIT_DIMENSIONS)))
 
-  # As a special case, --base-whitelist-rtxt-path can be empty to indicate
-  # that the module doesn't need such a whitelist. That's because it is easier
+  # As a special case, --base-allowlist-rtxt-path can be empty to indicate
+  # that the module doesn't need such a allowlist. That's because it is easier
   # to check this condition here than through GN rules :-(
-  if options.base_whitelist_rtxt_path == '':
+  if options.base_allowlist_rtxt_path == '':
     options.base_module_rtxt_path = None
 
-  # Check --base-module-rtxt-path and --base-whitelist-rtxt-path usage.
+  # Check --base-module-rtxt-path and --base-allowlist-rtxt-path usage.
   if options.base_module_rtxt_path:
-    if not options.base_whitelist_rtxt_path:
+    if not options.base_allowlist_rtxt_path:
       parser.error(
-          '--base-module-rtxt-path requires --base-whitelist-rtxt-path')
+          '--base-module-rtxt-path requires --base-allowlist-rtxt-path')
     if 'language' not in options.split_dimensions:
       parser.error('--base-module-rtxt-path is only valid with '
                    'language-based splits.')
@@ -193,6 +205,9 @@ def _GenerateBundleConfigJson(uncompressed_assets, compress_shared_libraries,
           'uncompressNativeLibraries': {
               'enabled': not compress_shared_libraries,
           },
+          'uncompressDexFiles': {
+              'enabled': True,  # Applies only for P+.
+          }
       },
       'compression': {
           'uncompressedGlob': sorted(uncompressed_globs),
@@ -223,9 +238,13 @@ def _RewriteLanguageAssetPath(src_path):
   locale = src_path[len(_LOCALES_SUBDIR):-4]
   android_locale = resource_utils.ToAndroidLocaleName(locale)
 
-  # The locale format is <lang>-<region> or <lang>. Extract the language.
+  # The locale format is <lang>-<region> or <lang> or BCP-47 (e.g b+sr+Latn).
+  # Extract the language.
   pos = android_locale.find('-')
-  if pos >= 0:
+  if android_locale.startswith('b+'):
+    # If locale is in BCP-47 the language is the second tag (e.g. b+sr+Latn)
+    android_language = android_locale.split('+')[1]
+  elif pos >= 0:
     android_language = android_locale[:pos]
   else:
     android_language = android_locale
@@ -289,19 +308,78 @@ def _SplitModuleForAssetTargeting(src_module_zip, tmp_dir, split_dimensions):
     return tmp_zip
 
 
-def _GenerateBaseResourcesWhitelist(base_module_rtxt_path,
-                                    base_whitelist_rtxt_path):
-  """Generate a whitelist of base master resource ids.
+def _GenerateBaseResourcesAllowList(base_module_rtxt_path,
+                                    base_allowlist_rtxt_path):
+  """Generate a allowlist of base master resource ids.
 
   Args:
     base_module_rtxt_path: Path to base module R.txt file.
-    base_whitelist_rtxt_path: Path to base whitelist R.txt file.
+    base_allowlist_rtxt_path: Path to base allowlist R.txt file.
   Returns:
     list of resource ids.
   """
-  ids_map = resource_utils.GenerateStringResourcesWhitelist(
-      base_module_rtxt_path, base_whitelist_rtxt_path)
+  ids_map = resource_utils.GenerateStringResourcesAllowList(
+      base_module_rtxt_path, base_allowlist_rtxt_path)
   return ids_map.keys()
+
+
+def _ConcatTextFiles(in_paths, out_path):
+  """Concatenate the contents of multiple text files into one.
+
+  The each file contents is preceded by a line containing the original filename.
+
+  Args:
+    in_paths: List of input file paths.
+    out_path: Path to output file.
+  """
+  with open(out_path, 'w') as out_file:
+    for in_path in in_paths:
+      if not os.path.exists(in_path):
+        continue
+      with open(in_path, 'r') as in_file:
+        out_file.write('-- Contents of {}\n'.format(os.path.basename(in_path)))
+        out_file.write(in_file.read())
+
+
+def _LoadPathmap(pathmap_path):
+  """Load the pathmap of obfuscated resource paths.
+
+  Returns: A dict mapping from obfuscated paths to original paths or an
+           empty dict if passed a None |pathmap_path|.
+  """
+  if pathmap_path is None:
+    return {}
+
+  pathmap = {}
+  with open(pathmap_path, 'r') as f:
+    for line in f:
+      line = line.strip()
+      if line.startswith('--') or line == '':
+        continue
+      original, renamed = line.split(' -> ')
+      pathmap[renamed] = original
+  return pathmap
+
+
+def _WriteBundlePathmap(module_pathmap_paths, module_names,
+                        bundle_pathmap_path):
+  """Combine the contents of module pathmaps into a bundle pathmap.
+
+  This rebases the resource paths inside the module pathmap before adding them
+  to the bundle pathmap. So res/a.xml inside the base module pathmap would be
+  base/res/a.xml in the bundle pathmap.
+  """
+  with open(bundle_pathmap_path, 'w') as bundle_pathmap_file:
+    for module_pathmap_path, module_name in zip(module_pathmap_paths,
+                                                module_names):
+      if not os.path.exists(module_pathmap_path):
+        continue
+      module_pathmap = _LoadPathmap(module_pathmap_path)
+      for short_path, long_path in module_pathmap.iteritems():
+        rebased_long_path = '{}/{}'.format(module_name, long_path)
+        rebased_short_path = '{}/{}'.format(module_name, short_path)
+        line = '{} -> {}\n'.format(rebased_long_path, rebased_short_path)
+        bundle_pathmap_file.write(line)
 
 
 def main(args):
@@ -320,8 +398,8 @@ def main(args):
 
     base_master_resource_ids = None
     if options.base_module_rtxt_path:
-      base_master_resource_ids = _GenerateBaseResourcesWhitelist(
-          options.base_module_rtxt_path, options.base_whitelist_rtxt_path)
+      base_master_resource_ids = _GenerateBaseResourcesAllowList(
+          options.base_module_rtxt_path, options.base_allowlist_rtxt_path)
 
     bundle_config = _GenerateBundleConfigJson(
         options.uncompressed_assets, options.compress_shared_libraries,
@@ -340,12 +418,17 @@ def main(args):
     with open(tmp_bundle_config, 'w') as f:
       f.write(bundle_config)
 
-    cmd_args = ['java', '-jar', bundletool.BUNDLETOOL_JAR_PATH, 'build-bundle']
-    cmd_args += ['--modules=%s' % ','.join(module_zips)]
-    cmd_args += ['--output=%s' % tmp_unsigned_bundle]
-    cmd_args += ['--config=%s' % tmp_bundle_config]
+    cmd_args = [
+        build_utils.JAVA_PATH, '-jar', bundletool.BUNDLETOOL_JAR_PATH,
+        'build-bundle', '--modules=' + ','.join(module_zips),
+        '--output=' + tmp_unsigned_bundle, '--config=' + tmp_bundle_config
+    ]
 
-    build_utils.CheckOutput(cmd_args, print_stdout=True, print_stderr=True)
+    build_utils.CheckOutput(
+        cmd_args,
+        print_stdout=True,
+        print_stderr=True,
+        stderr_filter=build_utils.FilterReflectiveAccessJavaWarnings)
 
     if options.keystore_path:
       # NOTE: As stated by the public documentation, apksigner cannot be used
@@ -365,12 +448,11 @@ def main(args):
     shutil.move(tmp_bundle, options.out_bundle)
 
   if options.rtxt_out_path:
-    with open(options.rtxt_out_path, 'w') as rtxt_out:
-      for rtxt_in_path in options.rtxt_in_paths:
-        with open(rtxt_in_path, 'r') as rtxt_in:
-          rtxt_out.write('-- Contents of {}\n'.format(
-              os.path.basename(rtxt_in_path)))
-          rtxt_out.write(rtxt_in.read())
+    _ConcatTextFiles(options.rtxt_in_paths, options.rtxt_out_path)
+
+  if options.pathmap_out_path:
+    _WriteBundlePathmap(options.pathmap_in_paths, options.module_names,
+                        options.pathmap_out_path)
 
 
 if __name__ == '__main__':

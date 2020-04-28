@@ -13,8 +13,8 @@
 #include "ios/chrome/browser/chrome_url_constants.h"
 #include "ios/chrome/browser/omaha/omaha_service.h"
 #include "ios/chrome/grit/ios_resources.h"
-#include "ios/web/public/web_ui_ios_data_source.h"
 #include "ios/web/public/webui/web_ui_ios.h"
+#include "ios/web/public/webui/web_ui_ios_data_source.h"
 #include "ios/web/public/webui/web_ui_ios_message_handler.h"
 
 using web::WebUIIOSMessageHandler;
@@ -25,10 +25,9 @@ web::WebUIIOSDataSource* CreateOmahaUIHTMLSource() {
   web::WebUIIOSDataSource* source =
       web::WebUIIOSDataSource::Create(kChromeUIOmahaHost);
 
-  source->SetJsonPath("strings.js");
+  source->UseStringsJs();
   source->AddResourcePath("omaha.js", IDR_IOS_OMAHA_JS);
   source->SetDefaultResource(IDR_IOS_OMAHA_HTML);
-  source->UseGzip();
   return source;
 }
 
@@ -88,8 +87,7 @@ OmahaUI::OmahaUI(web::WebUIIOS* web_ui) : WebUIIOSController(web_ui) {
   web_ui->AddMessageHandler(std::make_unique<OmahaDOMHandler>());
 
   // Set up the chrome://omaha/ source.
-  ios::ChromeBrowserState* browser_state =
-      ios::ChromeBrowserState::FromWebUIIOS(web_ui);
+  ChromeBrowserState* browser_state = ChromeBrowserState::FromWebUIIOS(web_ui);
   web::WebUIIOSDataSource::Add(browser_state, CreateOmahaUIHTMLSource());
 }
 

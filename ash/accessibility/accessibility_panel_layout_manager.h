@@ -6,7 +6,7 @@
 #define ASH_ACCESSIBILITY_ACCESSIBILITY_PANEL_LAYOUT_MANAGER_H_
 
 #include "ash/ash_export.h"
-#include "ash/public/interfaces/accessibility_controller.mojom.h"
+#include "ash/public/cpp/accessibility_controller_enums.h"
 #include "ash/shell_observer.h"
 #include "base/macros.h"
 #include "ui/aura/layout_manager.h"
@@ -29,7 +29,7 @@ class ASH_EXPORT AccessibilityPanelLayoutManager
     : public aura::LayoutManager,
       public display::DisplayObserver,
       public ::wm::ActivationChangeObserver,
-      public ash::ShellObserver {
+      public ShellObserver {
  public:
   // Height of the panel in DIPs. Public for test.
   static constexpr int kDefaultPanelHeight = 35;
@@ -38,8 +38,8 @@ class ASH_EXPORT AccessibilityPanelLayoutManager
   ~AccessibilityPanelLayoutManager() override;
 
   // Controls the panel's visibility and location.
-  void SetPanelBounds(const gfx::Rect& bounds,
-                      mojom::AccessibilityPanelState state);
+  void SetAlwaysVisible(bool always_visible);
+  void SetPanelBounds(const gfx::Rect& bounds, AccessibilityPanelState state);
 
   // aura::LayoutManager:
   void OnWindowResized() override {}
@@ -81,9 +81,11 @@ class ASH_EXPORT AccessibilityPanelLayoutManager
   // Window bounds when not in fullscreen
   gfx::Rect panel_bounds_ = gfx::Rect(0, 0, 0, 0);
 
+  // Determines whether panel is hidden when browser is in fullscreen.
+  bool always_visible_ = false;
+
   // Determines how the panel_bounds_ are used when displaying the panel.
-  mojom::AccessibilityPanelState panel_state_ =
-      mojom::AccessibilityPanelState::BOUNDED;
+  AccessibilityPanelState panel_state_ = AccessibilityPanelState::BOUNDED;
 
   DISALLOW_COPY_AND_ASSIGN(AccessibilityPanelLayoutManager);
 };

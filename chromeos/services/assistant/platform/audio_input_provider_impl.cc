@@ -4,16 +4,17 @@
 
 #include "chromeos/services/assistant/platform/audio_input_provider_impl.h"
 
-#include "chromeos/services/assistant/public/features.h"
+#include "chromeos/services/assistant/public/cpp/features.h"
 
 namespace chromeos {
 namespace assistant {
 
 AudioInputProviderImpl::AudioInputProviderImpl(
-    service_manager::Connector* connector,
-    const std::string& input_device_id,
-    const std::string& hotword_device_id)
-    : audio_input_(connector, input_device_id, hotword_device_id) {}
+    PowerManagerClient* power_manager_client,
+    CrasAudioHandler* cras_audio_handler)
+    : audio_input_(power_manager_client,
+                   cras_audio_handler,
+                   /*input_device_id=*/std::string()) {}
 
 AudioInputProviderImpl::~AudioInputProviderImpl() = default;
 
@@ -42,6 +43,10 @@ void AudioInputProviderImpl::SetDeviceId(const std::string& device_id) {
 
 void AudioInputProviderImpl::SetHotwordDeviceId(const std::string& device_id) {
   audio_input_.SetHotwordDeviceId(device_id);
+}
+
+void AudioInputProviderImpl::SetDspHotwordLocale(std::string pref_locale) {
+  audio_input_.SetDspHotwordLocale(pref_locale);
 }
 
 }  // namespace assistant

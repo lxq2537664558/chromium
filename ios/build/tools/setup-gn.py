@@ -28,7 +28,7 @@ class ConfigParserWithStringInterpolation(ConfigParser.SafeConfigParser):
 
   '''A .ini file parser that supports strings and environment variables.'''
 
-  ENV_VAR_PATTERN = re.compile('\$([A-Za-z0-9_]+)')
+  ENV_VAR_PATTERN = re.compile(r'\$([A-Za-z0-9_]+)')
 
   def values(self, section):
     return map(
@@ -84,18 +84,22 @@ class GnGenerator(object):
     """
     args = []
 
-    if self._settings.getboolean('goma', 'enabled'):
-      args.append(('use_goma', True))
-      goma_dir = self._settings.getstring('goma', 'install')
-      if goma_dir:
-        args.append(('goma_dir', '"%s"' % os.path.expanduser(goma_dir)))
+    # build/config/ios/ios_sdk.gni asserts that goma is not enabled when
+    # building Official, so ignore the value of goma.enabled when creating
+    # args.gn for Official.
+    if self._config != 'Official':
+      if self._settings.getboolean('goma', 'enabled'):
+        args.append(('use_goma', True))
+        goma_dir = self._settings.getstring('goma', 'install')
+        if goma_dir:
+          args.append(('goma_dir', '"%s"' % os.path.expanduser(goma_dir)))
 
     args.append(('is_debug', self._config in ('Debug', 'Coverage')))
     args.append(('enable_dsyms', self._config in ('Profile', 'Official')))
     args.append(('enable_stripping', 'enable_dsyms'))
     args.append(('is_official_build', self._config == 'Official'))
     args.append(('is_chrome_branded', 'is_official_build'))
-    args.append(('use_xcode_clang', 'is_official_build'))
+    args.append(('use_xcode_clang', 'false'))
     args.append(('use_clang_coverage', self._config == 'Coverage'))
     args.append(('is_component_build', False))
 
@@ -201,9 +205,7 @@ class GnGenerator(object):
     if generate_xcode_project:
       gn_command.append('--ide=xcode')
       gn_command.append('--root-target=gn_all')
-      if self._settings.getboolean('goma', 'enabled'):
-        ninja_jobs = self._settings.getint('xcode', 'jobs') or 200
-        gn_command.append('--ninja-extra-args=-j%s' % ninja_jobs)
+      gn_command.append('--ninja-executable=autoninja')
       if self._settings.has_section('filters'):
         target_filters = self._settings.values('filters')
         if target_filters:
@@ -321,18 +323,6 @@ def Main(args):
     sys.stderr.write('ERROR: invalid value for build.arch: %s\n' %
         settings.getstring('build', 'arch'))
     sys.exit(1)
-
-  if settings.getboolean('goma', 'enabled'):
-    if settings.getint('xcode', 'jobs') < 0:
-      sys.stderr.write('ERROR: invalid value for xcode.jobs: %s\n' %
-          settings.get('xcode', 'jobs'))
-      sys.exit(1)
-    goma_install = os.path.expanduser(settings.getstring('goma', 'install'))
-    if not os.path.isdir(goma_install):
-      sys.stderr.write('WARNING: goma.install directory not found: %s\n' %
-          settings.get('goma', 'install'))
-      sys.stderr.write('WARNING: disabling goma\n')
-      settings.set('goma', 'enabled', 'false')
 
   # Find gn binary in PATH.
   gn_path = FindGn()

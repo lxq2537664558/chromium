@@ -5,10 +5,10 @@
 #include "chromeos/services/device_sync/cryptauth_device_manager_impl.h"
 
 #include <stddef.h>
-#include <stdexcept>
-#include <utility>
 
 #include <memory>
+#include <stdexcept>
+#include <utility>
 
 #include "base/base64url.h"
 #include "base/bind.h"
@@ -384,28 +384,25 @@ void AddSoftwareFeaturesToExternalDevice(
   // these deprecated fields, instead of software features. To work around this,
   // these pref values are migrated to software features locally.
   if (old_unlock_key_value_from_prefs) {
-    if (!base::ContainsValue(
-            external_device->supported_software_features(),
-            SoftwareFeatureEnumToString(
-                cryptauth::SoftwareFeature::EASY_UNLOCK_HOST))) {
+    if (!base::Contains(external_device->supported_software_features(),
+                        SoftwareFeatureEnumToString(
+                            cryptauth::SoftwareFeature::EASY_UNLOCK_HOST))) {
       external_device->add_supported_software_features(
           SoftwareFeatureEnumToString(
               cryptauth::SoftwareFeature::EASY_UNLOCK_HOST));
     }
-    if (!base::ContainsValue(
-            external_device->enabled_software_features(),
-            SoftwareFeatureEnumToString(
-                cryptauth::SoftwareFeature::EASY_UNLOCK_HOST))) {
+    if (!base::Contains(external_device->enabled_software_features(),
+                        SoftwareFeatureEnumToString(
+                            cryptauth::SoftwareFeature::EASY_UNLOCK_HOST))) {
       external_device->add_enabled_software_features(
           SoftwareFeatureEnumToString(
               cryptauth::SoftwareFeature::EASY_UNLOCK_HOST));
     }
   }
   if (old_mobile_hotspot_supported_from_prefs) {
-    if (!base::ContainsValue(
-            external_device->supported_software_features(),
-            SoftwareFeatureEnumToString(
-                cryptauth::SoftwareFeature::MAGIC_TETHER_HOST))) {
+    if (!base::Contains(external_device->supported_software_features(),
+                        SoftwareFeatureEnumToString(
+                            cryptauth::SoftwareFeature::MAGIC_TETHER_HOST))) {
       external_device->add_supported_software_features(
           SoftwareFeatureEnumToString(
               cryptauth::SoftwareFeature::MAGIC_TETHER_HOST));
@@ -538,35 +535,27 @@ CryptAuthDeviceManagerImpl::Factory*
 
 // static
 std::unique_ptr<CryptAuthDeviceManager>
-CryptAuthDeviceManagerImpl::Factory::NewInstance(
+CryptAuthDeviceManagerImpl::Factory::Create(
     base::Clock* clock,
     CryptAuthClientFactory* cryptauth_client_factory,
     CryptAuthGCMManager* gcm_manager,
     PrefService* pref_service) {
-  if (!factory_instance_)
-    factory_instance_ = new Factory();
+  if (factory_instance_) {
+    return factory_instance_->CreateInstance(clock, cryptauth_client_factory,
+                                             gcm_manager, pref_service);
+  }
 
-  return factory_instance_->BuildInstance(clock, cryptauth_client_factory,
-                                          gcm_manager, pref_service);
+  return base::WrapUnique(new CryptAuthDeviceManagerImpl(
+      clock, cryptauth_client_factory, gcm_manager, pref_service));
 }
 
 // static
-void CryptAuthDeviceManagerImpl::Factory::SetInstanceForTesting(
+void CryptAuthDeviceManagerImpl::Factory::SetFactoryForTesting(
     Factory* factory) {
   factory_instance_ = factory;
 }
 
 CryptAuthDeviceManagerImpl::Factory::~Factory() = default;
-
-std::unique_ptr<CryptAuthDeviceManager>
-CryptAuthDeviceManagerImpl::Factory::BuildInstance(
-    base::Clock* clock,
-    CryptAuthClientFactory* cryptauth_client_factory,
-    CryptAuthGCMManager* gcm_manager,
-    PrefService* pref_service) {
-  return base::WrapUnique(new CryptAuthDeviceManagerImpl(
-      clock, cryptauth_client_factory, gcm_manager, pref_service));
-}
 
 CryptAuthDeviceManagerImpl::CryptAuthDeviceManagerImpl(
     base::Clock* clock,
@@ -577,8 +566,7 @@ CryptAuthDeviceManagerImpl::CryptAuthDeviceManagerImpl(
       cryptauth_client_factory_(cryptauth_client_factory),
       gcm_manager_(gcm_manager),
       pref_service_(pref_service),
-      scheduler_(CreateSyncScheduler(this)),
-      weak_ptr_factory_(this) {
+      scheduler_(CreateSyncScheduler(this)) {
   UpdateUnlockKeysFromPrefs();
 }
 
@@ -645,10 +633,9 @@ std::vector<cryptauth::ExternalDeviceInfo>
 CryptAuthDeviceManagerImpl::GetUnlockKeys() const {
   std::vector<cryptauth::ExternalDeviceInfo> unlock_keys;
   for (const auto& device : synced_devices_) {
-    if (base::ContainsValue(
-            device.enabled_software_features(),
-            SoftwareFeatureEnumToString(
-                cryptauth::SoftwareFeature::EASY_UNLOCK_HOST))) {
+    if (base::Contains(device.enabled_software_features(),
+                       SoftwareFeatureEnumToString(
+                           cryptauth::SoftwareFeature::EASY_UNLOCK_HOST))) {
       unlock_keys.push_back(device);
     }
   }
@@ -659,10 +646,9 @@ std::vector<cryptauth::ExternalDeviceInfo>
 CryptAuthDeviceManagerImpl::GetPixelUnlockKeys() const {
   std::vector<cryptauth::ExternalDeviceInfo> unlock_keys;
   for (const auto& device : synced_devices_) {
-    if (base::ContainsValue(
-            device.enabled_software_features(),
-            SoftwareFeatureEnumToString(
-                cryptauth::SoftwareFeature::EASY_UNLOCK_HOST)) &&
+    if (base::Contains(device.enabled_software_features(),
+                       SoftwareFeatureEnumToString(
+                           cryptauth::SoftwareFeature::EASY_UNLOCK_HOST)) &&
         device.pixel_phone()) {
       unlock_keys.push_back(device);
     }
@@ -674,10 +660,9 @@ std::vector<cryptauth::ExternalDeviceInfo>
 CryptAuthDeviceManagerImpl::GetTetherHosts() const {
   std::vector<cryptauth::ExternalDeviceInfo> tether_hosts;
   for (const auto& device : synced_devices_) {
-    if (base::ContainsValue(
-            device.supported_software_features(),
-            SoftwareFeatureEnumToString(
-                cryptauth::SoftwareFeature::MAGIC_TETHER_HOST))) {
+    if (base::Contains(device.supported_software_features(),
+                       SoftwareFeatureEnumToString(
+                           cryptauth::SoftwareFeature::MAGIC_TETHER_HOST))) {
       tether_hosts.push_back(device);
     }
   }
@@ -688,10 +673,9 @@ std::vector<cryptauth::ExternalDeviceInfo>
 CryptAuthDeviceManagerImpl::GetPixelTetherHosts() const {
   std::vector<cryptauth::ExternalDeviceInfo> tether_hosts;
   for (const auto& device : synced_devices_) {
-    if (base::ContainsValue(
-            device.supported_software_features(),
-            SoftwareFeatureEnumToString(
-                cryptauth::SoftwareFeature::MAGIC_TETHER_HOST)) &&
+    if (base::Contains(device.supported_software_features(),
+                       SoftwareFeatureEnumToString(
+                           cryptauth::SoftwareFeature::MAGIC_TETHER_HOST)) &&
         device.pixel_phone())
       tether_hosts.push_back(device);
   }
@@ -759,7 +743,9 @@ void CryptAuthDeviceManagerImpl::OnGetMyDevicesFailure(
   RecordDeviceSyncResult(false /* success */);
 }
 
-void CryptAuthDeviceManagerImpl::OnResyncMessage() {
+void CryptAuthDeviceManagerImpl::OnResyncMessage(
+    const base::Optional<std::string>& session_id,
+    const base::Optional<CryptAuthFeatureType>& feature_type) {
   ForceSyncNow(cryptauth::INVOCATION_REASON_SERVER_INITIATED);
 }
 

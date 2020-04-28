@@ -5,7 +5,8 @@
 #include "extensions/browser/lazy_background_task_queue.h"
 
 #include "base/callback.h"
-#include "base/logging.h"
+#include "base/check.h"
+#include "base/notreached.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/notification_service.h"
 #include "content/public/browser/render_process_host.h"
@@ -13,7 +14,6 @@
 #include "content/public/browser/site_instance.h"
 #include "content/public/browser/web_contents.h"
 #include "extensions/browser/extension_host.h"
-#include "extensions/browser/extension_registry.h"
 #include "extensions/browser/extensions_browser_client.h"
 #include "extensions/browser/lazy_background_task_queue_factory.h"
 #include "extensions/browser/lazy_context_id.h"
@@ -43,7 +43,7 @@ bool CreateLazyBackgroundHost(ProcessManager* pm, const Extension* extension) {
 
 LazyBackgroundTaskQueue::LazyBackgroundTaskQueue(
     content::BrowserContext* browser_context)
-    : browser_context_(browser_context), extension_registry_observer_(this) {
+    : browser_context_(browser_context) {
   registrar_.Add(this,
                  extensions::NOTIFICATION_EXTENSION_HOST_DID_STOP_FIRST_LOAD,
                  content::NotificationService::AllBrowserContextsAndSources());
@@ -233,7 +233,7 @@ void LazyBackgroundTaskQueue::CreateLazyBackgroundHostOnExtensionLoaded(
     content::BrowserContext* browser_context,
     const Extension* extension) {
   PendingTasksKey key(browser_context, extension->id());
-  if (!base::ContainsKey(pending_tasks_, key))
+  if (!base::Contains(pending_tasks_, key))
     return;
 
   ProcessManager* pm = ProcessManager::Get(browser_context);

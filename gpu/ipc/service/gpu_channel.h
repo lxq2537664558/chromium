@@ -41,12 +41,13 @@ class WaitableEvent;
 }
 
 namespace gpu {
-
 class GpuChannelManager;
 class GpuChannelMessageFilter;
+class ImageDecodeAcceleratorStub;
 class ImageDecodeAcceleratorWorker;
 class Scheduler;
 class SharedImageStub;
+class StreamTexture;
 class SyncPointManager;
 
 // Encapsulates an IPC channel between the GPU process and one renderer
@@ -105,6 +106,8 @@ class GPU_IPC_SERVICE_EXPORT GpuChannel : public IPC::Listener,
     return io_task_runner_;
   }
 
+  bool is_gpu_host() const { return is_gpu_host_; }
+
   // IPC::Listener implementation:
   bool OnMessageReceived(const IPC::Message& msg) override;
   void OnChannelConnected(int32_t peer_pid) override;
@@ -154,8 +157,14 @@ class GPU_IPC_SERVICE_EXPORT GpuChannel : public IPC::Listener,
 
   void HandleMessageForTesting(const IPC::Message& msg);
 
+  ImageDecodeAcceleratorStub* GetImageDecodeAcceleratorStub() const;
+
 #if defined(OS_ANDROID)
   const CommandBufferStub* GetOneStub() const;
+
+  // Called by StreamTexture to remove the GpuChannel's reference to the
+  // StreamTexture.
+  void DestroyStreamTexture(int32_t stream_id);
 #endif
 
   SharedImageStub* shared_image_stub() const {
@@ -186,6 +195,7 @@ class GPU_IPC_SERVICE_EXPORT GpuChannel : public IPC::Listener,
                              gpu::ContextResult* result,
                              gpu::Capabilities* capabilities);
   void OnDestroyCommandBuffer(int32_t route_id);
+  void OnCreateStreamTexture(int32_t stream_id, bool* succeeded);
   bool CreateSharedImageStub();
 
   std::unique_ptr<IPC::SyncChannel> sync_channel_;  // nullptr in tests.
@@ -237,10 +247,15 @@ class GPU_IPC_SERVICE_EXPORT GpuChannel : public IPC::Listener,
 
   const bool is_gpu_host_;
 
+#if defined(OS_ANDROID)
+  // Set of active StreamTextures.
+  base::flat_map<int32_t, scoped_refptr<StreamTexture>> stream_textures_;
+#endif
+
   // Member variables should appear before the WeakPtrFactory, to ensure that
   // any WeakPtrs to Controller are invalidated before its members variable's
   // destructors are executed, rendering them invalid.
-  base::WeakPtrFactory<GpuChannel> weak_factory_;
+  base::WeakPtrFactory<GpuChannel> weak_factory_{this};
 
   DISALLOW_COPY_AND_ASSIGN(GpuChannel);
 };

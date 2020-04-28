@@ -45,12 +45,6 @@ class PasswordGenerationFrameHelper {
   void ProcessPasswordRequirements(
       const std::vector<autofill::FormStructure*>& forms);
 
-  // Detect account creation forms from forms with autofill type annotated.
-  // Will send a message to the renderer if we find a correctly annotated form
-  // and the feature is enabled.
-  void DetectFormsEligibleForGeneration(
-      const std::vector<autofill::FormStructure*>& forms);
-
   // Determines current state of password generation
   // |log_debug_data| determines whether log entries are sent to the
   // autofill::SavePasswordProgressLogger.
@@ -72,8 +66,7 @@ class PasswordGenerationFrameHelper {
       const GURL& last_committed_url,
       autofill::FormSignature form_signature,
       autofill::FieldSignature field_signature,
-      uint32_t max_length,
-      uint32_t* spec_priority);
+      uint32_t max_length);
 
  private:
   friend class PasswordGenerationFrameHelperTest;

@@ -4,17 +4,27 @@
 
 #include "ash/system/unified/unified_slider_view.h"
 
-#include "ash/system/tray/tray_constants.h"
-#include "ash/system/unified/top_shortcut_button.h"
+#include "ash/style/ash_color_provider.h"
+#include "ash/style/default_color_constants.h"
+#include "ash/system/tray/tray_popup_utils.h"
+#include "ash/system/unified/unified_system_tray_view.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/gfx/canvas.h"
 #include "ui/gfx/paint_vector_icon.h"
 #include "ui/views/accessibility/view_accessibility.h"
+#include "ui/views/animation/flood_fill_ink_drop_ripple.h"
+#include "ui/views/animation/ink_drop_highlight.h"
+#include "ui/views/animation/ink_drop_impl.h"
 #include "ui/views/border.h"
+#include "ui/views/controls/highlight_path_generator.h"
 #include "ui/views/layout/box_layout.h"
+#include "ui/views/view_class_properties.h"
 #include "ui/views/widget/widget.h"
 
 namespace ash {
+
+using ContentLayerType = AshColorProvider::ContentLayerType;
+using AshColorMode = AshColorProvider::AshColorMode;
 
 namespace {
 
@@ -22,12 +32,27 @@ views::Slider* CreateSlider(UnifiedSliderListener* listener, bool readonly) {
   if (readonly)
     return new ReadOnlySlider();
 
-  return new views::Slider(listener);
+  return new SystemSlider(listener);
 }
 
 }  // namespace
 
-ReadOnlySlider::ReadOnlySlider() : Slider(nullptr) {}
+SystemSlider::SystemSlider(views::SliderListener* listener)
+    : views::Slider(listener) {}
+
+SkColor SystemSlider::GetThumbColor() const {
+  using Type = AshColorProvider::ContentLayerType;
+  return AshColorProvider::Get()->GetContentLayerColor(
+      (style() == RenderingStyle::kMinimalStyle) ? Type::kSliderThumbDisabled
+                                                 : Type::kSliderThumbEnabled,
+      AshColorProvider::AshColorMode::kDark);
+}
+
+SkColor SystemSlider::GetTroughColor() const {
+  return AshColorProvider::Get()->GetDisabledColor(GetThumbColor());
+}
+
+ReadOnlySlider::ReadOnlySlider() : SystemSlider(nullptr) {}
 
 bool ReadOnlySlider::OnMousePressed(const ui::MouseEvent& event) {
   return false;
@@ -43,45 +68,103 @@ bool ReadOnlySlider::OnKeyPressed(const ui::KeyEvent& event) {
   return false;
 }
 
+const char* ReadOnlySlider::GetClassName() const {
+  return "ReadOnlySlider";
+}
+
 void ReadOnlySlider::OnGestureEvent(ui::GestureEvent* event) {}
 
 UnifiedSliderButton::UnifiedSliderButton(views::ButtonListener* listener,
                                          const gfx::VectorIcon& icon,
                                          int accessible_name_id)
-    : TopShortcutButton(listener, accessible_name_id) {
+    : views::ToggleImageButton(listener) {
+  SetImageHorizontalAlignment(ALIGN_CENTER);
+  SetImageVerticalAlignment(ALIGN_MIDDLE);
+  if (accessible_name_id)
+    SetTooltipText(l10n_util::GetStringUTF16(accessible_name_id));
+
+  TrayPopupUtils::ConfigureTrayPopupButton(this);
+
   SetVectorIcon(icon);
+  SetBorder(views::CreateEmptyBorder(kUnifiedCircularButtonFocusPadding));
+  views::InstallCircleHighlightPathGenerator(this);
+  focus_ring()->SetColor(UnifiedSystemTrayView::GetFocusRingColor());
 }
 
 UnifiedSliderButton::~UnifiedSliderButton() = default;
 
+gfx::Size UnifiedSliderButton::CalculatePreferredSize() const {
+  return gfx::Size(kTrayItemSize + kUnifiedCircularButtonFocusPadding.width(),
+                   kTrayItemSize + kUnifiedCircularButtonFocusPadding.height());
+}
+
+const char* UnifiedSliderButton::GetClassName() const {
+  return "UnifiedSliderButton";
+}
+
 void UnifiedSliderButton::SetVectorIcon(const gfx::VectorIcon& icon) {
+  const SkColor toggled_color = AshColorProvider::Get()->GetContentLayerColor(
+      ContentLayerType::kIconSystemMenuToggled, AshColorMode::kDark);
+  const SkColor icon_color = AshColorProvider::Get()->GetContentLayerColor(
+      ContentLayerType::kIconSystemMenu, AshColorMode::kDark);
+
   SetImage(views::Button::STATE_NORMAL,
-           gfx::CreateVectorIcon(icon, kUnifiedMenuIconColor));
+           gfx::CreateVectorIcon(icon, icon_color));
+
+  toggled_icon_ = gfx::CreateVectorIcon(icon, toggled_color);
+  SetToggledImage(views::Button::STATE_NORMAL, &toggled_icon_);
+
   SetImage(views::Button::STATE_DISABLED,
-           gfx::CreateVectorIcon(icon, kUnifiedMenuIconColor));
+           gfx::CreateVectorIcon(icon, icon_color));
 }
 
 void UnifiedSliderButton::SetToggled(bool toggled) {
   toggled_ = toggled;
-  SchedulePaint();
+  views::ToggleImageButton::SetToggled(toggled);
 }
 
 void UnifiedSliderButton::PaintButtonContents(gfx::Canvas* canvas) {
   gfx::Rect rect(GetContentsBounds());
   cc::PaintFlags flags;
   flags.setAntiAlias(true);
-  flags.setColor(toggled_ ? kUnifiedMenuButtonColorActive
-                          : kUnifiedMenuButtonColor);
+  flags.setColor(
+      toggled_
+          ? AshColorProvider::Get()->GetControlsLayerColor(
+                AshColorProvider::ControlsLayerType::kActiveControlBackground,
+                AshColorProvider::AshColorMode::kDark)
+          : AshColorProvider::Get()->GetControlsLayerColor(
+                AshColorProvider::ControlsLayerType::kInactiveControlBackground,
+                AshColorProvider::AshColorMode::kDark));
   flags.setStyle(cc::PaintFlags::kFill_Style);
-  canvas->DrawCircle(gfx::PointF(rect.CenterPoint()), kTrayItemSize / 2, flags);
+  canvas->DrawCircle(gfx::PointF(rect.CenterPoint()), kTrayItemCornerRadius,
+                     flags);
 
   views::ImageButton::PaintButtonContents(canvas);
 }
 
+std::unique_ptr<views::InkDrop> UnifiedSliderButton::CreateInkDrop() {
+  return TrayPopupUtils::CreateInkDrop(this);
+}
+
+std::unique_ptr<views::InkDropRipple> UnifiedSliderButton::CreateInkDropRipple()
+    const {
+  return TrayPopupUtils::CreateInkDropRipple(
+      TrayPopupInkDropStyle::FILL_BOUNDS, this,
+      GetInkDropCenterBasedOnLastEvent(),
+      UnifiedSystemTrayView::GetBackgroundColor());
+}
+
+std::unique_ptr<views::InkDropHighlight>
+UnifiedSliderButton::CreateInkDropHighlight() const {
+  return TrayPopupUtils::CreateInkDropHighlight(
+      TrayPopupInkDropStyle::FILL_BOUNDS, this,
+      UnifiedSystemTrayView::GetBackgroundColor());
+}
+
 void UnifiedSliderButton::GetAccessibleNodeData(ui::AXNodeData* node_data) {
-  if (!enabled())
+  if (!GetEnabled())
     return;
-  TopShortcutButton::GetAccessibleNodeData(node_data);
+  views::ToggleImageButton::GetAccessibleNodeData(node_data);
   node_data->role = ax::mojom::Role::kToggleButton;
   node_data->SetCheckedState(toggled_ ? ax::mojom::CheckedState::kTrue
                                       : ax::mojom::CheckedState::kFalse);
@@ -94,8 +177,8 @@ UnifiedSliderView::UnifiedSliderView(UnifiedSliderListener* listener,
     : button_(new UnifiedSliderButton(listener, icon, accessible_name_id)),
       slider_(CreateSlider(listener, readonly)) {
   auto* layout = SetLayoutManager(std::make_unique<views::BoxLayout>(
-      views::BoxLayout::kHorizontal, kUnifiedMenuItemPadding,
-      kUnifiedTopShortcutSpacing));
+      views::BoxLayout::Orientation::kHorizontal, kUnifiedSliderRowPadding,
+      kUnifiedSliderViewSpacing));
 
   AddChildView(button_);
   AddChildView(slider_);
@@ -103,7 +186,7 @@ UnifiedSliderView::UnifiedSliderView(UnifiedSliderListener* listener,
   // Prevent an accessibility event while initiallizing this view. Typically
   // the first update of the slider value is conducted by the caller function
   // to reflect the current value.
-  slider_->set_enable_accessibility_events(false);
+  slider_->SetEnableAccessibilityEvents(false);
 
   slider_->GetViewAccessibility().OverrideName(
       l10n_util::GetStringUTF16(accessible_name_id));
@@ -111,7 +194,10 @@ UnifiedSliderView::UnifiedSliderView(UnifiedSliderListener* listener,
   slider_->SetPreferredSize(gfx::Size(0, kTrayItemSize));
   layout->SetFlexForView(slider_, 1);
   layout->set_cross_axis_alignment(
-      views::BoxLayout::CROSS_AXIS_ALIGNMENT_CENTER);
+      views::BoxLayout::CrossAxisAlignment::kCenter);
+
+  SetPaintToLayer();
+  layer()->SetFillsBoundsOpaquely(false);
 }
 
 void UnifiedSliderView::SetSliderValue(float value, bool by_user) {
@@ -125,7 +211,11 @@ void UnifiedSliderView::SetSliderValue(float value, bool by_user) {
 
   slider_->SetValue(value);
   if (by_user)
-    slider_->set_enable_accessibility_events(true);
+    slider_->SetEnableAccessibilityEvents(true);
+}
+
+const char* UnifiedSliderView::GetClassName() const {
+  return "UnifiedSliderView";
 }
 
 UnifiedSliderView::~UnifiedSliderView() = default;

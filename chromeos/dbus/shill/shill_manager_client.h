@@ -9,7 +9,9 @@
 
 #include "base/component_export.h"
 #include "base/macros.h"
+#include "base/time/time.h"
 #include "chromeos/dbus/dbus_method_call_status.h"
+#include "chromeos/dbus/shill/fake_shill_simulated_result.h"
 #include "chromeos/dbus/shill/shill_client_helper.h"
 
 namespace dbus {
@@ -26,7 +28,6 @@ class ShillPropertyChangedObserver;
 // initializes the DBusThreadManager instance.
 class COMPONENT_EXPORT(SHILL_CLIENT) ShillManagerClient {
  public:
-  typedef ShillClientHelper::PropertyChangedHandler PropertyChangedHandler;
   typedef ShillClientHelper::DictionaryValueCallback DictionaryValueCallback;
   typedef ShillClientHelper::ErrorCallback ErrorCallback;
 
@@ -91,8 +92,11 @@ class COMPONENT_EXPORT(SHILL_CLIENT) ShillManagerClient {
     // or states provided by the command line.
     virtual void SetupDefaultEnvironment() = 0;
 
-    // Returns the interactive delay specified on the command line, 0 for none.
-    virtual int GetInteractiveDelay() const = 0;
+    // Returns the interactive delay (specified by the command line or a test).
+    virtual base::TimeDelta GetInteractiveDelay() const = 0;
+
+    // Sets the interactive delay for testing.
+    virtual void SetInteractiveDelay(base::TimeDelta delay) = 0;
 
     // Sets the 'best' service to connect to on a ConnectToBestServices call.
     virtual void SetBestServiceToConnect(const std::string& service_path) = 0;
@@ -102,6 +106,10 @@ class COMPONENT_EXPORT(SHILL_CLIENT) ShillManagerClient {
 
     // Returns the current Fast Transition status.
     virtual bool GetFastTransitionStatus() = 0;
+
+    // Makes ConfigureService succeed, fail, or timeout.
+    virtual void SetSimulateConfigurationResult(
+        FakeShillSimulatedResult configuration_result) = 0;
 
    protected:
     virtual ~TestInterface() {}
@@ -129,69 +137,67 @@ class COMPONENT_EXPORT(SHILL_CLIENT) ShillManagerClient {
 
   // Calls GetProperties method.
   // |callback| is called after the method call succeeds.
-  virtual void GetProperties(const DictionaryValueCallback& callback) = 0;
+  virtual void GetProperties(DictionaryValueCallback callback) = 0;
 
   // Calls GetNetworksForGeolocation method.
   // |callback| is called after the method call succeeds.
-  virtual void GetNetworksForGeolocation(
-      const DictionaryValueCallback& callback) = 0;
+  virtual void GetNetworksForGeolocation(DictionaryValueCallback callback) = 0;
 
   // Calls SetProperty method.
   // |callback| is called after the method call succeeds.
   virtual void SetProperty(const std::string& name,
                            const base::Value& value,
-                           const base::Closure& callback,
-                           const ErrorCallback& error_callback) = 0;
+                           base::OnceClosure callback,
+                           ErrorCallback error_callback) = 0;
 
   // Calls RequestScan method.
   // |callback| is called after the method call succeeds.
   virtual void RequestScan(const std::string& type,
-                           const base::Closure& callback,
-                           const ErrorCallback& error_callback) = 0;
+                           base::OnceClosure callback,
+                           ErrorCallback error_callback) = 0;
 
   // Calls EnableTechnology method.
   // |callback| is called after the method call succeeds.
   virtual void EnableTechnology(const std::string& type,
-                                const base::Closure& callback,
-                                const ErrorCallback& error_callback) = 0;
+                                base::OnceClosure callback,
+                                ErrorCallback error_callback) = 0;
 
   // Calls DisableTechnology method.
   // |callback| is called after the method call succeeds.
   virtual void DisableTechnology(const std::string& type,
-                                 const base::Closure& callback,
-                                 const ErrorCallback& error_callback) = 0;
+                                 base::OnceClosure callback,
+                                 ErrorCallback error_callback) = 0;
 
   // Calls ConfigureService method.
   // |callback| is called after the method call succeeds.
   virtual void ConfigureService(const base::DictionaryValue& properties,
-                                const ObjectPathCallback& callback,
-                                const ErrorCallback& error_callback) = 0;
+                                ObjectPathCallback callback,
+                                ErrorCallback error_callback) = 0;
 
   // Calls ConfigureServiceForProfile method.
   // |callback| is called with the created service if the method call succeeds.
   virtual void ConfigureServiceForProfile(
       const dbus::ObjectPath& profile_path,
       const base::DictionaryValue& properties,
-      const ObjectPathCallback& callback,
-      const ErrorCallback& error_callback) = 0;
+      ObjectPathCallback callback,
+      ErrorCallback error_callback) = 0;
 
   // Calls GetService method.
   // |callback| is called after the method call succeeds.
   virtual void GetService(const base::DictionaryValue& properties,
-                          const ObjectPathCallback& callback,
-                          const ErrorCallback& error_callback) = 0;
+                          ObjectPathCallback callback,
+                          ErrorCallback error_callback) = 0;
 
   // For each technology present, connects to the "best" service available.
   // Called once the user is logged in and certificates are loaded.
-  virtual void ConnectToBestServices(const base::Closure& callback,
-                                     const ErrorCallback& error_callback) = 0;
+  virtual void ConnectToBestServices(base::OnceClosure callback,
+                                     ErrorCallback error_callback) = 0;
 
   // Enable or disable network bandwidth throttling, on all interfaces on the
   // system.
-  virtual void SetNetworkThrottlingStatus(
-      const NetworkThrottlingStatus& status,
-      const base::Closure& callback,
-      const ErrorCallback& error_callback) = 0;
+  virtual void SetNetworkThrottlingStatus(const NetworkThrottlingStatus& status,
+                                          base::OnceClosure callback,
+                                          ErrorCallback error_callback) = 0;
 
   // Returns an interface for testing (stub only), or returns null.
   virtual TestInterface* GetTestInterface() = 0;

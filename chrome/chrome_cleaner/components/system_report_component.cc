@@ -41,6 +41,7 @@
 #include "base/win/scoped_bstr.h"
 #include "base/win/scoped_handle.h"
 #include "base/win/scoped_variant.h"
+#include "base/win/win_util.h"
 #include "base/win/windows_version.h"
 #include "chrome/chrome_cleaner/chrome_utils/chrome_util.h"
 #include "chrome/chrome_cleaner/chrome_utils/extension_file_logger.h"
@@ -593,9 +594,7 @@ void ReportLayeredServiceProviders() {
       const std::set<GUID, GUIDLess>& guids = provider->second;
       for (std::set<GUID, GUIDLess>::const_iterator guid = guids.begin();
            guid != guids.end(); ++guid) {
-        base::string16 guid_str;
-        GUIDToString(*guid, &guid_str);
-        logged_guids.push_back(guid_str);
+        logged_guids.push_back(base::win::String16FromGUID(*guid));
       }
       LoggingServiceAPI::GetInstance()->AddLayeredServiceProvider(
           logged_guids, file_information);
@@ -708,13 +707,14 @@ void ReportInstalledExtensions(JsonParserAPI* json_parser,
   GetNonWhitelistedDefaultExtensions(json_parser, &default_extension_policies,
                                      &default_extensions_done);
 
-  // Wait for all asynchronous parsing to be done
+  // Wait for all asynchronous parsing to be done with a single timeout for all
+  // phases combined.
   const base::TimeTicks end_time =
       base::TimeTicks::Now() +
       base::TimeDelta::FromMilliseconds(kParseAttemptTimeoutMilliseconds);
-  extension_settings_done.TimedWaitUntil(end_time);
-  master_preferences_done.TimedWaitUntil(end_time);
-  default_extensions_done.TimedWaitUntil(end_time);
+  extension_settings_done.TimedWait(end_time - base::TimeTicks::Now());
+  master_preferences_done.TimedWait(end_time - base::TimeTicks::Now());
+  default_extensions_done.TimedWait(end_time - base::TimeTicks::Now());
 
   // Log extensions that were found
   for (const ExtensionPolicyRegistryEntry& policy :

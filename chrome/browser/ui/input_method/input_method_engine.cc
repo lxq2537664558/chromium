@@ -23,12 +23,17 @@
 
 namespace {
 
+const char kErrorWrongContext[] = "Context is not active.";
 const char kErrorFollowCursorWindowExists[] =
     "A follow cursor IME window exists.";
 const char kErrorNoInputFocus[] =
     "The follow cursor IME window cannot be created without an input focus.";
 const char kErrorReachMaxWindowCount[] =
     "Cannot create more than 5 normal IME windows.";
+const char kErrorSentKeyEventsNotAllowed[] =
+    "input.ime.sendKeyEvents API is not allowed on non-text fields.";
+const char kErrorSpecialKeysNotAllowed[] =
+    "ENTER et al. keys are allowed only on http:, https: etc.";
 
 const int kMaxNormalWindowCount = 5;
 
@@ -74,7 +79,8 @@ void InputMethodEngine::UpdateComposition(
   if (composition_.ime_text_spans.empty()) {
     composition_.ime_text_spans.push_back(ui::ImeTextSpan(
         ui::ImeTextSpan::Type::kComposition, 0, composition_.text.length(),
-        ui::ImeTextSpan::Thickness::kThin, SK_ColorTRANSPARENT));
+        ui::ImeTextSpan::Thickness::kThin,
+        ui::ImeTextSpan::UnderlineStyle::kSolid, SK_ColorTRANSPARENT));
   }
 
   ui::IMEInputContextHandlerInterface* input_context =
@@ -87,6 +93,19 @@ void InputMethodEngine::UpdateComposition(
   } else {
     composition_changed_ = true;
   }
+}
+
+bool InputMethodEngine::SetCompositionRange(
+    uint32_t before,
+    uint32_t after,
+    const std::vector<ui::ImeTextSpan>& text_spans) {
+  // Not supported on non-Chrome OS platforms.
+  return false;
+}
+
+bool InputMethodEngine::SetSelectionRange(uint32_t start, uint32_t end) {
+  // Not supported on non-Chrome OS platforms.
+  return false;
 }
 
 void InputMethodEngine::CommitTextToInputContext(int context_id,
@@ -106,39 +125,52 @@ void InputMethodEngine::CommitTextToInputContext(int context_id,
   }
 }
 
-void InputMethodEngine::DeleteSurroundingTextToInputContext(
-    int offset,
-    size_t number_of_chars) {
-  ui::IMEInputContextHandlerInterface* input_context =
-      ui::IMEBridge::Get()->GetInputContextHandler();
-  if (input_context)
-    input_context->DeleteSurroundingText(offset, number_of_chars);
-}
-
 bool InputMethodEngine::SendKeyEvent(ui::KeyEvent* event,
-                                     const std::string& code) {
+                                     const std::string& code,
+                                     std::string* error) {
   DCHECK(event);
 
   // input.ime.sendKeyEvents API is only allowed to work on text fields.
-  if (current_input_type_ == ui::TEXT_INPUT_TYPE_NONE)
+  if (current_input_type_ == ui::TEXT_INPUT_TYPE_NONE) {
+    *error =
+        base::StringPrintf("%s current input type = %d",
+                           kErrorSentKeyEventsNotAllowed, current_input_type_);
     return false;
+  }
 
   if (event->key_code() == ui::VKEY_UNKNOWN)
     event->set_key_code(ui::DomCodeToUsLayoutKeyboardCode(event->code()));
 
   ui::IMEInputContextHandlerInterface* input_context =
       ui::IMEBridge::Get()->GetInputContextHandler();
-  if (!input_context)
+  if (!input_context) {
+    *error = kErrorWrongContext;
     return false;
+  }
 
   // ENTER et al. keys are allowed to work only on http:, https: etc.
-  if (!IsValidKeyForAllPages(event)) {
-    if (IsSpecialPage(input_context->GetInputMethod()))
-      return false;
+  if (!IsValidKeyEvent(event)) {
+    *error = kErrorSpecialKeysNotAllowed;
+    return false;
   }
 
   input_context->SendKeyEvent(event);
   return true;
+}
+
+bool InputMethodEngine::IsValidKeyEvent(const ui::KeyEvent* ui_event) {
+  // Disable shortcut keys for Windows and Linux.
+  if (ui_event->IsControlDown() || ui_event->IsCommandDown()) {
+    return false;
+  }
+  // Disable the enter key for Windows and Linux.
+  if (ui_event->key_code() == ui::VKEY_RETURN) {
+    return false;
+  }
+  ui::IMEInputContextHandlerInterface* input_context =
+      ui::IMEBridge::Get()->GetInputContextHandler();
+  return input_context && (IsValidKeyForAllPages(ui_event) ||
+                           !IsSpecialPage(input_context->GetInputMethod()));
 }
 
 bool InputMethodEngine::IsActive() const {
@@ -272,20 +304,18 @@ bool InputMethodEngine::IsSpecialPage(ui::InputMethod* input_method) {
   return true;
 }
 
-bool InputMethodEngine::IsValidKeyForAllPages(ui::KeyEvent* ui_event) {
+bool InputMethodEngine::IsValidKeyForAllPages(const ui::KeyEvent* ui_event) {
   // Whitelists all character keys except for Enter and Tab keys.
   std::vector<ui::KeyboardCode> invalid_character_keycodes{ui::VKEY_TAB,
                                                            ui::VKEY_RETURN};
   if (ui_event->GetDomKey().IsCharacter() && !ui_event->IsControlDown() &&
       !ui_event->IsCommandDown()) {
-    return !base::ContainsValue(invalid_character_keycodes,
-                                ui_event->key_code());
+    return !base::Contains(invalid_character_keycodes, ui_event->key_code());
   }
 
   // Whitelists Backspace key and arrow keys.
   std::vector<ui::KeyboardCode> whitelist_keycodes{
       ui::VKEY_BACK, ui::VKEY_LEFT, ui::VKEY_RIGHT, ui::VKEY_UP, ui::VKEY_DOWN};
-  return base::ContainsValue(whitelist_keycodes, ui_event->key_code());
+  return base::Contains(whitelist_keycodes, ui_event->key_code());
 }
-
 }  // namespace input_method

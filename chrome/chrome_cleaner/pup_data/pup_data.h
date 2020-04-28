@@ -17,6 +17,7 @@
 #include <vector>
 
 #include "base/files/file_path.h"
+#include "base/macros.h"
 #include "chrome/chrome_cleaner/chrome_utils/force_installed_extension.h"
 #include "chrome/chrome_cleaner/constants/uws_id.h"
 #include "chrome/chrome_cleaner/logging/proto/shared_data.pb.h"
@@ -394,9 +395,6 @@ class PUPData {
   // Return whether there is at least one PUP with flags matched by |chooser|.
   static bool HasFlaggedPUP(const std::vector<UwSId>& input_pup_list,
                             bool (*chooser)(Flags));
-
-  // Returns set of files found in service registrations of |uws|.
-  static FilePathSet GetFilesDetectedInServices(const std::vector<UwSId>& uws);
 
   // Convert a RegistryRoot to its corresponding HKEY. If
   // |registry_root| is a group policy, and |policy_file| is not null, the path

@@ -8,8 +8,11 @@
 #include <fuchsia/ui/views/cpp/fidl.h>
 #include <lib/fidl/cpp/binding_set.h>
 #include <lib/fit/function.h>
+#include <lib/sys/cpp/component_context.h>
 #include <utility>
 
+#include "base/bind.h"
+#include "base/fuchsia/default_context.h"
 #include "base/fuchsia/fuchsia_logging.h"
 #include "base/logging.h"
 #include "fuchsia/runners/common/web_content_runner.h"
@@ -21,7 +24,10 @@ WebComponent::WebComponent(
         controller_request)
     : runner_(runner),
       startup_context_(std::move(context)),
-      controller_binding_(this) {
+      controller_binding_(this),
+      module_context_(startup_context()
+                          ->svc()
+                          ->Connect<fuchsia::modular::ModuleContext>()) {
   DCHECK(runner);
 
   // If the ComponentController request is valid then bind it, and configure it
@@ -33,44 +39,74 @@ WebComponent::WebComponent(
           << " ComponentController disconnected";
       // Teardown the component with dummy values, since ComponentController
       // channel isn't there to receive them.
-      DestroyComponent(0, fuchsia::sys::TerminationReason::EXITED);
+      DestroyComponent(0, fuchsia::sys::TerminationReason::UNKNOWN);
     });
-  }
-
-  // Create the underlying Frame and get its NavigationController.
-  runner_->context()->CreateFrame(frame_.NewRequest());
-
-  if (startup_context()->public_services()) {
-    // Publish services before returning control to the message-loop, to ensure
-    // that it is available before the ServiceDirectory starts processing
-    // requests.
-    view_provider_binding_ = std::make_unique<
-        base::fuchsia::ScopedServiceBinding<fuchsia::ui::app::ViewProvider>>(
-        startup_context()->public_services(), this);
-    lifecycle_ = std::make_unique<cr_fuchsia::LifecycleImpl>(
-        startup_context_->public_services(),
-        base::BindOnce(&WebComponent::Kill, base::Unretained(this)));
   }
 }
 
 WebComponent::~WebComponent() {
+  // If Modular is available, request to be removed from the Story.
+  if (module_context_)
+    module_context_->RemoveSelfFromStory();
+
   // Send process termination details to the client.
   controller_binding_.events().OnTerminated(termination_exit_code_,
                                             termination_reason_);
 }
 
-void WebComponent::LoadUrl(const GURL& url) {
+void WebComponent::EnableRemoteDebugging() {
+  DCHECK(!component_started_);
+  enable_remote_debugging_ = true;
+}
+
+void WebComponent::StartComponent() {
+  DCHECK(!component_started_);
+
+  // Create the underlying Frame and get its NavigationController.
+  fuchsia::web::CreateFrameParams create_params;
+  create_params.set_enable_remote_debugging(enable_remote_debugging_);
+  frame_ = runner_->CreateFrame(std::move(create_params));
+
+  // If the Frame unexpectedly disconnect us then tear-down this Component.
+  frame_.set_error_handler([this](zx_status_t status) {
+    ZX_LOG_IF(ERROR, status != ZX_ERR_PEER_CLOSED, status)
+        << " Frame disconnected";
+    DestroyComponent(0, fuchsia::sys::TerminationReason::EXITED);
+  });
+
+  if (startup_context()->has_outgoing_directory_request()) {
+    // Publish outgoing services and start serving component's outgoing
+    // directory.
+    view_provider_binding_ = std::make_unique<
+        base::fuchsia::ScopedServiceBinding<fuchsia::ui::app::ViewProvider>>(
+        startup_context()->component_context()->outgoing().get(), this);
+    lifecycle_ = std::make_unique<cr_fuchsia::LifecycleImpl>(
+        startup_context()->component_context()->outgoing().get(),
+        base::BindOnce(&WebComponent::Kill, base::Unretained(this)));
+    startup_context()->ServeOutgoingDirectory();
+  }
+
+  component_started_ = true;
+}
+
+void WebComponent::LoadUrl(
+    const GURL& url,
+    std::vector<fuchsia::net::http::Header> extra_headers) {
   DCHECK(url.is_valid());
-  chromium::web::NavigationControllerPtr navigation_controller;
+  fuchsia::web::NavigationControllerPtr navigation_controller;
   frame()->GetNavigationController(navigation_controller.NewRequest());
 
   // Set the page activation flag on the initial load, so that features like
   // autoplay work as expected when a WebComponent first loads the specified
   // content.
-  chromium::web::LoadUrlParams params;
+  fuchsia::web::LoadUrlParams params;
   params.set_was_user_activated(true);
+  if (!extra_headers.empty())
+    params.set_headers(std::move(extra_headers));
 
-  navigation_controller->LoadUrl(url.spec(), std::move(params));
+  navigation_controller->LoadUrl(
+      url.spec(), std::move(params),
+      [](fuchsia::web::NavigationController_LoadUrl_Result) {});
 }
 
 void WebComponent::Kill() {

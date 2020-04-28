@@ -6,7 +6,6 @@ package org.chromium.ui.resources;
 
 import android.content.res.AssetManager;
 
-import org.chromium.base.BuildConfig;
 import org.chromium.base.BuildInfo;
 import org.chromium.base.ContextUtils;
 import org.chromium.base.FileUtils;
@@ -18,6 +17,7 @@ import org.chromium.base.TraceEvent;
 import org.chromium.base.task.PostTask;
 import org.chromium.base.task.TaskTraits;
 import org.chromium.ui.base.LocalizationUtils;
+import org.chromium.ui.base.ResourceBundle;
 
 import java.io.File;
 import java.io.IOException;
@@ -35,12 +35,9 @@ import java.util.concurrent.CountDownLatch;
 public class ResourceExtractor {
     private static final String TAG = "ui";
     private static final String ICU_DATA_FILENAME = "icudtl.dat";
-    private static final String V8_NATIVES_DATA_FILENAME = "natives_blob.bin";
     private static final String V8_SNAPSHOT_DATA_FILENAME = "snapshot_blob.bin";
     private static final String FALLBACK_LOCALE = "en-US";
     private static final String COMPRESSED_LOCALES_DIR = "locales";
-    private static final int BUFFER_SIZE = 16 * 1024;
-    private static final boolean DEBUG = false;
 
     private class ExtractTask implements Runnable {
         private final List<Runnable> mCompletionCallbacks = new ArrayList<Runnable>();
@@ -105,19 +102,13 @@ public class ResourceExtractor {
                 throw new RuntimeException();
             }
 
-            AssetManager assetManager = ContextUtils.getApplicationAssets();
-            byte[] buffer = new byte[BUFFER_SIZE];
             for (int n = 0; n < assetPaths.length; ++n) {
                 String assetPath = assetPaths[n];
                 File output = new File(outputDir, outputNames[n]);
-                TraceEvent.begin("ExtractResource");
-                try (InputStream inputStream = assetManager.open(assetPath)) {
-                    FileUtils.copyFileStreamAtomicWithBuffer(inputStream, output, buffer);
-                } catch (IOException e) {
+                if (!FileUtils.extractAsset(
+                            ContextUtils.getApplicationContext(), assetPath, output)) {
                     // The app would just crash later if files are missing.
-                    throw new RuntimeException(e);
-                } finally {
-                    TraceEvent.end("ExtractResource");
+                    throw new RuntimeException();
                 }
             }
         }
@@ -159,22 +150,21 @@ public class ResourceExtractor {
         // NOTE: The UI language will differ from the application's language
         // when the system locale is not directly supported by Chrome's
         // resources.
-        if (DEBUG) {
-            Log.i(TAG, "Using UI language %s, system language: %s (Android name: %s)", uiLanguage,
-                    chromiumLanguage, androidLanguage);
-        }
+        Log.i(TAG, "Using UI locale %s, system locale: %s (Android name: %s)", uiLanguage,
+                chromiumLanguage, androidLanguage);
 
         // Currenty (Apr 2018), this array can be as big as 6 entries, so using a capacity
         // that allows a bit of growth, but is still in the right ballpark..
         ArrayList<String> activeLocales = new ArrayList<String>(6);
-        for (String locale : BuildConfig.COMPRESSED_LOCALES) {
+        String[] compressedLocales = ResourceBundle.getAvailableCompressedPakLocales();
+        for (String locale : compressedLocales) {
             if (LocalizationUtils.chromiumLocaleMatchesLanguage(locale, uiLanguage)) {
                 activeLocales.add(locale);
             }
         }
         if (activeLocales.isEmpty()) {
-            assert BuildConfig.COMPRESSED_LOCALES.length > 0;
-            assert Arrays.asList(BuildConfig.COMPRESSED_LOCALES).contains(FALLBACK_LOCALE);
+            assert compressedLocales.length > 0;
+            assert Arrays.asList(compressedLocales).contains(FALLBACK_LOCALE);
             activeLocales.add(FALLBACK_LOCALE);
         }
 
@@ -191,9 +181,7 @@ public class ResourceExtractor {
         AssetManager assetManager = ContextUtils.getApplicationAssets();
         if (!assetPathHasFile(
                     assetManager, COMPRESSED_LOCALES_DIR, activeLocales.get(0) + ".pak")) {
-            if (DEBUG) {
-                Log.i(TAG, "No locale pak files to extract, assuming app bundle.");
-            }
+            Log.i(TAG, "No locale pak files to extract, assuming app bundle.");
             return new String[] {};
         }
 
@@ -203,10 +191,8 @@ public class ResourceExtractor {
         for (int n = 0; n < activeLocales.size(); ++n) {
             localePakFiles[n] = COMPRESSED_LOCALES_DIR + '/' + activeLocales.get(n) + ".pak";
         }
-        if (DEBUG) {
-            Log.i(TAG, "UI Language '%s' will use %s.", uiLanguage,
-                    Arrays.toString(localePakFiles));
-        }
+        Log.i(TAG, "UI Language: %s requires .pak files: %s", uiLanguage,
+                Arrays.toString(activeLocales.toArray()));
 
         return localePakFiles;
     }
@@ -225,14 +211,10 @@ public class ResourceExtractor {
         try {
             InputStream input = assetManager.open(assetFilePath);
             input.close();
-            if (DEBUG) {
-                Log.i(TAG, "Found asset file: " + assetFilePath);
-            }
+            Log.i(TAG, "Found asset file: " + assetFilePath);
             return true;
         } catch (IOException e) {
-            if (DEBUG) {
-                Log.i(TAG, "No asset file at: " + assetFilePath);
-            }
+            Log.i(TAG, "Missing asset file: " + assetFilePath);
             return false;
         }
     }
@@ -302,11 +284,11 @@ public class ResourceExtractor {
             return;
         }
 
-        // If a previous release extracted resources, and the current release does not,
-        // deleteFiles() will not run and some files will be left. This currently
-        // can happen for ContentShell, but not for Chrome proper, since we always extract
-        // locale pak files.
+        // If a previous release extracted resources, and the current release does not, delete the
+        // old files since they are no longer needed.
         if (shouldSkipPakExtraction()) {
+            PostTask.postTask(
+                    TaskTraits.BEST_EFFORT, () -> { deleteFiles(getOutputDir().list()); });
             return;
         }
 
@@ -322,21 +304,17 @@ public class ResourceExtractor {
         return new File(getAppDataDir(), "paks");
     }
 
-    private static void deleteFile(File file) {
-        if (file.exists() && !file.delete()) {
-            Log.w(TAG, "Unable to remove %s", file.getName());
-        }
-    }
-
     private void deleteFiles(String[] existingFileNames) {
         // These used to be extracted, but no longer are, so just clean them up.
-        deleteFile(new File(getAppDataDir(), ICU_DATA_FILENAME));
-        deleteFile(new File(getAppDataDir(), V8_NATIVES_DATA_FILENAME));
-        deleteFile(new File(getAppDataDir(), V8_SNAPSHOT_DATA_FILENAME));
+        FileUtils.recursivelyDeleteFile(
+                new File(getAppDataDir(), ICU_DATA_FILENAME), FileUtils.DELETE_ALL);
+        FileUtils.recursivelyDeleteFile(
+                new File(getAppDataDir(), V8_SNAPSHOT_DATA_FILENAME), FileUtils.DELETE_ALL);
 
         if (existingFileNames != null) {
             for (String fileName : existingFileNames) {
-                deleteFile(new File(getOutputDir(), fileName));
+                FileUtils.recursivelyDeleteFile(
+                        new File(getOutputDir(), fileName), FileUtils.DELETE_ALL);
             }
         }
     }
@@ -347,6 +325,6 @@ public class ResourceExtractor {
     private static boolean shouldSkipPakExtraction() {
         // Certain apks like ContentShell.apk don't have any compressed locale
         // assets however, so skip extraction entirely for them.
-        return BuildConfig.COMPRESSED_LOCALES.length == 0;
+        return ResourceBundle.getAvailableCompressedPakLocales().length == 0;
     }
 }

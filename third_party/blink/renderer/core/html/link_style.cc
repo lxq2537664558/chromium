@@ -4,7 +4,7 @@
 
 #include "third_party/blink/renderer/core/html/link_style.h"
 
-#include "services/network/public/mojom/referrer_policy.mojom-shared.h"
+#include "services/network/public/mojom/referrer_policy.mojom-blink.h"
 #include "third_party/blink/renderer/core/css/style_sheet_contents.h"
 #include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/frame/csp/content_security_policy.h"
@@ -17,7 +17,7 @@
 #include "third_party/blink/renderer/core/loader/link_load_parameters.h"
 #include "third_party/blink/renderer/core/loader/resource/css_style_sheet_resource.h"
 #include "third_party/blink/renderer/core/loader/subresource_integrity_helper.h"
-#include "third_party/blink/renderer/platform/histogram.h"
+#include "third_party/blink/renderer/platform/heap/heap.h"
 #include "third_party/blink/renderer/platform/loader/fetch/fetch_parameters.h"
 #include "third_party/blink/renderer/platform/loader/subresource_integrity.h"
 #include "third_party/blink/renderer/platform/network/mime/content_type.h"
@@ -27,8 +27,6 @@
 #include "third_party/blink/renderer/platform/wtf/text/atomic_string.h"
 
 namespace blink {
-
-using namespace html_names;
 
 static bool StyleSheetTypeIsSupported(const String& type) {
   String trimmed_type = ContentType(type).GetType();
@@ -68,14 +66,15 @@ void LinkStyle::NotifyFinished(Resource* resource) {
   CSSStyleSheetResource* cached_style_sheet = ToCSSStyleSheetResource(resource);
   // See the comment in pending_script.cc about why this check is necessary
   // here, instead of in the resource fetcher. https://crbug.com/500701.
-  if (!cached_style_sheet->ErrorOccurred() &&
-      !owner_->FastGetAttribute(kIntegrityAttr).IsEmpty() &&
-      !cached_style_sheet->IntegrityMetadata().IsEmpty()) {
+  if ((!cached_style_sheet->ErrorOccurred() &&
+       !owner_->FastGetAttribute(html_names::kIntegrityAttr).IsEmpty() &&
+       !cached_style_sheet->IntegrityMetadata().IsEmpty()) ||
+      resource->IsLinkPreload()) {
     ResourceIntegrityDisposition disposition =
         cached_style_sheet->IntegrityDisposition();
 
     SubresourceIntegrityHelper::DoReport(
-        GetDocument(), cached_style_sheet->IntegrityReportInfo());
+        *GetExecutionContext(), cached_style_sheet->IntegrityReportInfo());
 
     if (disposition == ResourceIntegrityDisposition::kFailed) {
       loading_ = false;
@@ -86,17 +85,21 @@ void LinkStyle::NotifyFinished(Resource* resource) {
     }
   }
 
-  CSSParserContext* parser_context = CSSParserContext::Create(
+  auto* parser_context = MakeGarbageCollected<CSSParserContext>(
       GetDocument(), cached_style_sheet->GetResponse().ResponseUrl(),
       cached_style_sheet->GetResponse().IsCorsSameOrigin(),
       cached_style_sheet->GetReferrerPolicy(), cached_style_sheet->Encoding());
+  if (cached_style_sheet->GetResourceRequest().IsAdResource()) {
+    parser_context->SetIsAdRelated();
+  }
 
   if (StyleSheetContents* parsed_sheet =
           cached_style_sheet->CreateParsedStyleSheetFromCache(parser_context)) {
     if (sheet_)
       ClearSheet();
-    sheet_ = CSSStyleSheet::Create(parsed_sheet, *owner_);
-    sheet_->SetMediaQueries(MediaQuerySet::Create(owner_->Media()));
+    sheet_ = MakeGarbageCollected<CSSStyleSheet>(parsed_sheet, *owner_);
+    sheet_->SetMediaQueries(
+        MediaQuerySet::Create(owner_->Media(), GetExecutionContext()));
     if (owner_->IsInDocumentTree())
       SetSheetTitle(owner_->title());
 
@@ -106,14 +109,15 @@ void LinkStyle::NotifyFinished(Resource* resource) {
     return;
   }
 
-  StyleSheetContents* style_sheet =
-      StyleSheetContents::Create(cached_style_sheet->Url(), parser_context);
+  auto* style_sheet = MakeGarbageCollected<StyleSheetContents>(
+      parser_context, cached_style_sheet->Url());
 
   if (sheet_)
     ClearSheet();
 
-  sheet_ = CSSStyleSheet::Create(style_sheet, *owner_);
-  sheet_->SetMediaQueries(MediaQuerySet::Create(owner_->Media()));
+  sheet_ = MakeGarbageCollected<CSSStyleSheet>(style_sheet, *owner_);
+  sheet_->SetMediaQueries(
+      MediaQuerySet::Create(owner_->Media(), GetExecutionContext()));
   if (owner_->IsInDocumentTree())
     SetSheetTitle(owner_->title());
 
@@ -262,7 +266,8 @@ LinkStyle::LoadReturnValue LinkStyle::LoadStylesheetIfNeeded(
   bool media_query_matches = true;
   LocalFrame* frame = LoadingFrame();
   if (!owner_->Media().IsEmpty() && frame) {
-    scoped_refptr<MediaQuerySet> media = MediaQuerySet::Create(owner_->Media());
+    scoped_refptr<MediaQuerySet> media =
+        MediaQuerySet::Create(owner_->Media(), GetExecutionContext());
     MediaQueryEvaluator evaluator(frame);
     media_query_matches = evaluator.Eval(*media);
   }
@@ -299,18 +304,20 @@ void LinkStyle::Process() {
   DCHECK(owner_->ShouldProcessStyle());
   const LinkLoadParameters params(
       owner_->RelAttribute(),
-      GetCrossOriginAttributeValue(owner_->FastGetAttribute(kCrossoriginAttr)),
+      GetCrossOriginAttributeValue(
+          owner_->FastGetAttribute(html_names::kCrossoriginAttr)),
       owner_->TypeValue().DeprecatedLower(),
       owner_->AsValue().DeprecatedLower(), owner_->Media().DeprecatedLower(),
       owner_->nonce(), owner_->IntegrityValue(),
       owner_->ImportanceValue().LowerASCII(), owner_->GetReferrerPolicy(),
-      owner_->GetNonEmptyURLAttribute(kHrefAttr),
-      owner_->FastGetAttribute(kImagesrcsetAttr),
-      owner_->FastGetAttribute(kImagesizesAttr));
+      owner_->GetNonEmptyURLAttribute(html_names::kHrefAttr),
+      owner_->FastGetAttribute(html_names::kImagesrcsetAttr),
+      owner_->FastGetAttribute(html_names::kImagesizesAttr));
 
   WTF::TextEncoding charset = GetCharset();
 
-  if (owner_->RelAttribute().GetIconType() != kInvalidIcon &&
+  if (owner_->RelAttribute().GetIconType() !=
+          mojom::blink::FaviconIconType::kInvalid &&
       params.href.IsValid() && !params.href.IsEmpty()) {
     if (!owner_->ShouldLoadLink())
       return;
@@ -319,10 +326,8 @@ void LinkStyle::Process() {
     if (!GetDocument().GetContentSecurityPolicy()->AllowImageFromSource(
             params.href))
       return;
-    if (GetDocument().GetFrame() && GetDocument().GetFrame()->Client()) {
-      GetDocument().GetFrame()->Client()->DispatchDidChangeIcons(
-          owner_->RelAttribute().GetIconType());
-    }
+    if (GetDocument().GetFrame())
+      GetDocument().GetFrame()->UpdateFaviconURL();
   }
 
   if (!sheet_ && !owner_->LoadLink(params))
@@ -346,7 +351,7 @@ void LinkStyle::SetSheetTitle(const String& title) {
   if (title.IsEmpty() || !IsUnset() || owner_->IsAlternate())
     return;
 
-  const KURL& href = owner_->GetNonEmptyURLAttribute(kHrefAttr);
+  const KURL& href = owner_->GetNonEmptyURLAttribute(html_names::kHrefAttr);
   if (href.IsValid() && !href.IsEmpty())
     GetDocument().GetStyleEngine().SetPreferredStylesheetSetNameIfNotSet(title);
 }

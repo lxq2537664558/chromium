@@ -14,6 +14,7 @@
 #include "base/callback.h"
 #include "base/files/file_path.h"
 #include "base/memory/ref_counted.h"
+#include "base/memory/weak_ptr.h"
 #include "base/task_runner.h"
 #include "base/threading/thread_checker.h"
 #include "components/sync/base/invalidation_interface.h"
@@ -44,17 +45,20 @@ namespace syncer {
 class BaseTransaction;
 class CancelationSignal;
 class DataTypeDebugInfoListener;
-class Encryptor;
 class EngineComponentsFactory;
 class ExtensionsActivity;
 class JsBackend;
 class JsEventHandler;
 class ProtocolEvent;
 class SyncCycleSnapshot;
-class SyncEncryptionHandler;
+class SyncStatusObserver;
 class TypeDebugInfoObserver;
 class UnrecoverableErrorHandler;
 struct UserShare;
+
+namespace syncable {
+class NigoriHandler;
+}  // namespace syncable
 
 // SyncManager encapsulates syncable::Directory and serves as the parent of all
 // other objects in the sync API.  If multiple threads interact with the same
@@ -174,8 +178,7 @@ class SyncManager {
     virtual void OnInitializationComplete(
         const WeakHandle<JsBackend>& js_backend,
         const WeakHandle<DataTypeDebugInfoListener>& debug_info_listener,
-        bool success,
-        ModelTypeSet restored_types) = 0;
+        bool success) = 0;
 
     virtual void OnActionableError(
         const SyncProtocolError& sync_protocol_error) = 0;
@@ -213,28 +216,32 @@ class SyncManager {
 
     std::vector<scoped_refptr<ModelSafeWorker>> workers;
 
+    std::unique_ptr<SyncEncryptionHandler::Observer> encryption_observer_proxy;
+
     // Must outlive SyncManager.
     ExtensionsActivity* extensions_activity;
 
     // Must outlive SyncManager.
     ChangeDelegate* change_delegate;
 
-    std::string authenticated_account_id;
+    CoreAccountId authenticated_account_id;
 
     // Unqiuely identifies this client to the invalidation notification server.
     std::string invalidator_client_id;
 
-    // Used to boostrap the cryptographer.
-    std::string restored_key_for_bootstrapping;
-    std::string restored_keystore_key_for_bootstrapping;
-
     std::unique_ptr<EngineComponentsFactory> engine_components_factory;
 
     // Must outlive SyncManager.
-    Encryptor* encryptor;
+    UserShare* user_share;
+
+    // Must outlive SyncManager.
+    SyncEncryptionHandler* encryption_handler;
+
+    // Must outlive SyncManager.
+    syncable::NigoriHandler* nigori_handler;
 
     WeakHandle<UnrecoverableErrorHandler> unrecoverable_error_handler;
-    base::Closure report_unrecoverable_error_function;
+    base::RepeatingClosure report_unrecoverable_error_function;
 
     // Carries shutdown requests across threads and will be used to cut short
     // any network I/O and tell the syncer to exit early.
@@ -242,18 +249,16 @@ class SyncManager {
     // Must outlive SyncManager.
     CancelationSignal* cancelation_signal;
 
-    // Optional nigori state to be restored.
-    std::unique_ptr<SyncEncryptionHandler::NigoriState> saved_nigori_state;
-
     // Define the polling interval. Must not be zero.
     base::TimeDelta poll_interval;
 
-    // Non-authoritative values from prefs, to be compared with the Directory's
-    // counterparts.
-    // TODO(crbug.com/923285): Consider making these the authoritative data.
+    // Initial authoritative values (usually read from prefs).
     std::string cache_guid;
     std::string birthday;
     std::string bag_of_chips;
+
+    // List of observers to be added to AllStatus.
+    std::vector<SyncStatusObserver*> sync_status_observers;
   };
 
   // The state of sync the feature. If the user turned on sync explicitly, it
@@ -311,7 +316,7 @@ class SyncManager {
   virtual void ConfigureSyncer(ConfigureReason reason,
                                ModelTypeSet to_download,
                                SyncFeatureState sync_feature_state,
-                               const base::Closure& ready_task) = 0;
+                               base::OnceClosure ready_task) = 0;
 
   // Inform the syncer of a change in the invalidator's state.
   virtual void SetInvalidatorEnabled(bool invalidator_enabled) = 0;
@@ -330,9 +335,6 @@ class SyncManager {
   // Observer is being destroyed so the SyncManager doesn't
   // potentially dereference garbage.
   virtual void RemoveObserver(Observer* observer) = 0;
-
-  // Status-related getter.  May be called on any thread.
-  virtual SyncStatus GetDetailedStatus() const = 0;
 
   // Call periodically from a database-safe thread to persist recent changes
   // to the syncapi model.
@@ -355,7 +357,15 @@ class SyncManager {
 
   // Returns the cache_guid of the currently open database.
   // Requires that the SyncManager be initialized.
-  virtual const std::string cache_guid() = 0;
+  virtual std::string cache_guid() = 0;
+
+  // Returns the birthday of the currently open database.
+  // Requires that the SyncManager be initialized.
+  virtual std::string birthday() = 0;
+
+  // Returns the bag of chips of the currently open database.
+  // Requires that the SyncManager be initialized.
+  virtual std::string bag_of_chips() = 0;
 
   // Returns whether there are remaining unsynced items.
   virtual bool HasUnsyncedItemsForTest() = 0;

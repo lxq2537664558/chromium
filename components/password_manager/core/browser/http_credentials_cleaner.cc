@@ -51,8 +51,8 @@ void HttpCredentialCleaner::OnGetPasswordStoreResults(
       const GURL origin = form->origin;
       PostHSTSQueryForHostAndNetworkContext(
           origin, network_context_getter_.Run(),
-          base::Bind(&HttpCredentialCleaner::OnHSTSQueryResult,
-                     base::Unretained(this), base::Passed(&form), form_key));
+          base::BindOnce(&HttpCredentialCleaner::OnHSTSQueryResult,
+                         base::Unretained(this), std::move(form), form_key));
       ++total_http_credentials_;
     } else {  // HTTPS
       https_credentials_map_[form_key].insert(form->password_value);
@@ -92,7 +92,7 @@ void HttpCredentialCleaner::OnHSTSQueryResult(
     return;
   }
 
-  if (base::ContainsKey(user_it->second, form->password_value)) {
+  if (base::Contains(user_it->second, form->password_value)) {
     // The password store contains the same credentials (signon_realm, scheme,
     // username and password) on HTTPS version of the form.
     base::UmaHistogramEnumeration(

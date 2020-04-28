@@ -6,10 +6,12 @@ package org.chromium.content_public.browser.test.util;
 
 import org.chromium.base.annotations.JNINamespace;
 import org.chromium.content.browser.input.SelectPopup;
+import org.chromium.content.browser.selection.SelectionPopupControllerImpl;
 import org.chromium.content.browser.webcontents.WebContentsImpl;
 import org.chromium.content_public.browser.GestureListenerManager;
 import org.chromium.content_public.browser.ImeAdapter;
 import org.chromium.content_public.browser.RenderFrameHost;
+import org.chromium.content_public.browser.SelectionPopupController;
 import org.chromium.content_public.browser.ViewEventSink;
 import org.chromium.content_public.browser.WebContents;
 
@@ -107,6 +109,29 @@ public class WebContentsUtils {
         if (script == null) return;
         TestThreadUtils.runOnUiThreadBlocking(
                 () -> nativeEvaluateJavaScriptWithUserGesture(webContents, script));
+    }
+
+    /**
+     * Create and initialize a new {@link SelectionPopupController} instance for testing.
+     *
+     * @param webContents {@link WebContents} object.
+     * @return {@link SelectionPopupController} object used for the give WebContents.
+     *         Creates one if not present.
+     */
+    public static SelectionPopupController createSelectionPopupController(WebContents webContents) {
+        return SelectionPopupControllerImpl.createForTesting(webContents);
+    }
+
+    /**
+     * Checks if the given WebContents has a valid {@link ActionMode.Callback} set in place.
+     * @return {@code true} if WebContents (its SelectionPopupController) has a valid
+     *         action mode callback object.
+     */
+    public static boolean isActionModeSupported(WebContents webContents) {
+        SelectionPopupControllerImpl controller =
+                ((SelectionPopupControllerImpl) SelectionPopupController.fromWebContents(
+                        webContents));
+        return controller.isActionModeSupported();
     }
 
     private static native void nativeReportAllFrameSubmissions(

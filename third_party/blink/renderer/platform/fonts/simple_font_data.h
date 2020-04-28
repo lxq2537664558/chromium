@@ -24,8 +24,6 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_PLATFORM_FONTS_SIMPLE_FONT_DATA_H_
 #define THIRD_PARTY_BLINK_RENDERER_PLATFORM_FONTS_SIMPLE_FONT_DATA_H_
 
-#include <SkFont.h>
-
 #include <memory>
 #include <utility>
 
@@ -41,7 +39,9 @@
 #include "third_party/blink/renderer/platform/fonts/typesetting_features.h"
 #include "third_party/blink/renderer/platform/geometry/float_rect.h"
 #include "third_party/blink/renderer/platform/platform_export.h"
+#include "third_party/blink/renderer/platform/wtf/casting.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_hash.h"
+#include "third_party/skia/include/core/SkFont.h"
 
 #if defined(OS_MACOSX)
 #include "third_party/blink/renderer/platform/fonts/glyph_metrics_map.h"
@@ -246,7 +246,12 @@ ALWAYS_INLINE float SimpleFontData::WidthForGlyph(Glyph glyph) const {
 #endif
 }
 
-DEFINE_FONT_DATA_TYPE_CASTS(SimpleFontData, false);
+template <>
+struct DowncastTraits<SimpleFontData> {
+  static bool AllowFrom(const FontData& fontData) {
+    return !fontData.IsSegmented();
+  }
+};
 
 }  // namespace blink
 #endif  // THIRD_PARTY_BLINK_RENDERER_PLATFORM_FONTS_SIMPLE_FONT_DATA_H_

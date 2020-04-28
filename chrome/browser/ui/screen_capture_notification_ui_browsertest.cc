@@ -26,13 +26,13 @@ class ScreenCaptureNotificationUiBrowserTest : public DialogBrowserTest {
         ScreenCaptureNotificationUI::Create(base::string16(
             base::ASCIIToUTF16("ScreenCaptureNotificationUI Browser Test")));
     on_started_result_ = screen_capture_notification_ui_->OnStarted(
-        base::BindRepeating(
+        base::BindOnce(
             [](ScreenCaptureNotificationUiBrowserTest* test) {
               if (test->run_loop_)
                 test->run_loop_->QuitWhenIdle();
             },
             base::Unretained(this)),
-        base::RepeatingClosure());
+        content::MediaStreamUI::SourceCallback());
   }
 
   bool VerifyUi() override {

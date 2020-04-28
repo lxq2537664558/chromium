@@ -6,14 +6,13 @@
 #define THIRD_PARTY_BLINK_RENDERER_CORE_ANIMATION_CSS_CSS_ANIMATION_UPDATE_H_
 
 #include "base/macros.h"
-#include "third_party/blink/renderer/core/animation/css/css_animatable_value_factory.h"
 #include "third_party/blink/renderer/core/animation/effect_stack.h"
 #include "third_party/blink/renderer/core/animation/inert_effect.h"
 #include "third_party/blink/renderer/core/animation/interpolation.h"
 #include "third_party/blink/renderer/core/animation/keyframe_effect_model.h"
 #include "third_party/blink/renderer/core/css/css_keyframes_rule.h"
 #include "third_party/blink/renderer/core/css/css_property_equality.h"
-#include "third_party/blink/renderer/platform/wtf/allocator.h"
+#include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
 #include "third_party/blink/renderer/platform/wtf/hash_map.h"
 #include "third_party/blink/renderer/platform/wtf/text/atomic_string.h"
 #include "third_party/blink/renderer/platform/wtf/vector.h"
@@ -29,25 +28,28 @@ class NewCSSAnimation {
  public:
   NewCSSAnimation(AtomicString name,
                   size_t name_index,
+                  size_t position_index,
                   const InertEffect& effect,
                   Timing timing,
                   StyleRuleKeyframes* style_rule,
                   const Vector<EAnimPlayState>& play_state_list)
       : name(name),
         name_index(name_index),
+        position_index(position_index),
         effect(effect),
         timing(timing),
         style_rule(style_rule),
         style_rule_version(this->style_rule->Version()),
         play_state_list(play_state_list) {}
 
-  void Trace(blink::Visitor* visitor) {
+  void Trace(Visitor* visitor) {
     visitor->Trace(effect);
     visitor->Trace(style_rule);
   }
 
   AtomicString name;
   size_t name_index;
+  size_t position_index;
   Member<const InertEffect> effect;
   Timing timing;
   Member<StyleRuleKeyframes> style_rule;
@@ -73,7 +75,7 @@ class UpdatedCSSAnimation {
         style_rule_version(this->style_rule->Version()),
         play_state_list(play_state_list) {}
 
-  void Trace(blink::Visitor* visitor) {
+  void Trace(Visitor* visitor) {
     visitor->Trace(animation);
     visitor->Trace(effect);
     visitor->Trace(style_rule);
@@ -98,7 +100,7 @@ namespace blink {
 // This class stores the CSS Animations/Transitions information we use during a
 // style recalc. This includes updates to animations/transitions as well as the
 // Interpolations to be applied.
-class CSSAnimationUpdate final {
+class CORE_EXPORT CSSAnimationUpdate final {
   DISALLOW_NEW();
 
  public:
@@ -110,13 +112,14 @@ class CSSAnimationUpdate final {
 
   void StartAnimation(const AtomicString& animation_name,
                       size_t name_index,
+                      wtf_size_t position_index,
                       const InertEffect& effect,
                       const Timing& timing,
                       StyleRuleKeyframes* style_rule,
                       const Vector<EAnimPlayState>& play_state_list) {
     new_animations_.push_back(NewCSSAnimation(animation_name, name_index,
-                                              effect, timing, style_rule,
-                                              play_state_list));
+                                              position_index, effect, timing,
+                                              style_rule, play_state_list));
   }
   void CancelAnimation(wtf_size_t index, const Animation& animation) {
     cancelled_animation_indices_.push_back(index);
@@ -180,7 +183,7 @@ class CSSAnimationUpdate final {
    public:
     NewTransition();
     ~NewTransition();
-    void Trace(blink::Visitor* visitor) { visitor->Trace(effect); }
+    void Trace(Visitor* visitor) { visitor->Trace(effect); }
 
     PropertyHandle property = HashTraits<blink::PropertyHandle>::EmptyValue();
     scoped_refptr<const ComputedStyle> from;
@@ -252,7 +255,7 @@ class CSSAnimationUpdate final {
            updated_compositor_keyframes_.IsEmpty();
   }
 
-  void Trace(blink::Visitor* visitor) {
+  void Trace(Visitor* visitor) {
     visitor->Trace(new_transitions_);
     visitor->Trace(new_animations_);
     visitor->Trace(suppressed_animations_);

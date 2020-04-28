@@ -59,6 +59,10 @@ class CONTENT_EXPORT TouchActionFilter {
     return allowed_touch_action_;
   }
 
+  base::Optional<cc::TouchAction> active_touch_action() const {
+    return active_touch_action_;
+  }
+
   cc::TouchAction white_listed_touch_action() const {
     return white_listed_touch_action_;
   }
@@ -119,8 +123,6 @@ class CONTENT_EXPORT TouchActionFilter {
   // True if an active gesture sequence is in progress. i.e. after GTD and
   // before GSE.
   bool gesture_sequence_in_progress_ = false;
-
-  bool compositor_touch_action_enabled_ = false;
 
   bool has_deferred_events_ = false;
 

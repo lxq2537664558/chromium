@@ -16,7 +16,6 @@
 #include "build/build_config.h"
 #include "chrome/app/chrome_command_ids.h"
 #include "chrome/browser/browser_process.h"
-#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/history/history_service_factory.h"
 #include "chrome/browser/profiles/profile_attributes_storage.h"
 #include "chrome/browser/profiles/profile_manager.h"
@@ -25,6 +24,8 @@
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/browser_list.h"
+#include "chrome/browser/ui/find_bar/find_bar_state.h"
+#include "chrome/browser/ui/find_bar/find_bar_state_factory.h"
 #include "chrome/browser/ui/toolbar/app_menu_model.h"
 #include "chrome/browser/ui/user_manager.h"
 #include "chrome/test/base/in_process_browser_test.h"
@@ -35,8 +36,6 @@
 #include "components/history/core/browser/history_db_task.h"
 #include "components/history/core/browser/history_service.h"
 #include "components/search_engines/template_url_service.h"
-#include "components/signin/core/browser/account_consistency_method.h"
-#include "content/public/browser/notification_service.h"
 #include "content/public/test/browser_test_utils.h"
 #include "content/public/test/test_utils.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
@@ -105,7 +104,8 @@ base::FilePath CreateTestingProfile(const std::string& name,
   base::FilePath profile_path =
       manager->user_data_dir().AppendASCII(relative_path);
   storage.AddProfile(profile_path, base::ASCIIToUTF16(name), std::string(),
-                     base::string16(), 0u, std::string(), EmptyAccountId());
+                     base::string16(), false, 0u, std::string(),
+                     EmptyAccountId());
 
   EXPECT_EQ(starting_number_of_profiles + 1u, storage.GetNumberOfProfiles());
   return profile_path;
@@ -130,12 +130,9 @@ Browser* ProfileWindowBrowserTest::OpenGuestBrowser() {
   // Create a guest browser nicely. Using CreateProfile() and CreateBrowser()
   // does incomplete initialization that would lead to
   // SystemUrlRequestContextGetter being leaked.
-  content::WindowedNotificationObserver browser_creation_observer(
-      chrome::NOTIFICATION_BROWSER_OPENED,
-      content::NotificationService::AllSources());
   profiles::SwitchToGuestProfile(ProfileManager::CreateCallback());
+  ui_test_utils::WaitForBrowserToOpen();
 
-  browser_creation_observer.Wait();
   DCHECK_NE(static_cast<Profile*>(nullptr),
             g_browser_process->profile_manager()->GetProfileByPath(
                 ProfileManager::GetGuestProfilePath()));
@@ -205,10 +202,43 @@ IN_PROC_BROWSER_TEST_F(ProfileWindowBrowserTest, GuestClearsCookies) {
   ASSERT_EQ("", cookie);
 }
 
+IN_PROC_BROWSER_TEST_F(ProfileWindowBrowserTest, GuestClearsFindInPageCache) {
+  Browser* guest_browser = OpenGuestBrowser();
+  Profile* guest_profile = guest_browser->profile();
+
+  base::string16 fip_text =
+      base::ASCIIToUTF16("first guest session search text");
+  FindBarStateFactory::GetForBrowserContext(guest_profile)
+      ->SetLastSearchText(fip_text);
+
+  // Open a second guest window and close one. This should not affect the find
+  // in page cache as the guest session hasn't been ended.
+  profiles::FindOrCreateNewWindowForProfile(
+      guest_profile, chrome::startup::IS_NOT_PROCESS_STARTUP,
+      chrome::startup::IS_NOT_FIRST_RUN, true /*always_create*/);
+  CloseBrowserSynchronously(guest_browser);
+  EXPECT_EQ(fip_text, FindBarStateFactory::GetForBrowserContext(guest_profile)
+                          ->GetSearchPrepopulateText());
+
+  // Close the remaining guest browser window.
+  guest_browser = chrome::FindAnyBrowser(guest_profile, true);
+  EXPECT_TRUE(guest_browser);
+  CloseBrowserSynchronously(guest_browser);
+
+  // Open a new guest browser window. Since this is a separate session, the find
+  // in page text should have been cleared (along with all other browsing data).
+  profiles::FindOrCreateNewWindowForProfile(
+      guest_profile, chrome::startup::IS_NOT_PROCESS_STARTUP,
+      chrome::startup::IS_NOT_FIRST_RUN, true /*always_create*/);
+  EXPECT_EQ(base::string16(),
+            FindBarStateFactory::GetForBrowserContext(guest_profile)
+                ->GetSearchPrepopulateText());
+}
+
 IN_PROC_BROWSER_TEST_F(ProfileWindowBrowserTest, GuestCannotSignin) {
   Browser* guest_browser = OpenGuestBrowser();
 
-  identity::IdentityManager* identity_manager =
+  signin::IdentityManager* identity_manager =
       IdentityManagerFactory::GetForProfile(guest_browser->profile());
 
   // Guest profiles can't sign in without a IdentityManager.

@@ -7,17 +7,19 @@
 #ifndef CHROME_BROWSER_PROFILES_PROFILE_H_
 #define CHROME_BROWSER_PROFILES_PROFILE_H_
 
+#include <memory>
 #include <string>
 
-#include "base/logging.h"
+#include "base/files/file_path.h"
 #include "base/macros.h"
-#include "base/memory/ref_counted.h"
+#include "base/memory/scoped_refptr.h"
+#include "base/observer_list.h"
+#include "base/time/time.h"
 #include "build/build_config.h"
-#include "chrome/browser/profiles/profile_key.h"
-#include "components/domain_reliability/clear_mode.h"
 #include "content/public/browser/browser_context.h"
-#include "content/public/browser/content_browser_client.h"
-#include "services/network/public/mojom/network_service.mojom-forward.h"
+#include "mojo/public/cpp/bindings/remote.h"
+#include "services/network/public/mojom/network_context.mojom-forward.h"
+#include "url/gurl.h"
 
 #if !defined(OS_ANDROID)
 class ChromeZoomLevelPrefs;
@@ -26,6 +28,7 @@ class ChromeZoomLevelPrefs;
 class ExtensionSpecialStoragePolicy;
 class PrefService;
 class PrefStore;
+class ProfileKey;
 class TestingProfile;
 
 namespace base {
@@ -36,6 +39,17 @@ namespace content {
 class WebUI;
 }
 
+namespace policy {
+class SchemaRegistryService;
+class ProfilePolicyConnector;
+class UserCloudPolicyManager;
+
+#if defined(OS_CHROMEOS)
+class ActiveDirectoryPolicyManager;
+class UserCloudPolicyManagerChromeOS;
+#endif
+}  // namespace policy
+
 namespace network {
 class SharedURLLoaderFactory;
 }
@@ -43,6 +57,8 @@ class SharedURLLoaderFactory;
 namespace user_prefs {
 class PrefRegistrySyncable;
 }
+
+class ProfileObserver;
 
 // Instead of adding more members to Profile, consider creating a
 // KeyedService. See
@@ -87,6 +103,48 @@ class Profile : public content::BrowserContext {
     GUEST_PROFILE,  // Guest session's profile
   };
 
+  class OTRProfileID {
+   public:
+    // Creates an OTR profile ID from |profile_id|.
+    // |profile_id| should follow the following naming scheme:
+    // "<component>::<subcomponent_id>". For example, "HaTS::WebDialog"
+    explicit OTRProfileID(const std::string& profile_id);
+
+    // ID used by the incognito and guest profiles.
+    // TODO(https://crbug.com/1033903): To be replaced with |IncognitoID| and
+    // |GuestID| when the use cases are reduced.
+    static const OTRProfileID PrimaryID();
+
+    // Creates a unique OTR profile id with the given profile id prefix.
+    static OTRProfileID CreateUnique(const std::string& profile_id_prefix);
+
+    bool operator==(const OTRProfileID& other) const {
+      return profile_id_ == other.profile_id_;
+    }
+
+    bool operator!=(const OTRProfileID& other) const {
+      return profile_id_ != other.profile_id_;
+    }
+
+    bool operator<(const OTRProfileID& other) const {
+      return profile_id_ < other.profile_id_;
+    }
+
+   private:
+    friend std::ostream& operator<<(std::ostream& out,
+                                    const Profile::OTRProfileID& profile_id);
+
+    OTRProfileID() = default;
+
+    // Returns this OTRProfileID in a string format that can be used for debug
+    // message.
+    const std::string& ToString() const;
+
+    static int first_unused_index_;
+
+    const std::string profile_id_;
+  };
+
   class Delegate {
    public:
     virtual ~Delegate();
@@ -111,9 +169,9 @@ class Profile : public content::BrowserContext {
   // CREATE_MODE_ASYNCHRONOUS then the profile is initialized asynchronously.
   // Can return null if |create_mode| is CREATE_MODE_SYNCHRONOUS and the
   // creation of the profile directory fails.
-  static Profile* CreateProfile(const base::FilePath& path,
-                                Delegate* delegate,
-                                CreateMode create_mode);
+  static std::unique_ptr<Profile> CreateProfile(const base::FilePath& path,
+                                                Delegate* delegate,
+                                                CreateMode create_mode);
 
   // Returns the profile corresponding to the given browser context.
   static Profile* FromBrowserContext(content::BrowserContext* browser_context);
@@ -121,7 +179,27 @@ class Profile : public content::BrowserContext {
   // Returns the profile corresponding to the given WebUI.
   static Profile* FromWebUI(content::WebUI* web_ui);
 
+  void AddObserver(ProfileObserver* observer);
+  void RemoveObserver(ProfileObserver* observer);
+
   // content::BrowserContext implementation ------------------------------------
+
+  // Returns the path of the directory where this context's data is stored.
+  base::FilePath GetPath() override = 0;
+  virtual base::FilePath GetPath() const = 0;
+
+  // Return whether this context is off the record. Default is false.
+  // Note that for Chrome this covers BOTH Incognito mode and Guest sessions.
+  bool IsOffTheRecord() override = 0;
+  virtual bool IsOffTheRecord() const = 0;
+  virtual const OTRProfileID& GetOTRProfileID() const = 0;
+
+  variations::VariationsClient* GetVariationsClient() override;
+
+  // Returns the creation time of this profile. This will either be the creation
+  // time of the profile directory or, for ephemeral off-the-record profiles,
+  // the creation time of the profile object instance.
+  virtual base::Time GetCreationTime() const = 0;
 
   // Typesafe upcast.
   virtual TestingProfile* AsTestingProfile();
@@ -134,30 +212,55 @@ class Profile : public content::BrowserContext {
   // implementations, this is usually the Google-services email address.
   virtual std::string GetProfileUserName() const = 0;
 
-  // Returns the profile type.
-  virtual ProfileType GetProfileType() const = 0;
-
-  // Return the incognito version of this profile. The returned pointer
-  // is owned by the receiving profile. If the receiving profile is off the
-  // record, the same profile is returned.
+  // Return an OffTheRecord version of this profile with the given
+  // |otr_profile_id|. The returned pointer is owned by the receiving profile.
+  // If the receiving profile is OffTheRecord, the owner would be its original
+  // profile.
   //
-  // WARNING: This will create the OffTheRecord profile if it doesn't already
+  // WARNING I: This will create the OffTheRecord profile if it doesn't already
   // exist. If this isn't what you want, you need to check
   // HasOffTheRecordProfile() first.
-  virtual Profile* GetOffTheRecordProfile() = 0;
+  //
+  // WARNING II: Once a profile is no longer used, use
+  // ProfileDestroyer::DestroyProfileWhenAppropriate or
+  // ProfileDestroyer::DestroyOffTheRecordProfileNow to destroy it.
+  //
+  // TODO(https://crbug.com/1033903): Remove the default value.
+  virtual Profile* GetOffTheRecordProfile(
+      const OTRProfileID& otr_profile_id = OTRProfileID::PrimaryID()) = 0;
 
-  // Destroys the incognito profile.
-  virtual void DestroyOffTheRecordProfile() = 0;
+  // Returns all OffTheRecord profiles.
+  virtual std::vector<Profile*> GetAllOffTheRecordProfiles() = 0;
 
-  // True if an incognito profile exists.
-  virtual bool HasOffTheRecordProfile() = 0;
+  // Returns the primary OffTheRecord profile. Creates the profile if it doesn't
+  // exist.
+  Profile* GetPrimaryOTRProfile();
+
+  // Destroys the OffTheRecord profile.
+  virtual void DestroyOffTheRecordProfile(Profile* otr_profile) = 0;
+
+  // TODO(https://crbug.com/1033903): Remove this function when all the use
+  // cases are migrated to above version. The parameter-less version destroys
+  // the primary OffTheRecord profile.
+  void DestroyOffTheRecordProfile();
+
+  // True if an OffTheRecord profile with given id exists.
+  // TODO(https://crbug.com/1033903): Remove the default value.
+  virtual bool HasOffTheRecordProfile(
+      const OTRProfileID& otr_profile_id = OTRProfileID::PrimaryID()) = 0;
+
+  // Returns true if the profile has any OffTheRecord profiles.
+  virtual bool HasAnyOffTheRecordProfile() = 0;
+
+  // True if the primary OffTheRecord profile exists.
+  bool HasPrimaryOTRProfile();
 
   // Return the original "recording" profile. This method returns this if the
-  // profile is not incognito.
+  // profile is not OffTheRecord.
   virtual Profile* GetOriginalProfile() = 0;
 
   // Return the original "recording" profile. This method returns this if the
-  // profile is not incognito.
+  // profile is not OffTheRecord.
   virtual const Profile* GetOriginalProfile() const = 0;
 
   // Returns whether the profile is supervised (either a legacy supervised
@@ -191,20 +294,16 @@ class Profile : public content::BrowserContext {
   // Retrieves a pointer to the PrefService that manages the preferences
   // for OffTheRecord Profiles.  This PrefService is lazily created the first
   // time that this method is called.
+  // TODO(https://crbug.com/1065444): Investigate whether it's possible to
+  // remove.
   virtual PrefService* GetOffTheRecordPrefs() = 0;
 
   // Like GetOffTheRecordPrefs but gives a read-only view of prefs that can be
   // used even if there's no OTR profile at the moment
   // (i.e. HasOffTheRecordProfile is false).
+  // TODO(https://crbug.com/1065444): Investigate whether it's possible to
+  // remove.
   virtual PrefService* GetReadOnlyOffTheRecordPrefs();
-
-  // Returns the main request context.
-  virtual net::URLRequestContextGetter* GetRequestContext() = 0;
-
-  // Returns a callback (which must be executed on the IO thread) that returns
-  // the cookie store for the chrome-extensions:// scheme.
-  virtual base::OnceCallback<net::CookieStore*()>
-  GetExtensionsCookieStoreGetter() = 0;
 
   // Returns the main URLLoaderFactory.
   virtual scoped_refptr<network::SharedURLLoaderFactory>
@@ -212,9 +311,15 @@ class Profile : public content::BrowserContext {
 
   // Return whether 2 profiles are the same. 2 profiles are the same if they
   // represent the same profile. This can happen if there is pointer equality
-  // or if one profile is the incognito version of another profile (or vice
+  // or if one profile is the OffTheRecord version of another profile (or vice
   // versa).
   virtual bool IsSameProfile(Profile* profile) = 0;
+
+  // Returns whether two profiles are the same and of the same type.
+  bool IsSameProfileAndType(Profile* profile) {
+    return IsSameProfile(profile) &&
+           GetProfileType() == profile->GetProfileType();
+  }
 
   // Returns the time the profile was started. This is not the time the profile
   // was created, rather it is the time the user started chrome and logged into
@@ -225,6 +330,26 @@ class Profile : public content::BrowserContext {
   // Returns the key used to index KeyedService instances created by a
   // SimpleKeyedServiceFactory, more strictly typed as a ProfileKey.
   virtual ProfileKey* GetProfileKey() const = 0;
+
+  // Returns the SchemaRegistryService.
+  virtual policy::SchemaRegistryService* GetPolicySchemaRegistryService() = 0;
+
+#if defined(OS_CHROMEOS)
+  // Returns the UserCloudPolicyManagerChromeOS.
+  virtual policy::UserCloudPolicyManagerChromeOS*
+  GetUserCloudPolicyManagerChromeOS() = 0;
+
+  // Returns the ActiveDirectoryPolicyManager.
+  virtual policy::ActiveDirectoryPolicyManager*
+  GetActiveDirectoryPolicyManager() = 0;
+#else
+  // Returns the UserCloudPolicyManager.
+  virtual policy::UserCloudPolicyManager* GetUserCloudPolicyManager() = 0;
+#endif
+
+  virtual policy::ProfilePolicyConnector* GetProfilePolicyConnector() = 0;
+  virtual const policy::ProfilePolicyConnector* GetProfilePolicyConnector()
+      const = 0;
 
   // Returns the last directory that was chosen for uploading or opening a file.
   virtual base::FilePath last_selected_directory() = 0;
@@ -270,19 +395,33 @@ class Profile : public content::BrowserContext {
 
   std::string GetDebugName();
 
-  // Returns whether it's a regular profile. Short-hand for GetProfileType() ==
-  // REGULAR_PROFILE.
+  // IsRegularProfile() and IsIncognitoProfile() are mutually exclusive.
+  // IsSystemProfile() implies that IsRegularProfile() is true.
+  // IsOffTheRecord() is true for the off the record profile of incognito mode
+  // and guest sessions.
+
+  // Returns whether it's a regular profile.
   bool IsRegularProfile() const;
 
-  // Returns whether it is an Incognito session. An Incognito session is an
-  // off-the-record session that is not a guest session.
-  bool IsIncognito() const;
+  // Returns whether it is an Incognito profile. An Incognito profile is an
+  // off-the-record profile that is not a guest profile.
+  //
+  // TODO(https://crbug.com/1033903): Update to return false for non-primary
+  // OTRs and update documentation above.
+  bool IsIncognitoProfile() const;
 
-  // Returns whether it is a guest session.
+  // Returns true if this is a primary OffTheRecord profile, which covers the
+  // OffTheRecord profile used for incognito mode and guest sessions.
+  virtual bool IsPrimaryOTRProfile();
+
+  // Returns whether it is a guest session. This covers both the guest profile
+  // and its parent.
   virtual bool IsGuestSession() const;
 
   // Returns whether it is a system profile.
   virtual bool IsSystemProfile() const;
+
+  bool CanUseDiskWhenOffTheRecord() override;
 
   // Did the user restore the last session? This is set by SessionRestore.
   void set_restored_last_session(bool restored_last_session) {
@@ -312,7 +451,7 @@ class Profile : public content::BrowserContext {
 
   // Creates NetworkContext for the specified isolated app (or for the profile
   // itself, if |relative_path| is empty).
-  virtual network::mojom::NetworkContextPtr CreateNetworkContext(
+  virtual mojo::Remote<network::mojom::NetworkContext> CreateNetworkContext(
       bool in_memory,
       const base::FilePath& relative_partition_path);
 
@@ -337,17 +476,10 @@ class Profile : public content::BrowserContext {
   // This method is virtual in order to be overridden for tests.
   virtual bool IsNewProfile();
 
-  // Checks whether sync is configurable by the user. Returns false if sync is
-  // disallowed by the command line or controlled by configuration management.
-  bool IsSyncAllowed();
-
   // Send NOTIFICATION_PROFILE_DESTROYED for this Profile, if it has not
   // already been sent. It is necessary because most Profiles are destroyed by
   // ProfileDestroyer, but in tests, some are not.
   void MaybeSendDestroyedNotification();
-
-  // Creates an OffTheRecordProfile which points to this Profile.
-  Profile* CreateOffTheRecordProfile();
 
 #if !defined(OS_ANDROID)
   // Convenience method to retrieve the default zoom level for the default
@@ -355,7 +487,15 @@ class Profile : public content::BrowserContext {
   double GetDefaultZoomLevelForProfile();
 #endif
 
+  // Wipes all data for this profile.
+  void Wipe();
+
+  virtual void SetCreationTimeForTesting(base::Time creation_time) = 0;
+
  protected:
+  // Returns the profile type.
+  virtual ProfileType GetProfileType() const = 0;
+
   void set_is_guest_profile(bool is_guest_profile) {
     is_guest_profile_ = is_guest_profile;
   }
@@ -364,10 +504,19 @@ class Profile : public content::BrowserContext {
     is_system_profile_ = is_system_profile;
   }
 
+  // Creates an OffTheRecordProfile which points to this Profile. The caller is
+  // responsible for sending a NOTIFICATION_PROFILE_CREATED when the profile is
+  // correctly assigned to its owner.
+  static std::unique_ptr<Profile> CreateOffTheRecordProfile(
+      Profile* parent,
+      const OTRProfileID& otr_profile_id);
+
   // Returns a newly created ExtensionPrefStore suitable for the supplied
   // Profile.
   static PrefStore* CreateExtensionPrefStore(Profile*,
                                              bool incognito_pref_store);
+
+  void NotifyOffTheRecordProfileCreated(Profile* off_the_record);
 
  private:
   bool restored_last_session_;
@@ -387,6 +536,10 @@ class Profile : public content::BrowserContext {
   // A non-browsing profile not associated to a user. Sample use: User-Manager.
   bool is_system_profile_;
 
+  base::ObserverList<ProfileObserver> observers_;
+
+  std::unique_ptr<variations::VariationsClient> chrome_variations_client_;
+
   DISALLOW_COPY_AND_ASSIGN(Profile);
 };
 
@@ -394,5 +547,8 @@ class Profile : public content::BrowserContext {
 struct ProfileCompare {
   bool operator()(Profile* a, Profile* b) const;
 };
+
+std::ostream& operator<<(std::ostream& out,
+                         const Profile::OTRProfileID& profile_id);
 
 #endif  // CHROME_BROWSER_PROFILES_PROFILE_H_

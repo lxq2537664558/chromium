@@ -39,7 +39,7 @@
 #include "third_party/blink/renderer/platform/geometry/int_size.h"
 #include "third_party/blink/renderer/platform/graphics/color.h"
 #include "third_party/blink/renderer/platform/heap/persistent.h"
-#include "third_party/blink/renderer/platform/wtf/allocator.h"
+#include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
 
 namespace blink {
 
@@ -58,7 +58,9 @@ class CORE_EXPORT FullscreenController {
 
   // Called by Fullscreen (via ChromeClient) to request entering or exiting
   // fullscreen.
-  void EnterFullscreen(LocalFrame&, const FullscreenOptions*);
+  void EnterFullscreen(LocalFrame&,
+                       const FullscreenOptions*,
+                       bool for_cross_process_descendant);
   void ExitFullscreen(LocalFrame&);
 
   // Called by content::RenderWidget (via WebWidget) to notify that we've
@@ -78,6 +80,10 @@ class CORE_EXPORT FullscreenController {
  private:
   void UpdatePageScaleConstraints(bool reset_constraints);
   void RestoreBackgroundColorOverride();
+
+  void NotifyFramesOfFullscreenEntry(bool granted);
+
+  void EnterFullscreenCallback(bool granted);
 
   WebViewImpl* web_view_base_;
 

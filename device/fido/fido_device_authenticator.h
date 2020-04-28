@@ -21,15 +21,11 @@
 
 namespace device {
 
-class CtapGetAssertionRequest;
-class CtapMakeCredentialRequest;
+struct CtapGetAssertionRequest;
+struct CtapMakeCredentialRequest;
+struct EnumerateRPsResponse;
 class FidoDevice;
 class FidoTask;
-
-namespace pin {
-struct RetriesRequest;
-struct RetriesResponse;
-}  // namespace pin
 
 // Adaptor class from a |FidoDevice| to the |FidoAuthenticator| interface.
 // Responsible for translating WebAuthn-level requests into serializations that
@@ -48,17 +44,14 @@ class COMPONENT_EXPORT(DEVICE_FIDO) FidoDeviceAuthenticator
                     GetAssertionCallback callback) override;
   void GetNextAssertion(GetAssertionCallback callback) override;
   void GetTouch(base::OnceCallback<void()> callback) override;
-  void GetRetries(GetRetriesCallback callback) override;
-  void GetEphemeralKey(GetEphemeralKeyCallback callback) override;
-  void GetPINToken(std::string pin,
-                   const pin::KeyAgreementResponse& peer_key,
-                   GetPINTokenCallback callback) override;
+  void GetPinRetries(GetRetriesCallback callback) override;
+  void GetPINToken(std::string pin, GetTokenCallback callback) override;
+  void GetUvRetries(GetRetriesCallback callback) override;
+  void GetUvToken(GetTokenCallback callback) override;
   void SetPIN(const std::string& pin,
-              const pin::KeyAgreementResponse& peer_key,
               SetPINCallback callback) override;
   void ChangePIN(const std::string& old_pin,
                  const std::string& new_pin,
-                 pin::KeyAgreementResponse& peer_key,
                  SetPINCallback callback) override;
   MakeCredentialPINDisposition WillNeedPINToMakeCredential(
       const CtapMakeCredentialRequest& request,
@@ -70,6 +63,30 @@ class COMPONENT_EXPORT(DEVICE_FIDO) FidoDeviceAuthenticator
       const CtapGetAssertionRequest& request,
       const FidoRequestHandlerBase::Observer* observer) override;
 
+  void GetCredentialsMetadata(base::span<const uint8_t> pin_token,
+                              GetCredentialsMetadataCallback callback) override;
+  void EnumerateCredentials(base::span<const uint8_t> pin_token,
+                            EnumerateCredentialsCallback callback) override;
+  void DeleteCredential(base::span<const uint8_t> pin_token,
+                        const PublicKeyCredentialDescriptor& credential_id,
+                        DeleteCredentialCallback callback) override;
+
+  void GetModality(BioEnrollmentCallback callback) override;
+  void GetSensorInfo(BioEnrollmentCallback callback) override;
+  void BioEnrollFingerprint(const pin::TokenResponse&,
+                            base::Optional<std::vector<uint8_t>> template_id,
+                            BioEnrollmentCallback) override;
+  void BioEnrollCancel(BioEnrollmentCallback) override;
+  void BioEnrollEnumerate(const pin::TokenResponse&,
+                          BioEnrollmentCallback) override;
+  void BioEnrollRename(const pin::TokenResponse&,
+                       std::vector<uint8_t> template_id,
+                       std::string name,
+                       BioEnrollmentCallback) override;
+  void BioEnrollDelete(const pin::TokenResponse&,
+                       std::vector<uint8_t> template_id,
+                       BioEnrollmentCallback) override;
+
   void Reset(ResetCallback callback) override;
   void Cancel() override;
   std::string GetId() const override;
@@ -79,9 +96,13 @@ class COMPONENT_EXPORT(DEVICE_FIDO) FidoDeviceAuthenticator
   base::Optional<FidoTransportProtocol> AuthenticatorTransport() const override;
   bool IsInPairingMode() const override;
   bool IsPaired() const override;
+  bool RequiresBlePairingPin() const override;
 #if defined(OS_WIN)
   bool IsWinNativeApiAuthenticator() const override;
 #endif  // defined(OS_WIN)
+#if defined(OS_MACOSX)
+  bool IsTouchIdAuthenticator() const override;
+#endif  // defined(OS_MACOSX)
   base::WeakPtr<FidoAuthenticator> GetWeakPtr() override;
 
   FidoDevice* device() { return device_.get(); }
@@ -96,13 +117,64 @@ class COMPONENT_EXPORT(DEVICE_FIDO) FidoDeviceAuthenticator
       base::Optional<std::vector<uint8_t>> response_data);
 
  private:
+  using GetEphemeralKeyCallback =
+      base::OnceCallback<void(CtapDeviceResponseCode,
+                              base::Optional<pin::KeyAgreementResponse>)>;
   void InitializeAuthenticatorDone(base::OnceClosure callback);
+  void GetEphemeralKey(GetEphemeralKeyCallback callback);
+  void OnHaveEphemeralKeyForGetPINToken(
+      std::string pin,
+      GetTokenCallback callback,
+      CtapDeviceResponseCode status,
+      base::Optional<pin::KeyAgreementResponse> key);
+  void OnHaveEphemeralKeyForSetPIN(
+      std::string pin,
+      SetPINCallback callback,
+      CtapDeviceResponseCode status,
+      base::Optional<pin::KeyAgreementResponse> key);
+  void OnHaveEphemeralKeyForChangePIN(
+      std::string old_pin,
+      std::string new_pin,
+      SetPINCallback callback,
+      CtapDeviceResponseCode status,
+      base::Optional<pin::KeyAgreementResponse> key);
+  void OnHaveEphemeralKeyForUvToken(
+      GetTokenCallback callback,
+      CtapDeviceResponseCode status,
+      base::Optional<pin::KeyAgreementResponse> key);
+
+  template <typename... Args>
+  void TaskClearProxy(base::OnceCallback<void(Args...)> callback, Args... args);
+  template <typename... Args>
+  void OperationClearProxy(base::OnceCallback<void(Args...)> callback,
+                           Args... args);
+  template <typename Task, typename Request, typename Response>
+  void RunTask(Request request,
+               base::OnceCallback<void(CtapDeviceResponseCode,
+                                       base::Optional<Response>)> callback);
+  template <typename Request, typename Response>
+  void RunOperation(Request request,
+                    base::OnceCallback<void(CtapDeviceResponseCode,
+                                            base::Optional<Response>)> callback,
+                    base::OnceCallback<base::Optional<Response>(
+                        const base::Optional<cbor::Value>&)> parser,
+                    bool (*string_fixup_predicate)(
+                        const std::vector<const cbor::Value*>&) = nullptr);
+
+  struct EnumerateCredentialsState;
+  void OnEnumerateRPsDone(EnumerateCredentialsState state,
+                          CtapDeviceResponseCode status,
+                          base::Optional<EnumerateRPsResponse> response);
+  void OnEnumerateCredentialsDone(
+      EnumerateCredentialsState state,
+      CtapDeviceResponseCode status,
+      base::Optional<EnumerateCredentialsResponse> response);
 
   const std::unique_ptr<FidoDevice> device_;
   base::Optional<AuthenticatorSupportedOptions> options_;
   std::unique_ptr<FidoTask> task_;
   std::unique_ptr<GenericDeviceOperation> operation_;
-  base::WeakPtrFactory<FidoDeviceAuthenticator> weak_factory_;
+  base::WeakPtrFactory<FidoDeviceAuthenticator> weak_factory_{this};
 
   DISALLOW_COPY_AND_ASSIGN(FidoDeviceAuthenticator);
 };

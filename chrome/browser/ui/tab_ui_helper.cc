@@ -34,7 +34,7 @@ TabUIHelper::TabUIData::TabUIData(const GURL& url)
     : title(FormatUrlToSubdomain(url)), favicon(favicon::GetDefaultFavicon()) {}
 
 TabUIHelper::TabUIHelper(content::WebContents* contents)
-    : WebContentsObserver(contents), weak_ptr_factory_(this) {}
+    : WebContentsObserver(contents) {}
 TabUIHelper::~TabUIHelper() {}
 
 base::string16 TabUIHelper::GetTitle() const {
@@ -87,8 +87,8 @@ void TabUIHelper::NotifyInitialNavigationDelayed(bool is_navigation_delayed) {
   // When fetching favicon from history, we first try the exact URL, and then
   // fall back to the host.
   FetchFaviconFromHistory(web_contents()->GetVisibleURL(),
-                          base::Bind(&TabUIHelper::OnURLFaviconFetched,
-                                     weak_ptr_factory_.GetWeakPtr()));
+                          base::BindOnce(&TabUIHelper::OnURLFaviconFetched,
+                                         weak_ptr_factory_.GetWeakPtr()));
 }
 
 void TabUIHelper::DidStopLoading() {
@@ -106,7 +106,7 @@ bool TabUIHelper::ShouldUseFaviconFromHistory() const {
 
 void TabUIHelper::FetchFaviconFromHistory(
     const GURL& url,
-    const favicon_base::FaviconImageCallback& callback) {
+    favicon_base::FaviconImageCallback callback) {
   Profile* profile =
       Profile::FromBrowserContext(web_contents()->GetBrowserContext());
   favicon::FaviconService* favicon_service =
@@ -114,7 +114,7 @@ void TabUIHelper::FetchFaviconFromHistory(
                                            ServiceAccessType::EXPLICIT_ACCESS);
   // |favicon_service| might be null when testing.
   if (favicon_service) {
-    favicon_service->GetFaviconImageForPageURL(url, callback,
+    favicon_service->GetFaviconImageForPageURL(url, std::move(callback),
                                                &favicon_tracker_);
   }
 }
@@ -130,8 +130,8 @@ void TabUIHelper::OnURLFaviconFetched(
   }
 
   FetchFaviconFromHistory(web_contents()->GetVisibleURL().GetWithEmptyPath(),
-                          base::Bind(&TabUIHelper::OnHostFaviconFetched,
-                                     weak_ptr_factory_.GetWeakPtr()));
+                          base::BindOnce(&TabUIHelper::OnHostFaviconFetched,
+                                         weak_ptr_factory_.GetWeakPtr()));
 }
 
 void TabUIHelper::OnHostFaviconFetched(

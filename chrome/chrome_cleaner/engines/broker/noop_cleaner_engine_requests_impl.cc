@@ -5,13 +5,13 @@
 #include <utility>
 
 #include "chrome/chrome_cleaner/engines/broker/cleaner_engine_requests_impl.h"
-#include "chrome/chrome_cleaner/zip_archiver/sandboxed_zip_archiver.h"
+#include "chrome/chrome_cleaner/zip_archiver/zip_archiver.h"
 
 namespace chrome_cleaner {
+
 std::unique_ptr<chrome_cleaner::FileRemoverAPI>
 CreateFileRemoverWithDigestVerifier(
-    const std::vector<UwSId>& enabled_uws,
-    std::unique_ptr<SandboxedZipArchiver> archiver,
+    std::unique_ptr<ZipArchiver> archiver,
     const base::RepeatingClosure& reboot_needed_callback) {
   return nullptr;
 }
@@ -21,7 +21,6 @@ CleanerEngineRequestsImpl::CleanerEngineRequestsImpl(
     InterfaceMetadataObserver* metadata_observer,
     std::unique_ptr<chrome_cleaner::FileRemoverAPI> file_remover)
     : mojo_task_runner_(mojo_task_runner),
-      binding_(this),
       metadata_observer_(metadata_observer),
       file_remover_(std::move(file_remover)) {
   ANALYZER_ALLOW_UNUSED(metadata_observer_);
@@ -30,9 +29,9 @@ CleanerEngineRequestsImpl::CleanerEngineRequestsImpl(
 CleanerEngineRequestsImpl::~CleanerEngineRequestsImpl() = default;
 
 void CleanerEngineRequestsImpl::Bind(
-    mojom::CleanerEngineRequestsAssociatedPtrInfo* ptr_info) {
-  binding_.Bind(mojo::MakeRequest(ptr_info));
-  // There's no need to call set_connection_error_handler on this since it's an
+    mojo::PendingAssociatedRemote<mojom::CleanerEngineRequests>* remote) {
+  receiver_.Bind(remote->InitWithNewEndpointAndPassReceiver());
+  // There's no need to call set_disconnect_handler on this since it's an
   // associated interface. Any errors will be handled on the main EngineCommands
   // interface.
 }

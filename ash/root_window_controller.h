@@ -25,7 +25,6 @@ class Point;
 }
 
 namespace ui {
-class SimpleMenuModel;
 class WindowTreeHost;
 }
 
@@ -40,24 +39,24 @@ class ScopedCaptureClient;
 namespace ash {
 class AccessibilityPanelLayoutManager;
 class AlwaysOnTopController;
+class AppMenuModelAdapter;
 class AshWindowTreeHost;
 class LockScreenActionBackgroundController;
 enum class LoginStatus;
+class RootWindowLayoutManager;
 class Shelf;
 class ShelfLayoutManager;
+class SplitViewController;
 class StackingController;
 class StatusAreaWidget;
 class SystemModalContainerLayoutManager;
 class SystemWallpaperController;
 class TouchExplorationManager;
-class TouchObserverHUD;
+class TouchHudDebug;
+class TouchHudProjection;
 class WallpaperWidgetController;
 class WindowManager;
 class WorkAreaInsets;
-
-namespace wm {
-class RootWindowLayoutManager;
-}
 
 // This class maintains the per root window state for ash. This class
 // owns the root window and other dependent objects that should be
@@ -76,10 +75,13 @@ class ASH_EXPORT RootWindowController {
   ~RootWindowController();
 
   // Creates and Initialize the RootWindowController for primary display.
-  static void CreateForPrimaryDisplay(AshWindowTreeHost* host);
+  // Returns a pointer to the newly created controller.
+  static RootWindowController* CreateForPrimaryDisplay(AshWindowTreeHost* host);
 
   // Creates and Initialize the RootWindowController for secondary displays.
-  static void CreateForSecondaryDisplay(AshWindowTreeHost* host);
+  // Returns a pointer to the newly created controller.
+  static RootWindowController* CreateForSecondaryDisplay(
+      AshWindowTreeHost* host);
 
   // Returns a RootWindowController of the window's root window.
   static RootWindowController* ForWindow(const aura::Window* window);
@@ -102,14 +104,27 @@ class ASH_EXPORT RootWindowController {
   aura::Window* GetRootWindow();
   const aura::Window* GetRootWindow() const;
 
-  Shelf* shelf() const { return shelf_.get(); }
-
-  TouchObserverHUD* touch_observer_hud() const { return touch_observer_hud_; }
-  void set_touch_observer_hud(TouchObserverHUD* hud) {
-    touch_observer_hud_ = hud;
+  SplitViewController* split_view_controller() const {
+    return split_view_controller_.get();
   }
 
-  wm::RootWindowLayoutManager* root_window_layout_manager() {
+  Shelf* shelf() const { return shelf_.get(); }
+
+  TouchHudDebug* touch_hud_debug() const { return touch_hud_debug_; }
+  TouchHudProjection* touch_hud_projection() const {
+    return touch_hud_projection_;
+  }
+
+  // Set touch HUDs for this root window controller. The root window controller
+  // will not own the HUDs; their lifetimes are managed by themselves. Whenever
+  // the widget showing a HUD is being destroyed (e.g. because of detaching a
+  // display), the HUD deletes itself.
+  void set_touch_hud_debug(TouchHudDebug* hud) { touch_hud_debug_ = hud; }
+  void set_touch_hud_projection(TouchHudProjection* hud) {
+    touch_hud_projection_ = hud;
+  }
+
+  RootWindowLayoutManager* root_window_layout_manager() {
     return root_window_layout_manager_;
   }
 
@@ -238,18 +253,18 @@ class ASH_EXPORT RootWindowController {
   // Creates the containers (aura::Windows) used by the shell.
   void CreateContainers();
 
+  // Creates a new window for use as a container.
+  aura::Window* CreateContainer(int window_id,
+                                const char* name,
+                                aura::Window* parent);
+
   // Initializes |system_wallpaper_| and possibly also |boot_splash_screen_|.
   // The initial color is determined by the |root_window_type| and whether or
   // not this is the first boot.
   void CreateSystemWallpaper(RootWindowType root_window_type);
 
-  // Resets Shell::GetRootWindowForNewWindows() if appropriate. This is called
-  // during shutdown to make sure GetRootWindowForNewWindows() isn't referencing
-  // this.
-  void ResetRootForNewWindowsIfNecessary();
-
   // Callback for MenuRunner.
-  void OnMenuClosed(const base::TimeTicks desktop_context_menu_show_time);
+  void OnMenuClosed();
 
   // Passed as callback to |wallpaper_widget_controller_| - run when the
   // wallpaper widget is first set.
@@ -261,17 +276,18 @@ class ASH_EXPORT RootWindowController {
   aura::WindowTreeHost* window_tree_host_;
 
   // LayoutManagers are owned by the window they are installed on.
-  wm::RootWindowLayoutManager* root_window_layout_manager_ = nullptr;
+  RootWindowLayoutManager* root_window_layout_manager_ = nullptr;
 
   std::unique_ptr<WallpaperWidgetController> wallpaper_widget_controller_;
 
   std::unique_ptr<AlwaysOnTopController> always_on_top_controller_;
 
   // Manages the context menu.
-  std::unique_ptr<ui::SimpleMenuModel> menu_model_;
-  std::unique_ptr<views::MenuRunner> menu_runner_;
+  std::unique_ptr<AppMenuModelAdapter> root_window_menu_model_adapter_;
 
   std::unique_ptr<StackingController> stacking_controller_;
+
+  std::unique_ptr<SplitViewController> split_view_controller_;
 
   // The shelf controller for this root window. Exists for the entire lifetime
   // of the RootWindowController so that it is safe for observers to be added
@@ -288,10 +304,10 @@ class ASH_EXPORT RootWindowController {
   // feedback is on.
   std::unique_ptr<TouchExplorationManager> touch_exploration_manager_;
 
-  // Heads-up displays for touch events for this root. Not owned. Manages its
-  // own lifetime. Whenever the widget showing a HUD is being destroyed (e.g.
-  // because of detaching a display), the HUD deletes itself.
-  TouchObserverHUD* touch_observer_hud_ = nullptr;
+  // Heads-up displays for touch events. These HUDs are not owned by the root
+  // window controller and manage their own lifetimes.
+  TouchHudDebug* touch_hud_debug_ = nullptr;
+  TouchHudProjection* touch_hud_projection_ = nullptr;
 
   std::unique_ptr<::wm::ScopedCaptureClient> capture_client_;
 

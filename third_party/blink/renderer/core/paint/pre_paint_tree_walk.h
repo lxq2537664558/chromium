@@ -8,12 +8,13 @@
 #include "third_party/blink/renderer/core/paint/clip_rect.h"
 #include "third_party/blink/renderer/core/paint/paint_invalidator.h"
 #include "third_party/blink/renderer/core/paint/paint_property_tree_builder.h"
-#include "third_party/blink/renderer/platform/wtf/allocator.h"
+#include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
 
 namespace blink {
 
 class LayoutObject;
 class LocalFrameView;
+class NGFragmentChildIterator;
 
 // This class walks the whole layout tree, beginning from the root
 // LocalFrameView, across frame boundaries. Helper classes are called for each
@@ -86,10 +87,8 @@ class CORE_EXPORT PrePaintTreeWalk {
   static bool ContextRequiresTreeBuilderContext(const PrePaintTreeWalkContext&,
                                                 const LayoutObject&);
 
-#if DCHECK_IS_ON()
   void CheckTreeBuilderContextState(const LayoutObject&,
                                     const PrePaintTreeWalkContext&);
-#endif
 
   const PrePaintTreeWalkContext& ContextAt(wtf_size_t index) {
     DCHECK_LT(index, context_storage_.size());
@@ -103,8 +102,13 @@ class CORE_EXPORT PrePaintTreeWalk {
   // very big stack frames. Splitting the heavy lifting to a separate function
   // makes sure the stack frame is freed prior to making a recursive call.
   // See https://crbug.com/781301 .
-  NOINLINE void WalkInternal(const LayoutObject&, PrePaintTreeWalkContext&);
-  void Walk(const LayoutObject&);
+  NOINLINE void WalkInternal(const LayoutObject&,
+                             const NGFragmentChildIterator*,
+                             PrePaintTreeWalkContext&);
+  void WalkNGChildren(const LayoutObject* parent, NGFragmentChildIterator*);
+  void WalkLegacyChildren(const LayoutObject&);
+  void WalkChildren(const LayoutObject*, const NGFragmentChildIterator*);
+  void Walk(const LayoutObject&, const NGFragmentChildIterator*);
 
   bool NeedsTreeBuilderContextUpdate(const LocalFrameView&,
                                      const PrePaintTreeWalkContext&);

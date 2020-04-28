@@ -4,7 +4,7 @@
 
 #include "base/win/scoped_com_initializer.h"
 
-#include "base/logging.h"
+#include "base/check_op.h"
 
 namespace base {
 namespace win {
@@ -29,7 +29,9 @@ bool ScopedCOMInitializer::Succeeded() const {
 
 void ScopedCOMInitializer::Initialize(COINIT init) {
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
-  hr_ = CoInitializeEx(NULL, init);
+  // COINIT_DISABLE_OLE1DDE is always added based on:
+  // https://docs.microsoft.com/en-us/windows/desktop/learnwin32/initializing-the-com-library
+  hr_ = CoInitializeEx(nullptr, init | COINIT_DISABLE_OLE1DDE);
   DCHECK_NE(RPC_E_CHANGED_MODE, hr_) << "Invalid COM thread model change";
 }
 

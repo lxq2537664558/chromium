@@ -4,8 +4,9 @@
 
 #include "chrome/browser/chromeos/login/lock_screen_utils.h"
 
+#include "ash/public/cpp/ash_constants.h"
+#include "ash/public/cpp/ash_pref_names.h"
 #include "chrome/browser/browser_process.h"
-#include "chrome/browser/chromeos/language_preferences.h"
 #include "chrome/browser/chromeos/settings/cros_settings.h"
 #include "chrome/browser/ui/ash/ime_controller_client.h"
 #include "chrome/common/pref_names.h"
@@ -18,12 +19,14 @@ namespace chromeos {
 namespace lock_screen_utils {
 
 void SetUserInputMethod(const std::string& username,
-                        input_method::InputMethodManager::State* ime_state) {
+                        input_method::InputMethodManager::State* ime_state,
+                        bool honor_device_policy) {
   bool succeed = false;
 
   const std::string input_method = GetUserLastInputMethod(username);
 
-  EnforcePolicyInputMethods(input_method);
+  if (honor_device_policy)
+    EnforceDevicePolicyInputMethods(input_method);
 
   if (!input_method.empty())
     succeed = SetUserInputMethodImpl(username, input_method, ime_state);
@@ -79,8 +82,8 @@ bool SetUserInputMethodImpl(
       users_last_input_methods->SetKey(username, base::Value(""));
     return false;
   }
-  if (!base::ContainsValue(ime_state->GetActiveInputMethodIds(),
-                           user_input_method)) {
+  if (!base::Contains(ime_state->GetActiveInputMethodIds(),
+                      user_input_method)) {
     if (!ime_state->EnableInputMethod(user_input_method)) {
       DLOG(ERROR) << "SetUserInputMethod: user input method '"
                   << user_input_method
@@ -92,7 +95,7 @@ bool SetUserInputMethodImpl(
   return true;
 }
 
-void EnforcePolicyInputMethods(std::string user_input_method) {
+void EnforceDevicePolicyInputMethods(std::string user_input_method) {
   chromeos::CrosSettings* cros_settings = chromeos::CrosSettings::Get();
   const base::ListValue* login_screen_input_methods = nullptr;
   if (!cros_settings->GetList(chromeos::kDeviceLoginScreenInputMethods,
@@ -129,12 +132,13 @@ void StopEnforcingPolicyInputMethods() {
   imm->GetActiveIMEState()->SetAllowedInputMethods(allowed_input_methods, true);
   if (ImeControllerClient::Get())  // Can be null in tests.
     ImeControllerClient::Get()->SetImesManagedByPolicy(false);
+  imm->GetActiveIMEState()->SetInputMethodLoginDefault();
 }
 
 void SetKeyboardSettings(const AccountId& account_id) {
-  bool auto_repeat_enabled = language_prefs::kXkbAutoRepeatEnabled;
+  bool auto_repeat_enabled = ash::kDefaultKeyAutoRepeatEnabled;
   if (user_manager::known_user::GetBooleanPref(
-          account_id, prefs::kLanguageXkbAutoRepeatEnabled,
+          account_id, ash::prefs::kXkbAutoRepeatEnabled,
           &auto_repeat_enabled) &&
       !auto_repeat_enabled) {
     input_method::InputMethodManager::Get()
@@ -143,12 +147,13 @@ void SetKeyboardSettings(const AccountId& account_id) {
     return;
   }
 
-  int auto_repeat_delay = language_prefs::kXkbAutoRepeatDelayInMs;
-  int auto_repeat_interval = language_prefs::kXkbAutoRepeatIntervalInMs;
+  int auto_repeat_delay = ash::kDefaultKeyAutoRepeatDelay.InMilliseconds();
+  int auto_repeat_interval =
+      ash::kDefaultKeyAutoRepeatInterval.InMilliseconds();
   user_manager::known_user::GetIntegerPref(
-      account_id, prefs::kLanguageXkbAutoRepeatDelay, &auto_repeat_delay);
+      account_id, ash::prefs::kXkbAutoRepeatDelay, &auto_repeat_delay);
   user_manager::known_user::GetIntegerPref(
-      account_id, prefs::kLanguageXkbAutoRepeatInterval, &auto_repeat_interval);
+      account_id, ash::prefs::kXkbAutoRepeatInterval, &auto_repeat_interval);
   input_method::AutoRepeatRate rate;
   rate.initial_delay_in_ms = auto_repeat_delay;
   rate.repeat_interval_in_ms = auto_repeat_interval;
@@ -159,27 +164,21 @@ void SetKeyboardSettings(const AccountId& account_id) {
       rate);
 }
 
-std::vector<ash::mojom::LocaleItemPtr> FromListValueToLocaleItem(
+std::vector<ash::LocaleItem> FromListValueToLocaleItem(
     std::unique_ptr<base::ListValue> locales) {
-  std::vector<ash::mojom::LocaleItemPtr> result;
+  std::vector<ash::LocaleItem> result;
   for (const auto& locale : *locales) {
     const base::DictionaryValue* dictionary;
     if (!locale.GetAsDictionary(&dictionary))
       continue;
 
-    ash::mojom::LocaleItemPtr locale_item = ash::mojom::LocaleItem::New();
-    std::string language_code;
-    dictionary->GetString("value", &language_code);
-    locale_item->language_code = language_code;
-
-    std::string title;
-    dictionary->GetString("title", &title);
-    locale_item->title = title;
-
+    ash::LocaleItem locale_item;
+    dictionary->GetString("value", &locale_item.language_code);
+    dictionary->GetString("title", &locale_item.title);
     std::string group_name;
     dictionary->GetString("optionGroupName", &group_name);
     if (!group_name.empty())
-      locale_item->group_name = group_name;
+      locale_item.group_name = group_name;
     result.push_back(std::move(locale_item));
   }
   return result;

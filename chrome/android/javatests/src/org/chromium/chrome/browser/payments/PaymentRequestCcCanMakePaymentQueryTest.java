@@ -14,17 +14,15 @@ import org.junit.runner.RunWith;
 import org.chromium.base.test.util.CommandLineFlags;
 import org.chromium.base.test.util.Feature;
 import org.chromium.chrome.R;
-import org.chromium.chrome.browser.ChromeSwitches;
 import org.chromium.chrome.browser.autofill.AutofillTestHelper;
-import org.chromium.chrome.browser.autofill.CardType;
 import org.chromium.chrome.browser.autofill.PersonalDataManager.CreditCard;
+import org.chromium.chrome.browser.flags.ChromeSwitches;
 import org.chromium.chrome.browser.payments.PaymentRequestTestRule.MainActivityStartCallback;
 import org.chromium.chrome.browser.preferences.Pref;
 import org.chromium.chrome.browser.preferences.PrefServiceBridge;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
 import org.chromium.content_public.browser.test.util.TestThreadUtils;
 
-import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeoutException;
 
 /**
@@ -32,8 +30,7 @@ import java.util.concurrent.TimeoutException;
  * user has a valid  credit card without a billing address on file.
  */
 @RunWith(ChromeJUnit4ClassRunner.class)
-@CommandLineFlags.Add({ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE,
-        "enable-features=PaymentRequestHasEnrolledInstrument"})
+@CommandLineFlags.Add({ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE})
 public class PaymentRequestCcCanMakePaymentQueryTest implements MainActivityStartCallback {
     @Rule
     public PaymentRequestTestRule mPaymentRequestTestRule =
@@ -45,20 +42,18 @@ public class PaymentRequestCcCanMakePaymentQueryTest implements MainActivityStar
     }
 
     @Override
-    public void onMainActivityStarted() throws InterruptedException, ExecutionException,
-            TimeoutException {
+    public void onMainActivityStarted() throws TimeoutException {
         // The user has a valid credit card without a billing address on file. This is sufficient
         // for canMakePayment() to return true.
         new AutofillTestHelper().setCreditCard(new CreditCard("", "https://example.com", true, true,
                 "Jon Doe", "4111111111111111", "1111", "12", "2050", "visa", R.drawable.visa_card,
-                CardType.UNKNOWN, "" /* billingAddressId */, "" /* serverId */));
+                "" /* billingAddressId */, "" /* serverId */));
     }
 
     @Test
     @MediumTest
     @Feature({"Payments"})
-    public void testCanMakePayment()
-            throws InterruptedException, ExecutionException, TimeoutException {
+    public void testCanMakePayment() throws TimeoutException {
         mPaymentRequestTestRule.openPageAndClickBuyAndWait(
                 mPaymentRequestTestRule.getCanMakePaymentQueryResponded());
         mPaymentRequestTestRule.expectResultContains(new String[] {"true"});
@@ -96,8 +91,7 @@ public class PaymentRequestCcCanMakePaymentQueryTest implements MainActivityStar
     @Test
     @MediumTest
     @Feature({"Payments"})
-    public void testCanMakePaymentDisabled()
-            throws InterruptedException, ExecutionException, TimeoutException {
+    public void testCanMakePaymentDisabled() throws TimeoutException {
         TestThreadUtils.runOnUiThreadBlocking((Runnable) () -> {
             PrefServiceBridge.getInstance().setBoolean(Pref.CAN_MAKE_PAYMENT_ENABLED, false);
         });

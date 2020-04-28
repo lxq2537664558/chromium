@@ -1,2 +1,4 @@
 rootWebArea
-++image
+++genericContainer ignored
+++++genericContainer ignored
+++++++image

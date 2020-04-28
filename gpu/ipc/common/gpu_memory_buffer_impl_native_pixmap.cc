@@ -4,6 +4,8 @@
 
 #include "gpu/ipc/common/gpu_memory_buffer_impl_native_pixmap.h"
 
+#include <vulkan/vulkan.h>
+
 #include <utility>
 
 #include "base/bind.h"
@@ -53,8 +55,9 @@ GpuMemoryBufferImplNativePixmap::CreateFromHandle(
     DestructionCallback callback) {
   std::unique_ptr<gfx::ClientNativePixmap> native_pixmap =
       client_native_pixmap_factory->ImportFromHandle(
-          CloneHandleForIPC(handle.native_pixmap_handle), size, usage);
-  DCHECK(native_pixmap);
+          CloneHandleForIPC(handle.native_pixmap_handle), size, format, usage);
+  if (!native_pixmap)
+    return nullptr;
 
   return base::WrapUnique(new GpuMemoryBufferImplNativePixmap(
       handle.id, size, format, std::move(callback), std::move(native_pixmap),
@@ -71,8 +74,8 @@ base::OnceClosure GpuMemoryBufferImplNativePixmap::AllocateForTesting(
   scoped_refptr<gfx::NativePixmap> pixmap =
       ui::OzonePlatform::GetInstance()
           ->GetSurfaceFactoryOzone()
-          ->CreateNativePixmap(gfx::kNullAcceleratedWidget, size, format,
-                               usage);
+          ->CreateNativePixmap(gfx::kNullAcceleratedWidget, VK_NULL_HANDLE,
+                               size, format, usage);
   handle->native_pixmap_handle = pixmap->ExportHandle();
 #else
   // TODO(j.isorce): use gbm_bo_create / gbm_bo_get_fd from system libgbm.
@@ -85,6 +88,8 @@ base::OnceClosure GpuMemoryBufferImplNativePixmap::AllocateForTesting(
 
 bool GpuMemoryBufferImplNativePixmap::Map() {
   DCHECK(!mapped_);
+  DCHECK_EQ(gfx::NumberOfPlanesForLinearBufferFormat(GetFormat()),
+            handle_.planes.size());
   mapped_ = pixmap_->Map();
   return mapped_;
 }
@@ -101,7 +106,7 @@ void GpuMemoryBufferImplNativePixmap::Unmap() {
 }
 
 int GpuMemoryBufferImplNativePixmap::stride(size_t plane) const {
-  DCHECK_LT(plane, gfx::NumberOfPlanesForBufferFormat(format_));
+  DCHECK_LT(plane, gfx::NumberOfPlanesForLinearBufferFormat(format_));
   return pixmap_->GetStride(plane);
 }
 

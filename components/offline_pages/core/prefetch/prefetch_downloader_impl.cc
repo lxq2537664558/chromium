@@ -40,10 +40,7 @@ PrefetchDownloaderImpl::PrefetchDownloaderImpl(
     download::DownloadService* download_service,
     version_info::Channel channel,
     PrefService* prefs)
-    : download_service_(download_service),
-      channel_(channel),
-      prefs_(prefs),
-      weak_ptr_factory_(this) {
+    : download_service_(download_service), channel_(channel), prefs_(prefs) {
   DCHECK(download_service);
 }
 
@@ -121,6 +118,7 @@ void PrefetchDownloaderImpl::StartDownload(const std::string& download_id,
   params.scheduling_params.cancel_time =
       OfflineTimeNow() + kPrefetchDownloadLifetime;
   params.request_params.url = PrefetchDownloadURL(download_location, channel_);
+  params.request_params.require_safety_checks = false;
 
   std::string experiment_header = PrefetchExperimentHeader();
   if (!experiment_header.empty()) {

@@ -63,6 +63,8 @@ class ArcNotificationContentView
   void OnContainerAnimationEnded();
   void ActivateWidget(bool activate);
 
+  bool slide_in_progress() const { return slide_in_progress_; }
+
  private:
   friend class ArcNotificationViewTest;
   friend class ArcNotificationContentViewTest;
@@ -106,6 +108,7 @@ class ArcNotificationContentView
   void OnAccessibilityEvent(ax::mojom::Event event) override;
   void AddedToWidget() override;
   void RemovedFromWidget() override;
+  void VisibilityChanged(View* starting_from, bool is_visible) override;
 
   // aura::WindowObserver
   void OnWindowBoundsChanged(aura::Window* window,
@@ -116,6 +119,7 @@ class ArcNotificationContentView
 
   // views::WidgetObserver:
   void OnWidgetClosing(views::Widget* widget) override;
+  void OnWidgetActivationChanged(views::Widget* widget, bool active) override;
 
   // ArcNotificationItem::Observer
   void OnItemDestroying() override;
@@ -199,7 +203,6 @@ class ArcNotificationContentView
   base::Optional<gfx::Insets> mask_insets_;
 
   std::unique_ptr<ui::LayerTreeOwner> surface_copy_;
-  std::unique_ptr<ui::LayerOwner> surface_copy_mask_;
 
   DISALLOW_COPY_AND_ASSIGN(ArcNotificationContentView);
 };

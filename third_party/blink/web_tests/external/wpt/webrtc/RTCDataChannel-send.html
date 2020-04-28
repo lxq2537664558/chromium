@@ -1,5 +1,6 @@
 <!doctype html>
 <meta charset=utf-8>
+<meta name="timeout" content="long">
 <title>RTCDataChannel.prototype.send</title>
 <script src="/resources/testharness.js"></script>
 <script src="/resources/testharnessreport.js"></script>
@@ -53,7 +54,7 @@
     const pc = new RTCPeerConnection();
     const channel = pc.createDataChannel('test');
     assert_equals(channel.readyState, 'connecting');
-    assert_throws('InvalidStateError', () => channel.send(helloString));
+    assert_throws_dom('InvalidStateError', () => channel.send(helloString));
   }, 'Calling send() when data channel is in connecting state should throw InvalidStateError');
 
   /*
@@ -299,6 +300,7 @@
 
 promise_test(async t => {
   let pc1 = new RTCPeerConnection();
+  t.add_cleanup(() => pc1.close());
   let [channel1, channel2] = await createDataChannelPair(pc1);
   let message = 'hello888'; // 8 bytes
   while (message.length <= pc1.sctp.maxMessageSize) {
@@ -311,6 +313,6 @@ promise_test(async t => {
   // "send" method step 4:
   // If the byte size of "data" exceeds the value of maxMessageSize, throw
   // a TypeError.
-  assert_throws('TypeError', () => channel1.send(message));
+  assert_throws_js(TypeError, () => channel1.send(message));
 }, 'Calling send() up to max size should succeed, above max size should fail');
 </script>

@@ -29,8 +29,6 @@ namespace blink {
 
 class RadioButtonGroup : public GarbageCollected<RadioButtonGroup> {
  public:
-  static RadioButtonGroup* Create();
-
   RadioButtonGroup();
 
   bool IsEmpty() const { return members_.IsEmpty(); }
@@ -202,8 +200,6 @@ void RadioButtonGroup::Trace(Visitor* visitor) {
 // compiler from generating them as inlines. So we don't need to to define
 // RadioButtonGroup in the header.
 RadioButtonGroupScope::RadioButtonGroupScope() = default;
-
-RadioButtonGroupScope::~RadioButtonGroupScope() = default;
 
 void RadioButtonGroupScope::AddButton(HTMLInputElement* element) {
   DCHECK_EQ(element->type(), input_type_names::kRadio);

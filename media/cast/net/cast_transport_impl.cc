@@ -10,6 +10,7 @@
 #include <utility>
 
 #include "base/bind.h"
+#include "base/bind_helpers.h"
 #include "base/single_thread_task_runner.h"
 #include "build/build_config.h"
 #include "media/cast/net/cast_transport_defines.h"
@@ -44,7 +45,7 @@ std::unique_ptr<CastTransport> CastTransport::Create(
 }
 
 PacketReceiverCallback CastTransport::PacketReceiverForTesting() {
-  return PacketReceiverCallback();
+  return base::NullCallback();
 }
 
 class CastTransportImpl::RtcpClient : public RtcpObserver {
@@ -121,8 +122,7 @@ CastTransportImpl::CastTransportImpl(
                                                         : nullptr,
              transport_.get(),
              transport_task_runner),
-      last_byte_acked_for_audio_(0),
-      weak_factory_(this) {
+      last_byte_acked_for_audio_(0) {
   DCHECK(clock);
   DCHECK(transport_client_);
   DCHECK(transport_);
@@ -134,8 +134,8 @@ CastTransportImpl::CastTransportImpl(
                        weak_factory_.GetWeakPtr()),
         logging_flush_interval_);
   }
-  transport_->StartReceiving(
-      base::Bind(&CastTransportImpl::OnReceivedPacket, base::Unretained(this)));
+  transport_->StartReceiving(base::BindRepeating(
+      &CastTransportImpl::OnReceivedPacket, base::Unretained(this)));
 }
 
 CastTransportImpl::~CastTransportImpl() {

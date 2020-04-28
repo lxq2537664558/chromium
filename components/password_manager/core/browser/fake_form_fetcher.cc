@@ -7,6 +7,7 @@
 #include <memory>
 
 #include "components/autofill/core/common/password_form.h"
+#include "components/password_manager/core/browser/password_manager_util.h"
 #include "components/password_manager/core/browser/statistics_table.h"
 
 using autofill::PasswordForm;
@@ -18,11 +19,15 @@ FakeFormFetcher::FakeFormFetcher() = default;
 FakeFormFetcher::~FakeFormFetcher() = default;
 
 void FakeFormFetcher::AddConsumer(Consumer* consumer) {
-  consumers_.insert(consumer);
+  consumers_.AddObserver(consumer);
 }
 
 void FakeFormFetcher::RemoveConsumer(Consumer* consumer) {
-  consumers_.erase(consumer);
+  consumers_.RemoveObserver(consumer);
+}
+
+void FakeFormFetcher::Fetch() {
+  state_ = State::WAITING;
 }
 
 FormFetcher::State FakeFormFetcher::GetState() const {
@@ -34,39 +39,73 @@ const std::vector<InteractionsStats>& FakeFormFetcher::GetInteractionsStats()
   return stats_;
 }
 
-const std::vector<const autofill::PasswordForm*>&
-FakeFormFetcher::GetNonFederatedMatches() const {
+std::vector<const PasswordForm*> FakeFormFetcher::GetNonFederatedMatches()
+    const {
   return non_federated_;
 }
 
-const std::vector<const autofill::PasswordForm*>&
-FakeFormFetcher::GetFederatedMatches() const {
+std::vector<const PasswordForm*> FakeFormFetcher::GetFederatedMatches() const {
   return federated_;
 }
 
-const std::vector<const autofill::PasswordForm*>&
-FakeFormFetcher::GetBlacklistedMatches() const {
-  return blacklisted_;
+bool FakeFormFetcher::IsBlacklisted() const {
+  return is_blacklisted_;
+}
+
+bool FakeFormFetcher::IsMovingBlocked(const autofill::GaiaIdHash& destination,
+                                      const base::string16& username) const {
+  // This is analogous to the implementation in
+  // MultiStoreFormFetcher::IsMovingBlocked().
+  for (const std::vector<const PasswordForm*>& matches_vector :
+       {federated_, non_federated_}) {
+    for (const PasswordForm* form : matches_vector) {
+      // Only local entries can be moved to the account store (though
+      // account store matches should never have |moving_blocked_for_list|
+      // entries anyway).
+      if (form->IsUsingAccountStore())
+        continue;
+      // Ignore PSL matches for blocking moving.
+      if (form->is_public_suffix_match)
+        continue;
+      if (form->username_value != username)
+        continue;
+      if (base::Contains(form->moving_blocked_for_list, destination))
+        return true;
+    }
+  }
+  return false;
+}
+
+const std::vector<const PasswordForm*>& FakeFormFetcher::GetAllRelevantMatches()
+    const {
+  return non_federated_same_scheme_;
+}
+
+const std::vector<const PasswordForm*>& FakeFormFetcher::GetBestMatches()
+    const {
+  return best_matches_;
+}
+
+const PasswordForm* FakeFormFetcher::GetPreferredMatch() const {
+  return preferred_match_;
 }
 
 void FakeFormFetcher::SetNonFederated(
-    const std::vector<const autofill::PasswordForm*>& non_federated) {
+    const std::vector<const PasswordForm*>& non_federated) {
   non_federated_ = non_federated;
+  password_manager_util::FindBestMatches(non_federated_, scheme_,
+                                         &non_federated_same_scheme_,
+                                         &best_matches_, &preferred_match_);
 }
 
-void FakeFormFetcher::SetBlacklisted(
-    const std::vector<const autofill::PasswordForm*>& blacklisted) {
-  blacklisted_ = blacklisted;
+void FakeFormFetcher::SetBlacklisted(bool is_blacklisted) {
+  is_blacklisted_ = is_blacklisted;
 }
 
 void FakeFormFetcher::NotifyFetchCompleted() {
   state_ = State::NOT_WAITING;
-  for (Consumer* consumer : consumers_)
-    consumer->OnFetchCompleted();
-}
-
-void FakeFormFetcher::Fetch() {
-  state_ = State::WAITING;
+  for (Consumer& consumer : consumers_)
+    consumer.OnFetchCompleted();
 }
 
 std::unique_ptr<FormFetcher> FakeFormFetcher::Clone() {

@@ -32,10 +32,9 @@ std::string GetCrtcAction(const DisplaySnapshot& output,
                             mode ? mode->ToString().c_str() : "NULL");
 }
 
-std::string GetSetHDCPStateAction(const DisplaySnapshot& output,
-                                  HDCPState state) {
-  return base::StringPrintf("set_hdcp(id=%" PRId64 ",state=%d)",
-                            output.display_id(), state);
+std::string GetSetHDCPStateAction(int64_t display_id, HDCPState state) {
+  return base::StringPrintf("set_hdcp(id=%" PRId64 ",state=%d)", display_id,
+                            state);
 }
 
 std::string SetColorMatrixAction(int64_t display_id,
@@ -68,6 +67,11 @@ std::string SetGammaCorrectionAction(
   return base::StringPrintf("set_gamma_correction(id=%" PRId64 "%s%s)",
                             display_id, degamma_table.c_str(),
                             gamma_table.c_str());
+}
+
+std::string SetPrivacyScreenAction(int64_t display_id, bool enabled) {
+  return base::StringPrintf("set_privacy_screen(id=%" PRId64 ",state=%d)",
+                            display_id, enabled);
 }
 
 std::string JoinActions(const char* action, ...) {

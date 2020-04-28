@@ -9,61 +9,51 @@ import android.content.res.Resources;
 import android.graphics.Color;
 import android.graphics.Rect;
 import android.graphics.drawable.ColorDrawable;
-import android.support.annotation.Nullable;
-import android.support.v4.view.ViewCompat;
+import android.os.Debug;
+import android.view.InputDevice;
 import android.view.KeyEvent;
+import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.ViewParent;
 import android.view.ViewTreeObserver.OnGlobalLayoutListener;
+import android.widget.AbsListView;
+import android.widget.AbsListView.OnScrollListener;
 import android.widget.ListView;
 
-import org.chromium.base.VisibleForTesting;
+import androidx.annotation.VisibleForTesting;
+import androidx.core.view.ViewCompat;
+
+import org.chromium.base.TraceEvent;
+import org.chromium.base.task.PostTask;
 import org.chromium.chrome.R;
-import org.chromium.chrome.browser.WindowDelegate;
-import org.chromium.chrome.browser.util.ColorUtils;
 import org.chromium.chrome.browser.util.KeyNavigationUtil;
-import org.chromium.chrome.browser.util.ViewUtils;
+import org.chromium.components.browser_ui.styles.ChromeColors;
+import org.chromium.content_public.browser.UiThreadTaskTraits;
+import org.chromium.ui.base.ViewUtils;
 
 import java.util.ArrayList;
 
 /**
- * A widget for showing a list of omnibox suggestions.
+ * A ListView based implementation of {@link OmniboxSuggestionsDropdown} for showing a list of
+ * omnibox suggestions.
  */
 @VisibleForTesting
-public class OmniboxSuggestionsList extends ListView {
+public class OmniboxSuggestionsList
+        extends ListView implements OmniboxSuggestionsDropdown, OnScrollListener {
     private final int[] mTempPosition = new int[2];
     private final Rect mTempRect = new Rect();
     private final int mStandardBgColor;
     private final int mIncognitoBgColor;
 
-    private OmniboxSuggestionListEmbedder mEmbedder;
+    private OmniboxSuggestionsDropdown.Embedder mEmbedder;
     private View mAnchorView;
     private View mAlignmentView;
+    private OmniboxSuggestionsDropdown.Observer mObserver;
     private OnGlobalLayoutListener mAnchorViewLayoutListener;
     private OnLayoutChangeListener mAlignmentViewLayoutListener;
-
-    /**
-     * Provides the capabilities required to embed the omnibox suggestion list into the UI.
-     */
-    public interface OmniboxSuggestionListEmbedder {
-        /** Return the anchor view the suggestion list should be drawn below. */
-        View getAnchorView();
-
-        /**
-         * Return the view that the omnibox suggestions should be aligned horizontally to.  The
-         * view must be a descendant of {@link #getAnchorView()}.  If null, the suggestions will
-         * be aligned to the start of {@link #getAnchorView()}.
-         */
-        @Nullable
-        View getAlignmentView();
-
-        /** Return the delegate used to interact with the Window. */
-        WindowDelegate getWindowDelegate();
-
-        /** Return whether the suggestions are being rendered in the tablet UI. */
-        boolean isTablet();
-    }
+    private int mListViewMaxHeight;
+    private int mLastBroadcastedListViewMaxHeight;
 
     /**
      * Constructs a new list designed for containing omnibox suggestions.
@@ -76,15 +66,20 @@ public class OmniboxSuggestionsList extends ListView {
         setFocusableInTouchMode(true);
 
         final Resources resources = context.getResources();
-        mStandardBgColor = ColorUtils.getDefaultThemeColor(resources, false);
-        mIncognitoBgColor = ColorUtils.getDefaultThemeColor(resources, true);
+        mStandardBgColor = ChromeColors.getDefaultThemeColor(resources, false);
+        mIncognitoBgColor = ChromeColors.getDefaultThemeColor(resources, true);
         int paddingBottom =
                 resources.getDimensionPixelOffset(R.dimen.omnibox_suggestion_list_padding_bottom);
         ViewCompat.setPaddingRelative(this, 0, 0, 0, paddingBottom);
     }
 
-    /** Set the embedder for the list view. */
-    void setEmbedder(OmniboxSuggestionListEmbedder embedder) {
+    @Override
+    public View getView() {
+        return this;
+    }
+
+    @Override
+    public void setEmbedder(OmniboxSuggestionsDropdown.Embedder embedder) {
         assert mEmbedder == null;
         mEmbedder = embedder;
         mAnchorView = mEmbedder.getAnchorView();
@@ -123,6 +118,23 @@ public class OmniboxSuggestionsList extends ListView {
         } else {
             mAlignmentViewLayoutListener = null;
         }
+
+        setOnScrollListener(this);
+    }
+
+    @Override
+    public void setObserver(OmniboxSuggestionsDropdown.Observer observer) {
+        mObserver = observer;
+    }
+
+    @Override
+    public void resetSelection() {
+        setSelection(0);
+    }
+
+    @Override
+    public int getItemCount() {
+        return getCount();
     }
 
     private void adjustSidePadding() {
@@ -134,20 +146,16 @@ public class OmniboxSuggestionsList extends ListView {
                 getPaddingBottom());
     }
 
-    /**
-     * Show (and properly size) the suggestions list.
-     */
-    void show() {
+    @Override
+    public void show() {
         if (getVisibility() != VISIBLE) {
             setVisibility(VISIBLE);
             if (getSelectedItemPosition() != 0) setSelection(0);
         }
     }
 
-    /**
-     * Update the suggestion popup background to reflect the current state.
-     */
-    void refreshPopupBackground(boolean isIncognito) {
+    @Override
+    public void refreshPopupBackground(boolean isIncognito) {
         int color = isIncognito ? mIncognitoBgColor : mStandardBgColor;
         if (!isHardwareAccelerated()) {
             // When HW acceleration is disabled, changing mSuggestionList' items somehow erases
@@ -164,24 +172,48 @@ public class OmniboxSuggestionsList extends ListView {
 
     @Override
     protected void onMeasure(int widthMeasureSpec, int heightMeasureSpec) {
-        View contentView =
-                mEmbedder.getAnchorView().getRootView().findViewById(android.R.id.content);
-        ViewUtils.getRelativeLayoutPosition(contentView, mAnchorView, mTempPosition);
-        int anchorY = mTempPosition[1];
-        int anchorBottomRelativeToContent = anchorY + mAnchorView.getMeasuredHeight();
+        try (TraceEvent tracing = TraceEvent.scoped("OmniboxSuggestionsList.Measure")) {
+            final long start = Debug.threadCpuTimeNanos();
+            View contentView =
+                    mEmbedder.getAnchorView().getRootView().findViewById(android.R.id.content);
+            ViewUtils.getRelativeLayoutPosition(contentView, mAnchorView, mTempPosition);
+            int anchorY = mTempPosition[1];
+            int anchorBottomRelativeToContent = anchorY + mAnchorView.getMeasuredHeight();
 
-        // Update the layout params to ensure the parent correctly positions the suggestions under
-        // the anchor view.
-        ViewGroup.LayoutParams layoutParams = getLayoutParams();
-        if (layoutParams != null && layoutParams instanceof MarginLayoutParams) {
-            ((MarginLayoutParams) layoutParams).topMargin = anchorBottomRelativeToContent;
+            // Update the layout params to ensure the parent correctly positions the suggestions
+            // under the anchor view.
+            ViewGroup.LayoutParams layoutParams = getLayoutParams();
+            if (layoutParams != null && layoutParams instanceof MarginLayoutParams) {
+                ((MarginLayoutParams) layoutParams).topMargin = anchorBottomRelativeToContent;
+            }
+            mEmbedder.getWindowDelegate().getWindowVisibleDisplayFrame(mTempRect);
+            int availableViewportHeight = mTempRect.height() - anchorBottomRelativeToContent;
+
+            if (availableViewportHeight != mListViewMaxHeight) {
+                mListViewMaxHeight = availableViewportHeight;
+                if (mObserver != null) {
+                    PostTask.postTask(UiThreadTaskTraits.DEFAULT, () -> {
+                        // Detect if there was another change since this task posted.
+                        // This indicates a subsequent task being posted too.
+                        if (mListViewMaxHeight != availableViewportHeight) return;
+                        // Detect if the new height is the same as previously broadcasted.
+                        // The two checks (one above and one below) allow us to detect quick
+                        // A->B->A transitions and suppress the broadcasts.
+                        if (mLastBroadcastedListViewMaxHeight == availableViewportHeight) return;
+                        if (mObserver == null) return;
+                        mObserver.onSuggestionDropdownHeightChanged(availableViewportHeight);
+                        mLastBroadcastedListViewMaxHeight = availableViewportHeight;
+                    });
+                }
+            }
+
+            super.onMeasure(MeasureSpec.makeMeasureSpec(
+                                    mAnchorView.getMeasuredWidth(), MeasureSpec.EXACTLY),
+                    MeasureSpec.makeMeasureSpec(availableViewportHeight,
+                            mEmbedder.isTablet() ? MeasureSpec.AT_MOST : MeasureSpec.EXACTLY));
+            final long end = Debug.threadCpuTimeNanos();
+            SuggestionsMetrics.recordSuggestionListMeasureTime(start, end);
         }
-        mEmbedder.getWindowDelegate().getWindowVisibleDisplayFrame(mTempRect);
-        int availableViewportHeight = mTempRect.height() - anchorBottomRelativeToContent;
-        super.onMeasure(
-                MeasureSpec.makeMeasureSpec(mAnchorView.getMeasuredWidth(), MeasureSpec.EXACTLY),
-                MeasureSpec.makeMeasureSpec(availableViewportHeight,
-                        mEmbedder.isTablet() ? MeasureSpec.AT_MOST : MeasureSpec.EXACTLY));
     }
 
     @Override
@@ -219,22 +251,22 @@ public class OmniboxSuggestionsList extends ListView {
     }
 
     @Override
-    protected void layoutChildren() {
-        super.layoutChildren();
-        // In ICS, the selected view is not marked as selected despite calling setSelection(0),
-        // so we bootstrap this after the children have been laid out.
-        if (!isInTouchMode() && getSelectedView() != null) {
-            getSelectedView().setSelected(true);
-        }
-    }
-
-    @Override
     protected void onAttachedToWindow() {
         super.onAttachedToWindow();
         mAnchorView.getViewTreeObserver().addOnGlobalLayoutListener(mAnchorViewLayoutListener);
         if (mAlignmentView != null) {
             adjustSidePadding();
             mAlignmentView.addOnLayoutChangeListener(mAlignmentViewLayoutListener);
+        }
+    }
+
+    @Override
+    protected void onLayout(boolean changed, int l, int t, int r, int b) {
+        try (TraceEvent tracing = TraceEvent.scoped("OmniboxSuggestionsList.Layout")) {
+            final long start = Debug.threadCpuTimeNanos();
+            super.onLayout(changed, l, t, r, b);
+            final long end = Debug.threadCpuTimeNanos();
+            SuggestionsMetrics.recordSuggestionListLayoutTime(start, end);
         }
     }
 
@@ -247,6 +279,32 @@ public class OmniboxSuggestionsList extends ListView {
         mAnchorView.getViewTreeObserver().removeOnGlobalLayoutListener(mAnchorViewLayoutListener);
         if (mAlignmentView != null) {
             mAlignmentView.removeOnLayoutChangeListener(mAlignmentViewLayoutListener);
+        }
+    }
+
+    @Override
+    public boolean onGenericMotionEvent(MotionEvent event) {
+        // Consume mouse events to ensure clicks do not bleed through to sibling views that
+        // are obscured by the list.  crbug.com/968414
+        if ((event.getSource() & InputDevice.SOURCE_CLASS_POINTER) != 0
+                && event.getToolType(0) == MotionEvent.TOOL_TYPE_MOUSE) {
+            int action = event.getActionMasked();
+            if (action == MotionEvent.ACTION_BUTTON_PRESS
+                    || action == MotionEvent.ACTION_BUTTON_RELEASE) {
+                return true;
+            }
+        }
+        return super.onGenericMotionEvent(event);
+    }
+
+    @Override
+    public void onScroll(
+            AbsListView view, int firstVisibleItem, int visibleItemCount, int totalItemCount) {}
+
+    @Override
+    public void onScrollStateChanged(AbsListView view, int scrollState) {
+        if (scrollState == SCROLL_STATE_TOUCH_SCROLL && mObserver != null) {
+            mObserver.onSuggestionDropdownScroll();
         }
     }
 }

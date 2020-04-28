@@ -43,9 +43,7 @@ class RangeInputType final : public InputType, public InputTypeView {
   USING_GARBAGE_COLLECTED_MIXIN(RangeInputType);
 
  public:
-  static InputType* Create(HTMLInputElement&);
-
-  RangeInputType(HTMLInputElement&);
+  explicit RangeInputType(HTMLInputElement&);
 
   void Trace(Visitor*) override;
   using InputType::GetElement;
@@ -65,6 +63,7 @@ class RangeInputType final : public InputType, public InputTypeView {
   bool IsSteppable() const override;
   void HandleMouseDownEvent(MouseEvent&) override;
   void HandleKeydownEvent(KeyboardEvent&) override;
+  bool TypeShouldForceLegacyLayout() const override;
   LayoutObject* CreateLayoutObject(const ComputedStyle&,
                                    LegacyLayout) const override;
   void CreateShadowSubtree() override;
@@ -87,6 +86,8 @@ class RangeInputType final : public InputType, public InputTypeView {
 
   // InputTypeView function:
   void UpdateView() override;
+  void ValueAttributeChanged() override;
+  bool IsDraggedSlider() const override;
 
   bool tick_mark_values_dirty_;
   Vector<Decimal> tick_mark_values_;

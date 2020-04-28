@@ -15,12 +15,11 @@ namespace views {
 class BoxLayout;
 class ImageView;
 class InkDrop;
-class InkDropMask;
 class InkDropRipple;
 class Label;
 }  // namespace views
 
-namespace app_list {
+namespace ash {
 
 class AppListViewDelegate;
 
@@ -35,7 +34,6 @@ class APP_LIST_EXPORT SearchResultSuggestionChipView
   void SetBackgroundBlurEnabled(bool enabled);
 
   void OnResultChanged() override;
-  void SetIndexInSuggestionChipContainer(size_t index);
 
   // SearchResultObserver:
   void OnMetadataChanged() override;
@@ -45,18 +43,14 @@ class APP_LIST_EXPORT SearchResultSuggestionChipView
 
   // views::View:
   const char* GetClassName() const override;
-  gfx::Size CalculatePreferredSize() const override;
-  int GetHeightForWidth(int width) const override;
   void ChildVisibilityChanged(views::View* child) override;
   void OnPaintBackground(gfx::Canvas* canvas) override;
   void OnFocus() override;
   void OnBlur() override;
-  void OnBoundsChanged(const gfx::Rect& previous_bounds) override;
   bool OnKeyPressed(const ui::KeyEvent& event) override;
 
   // views::InkDropHost:
   std::unique_ptr<views::InkDrop> CreateInkDrop() override;
-  std::unique_ptr<views::InkDropMask> CreateInkDropMask() const override;
   std::unique_ptr<views::InkDropRipple> CreateInkDropRipple() const override;
 
   // ui::LayerOwner:
@@ -73,8 +67,8 @@ class APP_LIST_EXPORT SearchResultSuggestionChipView
 
   void InitLayout();
 
-  // Sets a rounded rect mask layer with |corner_radius| to clip the chip.
-  void SetRoundedRectMaskLayer(int corner_radius);
+  // Sets rounded corners for the layer with |corner_radius| to clip the chip.
+  void SetRoundedCornersForLayer(int corner_radius);
 
   AppListViewDelegate* const view_delegate_;  // Owned by AppListView.
 
@@ -83,17 +77,11 @@ class APP_LIST_EXPORT SearchResultSuggestionChipView
 
   views::BoxLayout* layout_manager_;  // Owned by view hierarchy.
 
-  // The owner of a mask layer used to clip the chip.
-  std::unique_ptr<ui::LayerOwner> chip_mask_;
-
-  // The index of this view in the suggestion_chip_container, only used for uma
-  // logging.
-  int index_in_suggestion_chip_container_ = -1;
-  base::WeakPtrFactory<SearchResultSuggestionChipView> weak_ptr_factory_;
+  base::WeakPtrFactory<SearchResultSuggestionChipView> weak_ptr_factory_{this};
 
   DISALLOW_COPY_AND_ASSIGN(SearchResultSuggestionChipView);
 };
 
-}  // namespace app_list
+}  // namespace ash
 
 #endif  // ASH_APP_LIST_VIEWS_SEARCH_RESULT_SUGGESTION_CHIP_VIEW_H_

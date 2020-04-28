@@ -35,11 +35,6 @@
 #include <memory>
 #include <utility>
 
-#include "SkFontMetrics.h"
-#include "SkPath.h"
-#include "SkTypeface.h"
-#include "SkTypes.h"
-
 #include "base/memory/ptr_util.h"
 #include "base/sys_byteorder.h"
 #include "build/build_config.h"
@@ -51,6 +46,10 @@
 #include "third_party/blink/renderer/platform/wtf/math_extras.h"
 #include "third_party/blink/renderer/platform/wtf/text/character_names.h"
 #include "third_party/blink/renderer/platform/wtf/text/unicode.h"
+#include "third_party/skia/include/core/SkFontMetrics.h"
+#include "third_party/skia/include/core/SkPath.h"
+#include "third_party/skia/include/core/SkTypeface.h"
+#include "third_party/skia/include/core/SkTypes.h"
 
 namespace blink {
 
@@ -94,6 +93,12 @@ void SimpleFontData::PlatformInit(bool subpixel_ascent_descent) {
 
   font_metrics_.SetAscent(ascent);
   font_metrics_.SetDescent(descent);
+
+  float skia_underline_value;
+  if (metrics.hasUnderlinePosition(&skia_underline_value))
+    font_metrics_.SetUnderlinePosition(skia_underline_value);
+  if (metrics.hasUnderlineThickness(&skia_underline_value))
+    font_metrics_.SetUnderlineThickness(skia_underline_value);
 
   float x_height;
   if (metrics.fXHeight) {

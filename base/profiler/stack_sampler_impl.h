@@ -10,18 +10,18 @@
 #include "base/base_export.h"
 #include "base/profiler/frame.h"
 #include "base/profiler/register_context.h"
+#include "base/profiler/stack_copier.h"
 #include "base/profiler/stack_sampler.h"
 
 namespace base {
 
-class ThreadDelegate;
 class Unwinder;
 
-// Cross-platform stack sampler implementation. Delegates to ThreadDelegate for
-// platform-specific implementation.
+// Cross-platform stack sampler implementation. Delegates to StackCopier for the
+// platform-specific stack copying implementation.
 class BASE_EXPORT StackSamplerImpl : public StackSampler {
  public:
-  StackSamplerImpl(std::unique_ptr<ThreadDelegate> delegate,
+  StackSamplerImpl(std::unique_ptr<StackCopier> stack_copier,
                    std::unique_ptr<Unwinder> native_unwinder,
                    ModuleCache* module_cache,
                    StackSamplerTestDelegate* test_delegate = nullptr);
@@ -31,22 +31,27 @@ class BASE_EXPORT StackSamplerImpl : public StackSampler {
   StackSamplerImpl& operator=(const StackSamplerImpl&) = delete;
 
   // StackSampler:
-  void AddAuxUnwinder(Unwinder* unwinder) override;
+  void AddAuxUnwinder(std::unique_ptr<Unwinder> unwinder) override;
   void RecordStackFrames(StackBuffer* stack_buffer,
                          ProfileBuilder* profile_builder) override;
 
+  // Exposes the internal function for unit testing.
+  static std::vector<Frame> WalkStackForTesting(ModuleCache* module_cache,
+                                                RegisterContext* thread_context,
+                                                uintptr_t stack_top,
+                                                Unwinder* native_unwinder,
+                                                Unwinder* aux_unwinder);
+
  private:
-  bool CopyStack(StackBuffer* stack_buffer,
-                 uintptr_t* stack_top,
-                 ProfileBuilder* profile_builder,
-                 RegisterContext* thread_context);
+  static std::vector<Frame> WalkStack(ModuleCache* module_cache,
+                                      RegisterContext* thread_context,
+                                      uintptr_t stack_top,
+                                      Unwinder* native_unwinder,
+                                      Unwinder* aux_unwinder);
 
-  std::vector<Frame> WalkStack(RegisterContext* thread_context,
-                               uintptr_t stack_top);
-
-  const std::unique_ptr<ThreadDelegate> thread_delegate_;
+  const std::unique_ptr<StackCopier> stack_copier_;
   const std::unique_ptr<Unwinder> native_unwinder_;
-  Unwinder* aux_unwinder_ = nullptr;
+  std::unique_ptr<Unwinder> aux_unwinder_;
   ModuleCache* const module_cache_;
   StackSamplerTestDelegate* const test_delegate_;
 };

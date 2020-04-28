@@ -17,19 +17,21 @@ import android.graphics.Color;
 import android.net.Uri;
 import android.os.Build;
 import android.provider.Browser;
-import android.support.customtabs.CustomTabsIntent;
 import android.text.TextUtils;
+
+import androidx.browser.customtabs.CustomTabsIntent;
 
 import org.chromium.base.ApiCompatibilityUtils;
 import org.chromium.base.ContextUtils;
+import org.chromium.base.SysUtils;
 import org.chromium.base.task.PostTask;
 import org.chromium.base.task.TaskTraits;
 import org.chromium.chrome.R;
-import org.chromium.chrome.browser.ChromeFeatureList;
 import org.chromium.chrome.browser.IntentHandler;
+import org.chromium.chrome.browser.browserservices.BrowserServicesIntentDataProvider.CustomTabsUiType;
 import org.chromium.chrome.browser.customtabs.CustomTabIntentDataProvider;
 import org.chromium.chrome.browser.document.ChromeLauncherActivity;
-import org.chromium.chrome.browser.util.FeatureUtilities;
+import org.chromium.chrome.browser.flags.ChromeFeatureList;
 
 import java.util.Locale;
 
@@ -104,8 +106,7 @@ public class MediaViewerUtils {
         Intent intent = builder.build().intent;
         intent.setPackage(context.getPackageName());
         intent.setData(contentUri);
-        intent.putExtra(CustomTabIntentDataProvider.EXTRA_UI_TYPE,
-                CustomTabIntentDataProvider.CustomTabsUiType.MEDIA_VIEWER);
+        intent.putExtra(CustomTabIntentDataProvider.EXTRA_UI_TYPE, CustomTabsUiType.MEDIA_VIEWER);
         intent.putExtra(CustomTabIntentDataProvider.EXTRA_MEDIA_VIEWER_URL, displayUri.toString());
         intent.putExtra(CustomTabIntentDataProvider.EXTRA_ENABLE_EMBEDDED_MEDIA_EXPERIENCE, true);
         intent.putExtra(CustomTabIntentDataProvider.EXTRA_INITIAL_BACKGROUND_COLOR, mediaColor);
@@ -150,7 +151,6 @@ public class MediaViewerUtils {
      */
     public static void setOriginalUrlAndReferralExtraToIntent(
             Intent intent, String originalUrl, String referrer) {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.JELLY_BEAN_MR1) return;
         if (originalUrl != null) {
             intent.putExtra(Intent.EXTRA_ORIGINATING_URI, Uri.parse(originalUrl));
         }
@@ -191,16 +191,25 @@ public class MediaViewerUtils {
     static void synchronousUpdateMediaLauncherActivityEnabled() {
         Context context = ContextUtils.getApplicationContext();
         PackageManager packageManager = context.getPackageManager();
-        ComponentName componentName = new ComponentName(context, MediaLauncherActivity.class);
-        int newState = shouldEnableMediaLauncherActivity()
+        ComponentName mediaComponentName = new ComponentName(context, MediaLauncherActivity.class);
+        ComponentName audioComponentName = new ComponentName(
+                context, "org.chromium.chrome.browser.media.AudioLauncherActivity");
+
+        int newMediaState = shouldEnableMediaLauncherActivity()
+                ? PackageManager.COMPONENT_ENABLED_STATE_ENABLED
+                : PackageManager.COMPONENT_ENABLED_STATE_DISABLED;
+        int newAudioState = shouldEnableAudioLauncherActivity()
                 ? PackageManager.COMPONENT_ENABLED_STATE_ENABLED
                 : PackageManager.COMPONENT_ENABLED_STATE_DISABLED;
         // This indicates that we don't want to kill Chrome when changing component enabled
         // state.
         int flags = PackageManager.DONT_KILL_APP;
 
-        if (packageManager.getComponentEnabledSetting(componentName) != newState) {
-            packageManager.setComponentEnabledSetting(componentName, newState, flags);
+        if (packageManager.getComponentEnabledSetting(mediaComponentName) != newMediaState) {
+            packageManager.setComponentEnabledSetting(mediaComponentName, newMediaState, flags);
+        }
+        if (packageManager.getComponentEnabledSetting(audioComponentName) != newAudioState) {
+            packageManager.setComponentEnabledSetting(audioComponentName, newAudioState, flags);
         }
     }
 
@@ -224,8 +233,12 @@ public class MediaViewerUtils {
 
     private static boolean shouldEnableMediaLauncherActivity() {
         return sIsMediaLauncherActivityForceEnabledForTest
-                || ((FeatureUtilities.isAndroidGo() || isEnterpriseManaged())
+                || ((SysUtils.isAndroidGo() || isEnterpriseManaged())
                         && ChromeFeatureList.isEnabled(ChromeFeatureList.HANDLE_MEDIA_INTENTS));
+    }
+
+    private static boolean shouldEnableAudioLauncherActivity() {
+        return shouldEnableMediaLauncherActivity() && !SysUtils.isAndroidGo();
     }
 
     private static boolean isEnterpriseManaged() {

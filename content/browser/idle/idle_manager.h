@@ -15,7 +15,9 @@
 #include "base/time/time.h"
 #include "base/timer/timer.h"
 #include "content/browser/idle/idle_monitor.h"
-#include "mojo/public/cpp/bindings/binding_set.h"
+#include "mojo/public/cpp/bindings/pending_receiver.h"
+#include "mojo/public/cpp/bindings/pending_remote.h"
+#include "mojo/public/cpp/bindings/receiver_set.h"
 #include "third_party/blink/public/mojom/idle/idle_manager.mojom.h"
 #include "ui/base/idle/idle.h"
 #include "url/origin.h"
@@ -50,13 +52,11 @@ class CONTENT_EXPORT IdleManager : public blink::mojom::IdleManager {
   IdleManager();
   ~IdleManager() override;
 
-  // TODO: Origin for permission check; needed?
-  void CreateService(blink::mojom::IdleManagerRequest request,
-                     const url::Origin& origin);
+  void CreateService(mojo::PendingReceiver<blink::mojom::IdleManager> receiver);
 
   // blink.mojom.IdleManager:
   void AddMonitor(base::TimeDelta threshold,
-                  blink::mojom::IdleMonitorPtr monitor_ptr,
+                  mojo::PendingRemote<blink::mojom::IdleMonitor> monitor_remote,
                   AddMonitorCallback callback) override;
 
   // Testing helpers.
@@ -92,13 +92,13 @@ class CONTENT_EXPORT IdleManager : public blink::mojom::IdleManager {
   std::unique_ptr<IdleTimeProvider> idle_time_provider_;
 
   // Registered clients.
-  mojo::BindingSet<blink::mojom::IdleManager> bindings_;
+  mojo::ReceiverSet<blink::mojom::IdleManager> receivers_;
 
   // Owns Monitor instances, added when clients call AddMonitor().
   base::LinkedList<IdleMonitor> monitors_;
 
   SEQUENCE_CHECKER(sequence_checker_);
-  base::WeakPtrFactory<IdleManager> weak_factory_;
+  base::WeakPtrFactory<IdleManager> weak_factory_{this};
 
   DISALLOW_COPY_AND_ASSIGN(IdleManager);
 };

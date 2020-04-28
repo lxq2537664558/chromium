@@ -24,7 +24,6 @@ import org.junit.runner.RunWith;
 import org.chromium.android_webview.AwContents;
 import org.chromium.android_webview.test.util.AwTestTouchUtils;
 import org.chromium.android_webview.test.util.CommonResources;
-import org.chromium.base.test.util.DisableIf;
 import org.chromium.base.test.util.Feature;
 import org.chromium.content_public.browser.test.util.TestCallbackHelperContainer.OnPageCommitVisibleHelper;
 import org.chromium.content_public.browser.test.util.TestThreadUtils;
@@ -61,7 +60,7 @@ public class WebKitHitTestTest {
     }
 
     @After
-    public void tearDown() throws Exception {
+    public void tearDown() {
         if (mWebServer != null) {
             mWebServer.shutdown();
         }
@@ -83,7 +82,7 @@ public class WebKitHitTestTest {
                 + href + "\" " + "onclick=\"return false;\">" + anchorText + "</a>");
     }
 
-    private void simulateTabDownUpOnUiThread() throws Throwable {
+    private void simulateTabDownUpOnUiThread() {
         InstrumentationRegistry.getInstrumentation().runOnMainSync(() -> {
             mAwContents.getWebContents().getEventForwarder().dispatchKeyEvent(
                     new KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_TAB));
@@ -92,7 +91,7 @@ public class WebKitHitTestTest {
         });
     }
 
-    private void simulateInput(boolean byTouch) throws Throwable {
+    private void simulateInput(boolean byTouch) {
         // Send a touch click event if byTouch is true. Otherwise, send a TAB
         // key event to change the focused element of the page.
         if (byTouch) {
@@ -106,8 +105,7 @@ public class WebKitHitTestTest {
         return a == null ? b == null : a.equals(b);
     }
 
-    private void pollForHitTestDataOnUiThread(
-            final int expectedType, final String expectedExtra) throws Throwable {
+    private void pollForHitTestDataOnUiThread(final int expectedType, final String expectedExtra) {
         mActivityTestRule.pollUiThread(() -> {
             AwContents.HitTestData data = mAwContents.getLastHitTestResult();
             return expectedType == data.hitTestResultType
@@ -115,10 +113,8 @@ public class WebKitHitTestTest {
         });
     }
 
-    private void pollForHrefAndImageSrcOnUiThread(
-            final String expectedHref,
-            final String expectedAnchorText,
-            final String expectedImageSrc) throws Throwable {
+    private void pollForHrefAndImageSrcOnUiThread(final String expectedHref,
+            final String expectedAnchorText, final String expectedImageSrc) {
         mActivityTestRule.pollUiThread(() -> {
             AwContents.HitTestData data = mAwContents.getLastHitTestResult();
             return stringEquals(expectedHref, data.href)
@@ -399,7 +395,6 @@ public class WebKitHitTestTest {
 
     @Test
     @SmallTest
-    @DisableIf.Build(hardware_is = "flo", message = "crbug.com/948622")
     @Feature({"AndroidWebView", "WebKitHitTest"})
     public void testUnknownTypeUnrecognizedNode() throws Throwable {
         // Since UNKNOWN_TYPE is the default, hit test another type first for

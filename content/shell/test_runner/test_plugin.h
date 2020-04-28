@@ -9,11 +9,13 @@
 #include <string>
 
 #include "base/macros.h"
+#include "base/memory/ref_counted.h"
 #include "cc/layers/texture_layer.h"
 #include "cc/layers/texture_layer_client.h"
 #include "cc/resources/shared_bitmap_id_registrar.h"
 #include "gpu/command_buffer/common/mailbox.h"
 #include "gpu/command_buffer/common/sync_token.h"
+#include "third_party/blink/public/mojom/input/focus_type.mojom-forward.h"
 #include "third_party/blink/public/web/web_document.h"
 #include "third_party/blink/public/web/web_element.h"
 #include "third_party/blink/public/web/web_local_frame.h"
@@ -40,11 +42,10 @@ namespace viz {
 struct TransferableResource;
 }
 
-namespace test_runner {
+namespace content {
+class BlinkTestRunner;
 
-class WebTestDelegate;
-
-// A fake implemention of blink::WebPlugin for testing purposes.
+// A fake implementation of blink::WebPlugin for testing purposes.
 //
 // It uses GL to paint a scene consisiting of a primitive over a background. The
 // primitive and background can be customized using the following plugin
@@ -59,7 +60,7 @@ class WebTestDelegate;
 class TestPlugin : public blink::WebPlugin, public cc::TextureLayerClient {
  public:
   static TestPlugin* Create(const blink::WebPluginParams& params,
-                            WebTestDelegate* delegate,
+                            BlinkTestRunner* blink_test_runner,
                             blink::WebLocalFrame* frame);
   ~TestPlugin() override;
 
@@ -74,24 +75,22 @@ class TestPlugin : public blink::WebPlugin, public cc::TextureLayerClient {
   blink::WebPluginContainer* Container() const override;
   bool CanProcessDrag() const override;
   bool SupportsKeyboardFocus() const override;
-  void UpdateAllLifecyclePhases(
-      blink::WebWidget::LifecycleUpdateReason) override {}
+  void UpdateAllLifecyclePhases(blink::DocumentUpdateReason) override {}
   void Paint(cc::PaintCanvas* canvas, const blink::WebRect& rect) override {}
   void UpdateGeometry(const blink::WebRect& window_rect,
                       const blink::WebRect& clip_rect,
                       const blink::WebRect& unobscured_rect,
                       bool is_visible) override;
-  void UpdateFocus(bool focus, blink::WebFocusType focus_type) override {}
+  void UpdateFocus(bool focus, blink::mojom::FocusType focus_type) override {}
   void UpdateVisibility(bool visibility) override {}
   blink::WebInputEventResult HandleInputEvent(
       const blink::WebCoalescedInputEvent& event,
-      blink::WebCursorInfo& info) override;
-  bool HandleDragStatusUpdate(
-      blink::WebDragStatus drag_status,
-      const blink::WebDragData& data,
-      blink::WebDragOperationsMask mask,
-      const blink::WebFloatPoint& position,
-      const blink::WebFloatPoint& screen_position) override;
+      ui::Cursor* cursor) override;
+  bool HandleDragStatusUpdate(blink::WebDragStatus drag_status,
+                              const blink::WebDragData& data,
+                              blink::WebDragOperationsMask mask,
+                              const gfx::PointF& position,
+                              const gfx::PointF& screen_position) override;
   void DidReceiveResponse(const blink::WebURLResponse& response) override {}
   void DidReceiveData(const char* data, size_t data_length) override {}
   void DidFinishLoading() override {}
@@ -106,7 +105,7 @@ class TestPlugin : public blink::WebPlugin, public cc::TextureLayerClient {
 
  private:
   TestPlugin(const blink::WebPluginParams& params,
-             WebTestDelegate* delegate,
+             BlinkTestRunner* blink_test_runner,
              blink::WebLocalFrame* frame);
 
   enum Primitive { PrimitiveNone, PrimitiveTriangle };
@@ -135,6 +134,9 @@ class TestPlugin : public blink::WebPlugin, public cc::TextureLayerClient {
     }
   };
 
+  using ContextProviderRef = base::RefCountedData<
+      std::unique_ptr<blink::WebGraphicsContext3DProvider>>;
+
   // Functions for parsing plugin parameters.
   Primitive ParsePrimitive(const blink::WebString& string);
   void ParseColor(const blink::WebString& string, uint8_t color[3]);
@@ -159,15 +161,19 @@ class TestPlugin : public blink::WebPlugin, public cc::TextureLayerClient {
       cc::SharedBitmapIdRegistration registration,
       const gpu::SyncToken& sync_token,
       bool lost);
+  static void ReleaseSharedImage(
+      scoped_refptr<ContextProviderRef> context_provider,
+      const gpu::Mailbox& mailbox,
+      const gpu::SyncToken& sync_token,
+      bool lost);
 
-  WebTestDelegate* delegate_;
+  BlinkTestRunner* blink_test_runner_;
   blink::WebPluginContainer* container_;
   blink::WebLocalFrame* web_local_frame_;
 
   blink::WebRect rect_;
-  std::unique_ptr<blink::WebGraphicsContext3DProvider> context_provider_;
+  scoped_refptr<ContextProviderRef> context_provider_;
   gpu::gles2::GLES2Interface* gl_;
-  GLuint color_texture_;
   gpu::Mailbox mailbox_;
   gpu::SyncToken sync_token_;
   scoped_refptr<cc::CrossThreadSharedBitmap> shared_bitmap_;
@@ -191,6 +197,6 @@ class TestPlugin : public blink::WebPlugin, public cc::TextureLayerClient {
   DISALLOW_COPY_AND_ASSIGN(TestPlugin);
 };
 
-}  // namespace test_runner
+}  // namespace content
 
 #endif  // CONTENT_SHELL_TEST_RUNNER_TEST_PLUGIN_H_

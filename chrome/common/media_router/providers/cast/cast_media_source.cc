@@ -4,6 +4,7 @@
 
 #include "chrome/common/media_router/providers/cast/cast_media_source.h"
 
+#include <algorithm>
 #include <utility>
 
 #include "base/containers/flat_map.h"
@@ -11,14 +12,16 @@
 #include "base/strings/string_piece.h"
 #include "base/strings/string_split.h"
 #include "base/strings/utf_string_conversions.h"
-#include "chrome/common/media_router/media_source_helper.h"
+#include "chrome/common/media_router/media_source.h"
 #include "components/cast_channel/enum_table.h"
+#include "net/base/escape.h"
 #include "net/base/url_util.h"
 #include "url/gurl.h"
 #include "url/url_util.h"
 
 using cast_channel::BroadcastRequest;
 using cast_channel::CastDeviceCapability;
+using cast_channel::ReceiverAppType;
 
 namespace cast_util {
 
@@ -26,17 +29,21 @@ using media_router::AutoJoinPolicy;
 using media_router::DefaultActionPolicy;
 
 template <>
-const EnumTable<AutoJoinPolicy> EnumTable<AutoJoinPolicy>::instance({
-    {AutoJoinPolicy::kPageScoped, "page_scoped"},
-    {AutoJoinPolicy::kTabAndOriginScoped, "tab_and_origin_scoped"},
-    {AutoJoinPolicy::kOriginScoped, "origin_scoped"},
-});
+const EnumTable<AutoJoinPolicy> EnumTable<AutoJoinPolicy>::instance(
+    {
+        {AutoJoinPolicy::kPageScoped, "page_scoped"},
+        {AutoJoinPolicy::kTabAndOriginScoped, "tab_and_origin_scoped"},
+        {AutoJoinPolicy::kOriginScoped, "origin_scoped"},
+    },
+    AutoJoinPolicy::kMaxValue);
 
 template <>
-const EnumTable<DefaultActionPolicy> EnumTable<DefaultActionPolicy>::instance({
-    {DefaultActionPolicy::kCreateSession, "create_session"},
-    {DefaultActionPolicy::kCastThisTab, "cast_this_tab"},
-});
+const EnumTable<DefaultActionPolicy> EnumTable<DefaultActionPolicy>::instance(
+    {
+        {DefaultActionPolicy::kCreateSession, "create_session"},
+        {DefaultActionPolicy::kCastThisTab, "cast_this_tab"},
+    },
+    DefaultActionPolicy::kMaxValue);
 
 template <>
 const EnumTable<CastDeviceCapability> EnumTable<CastDeviceCapability>::instance(
@@ -49,7 +56,15 @@ const EnumTable<CastDeviceCapability> EnumTable<CastDeviceCapability>::instance(
         {CastDeviceCapability::VIDEO_OUT, "video_out"},
         // NONE deliberately omitted
     },
-    UnsortedEnumTable);
+    NonConsecutiveEnumTable);
+
+template <>
+const EnumTable<ReceiverAppType> EnumTable<ReceiverAppType>::instance(
+    {
+        {ReceiverAppType::kWeb, "WEB"},
+        {ReceiverAppType::kAndroidTv, "ANDROID_TV"},
+    },
+    ReceiverAppType::kMaxValue);
 
 }  // namespace cast_util
 
@@ -115,12 +130,15 @@ base::flat_map<std::string, std::string> MakeQueryMap(const GURL& url) {
   base::flat_map<std::string, std::string> result;
   for (net::QueryIterator query_it(url); !query_it.IsAtEnd();
        query_it.Advance()) {
-    result[query_it.GetKey()] = query_it.GetValue();
+    result[query_it.GetKey()] = query_it.GetUnescapedValue();
   }
   return result;
 }
 
-// TODO(imcheng): Move to common utils?
+// TODO(jrw): Move to common utils?
+//
+// TODO(jrw): Should this use net::UnescapeURLComponent instead of
+// url::DecodeURLEscapeSequences?
 std::string DecodeURLComponent(const std::string& encoded) {
   url::RawCanonOutputT<base::char16> unescaped;
   std::string output;
@@ -151,6 +169,21 @@ BitwiseOr<CastDeviceCapability> CastDeviceCapabilitiesFromString(
   return result;
 }
 
+std::vector<ReceiverAppType> SupportedAppTypesFromString(
+    const base::StringPiece& s) {
+  std::vector<ReceiverAppType> result;
+  for (const auto& type_str : base::SplitStringPiece(
+           s, ",", base::KEEP_WHITESPACE, base::SPLIT_WANT_NONEMPTY)) {
+    const auto type = cast_util::StringToEnum<ReceiverAppType>(type_str);
+    if (type) {
+      result.push_back(*type);
+    } else {
+      DLOG(ERROR) << "Unkown supported app type: " << type_str;
+    }
+  }
+  return result;
+}
+
 std::unique_ptr<CastMediaSource> CastMediaSourceForTabMirroring(
     const MediaSource::Id& source_id) {
   return std::make_unique<CastMediaSource>(
@@ -176,7 +209,8 @@ std::unique_ptr<CastMediaSource> CreateFromURLParams(
     const std::string& client_id,
     const std::string& broadcast_namespace,
     const std::string& encoded_broadcast_message,
-    const std::string& launch_timeout_str) {
+    const std::string& launch_timeout_str,
+    const std::vector<ReceiverAppType>& supported_app_types) {
   if (app_infos.empty())
     return nullptr;
 
@@ -199,6 +233,10 @@ std::unique_ptr<CastMediaSource> CreateFromURLParams(
         base::TimeDelta::FromMilliseconds(launch_timeout_millis));
   }
 
+  if (!supported_app_types.empty()) {
+    cast_source->set_supported_app_types(supported_app_types);
+  }
+
   return cast_source;
 }
 
@@ -219,7 +257,9 @@ std::unique_ptr<CastMediaSource> ParseCastUrl(const MediaSource::Id& source_id,
       FindValueOr(params, "clientId", ""),
       FindValueOr(params, "broadcastNamespace", ""),
       FindValueOr(params, "broadcastMessage", ""),
-      FindValueOr(params, "launchTimeout", ""));
+      FindValueOr(params, "launchTimeout", ""),
+      SupportedAppTypesFromString(
+          FindValueOr(params, "supportedAppTypes", "")));
 }
 
 std::unique_ptr<CastMediaSource> ParseLegacyCastUrl(
@@ -227,6 +267,13 @@ std::unique_ptr<CastMediaSource> ParseLegacyCastUrl(
     const GURL& url) {
   base::StringPairs params;
   base::SplitStringIntoKeyValuePairs(url.ref(), '=', '/', &params);
+  for (auto& pair : params) {
+    pair.second = net::UnescapeURLComponent(
+        pair.second,
+        net::UnescapeRule::SPACES | net::UnescapeRule::PATH_SEPARATORS |
+            net::UnescapeRule::URL_SPECIAL_CHARS_EXCEPT_PATH_SEPARATORS |
+            net::UnescapeRule::REPLACE_PLUS_WITH_SPACE);
+  }
 
   // Legacy URLs can specify multiple apps.
   std::vector<std::string> app_id_params;
@@ -269,10 +316,26 @@ std::unique_ptr<CastMediaSource> ParseLegacyCastUrl(
       FindValueOr(params, "__castClientId__", ""),
       FindValueOr(params, "__castBroadcastNamespace__", ""),
       FindValueOr(params, "__castBroadcastMessage__", ""),
-      FindValueOr(params, "__castLaunchTimeout__", ""));
+      FindValueOr(params, "__castLaunchTimeout__", ""),
+      /* supported_app_types */ {});
 }
 
 }  // namespace
+
+bool IsAutoJoinAllowed(AutoJoinPolicy policy,
+                       const url::Origin& origin1,
+                       int tab_id1,
+                       const url::Origin& origin2,
+                       int tab_id2) {
+  switch (policy) {
+    case AutoJoinPolicy::kPageScoped:
+      return false;
+    case AutoJoinPolicy::kTabAndOriginScoped:
+      return origin1 == origin2 && tab_id1 == tab_id2;
+    case AutoJoinPolicy::kOriginScoped:
+      return origin1 == origin2;
+  }
+}
 
 CastAppInfo::CastAppInfo(
     const std::string& app_id,
@@ -283,30 +346,35 @@ CastAppInfo::~CastAppInfo() = default;
 CastAppInfo::CastAppInfo(const CastAppInfo& other) = default;
 
 // static
-std::unique_ptr<CastMediaSource> CastMediaSource::FromMediaSourceId(
-    const MediaSource::Id& source_id) {
-  MediaSource source(source_id);
-  if (IsTabMirroringMediaSource(source))
-    return CastMediaSourceForTabMirroring(source_id);
+std::unique_ptr<CastMediaSource> CastMediaSource::FromMediaSource(
+    const MediaSource& source) {
+  if (source.IsTabMirroringSource())
+    return CastMediaSourceForTabMirroring(source.id());
 
-  if (IsDesktopMirroringMediaSource(source))
-    return CastMediaSourceForDesktopMirroring(source_id);
+  if (source.IsDesktopMirroringSource())
+    return CastMediaSourceForDesktopMirroring(source.id());
 
   const GURL& url = source.url();
   if (!url.is_valid())
     return nullptr;
 
   if (url.SchemeIs(kCastPresentationUrlScheme)) {
-    return ParseCastUrl(source_id, url);
+    return ParseCastUrl(source.id(), url);
   } else if (IsLegacyCastPresentationUrl(url)) {
-    return ParseLegacyCastUrl(source_id, url);
+    return ParseLegacyCastUrl(source.id(), url);
   } else if (url.SchemeIsHTTPOrHTTPS()) {
     // Arbitrary https URLs are supported via 1-UA mode which uses tab
     // mirroring.
-    return CastMediaSourceForTabMirroring(source_id);
+    return CastMediaSourceForTabMirroring(source.id());
   }
 
   return nullptr;
+}
+
+// static
+std::unique_ptr<CastMediaSource> CastMediaSource::FromMediaSourceId(
+    const MediaSource::Id& source_id) {
+  return FromMediaSource(MediaSource(source_id));
 }
 
 // static
@@ -341,12 +409,23 @@ bool CastMediaSource::ContainsAnyAppFrom(
       [this](const std::string& app_id) { return ContainsApp(app_id); });
 }
 
+bool CastMediaSource::ContainsStreamingApp() const {
+  return ContainsAnyAppFrom({kCastStreamingAppId, kCastStreamingAudioAppId});
+}
+
 std::vector<std::string> CastMediaSource::GetAppIds() const {
   std::vector<std::string> app_ids;
   for (const auto& info : app_infos_)
     app_ids.push_back(info.app_id);
 
   return app_ids;
+}
+
+void CastMediaSource::set_supported_app_types(
+    const std::vector<ReceiverAppType>& types) {
+  DCHECK(!types.empty());
+  DCHECK(base::Contains(types, ReceiverAppType::kWeb));
+  supported_app_types_ = types;
 }
 
 }  // namespace media_router

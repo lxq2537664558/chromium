@@ -62,8 +62,9 @@ class ContentVerifierHashTest
     // Override content verification mode before ExtensionSystemImpl initializes
     // ChromeContentVerifierDelegate.
     ChromeContentVerifierDelegate::SetDefaultModeForTesting(
-        uses_enforce_strict_mode() ? ContentVerifierDelegate::ENFORCE_STRICT
-                                   : ContentVerifierDelegate::ENFORCE);
+        uses_enforce_strict_mode()
+            ? ChromeContentVerifierDelegate::VerifyInfo::Mode::ENFORCE_STRICT
+            : ChromeContentVerifierDelegate::VerifyInfo::Mode::ENFORCE);
 
     ExtensionBrowserTest::SetUp();
   }
@@ -205,8 +206,7 @@ class ContentVerifierHashTest
       EnableExtension(id());
       registry_observer.WaitForExtensionLoaded();
     }
-    if (!base::ContainsKey(verifier_observer.completed_fetches(), id()))
-      verifier_observer.WaitForFetchComplete(id());
+    verifier_observer.EnsureFetchCompleted(id());
     LOG(INFO) << "Verifier observer has seen FetchComplete";
 
     if (job_observer) {
@@ -238,9 +238,10 @@ class ContentVerifierHashTest
 
   bool HasValidComputedHashes() {
     base::ScopedAllowBlockingForTesting allow_blocking;
-    ComputedHashes::Reader reader;
-    return reader.InitFromFile(
-        file_util::GetComputedHashesPath(info_->extension_root));
+    ComputedHashes::Status computed_hashes_status;
+    return ComputedHashes::CreateFromFile(
+               file_util::GetComputedHashesPath(info_->extension_root),
+               &computed_hashes_status) != base::nullopt;
   }
 
   bool HasValidVerifiedContents() {
@@ -339,8 +340,7 @@ class ContentVerifierHashTest
     }
 
     const ExtensionId& extension_id = extension->id();
-    if (!base::ContainsKey(verifier_observer.completed_fetches(), extension_id))
-      verifier_observer.WaitForFetchComplete(extension_id);
+    verifier_observer.EnsureFetchCompleted(extension_id);
 
     info_ = std::make_unique<ExtensionInfo>(extension, type);
 
@@ -570,8 +570,7 @@ IN_PROC_BROWSER_TEST_P(ContentVerifierHashTest,
       EnableExtension(extension_id);
       registry_observer.WaitForExtensionLoaded();
     }
-    if (!base::ContainsKey(verifier_observer.completed_fetches(), extension_id))
-      verifier_observer.WaitForFetchComplete(extension_id);
+    verifier_observer.EnsureFetchCompleted(extension_id);
     LOG(INFO) << "Verifier observer has seen FetchComplete";
 
     if (job_observer) {

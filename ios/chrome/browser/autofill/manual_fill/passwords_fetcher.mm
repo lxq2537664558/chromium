@@ -87,7 +87,7 @@ class PasswordStoreObserverBridge
       _passwordStore->GetAutofillableLogins(_savedPasswordsConsumer.get());
     } else {
       password_manager::PasswordStore::FormDigest digest = {
-          autofill::PasswordForm::SCHEME_HTML, std::string(), URL};
+          autofill::PasswordForm::Scheme::kHtml, std::string(), URL};
       digest.signon_realm = URL.spec();
       _passwordStore->GetLogins(digest, _savedPasswordsConsumer.get());
     }
@@ -103,8 +103,7 @@ class PasswordStoreObserverBridge
 
 - (void)onGetPasswordStoreResults:
     (std::vector<std::unique_ptr<autofill::PasswordForm>>)results {
-  // For Manual Fallback we filter out the android and the blacklisted
-  // passwords.
+  // Filter out Android facet IDs and any blocked passwords.
   base::EraseIf(results, [](const auto& form) {
     return form->blacklisted_by_user ||
            password_manager::IsValidAndroidFacetURI(form->signon_realm);

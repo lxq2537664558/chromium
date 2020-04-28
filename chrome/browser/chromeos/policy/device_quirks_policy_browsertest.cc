@@ -24,11 +24,6 @@ class DeviceQuirksPolicyTest : public policy::DevicePolicyCrosBrowserTest {
  public:
   DeviceQuirksPolicyTest() {}
 
-  void SetUpInProcessBrowserTestFixture() override {
-    InstallOwnerKey();
-    DevicePolicyCrosBrowserTest::SetUpInProcessBrowserTestFixture();
-  }
-
   void SetUpOnMainThread() override {
     // NOTE: QuirksManager::Initialize() isn't necessary here, since it'll be
     // called in ChromeBrowserMainPartsChromeos::PreMainMessageLoopRun().
@@ -69,8 +64,8 @@ class DeviceQuirksPolicyTest : public policy::DevicePolicyCrosBrowserTest {
 
     quirks::QuirksManager::Get()->RequestIccProfilePath(
         kProductId, kDisplayName,
-        base::Bind(&DeviceQuirksPolicyTest::OnQuirksClientFinished,
-                   base::Unretained(this)));
+        base::BindOnce(&DeviceQuirksPolicyTest::OnQuirksClientFinished,
+                       base::Unretained(this)));
 
     run_loop.Run();
 

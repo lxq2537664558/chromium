@@ -46,7 +46,7 @@ const SVGEnumerationMap& GetEnumerationMap<SVGTextPathSpacingType>() {
   return entries;
 }
 
-inline SVGTextPathElement::SVGTextPathElement(Document& document)
+SVGTextPathElement::SVGTextPathElement(Document& document)
     : SVGTextContentElement(svg_names::kTextPathTag, document),
       SVGURIReference(this),
       start_offset_(MakeGarbageCollected<SVGAnimatedLength>(
@@ -69,11 +69,9 @@ inline SVGTextPathElement::SVGTextPathElement(Document& document)
   AddToPropertyMap(spacing_);
 }
 
-DEFINE_NODE_FACTORY(SVGTextPathElement)
-
 SVGTextPathElement::~SVGTextPathElement() = default;
 
-void SVGTextPathElement::Trace(blink::Visitor* visitor) {
+void SVGTextPathElement::Trace(Visitor* visitor) {
   visitor->Trace(start_offset_);
   visitor->Trace(method_);
   visitor->Trace(spacing_);
@@ -118,7 +116,7 @@ LayoutObject* SVGTextPathElement::CreateLayoutObject(const ComputedStyle&,
 bool SVGTextPathElement::LayoutObjectIsNeeded(
     const ComputedStyle& style) const {
   if (parentNode() &&
-      (IsSVGAElement(*parentNode()) || IsSVGTextElement(*parentNode())))
+      (IsA<SVGAElement>(*parentNode()) || IsA<SVGTextElement>(*parentNode())))
     return SVGElement::LayoutObjectIsNeeded(style);
 
   return false;
@@ -129,11 +127,11 @@ void SVGTextPathElement::BuildPendingResource() {
   if (!isConnected())
     return;
   Element* target = ObserveTarget(target_id_observer_, *this);
-  if (IsSVGPathElement(target)) {
+  if (IsA<SVGPathElement>(target)) {
     // Register us with the target in the dependencies map. Any change of
     // hrefElement that leads to relayout/repainting now informs us, so we can
     // react to it.
-    AddReferenceTo(ToSVGElement(target));
+    AddReferenceTo(To<SVGElement>(target));
   }
 
   if (LayoutObject* layout_object = GetLayoutObject())

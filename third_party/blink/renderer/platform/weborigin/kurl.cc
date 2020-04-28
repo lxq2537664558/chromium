@@ -32,11 +32,11 @@
 #include "third_party/blink/renderer/platform/weborigin/known_ports.h"
 #include "third_party/blink/renderer/platform/wtf/math_extras.h"
 #include "third_party/blink/renderer/platform/wtf/std_lib_extras.h"
-#include "third_party/blink/renderer/platform/wtf/text/cstring.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_hash.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_statics.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_utf8_adaptor.h"
 #include "third_party/blink/renderer/platform/wtf/text/text_encoding.h"
+#include "third_party/blink/renderer/platform/wtf/thread_specific.h"
 #include "url/gurl.h"
 #include "url/url_util.h"
 #ifndef NDEBUG
@@ -101,9 +101,9 @@ class KURLCharsetConverter final : public url::CharsetConverter {
   void ConvertFromUTF16(const base::char16* input,
                         int input_length,
                         url::CanonOutput* output) override {
-    CString encoded = encoding_->Encode(
+    std::string encoded = encoding_->Encode(
         String(input, input_length), WTF::kURLEncodedEntitiesForUnencodables);
-    output->Append(encoded.data(), static_cast<int>(encoded.length()));
+    output->Append(encoded.c_str(), static_cast<int>(encoded.length()));
   }
 
  private:
@@ -124,12 +124,6 @@ bool IsValidProtocol(const String& protocol) {
       return false;
   }
   return true;
-}
-
-void KURL::Initialize() {
-  // This must be called before we create other threads to
-  // avoid racy static local initialization.
-  BlankURL();
 }
 
 String KURL::StrippedForUseAsReferrer() const {
@@ -170,8 +164,11 @@ bool ProtocolIsJavaScript(const String& url) {
 }
 
 const KURL& BlankURL() {
-  DEFINE_STATIC_LOCAL(KURL, static_blank_url, ("about:blank"));
-  return static_blank_url;
+  DEFINE_THREAD_SAFE_STATIC_LOCAL(ThreadSpecific<KURL>, static_blank_url, ());
+  KURL& blank_url = *static_blank_url;
+  if (blank_url.IsNull())
+    blank_url = KURL(AtomicString("about:blank"));
+  return blank_url;
 }
 
 bool KURL::IsAboutBlankURL() const {
@@ -179,8 +176,11 @@ bool KURL::IsAboutBlankURL() const {
 }
 
 const KURL& SrcdocURL() {
-  DEFINE_STATIC_LOCAL(KURL, static_srcdoc_url, ("about:srcdoc"));
-  return static_srcdoc_url;
+  DEFINE_THREAD_SAFE_STATIC_LOCAL(ThreadSpecific<KURL>, static_srcdoc_url, ());
+  KURL& srcdoc_url = *static_srcdoc_url;
+  if (srcdoc_url.IsNull())
+    srcdoc_url = KURL(AtomicString("about:srcdoc"));
+  return srcdoc_url;
 }
 
 bool KURL::IsAboutSrcdocURL() const {
@@ -188,8 +188,8 @@ bool KURL::IsAboutSrcdocURL() const {
 }
 
 const KURL& NullURL() {
-  DEFINE_THREAD_SAFE_STATIC_LOCAL(KURL, static_null_url, ());
-  return static_null_url;
+  DEFINE_THREAD_SAFE_STATIC_LOCAL(ThreadSpecific<KURL>, static_null_url, ());
+  return *static_null_url;
 }
 
 String KURL::ElidedString() const {
@@ -477,11 +477,27 @@ static String ParsePortFromStringPosition(const String& value,
 }
 
 void KURL::SetHostAndPort(const String& host_and_port) {
-  wtf_size_t separator = host_and_port.find(':');
-  if (!separator)
+  // This method intentionally does very sloppy parsing for backwards
+  // compatibility. See https://url.spec.whatwg.org/#host-state for what we
+  // theoretically should be doing.
+
+  // This logic for handling IPv6 addresses is adapted from ParseServerInfo in
+  // //url/third_party/mozilla/url_parse.cc. There's a slight behaviour
+  // difference for compatibility with the tests: the first colon after the
+  // address is considered to start the port, instead of the last.
+  wtf_size_t ipv6_terminator = host_and_port.ReverseFind(']');
+  if (ipv6_terminator == kNotFound) {
+    ipv6_terminator =
+        host_and_port.StartsWith('[') ? host_and_port.length() : 0;
+  }
+
+  wtf_size_t colon = host_and_port.find(':', ipv6_terminator);
+
+  if (colon == 0)
     return;
 
-  if (separator == kNotFound) {
+  if (colon == kNotFound) {
+    // |host_and_port| does not include a port, so only overwrite the host.
     url::Replacements<char> replacements;
     StringUTF8Adaptor host_utf8(host_and_port);
     replacements.SetHost(CharactersOrEmpty(host_utf8),
@@ -490,8 +506,8 @@ void KURL::SetHostAndPort(const String& host_and_port) {
     return;
   }
 
-  String host = host_and_port.Substring(0, separator);
-  String port = ParsePortFromStringPosition(host_and_port, separator + 1);
+  String host = host_and_port.Substring(0, colon);
+  String port = ParsePortFromStringPosition(host_and_port, colon + 1);
 
   StringUTF8Adaptor host_utf8(host);
   StringUTF8Adaptor port_utf8(port);
@@ -630,7 +646,7 @@ String DecodeURLEscapeSequences(const String& string, DecodeURLMode mode) {
 }
 
 String EncodeWithURLEscapeSequences(const String& not_encoded_string) {
-  CString utf8 =
+  std::string utf8 =
       UTF8Encoding().Encode(not_encoded_string, WTF::kNoUnencodables);
 
   url::RawCanonOutputT<char> buffer;
@@ -638,7 +654,7 @@ String EncodeWithURLEscapeSequences(const String& not_encoded_string) {
   if (buffer.capacity() < input_length * 3)
     buffer.Resize(input_length * 3);
 
-  url::EncodeURIComponent(utf8.data(), input_length, &buffer);
+  url::EncodeURIComponent(utf8.c_str(), input_length, &buffer);
   String escaped(buffer.data(), static_cast<unsigned>(buffer.length()));
   // Unescape '/'; it's safe and much prettier.
   escaped.Replace("%2F", "/");

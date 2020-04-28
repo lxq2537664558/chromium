@@ -15,6 +15,7 @@
 #include "base/bind.h"
 #include "base/lazy_instance.h"
 #include "base/logging.h"
+#include "base/memory/ptr_util.h"
 #include "base/numerics/safe_math.h"
 #include "base/strings/stringprintf.h"
 #include "base/threading/sequence_local_storage_slot.h"
@@ -93,16 +94,14 @@ void WriteMessageHeader(uint32_t name,
   }
 }
 
-void CreateSerializedMessageObject(
-    uint32_t name,
-    uint32_t flags,
-    uint32_t trace_id,
-    size_t payload_size,
-    size_t payload_interface_id_count,
-    std::vector<ScopedHandle>* handles,
-    const std::vector<MojoAppendMessageDataHandleOptions>* handle_options,
-    ScopedMessageHandle* out_handle,
-    internal::Buffer* out_buffer) {
+void CreateSerializedMessageObject(uint32_t name,
+                                   uint32_t flags,
+                                   uint32_t trace_id,
+                                   size_t payload_size,
+                                   size_t payload_interface_id_count,
+                                   std::vector<ScopedHandle>* handles,
+                                   ScopedMessageHandle* out_handle,
+                                   internal::Buffer* out_buffer) {
   TRACE_EVENT_WITH_FLOW0(TRACE_DISABLED_BY_DEFAULT("toplevel.flow"),
                          "mojo::Message Send", MANGLE_MESSAGE_ID(trace_id),
                          TRACE_EVENT_FLAG_FLOW_OUT);
@@ -111,12 +110,6 @@ void CreateSerializedMessageObject(
   MojoResult rv = mojo::CreateMessage(&handle);
   DCHECK_EQ(MOJO_RESULT_OK, rv);
   DCHECK(handle.is_valid());
-
-  MojoAppendMessageDataOptions append_options = {0};
-  append_options.struct_size = sizeof(append_options);
-  append_options.flags = MOJO_APPEND_MESSAGE_DATA_FLAG_NONE;
-  if (handle_options)
-    append_options.handle_options = handle_options->data();
 
   void* buffer;
   uint32_t buffer_size;
@@ -128,8 +121,8 @@ void CreateSerializedMessageObject(
   rv = MojoAppendMessageData(
       handle->value(), static_cast<uint32_t>(total_size),
       handles ? reinterpret_cast<MojoHandle*>(handles->data()) : nullptr,
-      handles ? static_cast<uint32_t>(handles->size()) : 0, &append_options,
-      &buffer, &buffer_size);
+      handles ? static_cast<uint32_t>(handles->size()) : 0, nullptr, &buffer,
+      &buffer_size);
   DCHECK_EQ(MOJO_RESULT_OK, rv);
   if (handles) {
     // Handle ownership has been taken by MojoAppendMessageData.
@@ -226,7 +219,9 @@ Message::Message(Message&& other)
       associated_endpoint_handles_(
           std::move(other.associated_endpoint_handles_)),
       transferable_(other.transferable_),
-      serialized_(other.serialized_) {
+      serialized_(other.serialized_),
+      heap_profiler_tag_(other.heap_profiler_tag_),
+      receiver_connection_group_(other.receiver_connection_group_) {
   other.transferable_ = false;
   other.serialized_ = false;
 #if defined(ENABLE_IPC_FUZZER)
@@ -242,24 +237,39 @@ Message::Message(uint32_t name,
                  uint32_t flags,
                  size_t payload_size,
                  size_t payload_interface_id_count,
-                 std::vector<ScopedHandle>* handles)
-    : Message(name,
-              flags,
-              payload_size,
-              payload_interface_id_count,
-              handles,
-              nullptr) {}
-
-Message::Message(
-    uint32_t name,
-    uint32_t flags,
-    size_t payload_size,
-    size_t payload_interface_id_count,
-    std::vector<ScopedHandle>* handles,
-    const std::vector<MojoAppendMessageDataHandleOptions>* handle_options) {
+                 std::vector<ScopedHandle>* handles) {
   CreateSerializedMessageObject(name, flags, GetTraceId(this), payload_size,
-                                payload_interface_id_count, handles,
-                                handle_options, &handle_, &payload_buffer_);
+                                payload_interface_id_count, handles, &handle_,
+                                &payload_buffer_);
+  transferable_ = true;
+  serialized_ = true;
+}
+
+Message::Message(base::span<const uint8_t> payload,
+                 base::span<ScopedHandle> handles) {
+  MojoResult rv = mojo::CreateMessage(&handle_);
+  DCHECK_EQ(MOJO_RESULT_OK, rv);
+  DCHECK(handle_.is_valid());
+
+  void* buffer;
+  uint32_t buffer_size;
+  DCHECK(base::IsValueInRangeForNumericType<uint32_t>(payload.size()));
+  DCHECK(base::IsValueInRangeForNumericType<uint32_t>(handles.size()));
+  MojoAppendMessageDataOptions options;
+  options.struct_size = sizeof(options);
+  options.flags = MOJO_APPEND_MESSAGE_DATA_FLAG_COMMIT_SIZE;
+  rv = MojoAppendMessageData(
+      handle_->value(), static_cast<uint32_t>(payload.size()),
+      reinterpret_cast<MojoHandle*>(handles.data()),
+      static_cast<uint32_t>(handles.size()), &options, &buffer, &buffer_size);
+  DCHECK_EQ(MOJO_RESULT_OK, rv);
+  // Handle ownership has been taken by MojoAppendMessageData.
+  for (auto& handle : handles)
+    ignore_result(handle.release());
+
+  payload_buffer_ = internal::Buffer(buffer, payload.size(), payload.size());
+  std::copy(payload.begin(), payload.end(),
+            static_cast<uint8_t*>(payload_buffer_.data()));
   transferable_ = true;
   serialized_ = true;
 }
@@ -324,6 +334,8 @@ Message& Message::operator=(Message&& other) {
   other.transferable_ = false;
   serialized_ = other.serialized_;
   other.serialized_ = false;
+  heap_profiler_tag_ = other.heap_profiler_tag_;
+  receiver_connection_group_ = other.receiver_connection_group_;
 #if defined(ENABLE_IPC_FUZZER)
   interface_name_ = other.interface_name_;
   method_name_ = other.method_name_;
@@ -338,6 +350,8 @@ void Message::Reset() {
   associated_endpoint_handles_.clear();
   transferable_ = false;
   serialized_ = false;
+  heap_profiler_tag_ = nullptr;
+  receiver_connection_group_ = nullptr;
 }
 
 const uint8_t* Message::payload() const {
@@ -387,8 +401,7 @@ void Message::AttachHandlesFromSerializationContext(
     return;
   }
 
-  if (context->associated_endpoint_handles()->empty() &&
-      !context->has_handles_with_shared_message_order()) {
+  if (context->associated_endpoint_handles()->empty()) {
     // Attaching only non-associated handles is easier since we don't have to
     // modify the message header. Faster path for that.
     payload_buffer_.AttachHandles(context->mutable_handles());
@@ -404,8 +417,7 @@ void Message::AttachHandlesFromSerializationContext(
   uint32_t payload_size = payload_num_bytes();
   mojo::Message new_message(name(), header()->flags, payload_size,
                             context->associated_endpoint_handles()->size(),
-                            context->mutable_handles(),
-                            context->handle_options());
+                            context->mutable_handles());
   std::swap(*context->mutable_associated_endpoint_handles(),
             new_message.associated_endpoint_handles_);
   memcpy(new_message.payload_buffer()->AllocateAndGet(payload_size), payload(),
@@ -540,17 +552,17 @@ bool PassThroughFilter::Accept(Message* message) {
 
 SyncMessageResponseContext::SyncMessageResponseContext()
     : outer_context_(current()) {
-  g_sls_sync_response_context.Get().Set(this);
+  g_sls_sync_response_context.Get().emplace(this);
 }
 
 SyncMessageResponseContext::~SyncMessageResponseContext() {
   DCHECK_EQ(current(), this);
-  g_sls_sync_response_context.Get().Set(outer_context_);
+  g_sls_sync_response_context.Get().emplace(outer_context_);
 }
 
 // static
 SyncMessageResponseContext* SyncMessageResponseContext::current() {
-  return g_sls_sync_response_context.Get().Get();
+  return g_sls_sync_response_context.Get().GetOrCreateValue();
 }
 
 void SyncMessageResponseContext::ReportBadMessage(const std::string& error) {
@@ -582,17 +594,17 @@ MessageHeaderV2::MessageHeaderV2() = default;
 
 MessageDispatchContext::MessageDispatchContext(Message* message)
     : outer_context_(current()), message_(message) {
-  g_sls_message_dispatch_context.Get().Set(this);
+  g_sls_message_dispatch_context.Get().emplace(this);
 }
 
 MessageDispatchContext::~MessageDispatchContext() {
   DCHECK_EQ(current(), this);
-  g_sls_message_dispatch_context.Get().Set(outer_context_);
+  g_sls_message_dispatch_context.Get().emplace(outer_context_);
 }
 
 // static
 MessageDispatchContext* MessageDispatchContext::current() {
-  return g_sls_message_dispatch_context.Get().Get();
+  return g_sls_message_dispatch_context.Get().GetOrCreateValue();
 }
 
 ReportBadMessageCallback MessageDispatchContext::GetBadMessageCallback() {

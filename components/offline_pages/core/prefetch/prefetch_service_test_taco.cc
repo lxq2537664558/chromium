@@ -4,10 +4,10 @@
 
 #include "components/offline_pages/core/prefetch/prefetch_service_test_taco.h"
 
+#include <memory>
 #include <utility>
 
 #include "base/macros.h"
-#include "base/memory/ptr_util.h"
 #include "base/threading/thread_task_runner_handle.h"
 #include "components/image_fetcher/core/image_fetcher.h"
 #include "components/image_fetcher/core/mock_image_fetcher.h"
@@ -46,7 +46,7 @@ class StubPrefetchBackgroundTaskHandler : public PrefetchBackgroundTaskHandler {
   StubPrefetchBackgroundTaskHandler() = default;
   ~StubPrefetchBackgroundTaskHandler() override = default;
   void CancelBackgroundTask() override {}
-  void EnsureTaskScheduled(const std::string& gcm_token) override {}
+  void EnsureTaskScheduled() override {}
   void Backoff() override {}
   void ResetBackoff() override {}
   void PauseBackoffUntilNextRun() override {}
@@ -78,8 +78,8 @@ PrefetchServiceTestTaco::PrefetchServiceTestTaco(SuggestionSource source) {
       std::make_unique<PrefetchStore>(base::ThreadTaskRunnerHandle::Get());
 
   download_service_ = std::make_unique<TestDownloadService>();
-  prefetch_downloader_ = base::WrapUnique(new PrefetchDownloaderImpl(
-      download_service_.get(), kTestChannel, pref_service_.get()));
+  prefetch_downloader_ = std::make_unique<PrefetchDownloaderImpl>(
+      download_service_.get(), kTestChannel, pref_service_.get());
   download_client_ =
       std::make_unique<TestDownloadClient>(prefetch_downloader_.get());
   download_service_->SetClient(download_client_.get());
@@ -121,7 +121,6 @@ void PrefetchServiceTestTaco::SetPrefetchDispatcher(
 void PrefetchServiceTestTaco::SetPrefetchGCMHandler(
     std::unique_ptr<PrefetchGCMHandler> gcm_handler) {
   CHECK(!prefetch_service_);
-  CHECK(gcm_handler);
   gcm_handler_ = std::move(gcm_handler);
 }
 
@@ -199,9 +198,9 @@ void PrefetchServiceTestTaco::CreatePrefetchService() {
       std::move(network_request_factory_), offline_page_model_.get(),
       std::move(prefetch_store_), std::move(suggested_articles_observer_),
       std::move(prefetch_downloader_), std::move(prefetch_importer_),
-      std::move(prefetch_background_task_handler_),
-      std::move(thumbnail_fetcher_), thumbnail_image_fetcher_.get());
-  service->SetPrefetchGCMHandler(std::move(gcm_handler_));
+      std::move(gcm_handler_), std::move(prefetch_background_task_handler_),
+      std::move(thumbnail_fetcher_), thumbnail_image_fetcher_.get(),
+      pref_service_.get());
   prefetch_service_ = std::move(service);
 }
 

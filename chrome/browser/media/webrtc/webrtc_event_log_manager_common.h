@@ -13,6 +13,8 @@
 #include "base/time/time.h"
 #include "build/build_config.h"
 
+class Profile;
+
 namespace content {
 class BrowserContext;
 }  // namespace content
@@ -92,21 +94,21 @@ extern const base::FilePath::CharType kWebRtcEventLogHistoryExtension[];
 // Such expired files will be purged from disk when examined.
 extern const base::TimeDelta kRemoteBoundWebRtcEventLogsMaxRetention;
 
-// StartRemoteLogging could fail for several reasons, but we only report
-// individually those failures that relate to either bad parameters, or calls
-// at a time that makes no sense. Anything else  would leak information to
-// the JS application (too many pending logs, etc.), and is not actionable
-// anyhow.
 // These are made globally visible so that unit tests may check for them.
-extern const char kStartRemoteLoggingFailureFeatureDisabled[];
-extern const char kStartRemoteLoggingFailureUnlimitedSizeDisallowed[];
-extern const char kStartRemoteLoggingFailureMaxSizeTooSmall[];
-extern const char kStartRemoteLoggingFailureMaxSizeTooLarge[];
-extern const char kStartRemoteLoggingFailureOutputPeriodMsTooLarge[];
-extern const char kStartRemoteLoggingFailureIllegalWebAppId[];
-extern const char kStartRemoteLoggingFailureUnknownOrInactivePeerConnection[];
 extern const char kStartRemoteLoggingFailureAlreadyLogging[];
-extern const char kStartRemoteLoggingFailureGeneric[];
+extern const char kStartRemoteLoggingFailureDeadRenderProcessHost[];
+extern const char kStartRemoteLoggingFailureFeatureDisabled[];
+extern const char kStartRemoteLoggingFailureFileCreationError[];
+extern const char kStartRemoteLoggingFailureFilePathUsedHistory[];
+extern const char kStartRemoteLoggingFailureFilePathUsedLog[];
+extern const char kStartRemoteLoggingFailureIllegalWebAppId[];
+extern const char kStartRemoteLoggingFailureLoggingDisabledBrowserContext[];
+extern const char kStartRemoteLoggingFailureMaxSizeTooLarge[];
+extern const char kStartRemoteLoggingFailureMaxSizeTooSmall[];
+extern const char kStartRemoteLoggingFailureNoAdditionalActiveLogsAllowed[];
+extern const char kStartRemoteLoggingFailureOutputPeriodMsTooLarge[];
+extern const char kStartRemoteLoggingFailureUnknownOrInactivePeerConnection[];
+extern const char kStartRemoteLoggingFailureUnlimitedSizeDisallowed[];
 
 // Values for the histogram for the result of the API call to collect
 // a WebRTC event log.
@@ -154,6 +156,11 @@ enum class WebRtcEventLoggingUploadUma {
 };
 
 void UmaRecordWebRtcEventLoggingUpload(WebRtcEventLoggingUploadUma result);
+
+// Success is signalled by 0.
+// All negative values signal errors.
+// Positive values are not used.
+void UmaRecordWebRtcEventLoggingNetErrorType(int net_error);
 
 // For a given Chrome session, this is a unique key for PeerConnections.
 // It's not, however, unique between sessions (after Chrome is restarted).
@@ -532,6 +539,9 @@ std::string ExtractRemoteBoundWebRtcEventLogLocalIdFromPath(
 // Returns kInvalidWebRtcEventLogWebAppId in case of an error.
 size_t ExtractRemoteBoundWebRtcEventLogWebAppIdFromPath(
     const base::FilePath& path);
+
+// Used to determine the default value for the policy controlling event logging.
+bool DoesProfileDefaultToLoggingEnabled(const Profile* const profile);
 
 }  // namespace webrtc_event_logging
 

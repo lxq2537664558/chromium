@@ -18,7 +18,7 @@ namespace {
 // "%Y-%m-%d %H:%M:%S";
 const char kDumpTimeFormat[] = "%04d-%02d-%02d %02d:%02d:%02d";
 
-const int kNumRequiredParams = 5;
+const int kNumRequiredParams = 4;
 
 const char kNameKey[] = "name";
 const char kDumpTimeKey[] = "dump_time";
@@ -32,6 +32,7 @@ const char kLastAppNameKey[] = "last_app_name";
 const char kReleaseVersionKey[] = "release_version";
 const char kBuildNumberKey[] = "build_number";
 const char kReasonKey[] = "reason";
+const char kStadiaSessionIdKey[] = "stadia_session_id";
 
 }  // namespace
 
@@ -56,7 +57,6 @@ std::unique_ptr<base::Value> DumpInfo::GetAsValue() const {
       std::make_unique<base::DictionaryValue>();
   base::DictionaryValue* entry;
   result->GetAsDictionary(&entry);
-  entry->SetString(kNameKey, params_.process_name);
 
   base::Time::Exploded ex;
   dump_time_.LocalExplode(&ex);
@@ -76,6 +76,7 @@ std::unique_ptr<base::Value> DumpInfo::GetAsValue() const {
   entry->SetString(kReleaseVersionKey, params_.cast_release_version);
   entry->SetString(kBuildNumberKey, params_.cast_build_number);
   entry->SetString(kReasonKey, params_.reason);
+  entry->SetString(kStadiaSessionIdKey, params_.stadia_session_id);
 
   return result;
 }
@@ -91,9 +92,6 @@ bool DumpInfo::ParseEntry(const base::Value* entry) {
     return false;
 
   // Extract required fields.
-  if (!dict->GetString(kNameKey, &params_.process_name))
-    return false;
-
   std::string dump_time;
   if (!dict->GetString(kDumpTimeKey, &dump_time))
     return false;
@@ -116,6 +114,9 @@ bool DumpInfo::ParseEntry(const base::Value* entry) {
   size_t num_params = kNumRequiredParams;
 
   // Extract all other optional fields.
+  std::string unused_process_name;
+  if (dict->GetString(kNameKey, &unused_process_name))
+    ++num_params;
   if (dict->GetString(kSuffixKey, &params_.suffix))
     ++num_params;
   if (dict->GetString(kPrevAppNameKey, &params_.previous_app_name))
@@ -129,6 +130,8 @@ bool DumpInfo::ParseEntry(const base::Value* entry) {
   if (dict->GetString(kBuildNumberKey, &params_.cast_build_number))
     ++num_params;
   if (dict->GetString(kReasonKey, &params_.reason))
+    ++num_params;
+  if (dict->GetString(kStadiaSessionIdKey, &params_.stadia_session_id))
     ++num_params;
 
   // Disallow extraneous params

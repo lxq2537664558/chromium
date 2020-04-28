@@ -6,6 +6,7 @@
 #include "base/run_loop.h"
 #include "base/strings/stringprintf.h"
 #include "chrome/browser/vr/test/mock_xr_device_hook_base.h"
+#include "chrome/browser/vr/test/multi_class_browser_test.h"
 #include "chrome/browser/vr/test/ui_utils.h"
 #include "chrome/browser/vr/test/webxr_vr_browser_test.h"
 
@@ -14,6 +15,8 @@
 namespace vr {
 
 namespace {
+
+const float kIPD = 0.2f;
 
 struct Frame {
   device_test::mojom::SubmittedFrameDataPtr submitted;
@@ -55,7 +58,7 @@ class MyXRMock : public MockXRDeviceHookBase {
 
   device_test::mojom::DeviceConfigPtr GetDeviceConfig() {
     auto config = device_test::mojom::DeviceConfig::New();
-    config->interpupillary_distance = 0.2f;
+    config->interpupillary_distance = kIPD;
     config->projection_left =
         device_test::mojom::ProjectionRaw::New(0.1f, 0.2f, 0.3f, 0.4f);
     config->projection_right =
@@ -158,16 +161,18 @@ std::string GetPoseAsString(const Frame& frame) {
 
 }  // namespace
 
-// Pixel test for WebVR/WebXR - start presentation, submit frames, get data back
-// out. Validates that submitted frames used expected pose.
-void TestPresentationPosesImpl(WebXrVrBrowserTestBase* t,
-                               std::string filename) {
+// Pixel test for WebXR - start presentation, submit frames, get data back out.
+// Validates that submitted frames used expected pose.
+WEBXR_VR_ALL_RUNTIMES_BROWSER_TEST_F(TestPresentationPoses) {
   // Disable frame-timeout UI to test what WebXR renders.
   UiUtils::DisableFrameTimeoutForTesting();
   MyXRMock my_mock;
 
   // Load the test page, and enter presentation.
-  t->LoadUrlAndAwaitInitialization(t->GetFileUrlForHtmlTestFile(filename));
+  t->LoadFileAndAwaitInitialization("test_webxr_poses");
+  ASSERT_TRUE(
+      t->RunJavaScriptAndExtractBoolOrFail("checkMagicWindowViewOffset()"))
+      << "view under Magic Window should not have any offset from frame";
   t->EnterSessionWithUserGestureOrFail();
 
   // Wait for JavaScript to submit at least one frame.
@@ -225,15 +230,15 @@ void TestPresentationPosesImpl(WebXrVrBrowserTestBase* t,
     ASSERT_TRUE(t->RunJavaScriptAndExtractBoolOrFail(base::StringPrintf(
         "checkFramePose(%d, %s)", frame_id, GetPoseAsString(frame).c_str())))
         << "JavaScript-side frame cache has incorrect pose";
+
+    ASSERT_TRUE(t->RunJavaScriptAndExtractBoolOrFail(
+        base::StringPrintf("checkFrameLeftEyeIPD(%d, %f)", frame_id, kIPD / 2)))
+        << "JavaScript-side frame cache has incorrect eye position";
   }
 
   // Tell JavaScript that it is done with the test.
   t->ExecuteStepAndWait("finishTest()");
   t->EndTest();
-}
-
-IN_PROC_BROWSER_TEST_F(WebXrVrBrowserTestStandard, TestPresentationPoses) {
-  TestPresentationPosesImpl(this, "test_webxr_poses");
 }
 
 }  // namespace vr

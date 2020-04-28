@@ -10,11 +10,11 @@ import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
 import android.content.ServiceConnection;
+import android.os.Bundle;
 import android.os.ConditionVariable;
 import android.os.IBinder;
 import android.os.ParcelFileDescriptor;
 import android.os.RemoteException;
-import android.support.test.InstrumentationRegistry;
 import android.support.test.filters.MediumTest;
 
 import org.junit.After;
@@ -23,15 +23,20 @@ import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 
-import org.chromium.android_webview.services.IVariationsSeedServer;
+import org.chromium.android_webview.common.services.IVariationsSeedServer;
+import org.chromium.android_webview.common.services.IVariationsSeedServerCallback;
+import org.chromium.android_webview.common.variations.VariationsServiceMetricsHelper;
+import org.chromium.android_webview.common.variations.VariationsUtils;
 import org.chromium.android_webview.services.VariationsSeedServer;
 import org.chromium.android_webview.test.AwJUnit4ClassRunner;
 import org.chromium.android_webview.test.OnlyRunIn;
 import org.chromium.base.ContextUtils;
+import org.chromium.base.test.util.CallbackHelper;
 
 import java.io.File;
 import java.io.FileNotFoundException;
 import java.io.IOException;
+import java.util.concurrent.TimeoutException;
 
 /**
  * Test VariationsSeedServer.
@@ -43,16 +48,24 @@ public class VariationsSeedServerTest {
 
     private File mTempFile;
 
+    private class StubSeedServerCallback extends IVariationsSeedServerCallback.Stub {
+        public CallbackHelper helper = new CallbackHelper();
+        public Bundle metrics;
+
+        @Override
+        public void reportVariationsServiceMetrics(Bundle metrics) {
+            this.metrics = metrics;
+            helper.notifyCalled();
+        }
+    }
+
     @Before
     public void setUp() throws IOException {
-        ContextUtils.initApplicationContextForTests(
-                InstrumentationRegistry.getInstrumentation().getTargetContext()
-                        .getApplicationContext());
         mTempFile = File.createTempFile("test_variations_seed", null);
     }
 
     @After
-    public void tearDown() throws IOException {
+    public void tearDown() {
         Assert.assertTrue("Failed to delete \"" + mTempFile + "\"", mTempFile.delete());
     }
 
@@ -69,8 +82,8 @@ public class VariationsSeedServerTest {
                 try {
                     // TODO(paulmiller): Test with various oldSeedDate values, after
                     // VariationsSeedServer can write actual seeds (with actual date values).
-                    IVariationsSeedServer.Stub.asInterface(service)
-                            .getSeed(file, /*oldSeedDate=*/ 0);
+                    IVariationsSeedServer.Stub.asInterface(service).getSeed(
+                            file, /*oldSeedDate=*/0, new StubSeedServerCallback());
                 } catch (RemoteException e) {
                     Assert.fail("Faild requesting seed: " + e.getMessage());
                 } finally {
@@ -90,5 +103,41 @@ public class VariationsSeedServerTest {
                         .bindService(intent, connection, Context.BIND_AUTO_CREATE));
         Assert.assertTrue("Timed out waiting for getSeed() to return",
                 getSeedCalled.block(BINDER_TIMEOUT_MILLIS));
+    }
+
+    @Test
+    @MediumTest
+    public void testReportMetrics()
+            throws FileNotFoundException, TimeoutException, RemoteException {
+        // Update the stamp time to avoid requesting a new seed.
+        VariationsUtils.updateStampTime();
+        // Write some fake metrics that should be reported during the getSeed IPC.
+        Context context = ContextUtils.getApplicationContext();
+        VariationsServiceMetricsHelper initialMetrics =
+                VariationsServiceMetricsHelper.fromBundle(new Bundle());
+        initialMetrics.setSeedFetchResult(200); // HTTP_OK
+        initialMetrics.setSeedFetchTime(50);
+        initialMetrics.setJobInterval(6000);
+        initialMetrics.setJobQueueTime(1000);
+        initialMetrics.setLastEnqueueTime(4);
+        initialMetrics.setLastJobStartTime(7);
+        Assert.assertTrue("Failed to write initial variations SharedPreferences",
+                initialMetrics.writeMetricsToVariationsSharedPreferences(context));
+
+        VariationsSeedServer server = new VariationsSeedServer();
+        IBinder binder = server.onBind(null);
+        StubSeedServerCallback callback = new StubSeedServerCallback();
+        IVariationsSeedServer.Stub.asInterface(binder).getSeed(
+                ParcelFileDescriptor.open(mTempFile, ParcelFileDescriptor.MODE_WRITE_ONLY),
+                /*oldSeedDate=*/0, callback);
+
+        callback.helper.waitForCallback(
+                "Timed out waiting for reportSeedMetrics() to be called", 0);
+        VariationsServiceMetricsHelper metrics =
+                VariationsServiceMetricsHelper.fromBundle(callback.metrics);
+        Assert.assertEquals(200, metrics.getSeedFetchResult());
+        Assert.assertEquals(50, metrics.getSeedFetchTime());
+        Assert.assertEquals(6000, metrics.getJobInterval());
+        Assert.assertEquals(1000, metrics.getJobQueueTime());
     }
 }

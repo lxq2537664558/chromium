@@ -7,7 +7,7 @@
 #include <utility>
 
 #include "base/bind.h"
-#include "base/logging.h"
+#include "base/check_op.h"
 #include "base/memory/weak_ptr.h"
 #include "chromeos/dbus/fake_arc_camera_client.h"
 #include "dbus/bus.h"
@@ -26,8 +26,7 @@ class ArcCameraClientImpl : public ArcCameraClient {
   explicit ArcCameraClientImpl(dbus::Bus* bus)
       : proxy_(bus->GetObjectProxy(
             arc_camera::kArcCameraServiceName,
-            dbus::ObjectPath(arc_camera::kArcCameraServicePath))),
-        weak_ptr_factory_(this) {}
+            dbus::ObjectPath(arc_camera::kArcCameraServicePath))) {}
 
   ~ArcCameraClientImpl() override = default;
 
@@ -52,7 +51,7 @@ class ArcCameraClientImpl : public ArcCameraClient {
   }
 
   dbus::ObjectProxy* proxy_;
-  base::WeakPtrFactory<ArcCameraClientImpl> weak_ptr_factory_;
+  base::WeakPtrFactory<ArcCameraClientImpl> weak_ptr_factory_{this};
 
   DISALLOW_COPY_AND_ASSIGN(ArcCameraClientImpl);
 };

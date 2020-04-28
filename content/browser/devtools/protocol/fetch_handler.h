@@ -13,6 +13,12 @@
 #include "content/browser/devtools/protocol/fetch.h"
 #include "services/network/public/mojom/network_service.mojom.h"
 
+namespace network {
+namespace mojom {
+class URLLoaderFactoryOverride;
+}
+}  // namespace network
+
 namespace content {
 class DevToolsAgentHostImpl;
 class DevToolsIOContext;
@@ -38,7 +44,7 @@ class FetchHandler : public DevToolsDomainHandler, public Fetch::Backend {
       const base::UnguessableToken& frame_token,
       bool is_navigation,
       bool is_download,
-      network::mojom::URLLoaderFactoryRequest* target_factory_request);
+      network::mojom::URLLoaderFactoryOverride* intercepting_factory);
 
  private:
   // DevToolsDomainHandler
@@ -56,7 +62,8 @@ class FetchHandler : public DevToolsDomainHandler, public Fetch::Backend {
   void FulfillRequest(
       const String& fetchId,
       int responseCode,
-      std::unique_ptr<Array<Fetch::HeaderEntry>> responseHeaders,
+      Maybe<Array<Fetch::HeaderEntry>> responseHeaders,
+      Maybe<Binary> binaryResponseHeaders,
       Maybe<Binary> body,
       Maybe<String> responsePhrase,
       std::unique_ptr<FulfillRequestCallback> callback) override;
@@ -91,7 +98,7 @@ class FetchHandler : public DevToolsDomainHandler, public Fetch::Backend {
   std::unique_ptr<Fetch::Frontend> frontend_;
   std::unique_ptr<DevToolsURLLoaderInterceptor> interceptor_;
   UpdateLoaderFactoriesCallback update_loader_factories_callback_;
-  base::WeakPtrFactory<FetchHandler> weak_factory_;
+  base::WeakPtrFactory<FetchHandler> weak_factory_{this};
 
   DISALLOW_COPY_AND_ASSIGN(FetchHandler);
 };

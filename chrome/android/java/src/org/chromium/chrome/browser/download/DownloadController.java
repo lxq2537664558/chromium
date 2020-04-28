@@ -6,25 +6,21 @@ package org.chromium.chrome.browser.download;
 
 import android.Manifest.permission;
 import android.app.Activity;
-import android.content.DialogInterface;
 import android.content.pm.PackageManager;
-import android.support.v7.app.AlertDialog;
 import android.util.Pair;
-import android.view.View;
-import android.widget.TextView;
 
 import org.chromium.base.ApplicationStatus;
 import org.chromium.base.Callback;
 import org.chromium.base.ContextUtils;
 import org.chromium.base.annotations.CalledByNative;
-import org.chromium.base.library_loader.LibraryProcessType;
+import org.chromium.base.annotations.NativeMethods;
 import org.chromium.chrome.R;
 import org.chromium.chrome.browser.ChromeActivity;
-import org.chromium.chrome.browser.ChromeFeatureList;
+import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.tabmodel.TabModelSelector;
-import org.chromium.chrome.browser.util.FeatureUtilities;
 import org.chromium.components.download.DownloadCollectionBridge;
+import org.chromium.components.permissions.AndroidPermissionRequester;
 import org.chromium.content_public.browser.BrowserStartupController;
 import org.chromium.content_public.browser.WebContents;
 import org.chromium.ui.base.AndroidPermissionDelegate;
@@ -32,15 +28,13 @@ import org.chromium.ui.base.PermissionCallback;
 import org.chromium.ui.base.WindowAndroid;
 
 /**
- * Java counterpart of android DownloadController.
- *
- * Its a singleton class instantiated by the C++ DownloadController.
+ * Java counterpart of android DownloadController. Owned by native.
  */
 public class DownloadController {
     /**
-     * Class for notifying the application that download has completed.
+     * Class for notifying download events to other classes.
      */
-    public interface DownloadNotificationService {
+    public interface Observer {
         /**
          * Notify the host application that a download is finished.
          * @param downloadInfo Information about the completed download.
@@ -67,12 +61,14 @@ public class DownloadController {
         void onDownloadInterrupted(final DownloadInfo downloadInfo, boolean isAutoResumable);
     }
 
-    private static DownloadNotificationService sDownloadNotificationService;
+    private static Observer sObserver;
 
-    public static void setDownloadNotificationService(DownloadNotificationService service) {
-        if (!ChromeFeatureList.isEnabled(ChromeFeatureList.DOWNLOAD_OFFLINE_CONTENT_PROVIDER)) {
-            sDownloadNotificationService = service;
+    public static void setDownloadNotificationService(Observer observer) {
+        if (ChromeFeatureList.isEnabled(ChromeFeatureList.DOWNLOAD_OFFLINE_CONTENT_PROVIDER)) {
+            return;
         }
+
+        sObserver = observer;
     }
 
     /**
@@ -85,8 +81,8 @@ public class DownloadController {
         MediaStoreHelper.addImageToGalleryOnSDCard(
                 downloadInfo.getFilePath(), downloadInfo.getMimeType());
 
-        if (sDownloadNotificationService == null) return;
-        sDownloadNotificationService.onDownloadCompleted(downloadInfo);
+        if (sObserver == null) return;
+        sObserver.onDownloadCompleted(downloadInfo);
     }
 
     /**
@@ -95,8 +91,8 @@ public class DownloadController {
      */
     @CalledByNative
     private static void onDownloadInterrupted(DownloadInfo downloadInfo, boolean isAutoResumable) {
-        if (sDownloadNotificationService == null) return;
-        sDownloadNotificationService.onDownloadInterrupted(downloadInfo, isAutoResumable);
+        if (sObserver == null) return;
+        sObserver.onDownloadInterrupted(downloadInfo, isAutoResumable);
     }
 
     /**
@@ -104,8 +100,8 @@ public class DownloadController {
      */
     @CalledByNative
     private static void onDownloadCancelled(DownloadInfo downloadInfo) {
-        if (sDownloadNotificationService == null) return;
-        sDownloadNotificationService.onDownloadCancelled(downloadInfo);
+        if (sObserver == null) return;
+        sObserver.onDownloadCancelled(downloadInfo);
     }
 
     /**
@@ -114,8 +110,8 @@ public class DownloadController {
      */
     @CalledByNative
     private static void onDownloadUpdated(DownloadInfo downloadInfo) {
-        if (sDownloadNotificationService == null) return;
-        sDownloadNotificationService.onDownloadUpdated(downloadInfo);
+        if (sObserver == null) return;
+        sObserver.onDownloadUpdated(downloadInfo);
     }
 
 
@@ -143,7 +139,8 @@ public class DownloadController {
     @CalledByNative
     private static void requestFileAccess(final long callbackId) {
         requestFileAccessPermissionHelper(result -> {
-            nativeOnAcquirePermissionResult(callbackId, result.first, result.second);
+            DownloadControllerJni.get().onAcquirePermissionResult(
+                    callbackId, result.first, result.second);
         });
     }
 
@@ -198,26 +195,18 @@ public class DownloadController {
             return;
         }
 
-        View view = activity.getLayoutInflater().inflate(R.layout.update_permissions_dialog, null);
-        TextView dialogText = (TextView) view.findViewById(R.id.text);
-        dialogText.setText(R.string.missing_storage_permission_download_education_text);
-
         final AndroidPermissionDelegate permissionDelegate = delegate;
         final PermissionCallback permissionCallback = (permissions, grantResults)
                 -> callback.onResult(Pair.create(grantResults.length > 0
                                 && grantResults[0] == PackageManager.PERMISSION_GRANTED,
                         null));
 
-        AlertDialog.Builder builder =
-                new AlertDialog.Builder(activity, R.style.Theme_Chromium_AlertDialog)
-                        .setView(view)
-                        .setPositiveButton(R.string.infobar_update_permissions_button_text,
-                                (DialogInterface.OnClickListener) (dialog, id)
-                                        -> permissionDelegate.requestPermissions(
-                                                new String[] {permission.WRITE_EXTERNAL_STORAGE},
-                                                permissionCallback))
-                        .setOnCancelListener(dialog -> callback.onResult(Pair.create(false, null)));
-        builder.create().show();
+        AndroidPermissionRequester.showMissingPermissionDialog(activity,
+                R.string.missing_storage_permission_download_education_text,
+                () -> permissionDelegate.requestPermissions(
+                                new String[] {permission.WRITE_EXTERNAL_STORAGE},
+                                permissionCallback),
+                () -> callback.onResult(Pair.create(false, null)));
     }
 
     /**
@@ -259,11 +248,8 @@ public class DownloadController {
      */
     @CalledByNative
     private static void onDownloadStarted() {
-        if (!BrowserStartupController.get(LibraryProcessType.PROCESS_BROWSER)
-                        .isStartupSuccessfullyCompleted()) {
-            return;
-        }
-        if (FeatureUtilities.isDownloadProgressInfoBarEnabled()) return;
+        if (!BrowserStartupController.getInstance().isFullBrowserStarted()) return;
+        if (ChromeFeatureList.isEnabled(ChromeFeatureList.DOWNLOAD_PROGRESS_INFOBAR)) return;
         DownloadUtils.showDownloadStartToast(ContextUtils.getApplicationContext());
     }
 
@@ -290,7 +276,8 @@ public class DownloadController {
         return false;
     }
 
-    // native methods
-    private static native void nativeOnAcquirePermissionResult(
-            long callbackId, boolean granted, String permissionToUpdate);
+    @NativeMethods
+    interface Natives {
+        void onAcquirePermissionResult(long callbackId, boolean granted, String permissionToUpdate);
+    }
 }

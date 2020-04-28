@@ -14,10 +14,9 @@
 #include "base/memory/ref_counted.h"
 #include "content/browser/background_fetch/background_fetch_test_browser_context.h"
 #include "content/browser/background_fetch/background_fetch_test_service_worker.h"
-#include "content/browser/devtools/devtools_background_services_context.h"
-#include "content/common/service_worker/service_worker_types.h"
+#include "content/browser/devtools/devtools_background_services_context_impl.h"
+#include "content/public/test/browser_task_environment.h"
 #include "content/public/test/test_browser_context.h"
-#include "content/public/test/test_browser_thread_bundle.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "url/origin.h"
 
@@ -83,10 +82,10 @@ class BackgroundFetchTestBase : public ::testing::Test {
   const url::Origin& origin() const { return origin_; }
 
   // Returns the DevTools context for logging events.
-  scoped_refptr<DevToolsBackgroundServicesContext> devtools_context() const;
+  scoped_refptr<DevToolsBackgroundServicesContextImpl> devtools_context() const;
 
  protected:
-  TestBrowserThreadBundle thread_bundle_;  // Must be first member.
+  BrowserTaskEnvironment task_environment_;  // Must be first member.
 
  private:
   BackgroundFetchTestBrowserContext browser_context_;

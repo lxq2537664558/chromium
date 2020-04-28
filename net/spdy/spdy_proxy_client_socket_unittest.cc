@@ -14,6 +14,7 @@
 #include "base/strings/utf_string_conversions.h"
 #include "net/base/address_list.h"
 #include "net/base/load_timing_info.h"
+#include "net/base/proxy_server.h"
 #include "net/base/test_completion_callback.h"
 #include "net/base/winsock_init.h"
 #include "net/dns/mock_host_resolver.h"
@@ -23,7 +24,6 @@
 #include "net/log/net_log_event_type.h"
 #include "net/log/net_log_source.h"
 #include "net/log/test_net_log.h"
-#include "net/log/test_net_log_entry.h"
 #include "net/log/test_net_log_util.h"
 #include "net/socket/client_socket_factory.h"
 #include "net/socket/connect_job_test_util.h"
@@ -42,7 +42,7 @@
 #include "net/test/cert_test_util.h"
 #include "net/test/gtest_util.h"
 #include "net/test/test_data_directory.h"
-#include "net/test/test_with_scoped_task_environment.h"
+#include "net/test/test_with_task_environment.h"
 #include "net/third_party/quiche/src/spdy/core/spdy_protocol.h"
 #include "net/traffic_annotation/network_traffic_annotation_test_helper.h"
 #include "testing/gmock/include/gmock/gmock.h"
@@ -93,12 +93,13 @@ base::WeakPtr<SpdySession> CreateSpdyProxySession(
       NetLogWithSource()));
 
   auto transport_params = base::MakeRefCounted<TransportSocketParams>(
-      key.host_port_pair(), OnHostResolutionCallback());
+      key.host_port_pair(), NetworkIsolationKey(),
+      false /* disable_secure_dns */, OnHostResolutionCallback());
 
   SSLConfig ssl_config;
   auto ssl_params = base::MakeRefCounted<SSLSocketParams>(
       transport_params, nullptr, nullptr, key.host_port_pair(), ssl_config,
-      key.privacy_mode());
+      key.privacy_mode(), key.network_isolation_key());
   TestConnectJobDelegate connect_job_delegate;
   SSLConnectJob connect_job(MEDIUM, SocketTag(), common_connect_job_params,
                             ssl_params, &connect_job_delegate,
@@ -120,7 +121,7 @@ base::WeakPtr<SpdySession> CreateSpdyProxySession(
 }  // namespace
 
 class SpdyProxyClientSocketTest : public PlatformTest,
-                                  public WithScopedTaskEnvironment,
+                                  public WithTaskEnvironment,
                                   public ::testing::WithParamInterface<bool> {
  public:
   SpdyProxyClientSocketTest();
@@ -157,12 +158,10 @@ class SpdyProxyClientSocketTest : public PlatformTest,
   void AddAuthToCache() {
     const base::string16 kFoo(base::ASCIIToUTF16("foo"));
     const base::string16 kBar(base::ASCIIToUTF16("bar"));
-    session_->http_auth_cache()->Add(GURL(kProxyUrl),
-                                     "MyRealm1",
-                                     HttpAuth::AUTH_SCHEME_BASIC,
-                                     "Basic realm=MyRealm1",
-                                     AuthCredentials(kFoo, kBar),
-                                     "/");
+    session_->http_auth_cache()->Add(
+        GURL(kProxyUrl), HttpAuth::AUTH_PROXY, "MyRealm1",
+        HttpAuth::AUTH_SCHEME_BASIC, NetworkIsolationKey(),
+        "Basic realm=MyRealm1", AuthCredentials(kFoo, kBar), "/");
   }
 
   void ResumeAndRun() {
@@ -179,12 +178,12 @@ class SpdyProxyClientSocketTest : public PlatformTest,
   // Whether to use net::Socket::ReadIfReady() instead of net::Socket::Read().
   bool use_read_if_ready() const { return GetParam(); }
 
+  RecordingBoundTestNetLog net_log_;
   SpdyTestUtil spdy_util_;
   std::unique_ptr<SpdyProxyClientSocket> sock_;
   TestCompletionCallback read_callback_;
   TestCompletionCallback write_callback_;
   std::unique_ptr<SequencedSocketData> data_;
-  BoundTestNetLog net_log_;
 
  private:
   scoped_refptr<IOBuffer> read_buf_;
@@ -216,7 +215,9 @@ SpdyProxyClientSocketTest::SpdyProxyClientSocketTest()
                                  proxy_,
                                  PRIVACY_MODE_DISABLED,
                                  SpdySessionKey::IsProxySession::kFalse,
-                                 SocketTag()),
+                                 SocketTag(),
+                                 NetworkIsolationKey(),
+                                 false /* disable_secure_dns */),
       ssl_(SYNCHRONOUS, OK) {
   session_deps_.net_log = net_log_.bound().net_log();
 }
@@ -265,11 +266,14 @@ void SpdyProxyClientSocketTest::Initialize(base::span<const MockRead> reads,
 
   // Create the SpdyProxyClientSocket.
   sock_ = std::make_unique<SpdyProxyClientSocket>(
-      spdy_stream, user_agent_, endpoint_host_port_pair_, net_log_.bound(),
+      spdy_stream, ProxyServer(ProxyServer::SCHEME_HTTPS, proxy_host_port_),
+      user_agent_, endpoint_host_port_pair_, net_log_.bound(),
       new HttpAuthController(
           HttpAuth::AUTH_PROXY, GURL("https://" + proxy_host_port_.ToString()),
-          session_->http_auth_cache(), session_->http_auth_handler_factory(),
-          session_->host_resolver()));
+          NetworkIsolationKey(), session_->http_auth_cache(),
+          session_->http_auth_handler_factory(), session_->host_resolver()),
+      // Testing with the proxy delegate is in HttpProxyConnectJobTest.
+      nullptr);
 }
 
 scoped_refptr<IOBufferWithSize> SpdyProxyClientSocketTest::CreateBuffer(
@@ -469,7 +473,7 @@ spdy::SpdySerializedFrame SpdyProxyClientSocketTest::ConstructBodyFrame(
 
 // ----------- Connect
 
-INSTANTIATE_TEST_SUITE_P(/* no prefix */,
+INSTANTIATE_TEST_SUITE_P(All,
                          SpdyProxyClientSocketTest,
                          ::testing::Bool());
 
@@ -537,7 +541,7 @@ TEST_P(SpdyProxyClientSocketTest, ConnectRedirects) {
   spdy::SpdySerializedFrame rst(
       spdy_util_.ConstructSpdyRstStream(1, spdy::ERROR_CODE_CANCEL));
   MockWrite writes[] = {
-      CreateMockWrite(conn, 0, SYNCHRONOUS), CreateMockWrite(rst, 3),
+      CreateMockWrite(conn, 0, SYNCHRONOUS),
   };
 
   spdy::SpdySerializedFrame resp(ConstructConnectRedirectReplyFrame());
@@ -547,15 +551,14 @@ TEST_P(SpdyProxyClientSocketTest, ConnectRedirects) {
 
   Initialize(reads, writes);
 
-  AssertConnectFails(ERR_HTTPS_PROXY_TUNNEL_RESPONSE_REDIRECT);
+  AssertConnectFails(ERR_TUNNEL_CONNECTION_FAILED);
 
   const HttpResponseInfo* response = sock_->GetConnectResponseInfo();
   ASSERT_TRUE(response != nullptr);
 
   const HttpResponseHeaders* headers = response->headers.get();
   ASSERT_EQ(302, headers->response_code());
-  ASSERT_FALSE(headers->HasHeader("set-cookie"));
-  ASSERT_TRUE(headers->HasHeaderValue("content-length", "0"));
+  ASSERT_TRUE(headers->HasHeader("set-cookie"));
 
   std::string location;
   ASSERT_TRUE(headers->IsRedirect(&location));
@@ -1418,8 +1421,7 @@ TEST_P(SpdyProxyClientSocketTest, NetLog) {
   NetLogSource sock_source = sock_->NetLog().source();
   sock_.reset();
 
-  TestNetLogEntry::List entry_list;
-  net_log_.GetEntriesForSource(sock_source, &entry_list);
+  auto entry_list = net_log_.GetEntriesForSource(sock_source);
 
   ASSERT_EQ(entry_list.size(), 10u);
   EXPECT_TRUE(

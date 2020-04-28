@@ -5,6 +5,9 @@
 #include "ui/views/bubble/bubble_border.h"
 
 #include <algorithm>
+#include <map>
+#include <tuple>
+#include <utility>
 #include <vector>
 
 #include "base/logging.h"
@@ -31,7 +34,7 @@ namespace {
 // GetShadowValues and GetBorderAndShadowFlags cache their results. The shadow
 // values depend on both the shadow elevation and color, so we create a tuple to
 // key the cache.
-typedef std::tuple<int, SkColor> ShadowCacheKey;
+using ShadowCacheKey = std::tuple<int, SkColor>;
 
 // Utility functions for getting alignment points on the edge of a rectangle.
 gfx::Point CenterTop(const gfx::Rect& rect) {
@@ -153,7 +156,7 @@ gfx::Rect BubbleBorder::GetBounds(const gfx::Rect& anchor_rect,
     // With NO_ASSETS, there should be further insets, but the same logic is
     // used to position the bubble origin according to |anchor_rect|.
     DCHECK((shadow_ != NO_ASSETS && shadow_ != NO_SHADOW) ||
-           shadow_insets.IsEmpty());
+           insets_.has_value() || shadow_insets.IsEmpty());
     if (!avoid_shadow_overlap_)
       contents_bounds.Inset(-shadow_insets);
     // |arrow_offset_| is used to adjust bubbles that would normally be
@@ -199,10 +202,6 @@ gfx::Rect BubbleBorder::GetBounds(const gfx::Rect& anchor_rect,
   return gfx::Rect(x, y, size.width(), size.height());
 }
 
-int BubbleBorder::GetBorderCornerRadius() const {
-  return corner_radius_.value_or(0);
-}
-
 void BubbleBorder::Paint(const views::View& view, gfx::Canvas* canvas) {
   if (shadow_ == NO_ASSETS)
     return PaintNoAssets(view, canvas);
@@ -221,12 +220,12 @@ void BubbleBorder::Paint(const views::View& view, gfx::Canvas* canvas) {
 }
 
 gfx::Insets BubbleBorder::GetInsets() const {
+  if (insets_.has_value())
+    return insets_.value();
   if (shadow_ == NO_ASSETS)
     return gfx::Insets();
   if (shadow_ == NO_SHADOW)
     return gfx::Insets(kBorderThicknessDip);
-  if (insets_.has_value())
-    return insets_.value();
   return GetBorderAndShadowInsets(md_shadow_elevation_);
 }
 
@@ -249,7 +248,7 @@ const gfx::ShadowValues& BubbleBorder::GetShadowValues(
 
   gfx::ShadowValues shadows;
   if (elevation.has_value()) {
-    DCHECK(elevation.value() >= 0);
+    DCHECK_GE(elevation.value(), 0);
     shadows = LayoutProvider::Get()->MakeShadowValues(elevation.value(), color);
   } else {
     constexpr int kSmallShadowVerticalOffset = 2;
@@ -306,8 +305,8 @@ gfx::Size BubbleBorder::GetSizeForContentsSize(
 SkRRect BubbleBorder::GetClientRect(const View& view) const {
   gfx::RectF bounds(view.GetLocalBounds());
   bounds.Inset(GetInsets());
-  return SkRRect::MakeRectXY(gfx::RectFToSkRect(bounds),
-                             GetBorderCornerRadius(), GetBorderCornerRadius());
+  return SkRRect::MakeRectXY(gfx::RectFToSkRect(bounds), corner_radius(),
+                             corner_radius());
 }
 
 void BubbleBorder::PaintNoAssets(const View& view, gfx::Canvas* canvas) {
@@ -324,9 +323,10 @@ void BubbleBorder::PaintNoShadow(const View& view, gfx::Canvas* canvas) {
   flags.setAntiAlias(true);
   flags.setStyle(cc::PaintFlags::kStroke_Style);
   flags.setStrokeWidth(kBorderThicknessDip);
-  constexpr SkColor kBorderColor = gfx::kGoogleGrey600;
+  SkColor kBorderColor = view.GetNativeTheme()->GetSystemColor(
+      ui::NativeTheme::kColorId_BubbleBorder);
   flags.setColor(kBorderColor);
-  canvas->DrawRoundRect(bounds, GetBorderCornerRadius(), flags);
+  canvas->DrawRoundRect(bounds, corner_radius(), flags);
 }
 
 void BubbleBackground::Paint(gfx::Canvas* canvas, views::View* view) const {
@@ -341,7 +341,7 @@ void BubbleBackground::Paint(gfx::Canvas* canvas, views::View* view) const {
   gfx::RectF bounds(view->GetLocalBounds());
   bounds.Inset(gfx::InsetsF(border_->GetInsets()));
 
-  canvas->DrawRoundRect(bounds, border_->GetBorderCornerRadius(), flags);
+  canvas->DrawRoundRect(bounds, border_->corner_radius(), flags);
 }
 
 }  // namespace views

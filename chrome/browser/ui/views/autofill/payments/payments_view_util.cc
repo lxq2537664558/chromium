@@ -4,8 +4,7 @@
 
 #include "chrome/browser/ui/views/autofill/payments/payments_view_util.h"
 
-#include <memory>
-
+#include "build/branding_buildflags.h"
 #include "chrome/app/vector_icons/vector_icons.h"
 #include "chrome/browser/ui/views/chrome_layout_provider.h"
 #include "chrome/browser/ui/views/chrome_typography.h"
@@ -33,7 +32,7 @@ namespace autofill {
 namespace {
 
 // Dimensions of the Google Pay logo.
-#if defined(GOOGLE_CHROME_BUILD)
+#if BUILDFLAG(GOOGLE_CHROME_BRANDING)
 constexpr int kGooglePayLogoWidth = 40;
 #endif
 constexpr int kGooglePayLogoHeight = 16;
@@ -47,7 +46,7 @@ constexpr SkColor kTitleSeparatorColor = SkColorSetRGB(0x9E, 0x9E, 0x9E);
 TitleWithIconAndSeparatorView::TitleWithIconAndSeparatorView(
     const base::string16& window_title) {
   views::GridLayout* layout =
-      SetLayoutManager(std::make_unique<views::GridLayout>(this));
+      SetLayoutManager(std::make_unique<views::GridLayout>());
   views::ColumnSet* columns = layout->AddColumnSet(0);
 
   // Add columns for the Google Pay icon, the separator, and the title label.
@@ -62,13 +61,13 @@ TitleWithIconAndSeparatorView::TitleWithIconAndSeparatorView(
 
   layout->StartRow(views::GridLayout::kFixedSize, 0);
 
-  auto* icon_view = new views::ImageView();
-#if defined(GOOGLE_CHROME_BUILD)
+  auto icon_view = std::make_unique<views::ImageView>();
+#if BUILDFLAG(GOOGLE_CHROME_BRANDING)
   // kGooglePayLogoIcon is square, and CreateTiledImage() will clip it whereas
   // setting the icon size would rescale it incorrectly.
   gfx::ImageSkia image = gfx::ImageSkiaOperations::CreateTiledImage(
       gfx::CreateVectorIcon(kGooglePayLogoIcon,
-                            GetNativeTheme()->SystemDarkModeEnabled()
+                            GetNativeTheme()->ShouldUseDarkColors()
                                 ? gfx::kGoogleGrey200
                                 : gfx::kGoogleGrey700),
       /*x=*/0, /*y=*/0, kGooglePayLogoWidth, kGooglePayLogoHeight);
@@ -79,24 +78,24 @@ TitleWithIconAndSeparatorView::TitleWithIconAndSeparatorView(
                                 ui::NativeTheme::kColorId_DefaultIconColor));
 #endif
   icon_view->SetImage(image);
-  layout->AddView(icon_view);
+  auto* icon_view_ptr = layout->AddView(std::move(icon_view));
 
-  auto* separator = new views::Separator();
+  auto separator = std::make_unique<views::Separator>();
   separator->SetColor(kTitleSeparatorColor);
   separator->SetPreferredHeight(kGooglePayLogoSeparatorHeight);
-  layout->AddView(separator);
+  auto* separator_ptr = layout->AddView(std::move(separator));
 
-  auto* title_label =
-      new views::Label(window_title, views::style::CONTEXT_DIALOG_TITLE);
+  auto title_label = std::make_unique<views::Label>(
+      window_title, views::style::CONTEXT_DIALOG_TITLE);
   title_label->SetHorizontalAlignment(gfx::ALIGN_LEFT);
   title_label->SetMultiLine(true);
-  layout->AddView(title_label);
+  auto* title_label_ptr = layout->AddView(std::move(title_label));
 
   // Add vertical padding to the icon and the separator so they are aligned with
   // the first line of title label. This needs to be done after we create the
   // title label, so that we can use its preferred size.
-  const int title_label_height = title_label->GetPreferredSize().height();
-  icon_view->SetBorder(views::CreateEmptyBorder(
+  const int title_label_height = title_label_ptr->GetPreferredSize().height();
+  icon_view_ptr->SetBorder(views::CreateEmptyBorder(
       /*top=*/(title_label_height - kGooglePayLogoHeight) / 2,
       /*left=*/0, /*bottom=*/0, /*right=*/0));
   // TODO(crbug.com/873140): DISTANCE_RELATED_BUTTON_HORIZONTAL isn't the right
@@ -105,7 +104,7 @@ TitleWithIconAndSeparatorView::TitleWithIconAndSeparatorView(
   const int separator_horizontal_padding =
       ChromeLayoutProvider::Get()->GetDistanceMetric(
           views::DISTANCE_RELATED_BUTTON_HORIZONTAL);
-  separator->SetBorder(views::CreateEmptyBorder(
+  separator_ptr->SetBorder(views::CreateEmptyBorder(
       /*top=*/(title_label_height - kGooglePayLogoSeparatorHeight) / 2,
       /*left=*/separator_horizontal_padding, /*bottom=*/0,
       /*right=*/separator_horizontal_padding));
@@ -120,9 +119,9 @@ gfx::Size TitleWithIconAndSeparatorView::GetMinimumSize() const {
   return gfx::Size(0, 0);
 }
 
-views::Textfield* CreateCvcTextfield() {
-  views::Textfield* textfield = new views::Textfield();
-  textfield->set_placeholder_text(
+std::unique_ptr<views::Textfield> CreateCvcTextfield() {
+  auto textfield = std::make_unique<views::Textfield>();
+  textfield->SetPlaceholderText(
       l10n_util::GetStringUTF16(IDS_AUTOFILL_DIALOG_PLACEHOLDER_CVC));
   textfield->SetDefaultWidthInChars(8);
   textfield->SetTextInputType(ui::TextInputType::TEXT_INPUT_TYPE_NUMBER);
@@ -132,8 +131,8 @@ views::Textfield* CreateCvcTextfield() {
 LegalMessageView::LegalMessageView(const LegalMessageLines& legal_message_lines,
                                    views::StyledLabelListener* listener)
     : legal_message_lines_(legal_message_lines) {
-  SetLayoutManager(
-      std::make_unique<views::BoxLayout>(views::BoxLayout::kVertical));
+  SetLayoutManager(std::make_unique<views::BoxLayout>(
+      views::BoxLayout::Orientation::kVertical));
   for (const LegalMessageLine& line : legal_message_lines) {
     AddChildView(CreateLegalMessageLineLabel(line, listener).release());
   }
@@ -148,7 +147,7 @@ LegalMessageView::CreateLegalMessageLineLabel(
   std::unique_ptr<views::StyledLabel> label =
       std::make_unique<views::StyledLabel>(line.text(), listener);
   label->SetTextContext(CONTEXT_BODY_TEXT_LARGE);
-  label->SetDefaultTextStyle(ChromeTextStyle::STYLE_SECONDARY);
+  label->SetDefaultTextStyle(views::style::STYLE_SECONDARY);
   for (const LegalMessageLine::Link& link : line.links()) {
     label->AddStyleRange(link.range,
                          views::StyledLabel::RangeStyleInfo::CreateForLink());
@@ -161,8 +160,7 @@ const GURL LegalMessageView::GetUrlForLink(views::StyledLabel* label,
   // Index of |label| within its parent's view hierarchy is the same as the
   // legal message line index. DCHECK this assumption to guard against future
   // layout changes.
-  DCHECK_EQ(static_cast<size_t>(label->parent()->child_count()),
-            legal_message_lines_.size());
+  DCHECK_EQ(label->parent()->children().size(), legal_message_lines_.size());
 
   const std::vector<LegalMessageLine::Link>& links =
       legal_message_lines_[label->parent()->GetIndexOf(label)].links();

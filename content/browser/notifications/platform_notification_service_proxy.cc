@@ -9,11 +9,13 @@
 
 #include "base/logging.h"
 #include "base/task/post_task.h"
+#include "content/browser/notifications/devtools_event_logging.h"
 #include "content/browser/service_worker/service_worker_context_wrapper.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/content_browser_client.h"
 #include "content/public/browser/notification_database_data.h"
 #include "content/public/browser/platform_notification_service.h"
+#include "content/public/common/content_client.h"
 
 namespace content {
 
@@ -21,12 +23,22 @@ PlatformNotificationServiceProxy::PlatformNotificationServiceProxy(
     scoped_refptr<ServiceWorkerContextWrapper> service_worker_context,
     BrowserContext* browser_context)
     : service_worker_context_(service_worker_context),
+      browser_context_(browser_context),
       notification_service_(
           GetContentClient()->browser()->GetPlatformNotificationService(
-              browser_context)),
-      weak_ptr_factory_io_(this) {}
+              browser_context)) {}
 
 PlatformNotificationServiceProxy::~PlatformNotificationServiceProxy() = default;
+
+void PlatformNotificationServiceProxy::Shutdown() {
+  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  weak_ptr_factory_ui_.InvalidateWeakPtrs();
+}
+
+base::WeakPtr<PlatformNotificationServiceProxy>
+PlatformNotificationServiceProxy::AsWeakPtr() {
+  return weak_ptr_factory_ui_.GetWeakPtr();
+}
 
 void PlatformNotificationServiceProxy::DoDisplayNotification(
     const NotificationDatabaseData& data,
@@ -38,6 +50,8 @@ void PlatformNotificationServiceProxy::DoDisplayNotification(
         data.notification_id, service_worker_scope, data.origin,
         data.notification_data,
         data.notification_resources.value_or(blink::NotificationResources()));
+    notifications::LogNotificationDisplayedEventToDevTools(browser_context_,
+                                                           data);
   }
   std::move(callback).Run(/* success= */ true, data.notification_id);
 }
@@ -47,19 +61,25 @@ void PlatformNotificationServiceProxy::VerifyServiceWorkerScope(
     DisplayResultCallback callback,
     blink::ServiceWorkerStatusCode status,
     scoped_refptr<ServiceWorkerRegistration> registration) {
-  DCHECK_CURRENTLY_ON(BrowserThread::IO);
+  DCHECK_CURRENTLY_ON(ServiceWorkerContext::GetCoreThreadId());
+  base::OnceClosure task;
+
   if (status == blink::ServiceWorkerStatusCode::kOk &&
       registration->scope().GetOrigin() == data.origin) {
-    base::PostTaskWithTraits(
-        FROM_HERE, {BrowserThread::UI, base::TaskPriority::USER_VISIBLE},
-        base::BindOnce(&PlatformNotificationServiceProxy::DoDisplayNotification,
-                       AsWeakPtr(), data, registration->scope(),
-                       std::move(callback)));
+    task = base::BindOnce(
+        &PlatformNotificationServiceProxy::DoDisplayNotification, AsWeakPtr(),
+        data, registration->scope(), std::move(callback));
   } else {
-    base::PostTaskWithTraits(
-        FROM_HERE, {BrowserThread::UI, base::TaskPriority::USER_VISIBLE},
-        base::BindOnce(std::move(callback), /* success= */ false,
-                       /* notification_id= */ ""));
+    task = base::BindOnce(std::move(callback), /* success= */ false,
+                          /* notification_id= */ "");
+  }
+
+  if (ServiceWorkerContextWrapper::IsServiceWorkerOnUIEnabled()) {
+    std::move(task).Run();
+  } else {
+    base::PostTask(FROM_HERE,
+                   {BrowserThread::UI, base::TaskPriority::USER_VISIBLE},
+                   std::move(task));
   }
 }
 
@@ -67,15 +87,17 @@ void PlatformNotificationServiceProxy::DisplayNotification(
     const NotificationDatabaseData& data,
     DisplayResultCallback callback) {
   if (!service_worker_context_) {
-    base::PostTaskWithTraits(
+    base::PostTask(
         FROM_HERE, {BrowserThread::UI, base::TaskPriority::USER_VISIBLE},
         base::BindOnce(&PlatformNotificationServiceProxy::DoDisplayNotification,
                        AsWeakPtr(), data, GURL(), std::move(callback)));
     return;
   }
 
-  base::PostTaskWithTraits(
-      FROM_HERE, {BrowserThread::IO, base::TaskPriority::USER_VISIBLE},
+  base::PostTask(
+      FROM_HERE,
+      {ServiceWorkerContext::GetCoreThreadId(),
+       base::TaskPriority::USER_VISIBLE},
       base::BindOnce(
           &ServiceWorkerContextWrapper::FindReadyRegistrationForId,
           service_worker_context_, data.service_worker_registration_id,
@@ -89,7 +111,7 @@ void PlatformNotificationServiceProxy::CloseNotification(
     const std::string& notification_id) {
   if (!notification_service_)
     return;
-  base::PostTaskWithTraits(
+  base::PostTask(
       FROM_HERE, {BrowserThread::UI, base::TaskPriority::USER_VISIBLE},
       base::BindOnce(&PlatformNotificationServiceProxy::DoCloseNotification,
                      AsWeakPtr(), notification_id));
@@ -104,7 +126,7 @@ void PlatformNotificationServiceProxy::DoCloseNotification(
 void PlatformNotificationServiceProxy::ScheduleTrigger(base::Time timestamp) {
   if (!notification_service_)
     return;
-  base::PostTaskWithTraits(
+  base::PostTask(
       FROM_HERE, {BrowserThread::UI, base::TaskPriority::USER_VISIBLE},
       base::BindOnce(&PlatformNotificationServiceProxy::DoScheduleTrigger,
                      AsWeakPtr(), timestamp));
@@ -113,6 +135,27 @@ void PlatformNotificationServiceProxy::ScheduleTrigger(base::Time timestamp) {
 void PlatformNotificationServiceProxy::DoScheduleTrigger(base::Time timestamp) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
   notification_service_->ScheduleTrigger(timestamp);
+}
+
+void PlatformNotificationServiceProxy::ScheduleNotification(
+    const NotificationDatabaseData& data) {
+  DCHECK(data.notification_data.show_trigger_timestamp.has_value());
+  if (!notification_service_)
+    return;
+  base::PostTask(
+      FROM_HERE, {BrowserThread::UI, base::TaskPriority::USER_VISIBLE},
+      base::BindOnce(&PlatformNotificationServiceProxy::DoScheduleNotification,
+                     AsWeakPtr(), data));
+}
+
+void PlatformNotificationServiceProxy::DoScheduleNotification(
+    const NotificationDatabaseData& data) {
+  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  base::Time show_trigger_timestamp =
+      data.notification_data.show_trigger_timestamp.value();
+  notifications::LogNotificationScheduledEventToDevTools(
+      browser_context_, data, show_trigger_timestamp);
+  notification_service_->ScheduleTrigger(show_trigger_timestamp);
 }
 
 base::Time PlatformNotificationServiceProxy::GetNextTrigger() {
@@ -128,6 +171,26 @@ void PlatformNotificationServiceProxy::RecordNotificationUkmEvent(
   if (!notification_service_)
     return;
   notification_service_->RecordNotificationUkmEvent(data);
+}
+
+bool PlatformNotificationServiceProxy::ShouldLogClose(const GURL& origin) {
+  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  return notifications::ShouldLogNotificationEventToDevTools(browser_context_,
+                                                             origin);
+}
+
+void PlatformNotificationServiceProxy::LogClose(
+    const NotificationDatabaseData& data) {
+  base::PostTask(FROM_HERE,
+                 {BrowserThread::UI, base::TaskPriority::BEST_EFFORT},
+                 base::BindOnce(&PlatformNotificationServiceProxy::DoLogClose,
+                                AsWeakPtr(), data));
+}
+
+void PlatformNotificationServiceProxy::DoLogClose(
+    const NotificationDatabaseData& data) {
+  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  notifications::LogNotificationClosedEventToDevTools(browser_context_, data);
 }
 
 }  // namespace content

@@ -37,10 +37,15 @@ namespace tray {
 // Create the detailed view of accessibility tray.
 class ASH_EXPORT AccessibilityDetailedView : public TrayDetailedView {
  public:
+  static constexpr char kClassName[] = "AccessibilityDetailedView";
+
   explicit AccessibilityDetailedView(DetailedViewDelegate* delegate);
   ~AccessibilityDetailedView() override {}
 
   void OnAccessibilityStatusChanged();
+
+  // views::View
+  const char* GetClassName() const override;
 
  private:
   friend class ::ash::TrayAccessibilityLoginScreenTest;

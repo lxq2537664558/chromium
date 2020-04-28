@@ -9,17 +9,15 @@
 #include "base/bind.h"
 #include "base/mac/foundation_util.h"
 #include "base/strings/utf_string_conversions.h"
-#include "components/password_manager/core/browser/password_manager.h"
-#include "components/password_manager/core/browser/stub_password_manager_client.h"
+#include "components/password_manager/core/browser/leak_detection/leak_detection_check.h"
+#include "components/password_manager/core/browser/leak_detection/leak_detection_check_factory.h"
+#include "components/password_manager/core/browser/leak_detection/mock_leak_detection_check_factory.h"
 #include "components/password_manager/core/browser/test_password_store.h"
-#include "components/password_manager/core/common/password_manager_pref_names.h"
-#include "components/prefs/pref_registry_simple.h"
-#include "components/prefs/testing_pref_service.h"
-#include "ios/chrome/browser/passwords/credential_manager_util.h"
-#include "ios/chrome/browser/ssl/ios_security_state_tab_helper.h"
-#include "ios/web/public/navigation_item.h"
-#include "ios/web/public/navigation_manager.h"
-#include "ios/web/public/ssl_status.h"
+#include "components/password_manager/ios/credential_manager_util.h"
+#import "ios/chrome/browser/passwords/test/test_password_manager_client.h"
+#include "ios/web/public/navigation/navigation_item.h"
+#include "ios/web/public/navigation/navigation_manager.h"
+#include "ios/web/public/security/ssl_status.h"
 #import "ios/web/public/test/web_js_test.h"
 #include "ios/web/public/test/web_test_with_web_state.h"
 #include "net/ssl/ssl_connection_status_flags.h"
@@ -33,10 +31,6 @@
 #error "This file requires ARC support."
 #endif
 
-using password_manager::PasswordStore;
-using password_manager::PasswordManager;
-using password_manager::PasswordFormManagerForUI;
-using password_manager::TestPasswordStore;
 using testing::_;
 using url::Origin;
 
@@ -58,101 +52,10 @@ constexpr char kFileOrigin[] = "file://example_file";
 // SSL certificate to load for testing.
 constexpr char kCertFileName[] = "ok_cert.pem";
 
-// Mocks PasswordManagerClient, used indirectly by CredentialManager.
-class MockPasswordManagerClient
-    : public password_manager::StubPasswordManagerClient {
+class MockLeakDetectionCheck : public password_manager::LeakDetectionCheck {
  public:
-  MockPasswordManagerClient()
-      : last_committed_url_(kHttpsWebOrigin), password_manager_(this) {
-    store_ = base::MakeRefCounted<TestPasswordStore>();
-    store_->Init(syncer::SyncableService::StartSyncFlare(), nullptr);
-    prefs_ = std::make_unique<TestingPrefServiceSimple>();
-    prefs_->registry()->RegisterBooleanPref(
-        password_manager::prefs::kCredentialsEnableAutosignin, true);
-    prefs_->registry()->RegisterBooleanPref(
-        password_manager::prefs::kWasAutoSignInFirstRunExperienceShown, true);
-  }
-
-  // PasswordManagerClient:
-  MOCK_METHOD0(OnCredentialManagerUsed, bool());
-
-  // PromptUserTo*Ptr functions allow to both override PromptUserTo* methods
-  // and expect calls.
-  MOCK_METHOD1(PromptUserToSavePasswordPtr, void(PasswordFormManagerForUI*));
-  MOCK_METHOD3(PromptUserToChooseCredentialsPtr,
-               bool(const std::vector<autofill::PasswordForm*>& local_forms,
-                    const GURL& origin,
-                    const CredentialsCallback& callback));
-
-  scoped_refptr<TestPasswordStore> password_store() const { return store_; }
-  void set_password_store(scoped_refptr<TestPasswordStore> store) {
-    store_ = store;
-  }
-
-  PasswordFormManagerForUI* pending_manager() const { return manager_.get(); }
-
-  void set_current_url(const GURL& current_url) {
-    last_committed_url_ = current_url;
-  }
-
- private:
-  // PasswordManagerClient:
-  PrefService* GetPrefs() const override { return prefs_.get(); }
-  PasswordStore* GetPasswordStore() const override { return store_.get(); }
-  const PasswordManager* GetPasswordManager() const override {
-    return &password_manager_;
-  }
-  const GURL& GetLastCommittedEntryURL() const override {
-    return last_committed_url_;
-  }
-  // Stores |manager| into |manager_|. Save() should be
-  // called manually in test. To put expectation on this function being called,
-  // use PromptUserToSavePasswordPtr.
-  bool PromptUserToSaveOrUpdatePassword(
-      std::unique_ptr<PasswordFormManagerForUI> manager,
-      bool update_password) override;
-  // Mocks choosing a credential by the user. To put expectation on this
-  // function being called, use PromptUserToChooseCredentialsPtr.
-  bool PromptUserToChooseCredentials(
-      std::vector<std::unique_ptr<autofill::PasswordForm>> local_forms,
-      const GURL& origin,
-      const CredentialsCallback& callback) override;
-
-  std::unique_ptr<TestingPrefServiceSimple> prefs_;
-  GURL last_committed_url_;
-  PasswordManager password_manager_;
-  std::unique_ptr<PasswordFormManagerForUI> manager_;
-  scoped_refptr<TestPasswordStore> store_;
-
-  DISALLOW_COPY_AND_ASSIGN(MockPasswordManagerClient);
+  MOCK_METHOD3(Start, void(const GURL&, base::string16, base::string16));
 };
-
-bool MockPasswordManagerClient::PromptUserToSaveOrUpdatePassword(
-    std::unique_ptr<PasswordFormManagerForUI> manager,
-    bool update_password) {
-  EXPECT_FALSE(update_password);
-  manager_.swap(manager);
-  PromptUserToSavePasswordPtr(manager_.get());
-  return true;
-}
-
-bool MockPasswordManagerClient::PromptUserToChooseCredentials(
-    std::vector<std::unique_ptr<autofill::PasswordForm>> local_forms,
-    const GURL& origin,
-    const CredentialsCallback& callback) {
-  EXPECT_FALSE(local_forms.empty());
-  const autofill::PasswordForm* form = local_forms[0].get();
-  base::SequencedTaskRunnerHandle::Get()->PostTask(
-      FROM_HERE,
-      base::BindOnce(callback, base::Owned(new autofill::PasswordForm(*form))));
-  std::vector<autofill::PasswordForm*> raw_forms(local_forms.size());
-  std::transform(local_forms.begin(), local_forms.end(), raw_forms.begin(),
-                 [](const std::unique_ptr<autofill::PasswordForm>& form) {
-                   return form.get();
-                 });
-  PromptUserToChooseCredentialsPtr(raw_forms, origin, callback);
-  return true;
-}
 
 }  // namespace
 
@@ -164,9 +67,6 @@ class CredentialManagerBaseTest
 
   void SetUp() override {
     WebTestWithWebState::SetUp();
-
-    // Used indirectly by WebStateContentIsSecureHtml function.
-    IOSSecurityStateTabHelper::CreateForWebState(web_state());
   }
 
   // Updates SSLStatus on web_state()->GetNavigationManager()->GetVisibleItem()
@@ -204,7 +104,7 @@ class CredentialManagerTest : public CredentialManagerBaseTest {
   void SetUp() override {
     CredentialManagerBaseTest::SetUp();
 
-    client_ = std::make_unique<MockPasswordManagerClient>();
+    client_ = std::make_unique<TestPasswordManagerClient>();
     manager_ = std::make_unique<CredentialManager>(client_.get(), web_state());
 
     // Inject JavaScript and set up secure context.
@@ -213,16 +113,13 @@ class CredentialManagerTest : public CredentialManagerBaseTest {
     UpdateSslStatus(net::CERT_STATUS_IS_EV, web::SECURITY_STYLE_AUTHENTICATED,
                     web::SSLStatus::NORMAL_CONTENT);
 
-    ON_CALL(*client_, OnCredentialManagerUsed())
-        .WillByDefault(testing::Return(true));
-
     password_credential_form_1_.username_value = base::ASCIIToUTF16("id1");
     password_credential_form_1_.display_name = base::ASCIIToUTF16("Name One");
     password_credential_form_1_.icon_url = GURL("https://example.com/icon.png");
     password_credential_form_1_.password_value = base::ASCIIToUTF16("secret1");
     password_credential_form_1_.origin = GURL(kHttpsWebOrigin);
     password_credential_form_1_.signon_realm = kHttpsWebOrigin;
-    password_credential_form_1_.scheme = autofill::PasswordForm::SCHEME_HTML;
+    password_credential_form_1_.scheme = autofill::PasswordForm::Scheme::kHtml;
 
     password_credential_form_2_.username_value = base::ASCIIToUTF16("id2");
     password_credential_form_2_.display_name = base::ASCIIToUTF16("Name Two");
@@ -230,7 +127,7 @@ class CredentialManagerTest : public CredentialManagerBaseTest {
     password_credential_form_2_.password_value = base::ASCIIToUTF16("secret2");
     password_credential_form_2_.origin = GURL(kHttpsWebOrigin);
     password_credential_form_2_.signon_realm = kHttpsWebOrigin;
-    password_credential_form_2_.scheme = autofill::PasswordForm::SCHEME_HTML;
+    password_credential_form_2_.scheme = autofill::PasswordForm::Scheme::kHtml;
 
     federated_credential_form_.username_value = base::ASCIIToUTF16("id");
     federated_credential_form_.display_name = base::ASCIIToUTF16("name");
@@ -241,7 +138,7 @@ class CredentialManagerTest : public CredentialManagerBaseTest {
     federated_credential_form_.origin = GURL(kHttpsWebOrigin);
     federated_credential_form_.signon_realm =
         "federation://www.example.com/www.federation.com";
-    federated_credential_form_.scheme = autofill::PasswordForm::SCHEME_HTML;
+    federated_credential_form_.scheme = autofill::PasswordForm::Scheme::kHtml;
   }
 
   void TearDown() override {
@@ -256,7 +153,7 @@ class CredentialManagerTest : public CredentialManagerBaseTest {
   }
 
  protected:
-  std::unique_ptr<MockPasswordManagerClient> client_;
+  std::unique_ptr<TestPasswordManagerClient> client_;
   std::unique_ptr<CredentialManager> manager_;
 
   autofill::PasswordForm password_credential_form_1_;
@@ -266,6 +163,18 @@ class CredentialManagerTest : public CredentialManagerBaseTest {
 
 // Tests storing a PasswordCredential.
 TEST_F(CredentialManagerTest, StorePasswordCredential) {
+  auto mock_factory = std::make_unique<
+      testing::StrictMock<password_manager::MockLeakDetectionCheckFactory>>();
+  auto* weak_factory = mock_factory.get();
+  manager_->set_leak_factory(std::move(mock_factory));
+
+  auto check_instance = std::make_unique<MockLeakDetectionCheck>();
+  EXPECT_CALL(*check_instance,
+              Start(GURL(kHttpsWebOrigin), base::ASCIIToUTF16("id"),
+                    base::ASCIIToUTF16("pencil")));
+  EXPECT_CALL(*weak_factory, TryCreateLeakCheck)
+      .WillOnce(testing::Return(testing::ByMove(std::move(check_instance))));
+
   // Call API method |store|.
   ExecuteJavaScript(
       @"var credential = new PasswordCredential({"
@@ -365,10 +274,6 @@ TEST_F(CredentialManagerTest, TryToStoreCredentialFromInsecureContext) {
 
   // Expect that user will NOT be prompted to save or update password.
   EXPECT_CALL(*client_, PromptUserToSavePasswordPtr(_)).Times(0);
-
-  // Expect that PasswordManagerClient method used by
-  // CredentialManagerImpl::Store will not be called.
-  EXPECT_CALL(*client_, OnCredentialManagerUsed()).Times(0);
 
   // Call API method |store|.
   ExecuteJavaScript(
@@ -486,10 +391,6 @@ TEST_F(CredentialManagerTest, TryToGetCredentialFromInsecureContext) {
   LoadHtml(@"<html></html>", GURL(kHttpWebOrigin));
   LoadHtmlAndInject(@"<html></html>");
   client_->set_current_url(GURL(kHttpWebOrigin));
-
-  // Expect that PasswordManagerClient method used by
-  // CredentialManagerImpl::Get will not be called.
-  EXPECT_CALL(*client_, OnCredentialManagerUsed()).Times(0);
 
   // Call API method |get|.
   ExecuteJavaScript(
@@ -749,13 +650,13 @@ TEST_F(WebStateContentIsSecureHtmlTest, AcceptHttpsUrls) {
   LoadHtml(@"<html></html>", GURL(kHttpsWebOrigin));
   UpdateSslStatus(net::CERT_STATUS_IS_EV, web::SECURITY_STYLE_AUTHENTICATED,
                   web::SSLStatus::NORMAL_CONTENT);
-  EXPECT_TRUE(WebStateContentIsSecureHtml(web_state()));
+  EXPECT_TRUE(password_manager::WebStateContentIsSecureHtml(web_state()));
 }
 
 // Tests that WebStateContentIsSecureHtml returns false for HTTP origin.
 TEST_F(WebStateContentIsSecureHtmlTest, HttpIsNotSecureContext) {
   LoadHtml(@"<html></html>", GURL(kHttpWebOrigin));
-  EXPECT_FALSE(WebStateContentIsSecureHtml(web_state()));
+  EXPECT_FALSE(password_manager::WebStateContentIsSecureHtml(web_state()));
 }
 
 // Tests that WebStateContentIsSecureHtml returns false for HTTPS origin with
@@ -764,7 +665,7 @@ TEST_F(WebStateContentIsSecureHtmlTest, InsecureContent) {
   LoadHtml(@"<html></html>", GURL(kHttpsWebOrigin));
   UpdateSslStatus(net::CERT_STATUS_IS_EV, web::SECURITY_STYLE_AUTHENTICATED,
                   web::SSLStatus::DISPLAYED_INSECURE_CONTENT);
-  EXPECT_FALSE(WebStateContentIsSecureHtml(web_state()));
+  EXPECT_FALSE(password_manager::WebStateContentIsSecureHtml(web_state()));
 }
 
 // Tests that WebStateContentIsSecureHtml returns false for HTTPS origin with
@@ -773,30 +674,30 @@ TEST_F(WebStateContentIsSecureHtmlTest, InvalidSslCertificate) {
   LoadHtml(@"<html></html>", GURL(kHttpsWebOrigin));
   UpdateSslStatus(net::CERT_STATUS_INVALID, web::SECURITY_STYLE_UNAUTHENTICATED,
                   web::SSLStatus::NORMAL_CONTENT);
-  EXPECT_FALSE(WebStateContentIsSecureHtml(web_state()));
+  EXPECT_FALSE(password_manager::WebStateContentIsSecureHtml(web_state()));
 }
 
 // Tests that data:// URI scheme is not accepted as secure context.
 TEST_F(WebStateContentIsSecureHtmlTest, DataUriSchemeIsNotSecureContext) {
   LoadHtml(@"<html></html>", GURL(kDataUriSchemeOrigin));
-  EXPECT_FALSE(WebStateContentIsSecureHtml(web_state()));
+  EXPECT_FALSE(password_manager::WebStateContentIsSecureHtml(web_state()));
 }
 
 // Tests that localhost is accepted as secure context.
 TEST_F(WebStateContentIsSecureHtmlTest, LocalhostIsSecureContext) {
   LoadHtml(@"<html></html>", GURL(kLocalhostOrigin));
-  EXPECT_TRUE(WebStateContentIsSecureHtml(web_state()));
+  EXPECT_TRUE(password_manager::WebStateContentIsSecureHtml(web_state()));
 }
 
 // Tests that file origin is accepted as secure context.
 TEST_F(WebStateContentIsSecureHtmlTest, FileIsSecureContext) {
   LoadHtml(@"<html></html>", GURL(kFileOrigin));
-  EXPECT_TRUE(WebStateContentIsSecureHtml(web_state()));
+  EXPECT_TRUE(password_manager::WebStateContentIsSecureHtml(web_state()));
 }
 
 // Tests that content must be HTML.
 TEST_F(WebStateContentIsSecureHtmlTest, ContentMustBeHtml) {
   // No HTML is loaded on purpose, so that web_state()->ContentIsHTML() will
   // return false.
-  EXPECT_FALSE(WebStateContentIsSecureHtml(web_state()));
+  EXPECT_FALSE(password_manager::WebStateContentIsSecureHtml(web_state()));
 }

@@ -7,6 +7,7 @@
 #include <string>
 #include <utility>
 
+#include "ash/public/cpp/system_tray_client.h"
 #include "ash/shell.h"
 #include "ash/system/bluetooth/bluetooth_power_controller.h"
 #include "ash/system/model/system_tray_model.h"
@@ -16,6 +17,8 @@
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
+#include "base/time/default_clock.h"
+#include "base/time/time.h"
 #include "device/bluetooth/bluetooth_adapter.h"
 #include "device/bluetooth/bluetooth_adapter_factory.h"
 #include "device/bluetooth/bluetooth_device.h"
@@ -23,9 +26,11 @@
 #include "device/bluetooth/chromeos/bluetooth_utils.h"
 #include "services/device/public/cpp/bluetooth/bluetooth_utils.h"
 
-using device::mojom::BluetoothSystem;
+using device::mojom::BluetoothDeviceBatteryInfo;
+using device::mojom::BluetoothDeviceBatteryInfoPtr;
 using device::mojom::BluetoothDeviceInfo;
 using device::mojom::BluetoothDeviceInfoPtr;
+using device::mojom::BluetoothSystem;
 
 namespace ash {
 namespace {
@@ -33,12 +38,49 @@ namespace {
 // System tray shows a limited number of bluetooth devices.
 const int kMaximumDevicesShown = 50;
 
+device::ConnectionFailureReason GetConnectionFailureReason(
+    device::BluetoothDevice::ConnectErrorCode error_code) {
+  switch (error_code) {
+    case device::BluetoothDevice::ConnectErrorCode::ERROR_AUTH_FAILED:
+      return device::ConnectionFailureReason::kAuthFailed;
+    case device::BluetoothDevice::ConnectErrorCode::ERROR_AUTH_TIMEOUT:
+      return device::ConnectionFailureReason::kAuthTimeout;
+    case device::BluetoothDevice::ConnectErrorCode::ERROR_FAILED:
+      return device::ConnectionFailureReason::kFailed;
+    case device::BluetoothDevice::ConnectErrorCode::ERROR_UNKNOWN:
+      return device::ConnectionFailureReason::kUnknownConnectionError;
+    case device::BluetoothDevice::ConnectErrorCode::ERROR_UNSUPPORTED_DEVICE:
+      return device::ConnectionFailureReason::kUnsupportedDevice;
+    default:
+      return device::ConnectionFailureReason::kUnknownError;
+  }
+}
+
 void BluetoothSetDiscoveringError() {
   LOG(ERROR) << "BluetoothSetDiscovering failed.";
 }
 
-void BluetoothDeviceConnectError(
-    device::BluetoothDevice::ConnectErrorCode error_code) {}
+void OnBluetoothDeviceConnect(bool was_device_already_paired) {
+  if (was_device_already_paired) {
+    device::RecordUserInitiatedReconnectionAttemptResult(
+        base::nullopt /* failure_reason */,
+        device::BluetoothUiSurface::kSystemTray);
+  }
+}
+
+void OnBluetoothDeviceConnectError(
+    bool was_device_already_paired,
+    device::BluetoothDevice::ConnectErrorCode error_code) {
+  LOG(ERROR) << "Failed to connect to device, error code [" << error_code
+             << "]. The attempted device was previously ["
+             << (was_device_already_paired ? "paired" : "not paired") << "].";
+
+  if (was_device_already_paired) {
+    device::RecordUserInitiatedReconnectionAttemptResult(
+        GetConnectionFailureReason(error_code),
+        device::BluetoothUiSurface::kSystemTray);
+  }
+}
 
 std::string BluetoothAddressToStr(const BluetoothAddress& address) {
   static constexpr char kAddressFormat[] =
@@ -50,20 +92,11 @@ std::string BluetoothAddressToStr(const BluetoothAddress& address) {
 // Converts a MAC Address string e.g. "00:11:22:33:44:55" into an
 // BluetoothAddress e.g. {0x00, 0x11, 0x22, 0x33, 0x44, 0x55}.
 BluetoothAddress AddressStrToBluetoothAddress(const std::string& address_str) {
-  std::string numbers;
-  bool success = base::ReplaceChars(address_str, ":", "", &numbers);
-  DCHECK(success);
-
-  std::vector<uint8_t> address_vector;
-  success = base::HexStringToBytes(numbers, &address_vector);
-  DCHECK(success);
-
-  // If the size is not 6, then the underlying Bluetooth API returned an
-  // incorrect value.
-  CHECK_EQ(6u, address_vector.size());
-
   BluetoothAddress address_array;
-  std::copy_n(address_vector.begin(), 6, address_array.begin());
+
+  // If the string is not a valid encoding of a Bluetooth address, then the
+  // underlying Bluetooth API returned an incorrect value.
+  CHECK(device::BluetoothDevice::ParseAddress(address_str, address_array));
 
   return address_array;
 }
@@ -73,6 +106,10 @@ BluetoothDeviceInfoPtr GetBluetoothDeviceInfo(device::BluetoothDevice* device) {
   info->address = AddressStrToBluetoothAddress(device->GetAddress());
   info->name = device->GetName();
   info->is_paired = device->IsPaired();
+  if (device->battery_percentage()) {
+    info->battery_info =
+        BluetoothDeviceBatteryInfo::New(device->battery_percentage().value());
+  }
 
   switch (device->GetDeviceType()) {
     case device::BluetoothDeviceType::UNKNOWN:
@@ -133,8 +170,7 @@ BluetoothDeviceInfoPtr GetBluetoothDeviceInfo(device::BluetoothDevice* device) {
 
 }  // namespace
 
-TrayBluetoothHelperLegacy::TrayBluetoothHelperLegacy()
-    : weak_ptr_factory_(this) {}
+TrayBluetoothHelperLegacy::TrayBluetoothHelperLegacy() {}
 
 TrayBluetoothHelperLegacy::~TrayBluetoothHelperLegacy() {
   if (adapter_)
@@ -152,12 +188,14 @@ void TrayBluetoothHelperLegacy::InitializeOnAdapterReady(
 }
 
 void TrayBluetoothHelperLegacy::Initialize() {
-  device::BluetoothAdapterFactory::GetAdapter(
+  device::BluetoothAdapterFactory::Get()->GetAdapter(
       base::BindOnce(&TrayBluetoothHelperLegacy::InitializeOnAdapterReady,
                      weak_ptr_factory_.GetWeakPtr()));
 }
 
 void TrayBluetoothHelperLegacy::StartBluetoothDiscovering() {
+  discovery_start_timestamp_ = base::DefaultClock::GetInstance()->Now();
+
   if (HasBluetoothDiscoverySession()) {
     LOG(WARNING) << "Already have active Bluetooth device discovery session.";
     return;
@@ -165,20 +203,21 @@ void TrayBluetoothHelperLegacy::StartBluetoothDiscovering() {
   VLOG(1) << "Requesting new Bluetooth device discovery session.";
   should_run_discovery_ = true;
   adapter_->StartDiscoverySession(
-      base::Bind(&TrayBluetoothHelperLegacy::OnStartDiscoverySession,
-                 weak_ptr_factory_.GetWeakPtr()),
-      base::Bind(&BluetoothSetDiscoveringError));
+      base::BindOnce(&TrayBluetoothHelperLegacy::OnStartDiscoverySession,
+                     weak_ptr_factory_.GetWeakPtr()),
+      base::BindOnce(&BluetoothSetDiscoveringError));
 }
 
 void TrayBluetoothHelperLegacy::StopBluetoothDiscovering() {
+  discovery_start_timestamp_ = base::Time();
+
   should_run_discovery_ = false;
   if (!HasBluetoothDiscoverySession()) {
     LOG(WARNING) << "No active Bluetooth device discovery session.";
     return;
   }
   VLOG(1) << "Stopping Bluetooth device discovery session.";
-  discovery_session_->Stop(base::DoNothing(),
-                           base::Bind(&BluetoothSetDiscoveringError));
+  discovery_session_.reset();
 }
 
 void TrayBluetoothHelperLegacy::ConnectToBluetoothDevice(
@@ -189,17 +228,46 @@ void TrayBluetoothHelperLegacy::ConnectToBluetoothDevice(
       (device->IsConnected() && device->IsPaired())) {
     return;
   }
-  if (device->IsPaired() && !device->IsConnectable())
-    return;
-  if (device->IsPaired() || !device->IsPairable()) {
+
+  if (!discovery_start_timestamp_.is_null()) {
+    device::RecordDeviceSelectionDuration(
+        base::DefaultClock::GetInstance()->Now() - discovery_start_timestamp_,
+        device::BluetoothUiSurface::kSystemTray, device->IsPaired(),
+        device->GetType());
+    discovery_start_timestamp_ = base::Time();
+  }
+
+  // Extra consideration taken for already paired devices, for metrics
+  // collection.
+  if (device->IsPaired()) {
     base::RecordAction(
         base::UserMetricsAction("StatusArea_Bluetooth_Connect_Known"));
-    device->Connect(NULL, base::DoNothing(),
-                    base::Bind(&BluetoothDeviceConnectError));
+
+    if (!device->IsConnectable()) {
+      device::RecordUserInitiatedReconnectionAttemptResult(
+          device::ConnectionFailureReason::kNotConnectable,
+          device::BluetoothUiSurface::kSystemTray);
+      return;
+    }
+
+    device->Connect(nullptr /* pairing_delegate */,
+                    base::BindOnce(&OnBluetoothDeviceConnect,
+                                   true /* was_device_already_paired */),
+                    base::BindOnce(&OnBluetoothDeviceConnectError,
+                                   true /* was_device_already_paired */));
     return;
   }
-  // Show pairing dialog for the unpaired device.
-  Shell::Get()->system_tray_model()->client_ptr()->ShowBluetoothPairingDialog(
+
+  // Simply connect without pairing for devices which do not support pairing.
+  if (!device->IsPairable()) {
+    device->Connect(nullptr /* pairing_delegate */, base::DoNothing(),
+                    base::BindOnce(&OnBluetoothDeviceConnectError,
+                                   false /* was_device_already_paired */));
+    return;
+  }
+
+  // Show pairing dialog for the unpaired device; this kicks off pairing.
+  Shell::Get()->system_tray_model()->client()->ShowBluetoothPairingDialog(
       device->GetAddress(), device->GetNameForDisplay(), device->IsPaired(),
       device->IsConnected());
 }

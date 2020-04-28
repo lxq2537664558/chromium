@@ -18,10 +18,11 @@
 #include "third_party/blink/renderer/core/script/document_write_intervention.h"
 #include "third_party/blink/renderer/core/script/script_loader.h"
 #include "third_party/blink/renderer/platform/bindings/script_state.h"
-#include "third_party/blink/renderer/platform/histogram.h"
+#include "third_party/blink/renderer/platform/instrumentation/histogram.h"
 #include "third_party/blink/renderer/platform/instrumentation/tracing/trace_event.h"
 #include "third_party/blink/renderer/platform/loader/allowed_by_nosniff.h"
 #include "third_party/blink/renderer/platform/loader/fetch/cached_metadata.h"
+#include "third_party/blink/renderer/platform/loader/fetch/detachable_use_counter.h"
 #include "third_party/blink/renderer/platform/loader/fetch/memory_cache.h"
 #include "third_party/blink/renderer/platform/loader/fetch/raw_resource.h"
 #include "third_party/blink/renderer/platform/loader/fetch/resource_client.h"
@@ -41,13 +42,15 @@ ClassicPendingScript* ClassicPendingScript::Fetch(
     const WTF::TextEncoding& encoding,
     ScriptElementBase* element,
     FetchParameters::DeferOption defer) {
-  FetchParameters params = options.CreateFetchParameters(
-      url, element_document.GetSecurityOrigin(), cross_origin, encoding, defer);
+  FetchParameters params(
+      options.CreateFetchParameters(url, element_document.GetSecurityOrigin(),
+                                    cross_origin, encoding, defer));
 
   ClassicPendingScript* pending_script =
       MakeGarbageCollected<ClassicPendingScript>(
-          element, TextPosition(), ScriptSourceLocationType::kExternalFile,
-          options, true /* is_external */);
+          element, TextPosition(), KURL(), String(),
+          ScriptSourceLocationType::kExternalFile, options,
+          true /* is_external */);
 
   // [Intervention]
   // For users on slow connections, we want to avoid blocking the parser in
@@ -73,12 +76,14 @@ ClassicPendingScript* ClassicPendingScript::Fetch(
 ClassicPendingScript* ClassicPendingScript::CreateInline(
     ScriptElementBase* element,
     const TextPosition& starting_position,
+    const KURL& base_url,
+    const String& source_text,
     ScriptSourceLocationType source_location_type,
     const ScriptFetchOptions& options) {
   ClassicPendingScript* pending_script =
-      MakeGarbageCollected<ClassicPendingScript>(element, starting_position,
-                                                 source_location_type, options,
-                                                 false /* is_external */);
+      MakeGarbageCollected<ClassicPendingScript>(
+          element, starting_position, base_url, source_text,
+          source_location_type, options, false /* is_external */);
   pending_script->CheckState();
   return pending_script;
 }
@@ -86,20 +91,29 @@ ClassicPendingScript* ClassicPendingScript::CreateInline(
 ClassicPendingScript::ClassicPendingScript(
     ScriptElementBase* element,
     const TextPosition& starting_position,
+    const KURL& base_url_for_inline_script,
+    const String& source_text_for_inline_script,
     ScriptSourceLocationType source_location_type,
     const ScriptFetchOptions& options,
     bool is_external)
     : PendingScript(element, starting_position),
       options_(options),
-      base_url_for_inline_script_(
-          is_external ? KURL() : element->GetDocument().BaseURL()),
-      source_text_for_inline_script_(is_external ? String()
-                                                 : element->TextFromChildren()),
+      base_url_for_inline_script_(base_url_for_inline_script),
+      source_text_for_inline_script_(source_text_for_inline_script),
       source_location_type_(source_location_type),
       is_external_(is_external),
       ready_state_(is_external ? kWaitingForResource : kReady),
       integrity_failure_(false) {
   CHECK(GetElement());
+
+  if (is_external_) {
+    DCHECK(base_url_for_inline_script_.IsNull());
+    DCHECK(source_text_for_inline_script_.IsNull());
+  } else {
+    DCHECK(!base_url_for_inline_script_.IsNull());
+    DCHECK(!source_text_for_inline_script_.IsNull());
+  }
+
   MemoryPressureListenerRegistry::Instance().RegisterClient(this);
 }
 
@@ -244,15 +258,19 @@ void ClassicPendingScript::NotifyFinished(Resource* resource) {
   DCHECK(GetResource());
   ScriptElementBase* element = GetElement();
   if (element) {
-    SubresourceIntegrityHelper::DoReport(element->GetDocument(),
-                                         GetResource()->IntegrityReportInfo());
+    SubresourceIntegrityHelper::DoReport(
+        *element->GetDocument().GetExecutionContext(),
+        GetResource()->IntegrityReportInfo());
 
     // It is possible to get back a script resource with integrity metadata
     // for a request with an empty integrity attribute. In that case, the
-    // integrity check should be skipped, so this check ensures that the
-    // integrity attribute isn't empty in addition to checking if the
-    // resource has empty integrity metadata.
-    if (!element->IntegrityAttributeValue().IsEmpty()) {
+    // integrity check should be skipped, as the integrity may not have been
+    // "meant" for this specific request. If the resource is being served from
+    // the preload cache however, we know any associated integrity metadata and
+    // checks were destined for this request, so we cannot skip the integrity
+    // check.
+    if (!element->IntegrityAttributeValue().IsEmpty() ||
+        GetResource()->IsLinkPreload()) {
       integrity_failure_ = GetResource()->IntegrityDisposition() !=
                            ResourceIntegrityDisposition::kPassed;
     }
@@ -276,7 +294,7 @@ void ClassicPendingScript::NotifyFinished(Resource* resource) {
   AdvanceReadyState(error_occurred ? kErrorOccurred : kReady);
 }
 
-void ClassicPendingScript::Trace(blink::Visitor* visitor) {
+void ClassicPendingScript::Trace(Visitor* visitor) {
   ResourceClient::Trace(visitor);
   MemoryPressureListener::Trace(visitor);
   PendingScript::Trace(visitor);
@@ -342,9 +360,9 @@ ClassicScript* ClassicPendingScript::GetSource(const KURL& document_url) const {
   auto* fetcher = GetElement()->GetDocument().ContextDocument()->Fetcher();
   // If the MIME check fails, which is considered as load failure.
   if (!AllowedByNosniff::MimeTypeAsScript(
-          fetcher->Context(), &fetcher->GetConsoleLogger(),
-          resource->GetResponse(), AllowedByNosniff::MimeTypeCheck::kLax,
-          false)) {
+          fetcher->GetUseCounter(), &fetcher->GetConsoleLogger(),
+          resource->GetResponse(),
+          AllowedByNosniff::MimeTypeCheck::kLaxForElement)) {
     return nullptr;
   }
 

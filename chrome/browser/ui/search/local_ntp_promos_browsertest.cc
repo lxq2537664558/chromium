@@ -13,8 +13,6 @@
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/stringprintf.h"
 #include "base/test/metrics/histogram_tester.h"
-#include "base/test/scoped_feature_list.h"
-#include "chrome/browser/search/ntp_features.h"
 #include "chrome/browser/search/promos/promo_service.h"
 #include "chrome/browser/search/promos/promo_service_factory.h"
 #include "chrome/browser/search_provider_logos/logo_service_factory.h"
@@ -52,6 +50,8 @@ class MockPromoService : public PromoService {
 
   void SetupWithFailure() { promo_status_ = Status::FATAL_ERROR; }
 
+  void SetupWithBlockedPromo() { promo_status_ = Status::OK_BUT_BLOCKED; }
+
  private:
   PromoData promo_data_;
   Status promo_status_;
@@ -59,8 +59,6 @@ class MockPromoService : public PromoService {
 
 class LocalNTPPromoTest : public InProcessBrowserTest {
  protected:
-  LocalNTPPromoTest() {}
-
   MockPromoService* promo_service() {
     return static_cast<MockPromoService*>(
         PromoServiceFactory::GetForProfile(browser()->profile()));
@@ -68,8 +66,6 @@ class LocalNTPPromoTest : public InProcessBrowserTest {
 
  private:
   void SetUp() override {
-    feature_list_.InitWithFeatures(
-        {features::kUseGoogleLocalNtp, features::kPromosOnLocalNtp}, {});
     InProcessBrowserTest::SetUp();
   }
 
@@ -91,8 +87,6 @@ class LocalNTPPromoTest : public InProcessBrowserTest {
     PromoServiceFactory::GetInstance()->SetTestingFactory(
         context, base::BindRepeating(&LocalNTPPromoTest::CreatePromoService));
   }
-
-  base::test::ScopedFeatureList feature_list_;
 
   std::unique_ptr<
       base::CallbackList<void(content::BrowserContext*)>::Subscription>
@@ -121,6 +115,8 @@ IN_PROC_BROWSER_TEST_F(LocalNTPPromoTest, PromoInjectedIntoPage) {
       "NewTabPage.Promos.RequestLatency2.SuccessWithPromo", 1);
   histograms.ExpectTotalCount(
       "NewTabPage.Promos.RequestLatency2.SuccessWithoutPromo", 0);
+  histograms.ExpectTotalCount(
+      "NewTabPage.Promos.RequestLatency2.SuccessButBlocked", 0);
   histograms.ExpectTotalCount("NewTabPage.Promos.RequestLatency2.Failure", 0);
   histograms.ExpectTotalCount("NewTabPage.Promos.ShownTime", 1);
 }
@@ -145,6 +141,8 @@ IN_PROC_BROWSER_TEST_F(LocalNTPPromoTest, NoPromoAvailable) {
       "NewTabPage.Promos.RequestLatency2.SuccessWithPromo", 0);
   histograms.ExpectTotalCount(
       "NewTabPage.Promos.RequestLatency2.SuccessWithoutPromo", 1);
+  histograms.ExpectTotalCount(
+      "NewTabPage.Promos.RequestLatency2.SuccessButBlocked", 0);
   histograms.ExpectTotalCount("NewTabPage.Promos.RequestLatency2.Failure", 0);
   histograms.ExpectTotalCount("NewTabPage.Promos.ShownTime", 0);
 }
@@ -169,6 +167,124 @@ IN_PROC_BROWSER_TEST_F(LocalNTPPromoTest, PromoFetchFails) {
       "NewTabPage.Promos.RequestLatency2.SuccessWithPromo", 0);
   histograms.ExpectTotalCount(
       "NewTabPage.Promos.RequestLatency2.SuccessWithoutPromo", 0);
+  histograms.ExpectTotalCount(
+      "NewTabPage.Promos.RequestLatency2.SuccessButBlocked", 0);
   histograms.ExpectTotalCount("NewTabPage.Promos.RequestLatency2.Failure", 1);
   histograms.ExpectTotalCount("NewTabPage.Promos.ShownTime", 0);
+}
+
+IN_PROC_BROWSER_TEST_F(LocalNTPPromoTest, BlockedPromoFetched) {
+  promo_service()->SetupWithBlockedPromo();
+
+  base::HistogramTester histograms;
+
+  // Open a new blank tab, then go to NTP and listen for console messages.
+  content::WebContents* active_tab =
+      local_ntp_test_utils::OpenNewTab(browser(), GURL("about:blank"));
+  local_ntp_test_utils::NavigateToNTPAndWaitUntilLoaded(browser(),
+                                                        /*delay=*/1000);
+
+  bool result;
+  EXPECT_TRUE(instant_test_utils::GetBoolFromJS(
+      active_tab, "$('promo') === null", &result));
+  ASSERT_TRUE(result);
+
+  histograms.ExpectTotalCount(
+      "NewTabPage.Promos.RequestLatency2.SuccessWithPromo", 0);
+  histograms.ExpectTotalCount(
+      "NewTabPage.Promos.RequestLatency2.SuccessWithoutPromo", 0);
+  histograms.ExpectTotalCount(
+      "NewTabPage.Promos.RequestLatency2.SuccessButBlocked", 1);
+  histograms.ExpectTotalCount("NewTabPage.Promos.RequestLatency2.Failure", 0);
+  histograms.ExpectTotalCount("NewTabPage.Promos.ShownTime", 0);
+}
+
+// Tests are disabled until we implement a way to navigate to chrome scheme
+// links from the NTP.
+IN_PROC_BROWSER_TEST_F(LocalNTPPromoTest,
+                       PromoWithExtensionsLinkAndPermission) {
+  PromoData promo;
+  promo.promo_html = "<div><a href=\"chrome://extensions\">promo</a></div>";
+  promo.can_open_extensions_page = true;
+  promo_service()->SetupWithPromo(promo);
+
+  base::HistogramTester histograms;
+
+  // Open a new blank tab, then go to NTP and listen for console messages.
+  content::WebContents* active_tab =
+      local_ntp_test_utils::OpenNewTab(browser(), GURL("about:blank"));
+  local_ntp_test_utils::NavigateToNTPAndWaitUntilLoaded(browser(),
+                                                        /*delay=*/1000);
+
+  content::TestNavigationObserver nav_observer(active_tab, 1);
+  bool result;
+  EXPECT_TRUE(instant_test_utils::GetBoolFromJS(
+      active_tab,
+      "$('promo').innerHTML === '<div><a "
+      "href=\"chrome://extensions\">promo</a></div>'",
+      &result));
+  ASSERT_TRUE(result);
+
+  // Click on privileged link
+  EXPECT_TRUE(content::ExecuteScript(active_tab,
+                                     "$('promo').querySelector('a').click()"));
+  nav_observer.Wait();
+
+  // Expect navigation to the chrome extensions page to succeed.
+  EXPECT_EQ(active_tab->GetLastCommittedURL(), chrome::kChromeUIExtensionsURL);
+
+  histograms.ExpectTotalCount(
+      "NewTabPage.Promos.RequestLatency2.SuccessWithPromo", 1);
+  histograms.ExpectTotalCount(
+      "NewTabPage.Promos.RequestLatency2.SuccessWithoutPromo", 0);
+  histograms.ExpectTotalCount(
+      "NewTabPage.Promos.RequestLatency2.SuccessButBlocked", 0);
+  histograms.ExpectTotalCount("NewTabPage.Promos.RequestLatency2.Failure", 0);
+  histograms.ExpectTotalCount("NewTabPage.Promos.ShownTime", 1);
+}
+
+IN_PROC_BROWSER_TEST_F(LocalNTPPromoTest, PromoWithExtensionsLinkNoPermission) {
+  PromoData promo;
+  promo.promo_html = "<div><a href=\"chrome://extensions\">promo</a></div>";
+  promo_service()->SetupWithPromo(promo);
+
+  base::HistogramTester histograms;
+
+  // Open a new blank tab, then go to NTP and listen for console messages.
+  content::WebContents* active_tab =
+      local_ntp_test_utils::OpenNewTab(browser(), GURL("about:blank"));
+  local_ntp_test_utils::NavigateToNTPAndWaitUntilLoaded(browser(),
+                                                        /*delay=*/1000);
+
+  bool result;
+  EXPECT_TRUE(instant_test_utils::GetBoolFromJS(
+      active_tab,
+      "$('promo').innerHTML === '<div><a "
+      "href=\"chrome://extensions\">promo</a></div>'",
+      &result));
+  ASSERT_TRUE(result);
+
+  // Observe another roundtrip to the renderer process to ensure that the event
+  // loop has been executed.
+  base::string16 expected_title(base::UTF8ToUTF16("loaded"));
+  content::TitleWatcher title_watcher(active_tab, expected_title);
+  // Click on a priviliged link.
+  content::DidStartNavigationObserver did_start_navigation_observer(active_tab);
+  EXPECT_TRUE(content::ExecuteScript(active_tab,
+                                     "$('promo').querySelector('a').click()"));
+
+  EXPECT_TRUE(ExecuteScript(active_tab, "document.title = 'loaded';"));
+  // Make sure the event loop has been executed.
+  EXPECT_EQ(expected_title, title_watcher.WaitAndGetTitle());
+  // Expect that no navigation was observed.
+  EXPECT_FALSE(did_start_navigation_observer.observed());
+
+  histograms.ExpectTotalCount(
+      "NewTabPage.Promos.RequestLatency2.SuccessWithPromo", 1);
+  histograms.ExpectTotalCount(
+      "NewTabPage.Promos.RequestLatency2.SuccessWithoutPromo", 0);
+  histograms.ExpectTotalCount(
+      "NewTabPage.Promos.RequestLatency2.SuccessButBlocked", 0);
+  histograms.ExpectTotalCount("NewTabPage.Promos.RequestLatency2.Failure", 0);
+  histograms.ExpectTotalCount("NewTabPage.Promos.ShownTime", 1);
 }

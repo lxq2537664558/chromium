@@ -30,12 +30,6 @@ namespace ui {
 
 namespace {
 
-const GrGLInterface* GrGLCreateNativeInterface() {
-  return GrGLAssembleInterface(nullptr, [](void* ctx, const char name[]) {
-    return gl::GetGLProcAddress(name);
-  });
-}
-
 const char kUseDDL[] = "use-ddl";
 
 }  // namespace
@@ -49,8 +43,7 @@ SkiaGlRenderer::SkiaGlRenderer(
       window_surface_(std::move(window_surface)),
       gl_surface_(surface),
       use_ddl_(base::CommandLine::ForCurrentProcess()->HasSwitch(kUseDDL)),
-      condition_variable_(&lock_),
-      weak_ptr_factory_(this) {}
+      condition_variable_(&lock_) {}
 
 SkiaGlRenderer::~SkiaGlRenderer() {
   if (use_ddl_)
@@ -65,17 +58,21 @@ bool SkiaGlRenderer::Initialize() {
     return false;
   }
 
-  gl_surface_->Resize(size_, 1.f, gl::GLSurface::ColorSpace::UNSPECIFIED, true);
+  gl_surface_->Resize(size_, 1.f, gfx::ColorSpace(), true);
 
   if (!gl_context_->MakeCurrent(gl_surface_.get())) {
     LOG(FATAL) << "Failed to make GL context current";
     return false;
   }
 
-  auto native_interface =
-      sk_sp<const GrGLInterface>(GrGLCreateNativeInterface());
+  sk_sp<const GrGLInterface> native_interface = GrGLMakeAssembledInterface(
+      nullptr,
+      [](void* ctx, const char name[]) { return gl::GetGLProcAddress(name); });
   DCHECK(native_interface);
   GrContextOptions options;
+  // TODO(csmartdalton): enable internal multisampling after the related Skia
+  // rolls are in.
+  options.fInternalMultisampleCount = 0;
   gr_context_ = GrContext::MakeGL(std::move(native_interface), options);
   DCHECK(gr_context_);
 
@@ -114,13 +111,13 @@ void SkiaGlRenderer::RenderFrame() {
 
   if (gl_surface_->SupportsAsyncSwap()) {
     gl_surface_->SwapBuffersAsync(
-        base::BindRepeating(&SkiaGlRenderer::PostRenderFrameTask,
-                            weak_ptr_factory_.GetWeakPtr()),
-        base::BindRepeating(&SkiaGlRenderer::OnPresentation,
-                            weak_ptr_factory_.GetWeakPtr()));
+        base::BindOnce(&SkiaGlRenderer::PostRenderFrameTask,
+                       weak_ptr_factory_.GetWeakPtr()),
+        base::BindOnce(&SkiaGlRenderer::OnPresentation,
+                       weak_ptr_factory_.GetWeakPtr()));
   } else {
     PostRenderFrameTask(
-        gl_surface_->SwapBuffers(base::BindRepeating(
+        gl_surface_->SwapBuffers(base::BindOnce(
             &SkiaGlRenderer::OnPresentation, weak_ptr_factory_.GetWeakPtr())),
         nullptr);
   }
@@ -133,8 +130,8 @@ void SkiaGlRenderer::PostRenderFrameTask(
     gpu_fence->Wait();
 
   base::ThreadTaskRunnerHandle::Get()->PostTask(
-      FROM_HERE, base::BindRepeating(&SkiaGlRenderer::RenderFrame,
-                                     weak_ptr_factory_.GetWeakPtr()));
+      FROM_HERE, base::BindOnce(&SkiaGlRenderer::RenderFrame,
+                                weak_ptr_factory_.GetWeakPtr()));
 }
 
 void SkiaGlRenderer::Draw(SkCanvas* canvas, float fraction) {
@@ -252,7 +249,6 @@ void SkiaGlRenderer::Run() {
 }
 
 void SkiaGlRenderer::OnPresentation(const gfx::PresentationFeedback& feedback) {
-  DCHECK(gl_surface_->SupportsPresentationCallback());
   LOG_IF(ERROR, feedback.timestamp.is_null()) << "Last frame is discarded!";
 }
 

@@ -27,8 +27,6 @@
 
 namespace blink {
 
-class HTMLInputElement;
-
 // Each LayoutFileUploadControl contains a LayoutButton (for opening the file
 // chooser), and sufficient space to draw a file icon and filename. The
 // LayoutButton has a shadow node associated with it to receive click/hover
@@ -36,7 +34,7 @@ class HTMLInputElement;
 
 class CORE_EXPORT LayoutFileUploadControl final : public LayoutBlockFlow {
  public:
-  LayoutFileUploadControl(HTMLInputElement*);
+  explicit LayoutFileUploadControl(Element*);
   ~LayoutFileUploadControl() override;
 
   bool IsOfType(LayoutObjectType type) const override {
@@ -44,35 +42,24 @@ class CORE_EXPORT LayoutFileUploadControl final : public LayoutBlockFlow {
            LayoutBlockFlow::IsOfType(type);
   }
 
-  String ButtonValue();
   String FileTextValue() const;
 
   HTMLInputElement* UploadButton() const;
-  int UploadButtonWidth();
 
-  bool HasControlClip() const override { return true; }
-  LayoutRect ControlClipRect(const LayoutPoint&) const override;
-  LayoutRect OverflowClipRect(const LayoutPoint&,
-                              OverlayScrollbarClipBehavior) const override;
+  PhysicalRect OverflowClipRect(const PhysicalOffset&,
+                                OverlayScrollbarClipBehavior) const override;
 
   static const int kAfterButtonSpacing = 4;
 
   const char* GetName() const override { return "LayoutFileUploadControl"; }
 
  private:
-  void UpdateFromElement() override;
-  void ComputeIntrinsicLogicalWidths(
-      LayoutUnit& min_logical_width,
-      LayoutUnit& max_logical_width) const override;
-  void ComputePreferredLogicalWidths() override;
+  bool IsChildAllowed(LayoutObject* child,
+                      const ComputedStyle& style) const override;
   void PaintObject(const PaintInfo&,
-                   const LayoutPoint& paint_offset) const override;
+                   const PhysicalOffset& paint_offset) const override;
 
   int MaxFilenameWidth() const;
-
-  PositionWithAffinity PositionForPoint(const LayoutPoint&) const override;
-
-  bool can_receive_dropped_files_;
 };
 
 DEFINE_LAYOUT_OBJECT_TYPE_CASTS(LayoutFileUploadControl, IsFileUploadControl());

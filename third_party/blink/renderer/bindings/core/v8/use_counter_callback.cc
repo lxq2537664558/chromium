@@ -5,9 +5,10 @@
 #include "third_party/blink/renderer/bindings/core/v8/use_counter_callback.h"
 
 #include "third_party/blink/renderer/bindings/core/v8/v8_binding_for_core.h"
+#include "third_party/blink/renderer/core/execution_context/execution_context.h"
 #include "third_party/blink/renderer/core/frame/deprecation.h"
-#include "third_party/blink/renderer/core/frame/use_counter.h"
 #include "third_party/blink/renderer/platform/bindings/v8_per_isolate_data.h"
+#include "third_party/blink/renderer/platform/instrumentation/use_counter.h"
 
 namespace blink {
 
@@ -226,6 +227,45 @@ void UseCounterCallback(v8::Isolate* isolate,
       break;
     case v8::Isolate::kStringNormalize:
       blink_feature = WebFeature::kV8StringNormalize;
+      break;
+    case v8::Isolate::kCallSiteAPIGetFunctionSloppyCall:
+      blink_feature = WebFeature::kV8CallSiteAPIGetFunctionSloppyCall;
+      break;
+    case v8::Isolate::kCallSiteAPIGetThisSloppyCall:
+      blink_feature = WebFeature::kV8CallSiteAPIGetThisSloppyCall;
+      break;
+    case v8::Isolate::kRegExpExecCalledOnSlowRegExp:
+      blink_feature = WebFeature::kV8RegExpExecCalledOnSlowRegExp;
+      break;
+    case v8::Isolate::kRegExpReplaceCalledOnSlowRegExp:
+      blink_feature = WebFeature::kV8RegExpReplaceCalledOnSlowRegExp;
+      break;
+    case v8::Isolate::kSharedArrayBufferConstructed:
+      blink_feature = WebFeature::kV8SharedArrayBufferConstructed;
+      break;
+    case v8::Isolate::kArrayPrototypeHasElements:
+      blink_feature = WebFeature::kV8ArrayPrototypeHasElements;
+      break;
+    case v8::Isolate::kObjectPrototypeHasElements:
+      blink_feature = WebFeature::kV8ObjectPrototypeHasElements;
+      break;
+    case v8::Isolate::kDisplayNames:
+      blink_feature = WebFeature::kDisplayNames;
+      break;
+    case v8::Isolate::kNumberFormatStyleUnit:
+      blink_feature = WebFeature::kNumberFormatStyleUnit;
+      break;
+    case v8::Isolate::kDateTimeFormatRange:
+      blink_feature = WebFeature::kDateTimeFormatRange;
+      break;
+    case v8::Isolate::kDateTimeFormatDateTimeStyle:
+      blink_feature = WebFeature::kDateTimeFormatDateTimeStyle;
+      break;
+    case v8::Isolate::kBreakIteratorTypeWord:
+      blink_feature = WebFeature::kBreakIteratorTypeWord;
+      break;
+    case v8::Isolate::kBreakIteratorTypeLine:
+      blink_feature = WebFeature::kBreakIteratorTypeLine;
       break;
     default:
       // This can happen if V8 has added counters that this version of Blink

@@ -109,7 +109,7 @@ bool AreModesEqual(const QuickUnlockModeList& a, const QuickUnlockModeList& b) {
   // This is a slow comparison algorithm, but the number of entries in |a| and
   // |b| will always be very low (0-3 items) so it doesn't matter.
   for (size_t i = 0; i < a.size(); ++i) {
-    if (!base::ContainsValue(b, a[i]))
+    if (!base::Contains(b, a[i]))
       return false;
   }
 
@@ -172,7 +172,7 @@ bool IsPinDifficultEnough(const std::string& pin) {
     return true;
 
   // Check if it is on the list of most common PINs.
-  if (base::ContainsValue(kMostCommonPins, pin))
+  if (base::Contains(kMostCommonPins, pin))
     return false;
 
   // Check for same digits, increasing and decreasing PIN simultaneously.
@@ -277,7 +277,7 @@ QuickUnlockPrivateGetAuthTokenFunction::Run() {
   // is needed.
   AddRef();
 
-  base::PostTaskWithTraits(
+  base::PostTask(
       FROM_HERE, {content::BrowserThread::UI},
       base::BindOnce(&chromeos::ExtendedAuthenticator::AuthenticateToCheck,
                      extended_authenticator_.get(), user_context,
@@ -299,6 +299,7 @@ void QuickUnlockPrivateGetAuthTokenFunction::OnAuthSuccess(
   Profile* profile = GetActiveProfile(browser_context());
   QuickUnlockStorage* quick_unlock_storage =
       chromeos::quick_unlock::QuickUnlockFactory::GetForProfile(profile);
+  quick_unlock_storage->MarkStrongAuth();
   result->token = quick_unlock_storage->CreateAuthToken(user_context);
   result->lifetime_seconds = AuthToken::kTokenExpirationSeconds;
 

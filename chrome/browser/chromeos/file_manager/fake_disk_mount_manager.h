@@ -40,14 +40,6 @@ class FakeDiskMountManager : public chromeos::disks::DiskMountManager {
     chromeos::MountAccessMode access_mode;
   };
 
-  struct UnmountRequest {
-    UnmountRequest(const std::string& mount_path,
-                   chromeos::UnmountOptions options);
-
-    std::string mount_path;
-    chromeos::UnmountOptions options;
-  };
-
   struct RemountAllRequest {
     explicit RemountAllRequest(chromeos::MountAccessMode access_mode);
     chromeos::MountAccessMode access_mode;
@@ -59,7 +51,7 @@ class FakeDiskMountManager : public chromeos::disks::DiskMountManager {
   const std::vector<MountRequest>& mount_requests() const {
     return mount_requests_;
   }
-  const std::vector<UnmountRequest>& unmount_requests() const {
+  const std::vector<std::string>& unmount_requests() const {
     return unmount_requests_;
   }
   const std::vector<RemountAllRequest>& remount_all_requests() const {
@@ -94,11 +86,12 @@ class FakeDiskMountManager : public chromeos::disks::DiskMountManager {
   // is finished, |callback| will be invoked only when
   // |FinishAllUnmountRequest()| is called.
   void UnmountPath(const std::string& mount_path,
-                   chromeos::UnmountOptions options,
                    UnmountPathCallback callback) override;
   void RemountAllRemovableDrives(
       chromeos::MountAccessMode access_mode) override;
-  void FormatMountedDevice(const std::string& mount_path) override;
+  void FormatMountedDevice(const std::string& mount_path,
+                           chromeos::disks::FormatFileSystemType filesystem,
+                           const std::string& label) override;
   void RenameMountedDevice(const std::string& mount_path,
                            const std::string& volume_name) override;
   void UnmountDeviceRecursively(
@@ -111,14 +104,14 @@ class FakeDiskMountManager : public chromeos::disks::DiskMountManager {
                               const chromeos::disks::Disk* disk);
 
  private:
-  base::ObserverList<Observer>::Unchecked observers_;
+  base::ObserverList<Observer> observers_;
   base::queue<base::OnceClosure> pending_unmount_callbacks_;
 
   DiskMap disks_;
   MountPointMap mount_points_;
 
   std::vector<MountRequest> mount_requests_;
-  std::vector<UnmountRequest> unmount_requests_;
+  std::vector<std::string> unmount_requests_;
   std::vector<RemountAllRequest> remount_all_requests_;
   std::map<std::string, chromeos::MountError> unmount_errors_;
 

@@ -8,11 +8,11 @@ The templated `base::Callback<>` class is a generalized function object.
 Together with the `base::Bind()` function in base/bind.h, they provide a
 type-safe method for performing partial application of functions.
 
-Partial application (or "currying") is the process of binding a subset of a
-function's arguments to produce another function that takes fewer arguments.
-This can be used to pass around a unit of delayed execution, much like lexical
-closures are used in other languages. For example, it is used in Chromium code
-to schedule tasks on different MessageLoops.
+Partial application is the process of binding a subset of a function's arguments
+to produce another function that takes fewer arguments. This can be used to pass
+around a unit of delayed execution, much like lexical closures are used in other
+languages. For example, it is used in Chromium code to schedule tasks on
+different MessageLoops.
 
 A callback with no unbound input parameters (`base::Callback<void()>`) is
 called a `base::Closure`. Note that this is NOT the same as what other
@@ -48,8 +48,8 @@ implicit conversion.
 
 ### Memory Management And Passing
 
-Pass `base::Callback` objects by value if ownership is transferred; otherwise,
-pass it by const-reference.
+Pass `base::{Once,Repeating}Callback` objects by value if ownership is
+transferred; otherwise, pass it by const-reference.
 
 ```cpp
 // |Foo| just refers to |cb| but doesn't store it nor consume it.
@@ -58,8 +58,8 @@ bool Foo(const base::OnceCallback<void(int)>& cb) {
 }
 
 // |Bar| takes the ownership of |cb| and stores |cb| into |g_cb|.
-base::OnceCallback<void(int)> g_cb;
-void Bar(base::OnceCallback<void(int)> cb) {
+base::RepeatingCallback<void(int)> g_cb;
+void Bar(base::RepeatingCallback<void(int)> cb) {
   g_cb = std::move(cb);
 }
 
@@ -70,18 +70,19 @@ void Baz(base::OnceCallback<void(int)> cb) {
 
 // |Qux| takes the ownership of |cb| and transfers ownership to PostTask(),
 // which also takes the ownership of |cb|.
-void Qux(base::OnceCallback<void(int)> cb) {
-  PostTask(FROM_HERE,
-           base::BindOnce(std::move(cb), 42));
+void Qux(base::RepeatingCallback<void(int)> cb) {
+  PostTask(FROM_HERE, base::BindOnce(cb, 42));
+  PostTask(FROM_HERE, base::BindOnce(std::move(cb), 43));
 }
 ```
 
-When you pass a `base::Callback` object to a function parameter, use
-`std::move()` if you don't need to keep a reference to it, otherwise, pass the
+When you pass a `base::{Once,Repeating}Callback` object to a function parameter,
+use `std::move()` if you don't need to keep a reference to it, otherwise, pass the
 object directly. You may see a compile error when the function requires the
 exclusive ownership, and you didn't pass the callback by move. Note that the
-moved-from `base::Callback` becomes null, as if its `Reset()` method had been
-called, and its `is_null()` method will return true.
+moved-from `base::{Once,Repeating}Callback` becomes null, as if its `Reset()`
+method had been called. Afterward, its `is_null()` method will return true and
+its `operator bool()` will return false.
 
 ## Quick reference for basic stuff
 
@@ -259,7 +260,7 @@ pointer.
 base::Closure cb = base::Bind(&MyClass::MyFunc, this, 23, "hello world");
 ```
 
-### Partial Binding Of Parameters (Currying)
+### Partial Binding Of Parameters
 
 You can specify some parameters when you create the callback, and specify the
 rest when you execute the callback.
@@ -280,12 +281,12 @@ void AnotherFunc(const std::string& file) {
 };
 ```
 
-This technique is known as [Currying](http://en.wikipedia.org/wiki/Currying). It
-should be used in lieu of creating an adapter class that holds the bound
-arguments. Notice also that the `"MyPrefix: "` argument is actually a
-`const char*`, while `DisplayIntWithPrefix` actually wants a
-`const std::string&`. Like normal function dispatch, `base::Bind`, will coerce
-parameter types if possible.
+This technique is known as [partial
+application](http://en.wikipedia.org/wiki/Partial_application). It should be
+used in lieu of creating an adapter class that holds the bound arguments. Notice
+also that the `"MyPrefix: "` argument is actually a `const char*`, while
+`DisplayIntWithPrefix` actually wants a `const std::string&`. Like normal
+function dispatch, `base::Bind`, will coerce parameter types if possible.
 
 ### Avoiding Copies With Callback Parameters
 
@@ -336,17 +337,42 @@ base::BindRepeating(&Foo, base::Passed(std::move(p))); // Ok, but subtle.
 
 ### Binding A Class Method With Weak Pointers
 
+If `MyClass` has a `base::WeakPtr<MyClass> weak_this_` member (see below)
+then a class method can be bound with:
+
 ```cpp
-base::Bind(&MyClass::Foo, GetWeakPtr());
+base::Bind(&MyClass::Foo, weak_this_);
 ```
 
 The callback will not be run if the object has already been destroyed.
-**DANGER**: weak pointers are not threadsafe, so don't use this when passing
-between threads!
 
-To make a weak pointer, you would typically create a
-`base::WeakPtrFactory<Foo>` member at the bottom (to ensure it's destroyed
-last) of class `Foo`, then call `weak_factory_.GetWeakPtr()`.
+Note that class method callbacks bound to `base::WeakPtr`s may only be
+run on the same sequence on which the object will be destroyed, since otherwise
+execution of the callback might race with the object's deletion.
+
+To use `base::WeakPtr` with `base::Bind()`, `MyClass` will typically look like:
+
+```cpp
+class MyClass {
+public:
+  MyClass() {
+    weak_this_ = weak_factory_.GetWeakPtr();
+  }
+private:
+  base::WeakPtr<MyClass> weak_this_;
+  // MyClass member variables go here.
+  base::WeakPtrFactory<MyClass> weak_factory_{this};
+};
+```
+
+`weak_factory_` is the last member variable in `MyClass` so that it is
+destroyed first. This ensures that if any class methods bound to `weak_this_`
+are `Run()` during teardown, then they will not actually be executed.
+
+If `MyClass` only ever `base::Bind()`s and executes callbacks on the same
+sequence, then it is generally safe to call `weak_factory_.GetWeakPtr()` at the
+`base::Bind()` call, rather than taking a separate `weak_this_` during
+construction.
 
 ### Binding A Class Method With Manual Lifetime Management
 

@@ -10,7 +10,8 @@
 #import "ios/chrome/browser/ui/table_view/cells/table_view_cells_constants.h"
 #import "ios/chrome/browser/ui/table_view/chrome_table_view_styler.h"
 #import "ios/chrome/browser/ui/util/uikit_ui_util.h"
-#import "ios/chrome/common/ui_util/constraints_ui_util.h"
+#import "ios/chrome/common/ui/colors/UIColor+cr_semantic_colors.h"
+#import "ios/chrome/common/ui/util/constraints_ui_util.h"
 
 #if !defined(__has_feature) || !__has_feature(objc_arc)
 #error "This file requires ARC support."
@@ -34,7 +35,6 @@ const CGFloat kCellLabelsWidthProportion = 3.0f;
   self = [super initWithType:type];
   if (self) {
     self.cellClass = [TableViewDetailIconCell class];
-    _cellBackgroundColor = [UIColor whiteColor];
   }
   return self;
 }
@@ -46,7 +46,6 @@ const CGFloat kCellLabelsWidthProportion = 3.0f;
   [super configureCell:cell withStyler:styler];
   cell.textLabel.text = self.text;
   cell.detailTextLabel.text = self.detailText;
-  cell.backgroundColor = self.cellBackgroundColor;
 
   // Update the icon image, if one is present.
   UIImage* iconImage = nil;
@@ -103,9 +102,8 @@ const CGFloat kCellLabelsWidthProportion = 3.0f;
     _textLabel.translatesAutoresizingMaskIntoConstraints = NO;
     _textLabel.font = [UIFont preferredFontForTextStyle:UIFontTextStyleBody];
     _textLabel.adjustsFontForContentSizeCategory = YES;
-    _textLabel.textColor = [UIColor blackColor];
-    _textLabel.backgroundColor = [UIColor clearColor];
-    _textLabel.textAlignment = NSTextAlignmentLeft;
+    _textLabel.textColor = UIColor.cr_labelColor;
+    _textLabel.backgroundColor = UIColor.clearColor;
     [contentView addSubview:_textLabel];
 
     _detailTextLabel = [[UILabel alloc] init];
@@ -113,9 +111,8 @@ const CGFloat kCellLabelsWidthProportion = 3.0f;
     _detailTextLabel.font =
         [UIFont preferredFontForTextStyle:UIFontTextStyleBody];
     _detailTextLabel.adjustsFontForContentSizeCategory = YES;
-    _detailTextLabel.textColor = UIColorFromRGB(kSettingsCellsDetailTextColor);
-    _detailTextLabel.backgroundColor = [UIColor clearColor];
-    _detailTextLabel.textAlignment = NSTextAlignmentRight;
+    _detailTextLabel.textColor = UIColor.cr_secondaryLabelColor;
+    _detailTextLabel.backgroundColor = UIColor.clearColor;
     [contentView addSubview:_detailTextLabel];
 
     // Set up the constraints for when the icon is visible and hidden.  One of
@@ -127,32 +124,15 @@ const CGFloat kCellLabelsWidthProportion = 3.0f;
         constraintEqualToAnchor:_iconImageView.trailingAnchor
                        constant:kIconTrailingPadding];
 
-    // Rules between |_textLabel| width and |_detailTextLabel| width:
-    //   1. Widths are represented by the percentage according to the
-    //      available space inside |_labelContainerGuide|;
-    //   2. |_textLabel| has a width quota of 75%;
-    //   3. |_detailTextLabe| has a width quota of 25%;
-    //   4. When label A fits in A's quota, rest of A's quota can be used by
-    //      the other label(i.e. B can exceed B's quota), and vice versa;
-    //   5. When both labels exceed their quota, they occupy their quotas.
-    //
-    // Expected space allocation result:
-    //   Rows are |_textLabel|'s quota.
-    //   Columns are |_detailTextLabel|'s quota.
-    //   Pairs are actual width for (|_textLabel|, |_detailTextLabel|).
-    //
-    //                20%             60%             90%
-    //
-    //   20%       (20%, 20%)      (20%, 60%)      (20%, 80%)
-    //   60%       (60%, 20%)      (60%, 40%)      (60%, 30%)
-    //   90%       (80%, 20%)      (75%, 25%)      (75%, 25%)
-    //
+    // In case the two labels don't fit in width, have the |textLabel| be 3
+    // times the width of the |detailTextLabel| (so 75% / 25%).
     NSLayoutConstraint* widthConstraint = [_textLabel.widthAnchor
         constraintEqualToAnchor:_detailTextLabel.widthAnchor
                      multiplier:kCellLabelsWidthProportion];
     // Set low priority to the proportion constraint between |_textLabel| and
     // |_detailTextLabel|, so that it won't break other layouts.
     widthConstraint.priority = UILayoutPriorityDefaultLow;
+
     _standardConstraints = @[
       // Set up the vertical constraints and align the baselines of the two text
       // labels.
@@ -182,8 +162,7 @@ const CGFloat kCellLabelsWidthProportion = 3.0f;
           constraintLessThanOrEqualToAnchor:self.contentView.trailingAnchor
                                    constant:-kTableViewHorizontalSpacing],
       [_detailTextLabel.leadingAnchor
-          constraintEqualToAnchor:self.contentView.leadingAnchor
-                         constant:kTableViewHorizontalSpacing],
+          constraintEqualToAnchor:_textLabel.leadingAnchor],
       [_detailTextLabel.trailingAnchor
           constraintLessThanOrEqualToAnchor:_labelContainerGuide.trailingAnchor
                                    constant:-kTableViewHorizontalSpacing],
@@ -268,11 +247,21 @@ const CGFloat kCellLabelsWidthProportion = 3.0f;
   if (accessibilityContentSizeCategory) {
     [NSLayoutConstraint deactivateConstraints:_standardConstraints];
     [NSLayoutConstraint activateConstraints:_accessibilityConstraints];
+    // detailTextLabel is laid below textLabel with accessibility content size
+    // category.
+    _detailTextLabel.textAlignment = NSTextAlignmentNatural;
     _detailTextLabel.numberOfLines = 0;
     _textLabel.numberOfLines = 0;
   } else {
     [NSLayoutConstraint deactivateConstraints:_accessibilityConstraints];
     [NSLayoutConstraint activateConstraints:_standardConstraints];
+    // detailTextLabel is laid after textLabel and should have a trailing text
+    // alignment with non-accessibility content size category.
+    _detailTextLabel.textAlignment =
+        self.effectiveUserInterfaceLayoutDirection ==
+                UIUserInterfaceLayoutDirectionLeftToRight
+            ? NSTextAlignmentRight
+            : NSTextAlignmentLeft;
     _detailTextLabel.numberOfLines = 1;
     _textLabel.numberOfLines = 1;
   }
@@ -284,6 +273,10 @@ const CGFloat kCellLabelsWidthProportion = 3.0f;
 
 - (NSString*)accessibilityValue {
   return self.detailTextLabel.text;
+}
+
+- (NSArray<NSString*>*)accessibilityUserInputLabels {
+  return @[ self.textLabel.text ];
 }
 
 @end

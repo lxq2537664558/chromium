@@ -21,12 +21,4 @@
   }
   return self;
 }
-
-- (void)haltAllTabs {
-  // no-op
-}
-
-- (void)cleanDeviceSharingManager {
-  // no-op
-}
 @end

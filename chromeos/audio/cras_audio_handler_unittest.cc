@@ -15,7 +15,7 @@
 #include "base/memory/ref_counted.h"
 #include "base/run_loop.h"
 #include "base/system/system_monitor.h"
-#include "base/test/scoped_task_environment.h"
+#include "base/test/task_environment.h"
 #include "base/threading/thread_task_runner_handle.h"
 #include "base/values.h"
 #include "chromeos/audio/audio_devices_pref_handler.h"
@@ -23,10 +23,44 @@
 #include "chromeos/dbus/audio/audio_node.h"
 #include "chromeos/dbus/audio/fake_cras_audio_client.h"
 #include "media/base/video_facing.h"
+#include "mojo/public/cpp/bindings/pending_receiver.h"
+#include "mojo/public/cpp/bindings/receiver_set.h"
+#include "services/media_session/public/mojom/media_controller.mojom-test-utils.h"
+#include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace chromeos {
 namespace {
+
+class FakeMediaControllerManager
+    : public media_session::mojom::MediaControllerManagerInterceptorForTesting {
+ public:
+  FakeMediaControllerManager() = default;
+
+  mojo::PendingRemote<media_session::mojom::MediaControllerManager>
+  MakeRemote() {
+    mojo::PendingRemote<media_session::mojom::MediaControllerManager> remote;
+    receivers_.Add(this, remote.InitWithNewPipeAndPassReceiver());
+    return remote;
+  }
+
+  void CreateActiveMediaController(
+      mojo::PendingReceiver<media_session::mojom::MediaController> receiver)
+      override {}
+
+  MOCK_METHOD0(SuspendAllSessions, void());
+
+ private:
+  // media_session::mojom::MediaControllerManagerInterceptorForTesting:
+  MediaControllerManager* GetForwardingInterface() override {
+    NOTREACHED();
+    return nullptr;
+  }
+
+  mojo::ReceiverSet<media_session::mojom::MediaControllerManager> receivers_;
+
+  DISALLOW_COPY_AND_ASSIGN(FakeMediaControllerManager);
+};
 
 const uint64_t kInternalSpeakerId = 10001;
 const uint64_t kHeadphoneId = 10002;
@@ -261,11 +295,12 @@ class FakeVideoCaptureManager {
 class CrasAudioHandlerTest : public testing::TestWithParam<int> {
  public:
   CrasAudioHandlerTest()
-      : scoped_task_environment_(
-            base::test::ScopedTaskEnvironment::MainThreadType::UI) {}
+      : task_environment_(
+            base::test::SingleThreadTaskEnvironment::MainThreadType::UI) {}
   ~CrasAudioHandlerTest() override = default;
 
   void SetUp() override {
+    fake_manager_ = std::make_unique<FakeMediaControllerManager>();
     system_monitor_.AddDevicesChangedObserver(&system_monitor_observer_);
     video_capture_manager_.reset(new FakeVideoCaptureManager);
   }
@@ -303,7 +338,8 @@ class CrasAudioHandlerTest : public testing::TestWithParam<int> {
     CrasAudioClient::InitializeFake();
     fake_cras_audio_client()->SetAudioNodesForTesting(audio_nodes);
     audio_pref_handler_ = new AudioDevicesPrefHandlerStub();
-    CrasAudioHandler::Initialize(audio_pref_handler_);
+    CrasAudioHandler::Initialize(fake_manager_->MakeRemote(),
+                                 audio_pref_handler_);
     cras_audio_handler_ = CrasAudioHandler::Get();
     test_observer_.reset(new TestObserver);
     cras_audio_handler_->AddAudioObserver(test_observer_.get());
@@ -335,7 +371,8 @@ class CrasAudioHandlerTest : public testing::TestWithParam<int> {
     EXPECT_EQ(activate_by, activate_by_user);
 
     fake_cras_audio_client()->SetAudioNodesForTesting(audio_nodes);
-    CrasAudioHandler::Initialize(audio_pref_handler_);
+    CrasAudioHandler::Initialize(fake_manager_->MakeRemote(),
+                                 audio_pref_handler_);
 
     cras_audio_handler_ = CrasAudioHandler::Get();
     test_observer_.reset(new TestObserver);
@@ -350,7 +387,8 @@ class CrasAudioHandlerTest : public testing::TestWithParam<int> {
     fake_cras_audio_client()->SetAudioNodesForTesting(audio_nodes);
     fake_cras_audio_client()->SetActiveOutputNode(primary_active_node.id);
     audio_pref_handler_ = new AudioDevicesPrefHandlerStub();
-    CrasAudioHandler::Initialize(audio_pref_handler_);
+    CrasAudioHandler::Initialize(fake_manager_->MakeRemote(),
+                                 audio_pref_handler_);
     cras_audio_handler_ = CrasAudioHandler::Get();
     test_observer_.reset(new TestObserver);
     cras_audio_handler_->AddAudioObserver(test_observer_.get());
@@ -431,12 +469,13 @@ class CrasAudioHandlerTest : public testing::TestWithParam<int> {
     return FakeCrasAudioClient::Get();
   }
 
-  base::test::ScopedTaskEnvironment scoped_task_environment_;
+  base::test::SingleThreadTaskEnvironment task_environment_;
   base::SystemMonitor system_monitor_;
   SystemMonitorObserver system_monitor_observer_;
   CrasAudioHandler* cras_audio_handler_ = nullptr;         // Not owned.
   std::unique_ptr<TestObserver> test_observer_;
   scoped_refptr<AudioDevicesPrefHandlerStub> audio_pref_handler_;
+  std::unique_ptr<FakeMediaControllerManager> fake_manager_;
   std::unique_ptr<FakeVideoCaptureManager> video_capture_manager_;
 
  private:
@@ -458,15 +497,15 @@ class HDMIRediscoverWaiter {
     run_loop.Run();
   }
 
-  void CheckHDMIRediscoverGracePeriodEnd(const base::Closure& quit_loop_func) {
+  void CheckHDMIRediscoverGracePeriodEnd(base::OnceClosure quit_loop_func) {
     if (!cras_audio_handler_test_->IsDuringHDMIRediscoverGracePeriod()) {
-      quit_loop_func.Run();
+      std::move(quit_loop_func).Run();
       return;
     }
     base::ThreadTaskRunnerHandle::Get()->PostDelayedTask(
         FROM_HERE,
         base::BindOnce(&HDMIRediscoverWaiter::CheckHDMIRediscoverGracePeriodEnd,
-                       base::Unretained(this), quit_loop_func),
+                       base::Unretained(this), std::move(quit_loop_func)),
         base::TimeDelta::FromMilliseconds(grace_period_duration_in_ms_ / 4));
   }
 
@@ -4173,6 +4212,47 @@ TEST_P(CrasAudioHandlerTest, PlugInUSBHeadphoneAfterLastUnplugNotActive) {
   // USB headphone is active.
   EXPECT_EQ(kUSBHeadphone1->id,
             cras_audio_handler_->GetPrimaryActiveOutputNode());
+}
+
+TEST_P(CrasAudioHandlerTest, SuspendAllSessionsForOutput) {
+  // Set up initial output audio devices, with internal speaker, headphone and
+  // USBHeadphone.
+  AudioNodeList audio_nodes =
+      GenerateAudioNodeList({kInternalSpeaker, kHeadphone, kUSBHeadphone1});
+  SetUpCrasAudioHandler(audio_nodes);
+
+  // Verify the headphone has been selected as the active output.
+  AudioDevice active_output;
+  EXPECT_TRUE(
+      cras_audio_handler_->GetPrimaryActiveOutputDevice(&active_output));
+  EXPECT_EQ(kHeadphone->id, active_output.id);
+  EXPECT_EQ(kHeadphone->id, cras_audio_handler_->GetPrimaryActiveOutputNode());
+
+  // Unplug USBHeadphone should not suspend media sessions.
+  EXPECT_CALL(*fake_manager_.get(), SuspendAllSessions).Times(0);
+  audio_nodes = GenerateAudioNodeList({kInternalSpeaker, kHeadphone});
+  ChangeAudioNodes(audio_nodes);
+
+  // Unplug active output device should suspend all media sessions.
+  EXPECT_CALL(*fake_manager_.get(), SuspendAllSessions).Times(1);
+  audio_nodes.clear();
+  audio_nodes.push_back(GenerateAudioNode(kInternalSpeaker));
+  ChangeAudioNodes(audio_nodes);
+}
+
+TEST_P(CrasAudioHandlerTest, SuspendAllSessionsForInput) {
+  // Set up initial input audio devices, with internal mic and mic jack.
+  AudioNodeList audio_nodes = GenerateAudioNodeList({kInternalMic, kMicJack});
+  SetUpCrasAudioHandler(audio_nodes);
+
+  // Verify the mic jack has been selected as the active input.
+  EXPECT_EQ(kMicJack->id, cras_audio_handler_->GetPrimaryActiveInputNode());
+
+  // Unplug active input device should not suspend media sessions.
+  EXPECT_CALL(*fake_manager_.get(), SuspendAllSessions).Times(0);
+  audio_nodes.clear();
+  audio_nodes.push_back(GenerateAudioNode(kInternalMic));
+  ChangeAudioNodes(audio_nodes);
 }
 
 }  // namespace chromeos

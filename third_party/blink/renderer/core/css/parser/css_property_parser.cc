@@ -7,6 +7,7 @@
 #include "third_party/blink/renderer/core/css/css_inherited_value.h"
 #include "third_party/blink/renderer/core/css/css_initial_value.h"
 #include "third_party/blink/renderer/core/css/css_pending_substitution_value.h"
+#include "third_party/blink/renderer/core/css/css_revert_value.h"
 #include "third_party/blink/renderer/core/css/css_unicode_range_value.h"
 #include "third_party/blink/renderer/core/css/css_unset_value.h"
 #include "third_party/blink/renderer/core/css/css_variable_reference_value.h"
@@ -23,9 +24,38 @@
 
 namespace blink {
 
-using namespace css_property_parser_helpers;
+using css_property_parser_helpers::ConsumeIdent;
+using css_property_parser_helpers::IsImplicitProperty;
+using css_property_parser_helpers::ParseLonghand;
 
 class CSSIdentifierValue;
+
+namespace {
+
+const CSSValue* MaybeConsumeCSSWideKeyword(CSSParserTokenRange& range) {
+  CSSParserTokenRange local_range = range;
+
+  CSSValueID id = local_range.ConsumeIncludingWhitespace().Id();
+  if (!local_range.AtEnd())
+    return nullptr;
+
+  const CSSValue* value = nullptr;
+  if (id == CSSValueID::kInitial)
+    value = CSSInitialValue::Create();
+  if (id == CSSValueID::kInherit)
+    value = CSSInheritedValue::Create();
+  if (id == CSSValueID::kUnset)
+    value = cssvalue::CSSUnsetValue::Create();
+  if (RuntimeEnabledFeatures::CSSRevertEnabled() && id == CSSValueID::kRevert)
+    value = cssvalue::CSSRevertValue::Create();
+
+  if (value)
+    range = local_range;
+
+  return value;
+}
+
+}  // namespace
 
 CSSPropertyParser::CSSPropertyParser(
     const CSSParserTokenRange& range,
@@ -74,6 +104,10 @@ const CSSValue* CSSPropertyParser::ParseSingleValue(
     const CSSParserContext* context) {
   DCHECK(context);
   CSSPropertyParser parser(range, context, nullptr);
+
+  if (const CSSValue* value = MaybeConsumeCSSWideKeyword(parser.range_))
+    return value;
+
   const CSSValue* value = ParseLonghand(property, CSSPropertyID::kInvalid,
                                         *parser.context_, parser.range_);
   if (!value || !parser.range_.AtEnd())
@@ -126,9 +160,10 @@ bool CSSPropertyParser::ParseValueStart(CSSPropertyID unresolved_property,
 
     if (is_shorthand) {
       const cssvalue::CSSPendingSubstitutionValue& pending_value =
-          *cssvalue::CSSPendingSubstitutionValue::Create(property_id, variable);
-      AddExpandedPropertyForValue(property_id, pending_value, important,
-                                  *parsed_properties_);
+          *MakeGarbageCollected<cssvalue::CSSPendingSubstitutionValue>(
+              property_id, variable);
+      css_property_parser_helpers::AddExpandedPropertyForValue(
+          property_id, pending_value, important, *parsed_properties_);
     } else {
       AddProperty(property_id, CSSPropertyID::kInvalid, *variable, important,
                   IsImplicitProperty::kNotImplicit, *parsed_properties_);
@@ -139,9 +174,19 @@ bool CSSPropertyParser::ParseValueStart(CSSPropertyID unresolved_property,
   return false;
 }
 
+static inline bool IsExposedInMode(const ExecutionContext* execution_context,
+                                   const CSSProperty& property,
+                                   CSSParserMode mode) {
+  return mode == kUASheetMode ? property.IsUAExposed(execution_context)
+                              : property.IsWebExposed(execution_context);
+}
+
 template <typename CharacterType>
-static CSSPropertyID UnresolvedCSSPropertyID(const CharacterType* property_name,
-                                             unsigned length) {
+static CSSPropertyID UnresolvedCSSPropertyID(
+    const ExecutionContext* execution_context,
+    const CharacterType* property_name,
+    unsigned length,
+    CSSParserMode mode) {
   if (length == 0)
     return CSSPropertyID::kInvalid;
   if (length >= 2 && property_name[0] == '-' && property_name[1] == '-')
@@ -163,24 +208,33 @@ static CSSPropertyID UnresolvedCSSPropertyID(const CharacterType* property_name,
   const Property* hash_table_entry = FindProperty(name, length);
   if (!hash_table_entry)
     return CSSPropertyID::kInvalid;
-  CSSPropertyID property = static_cast<CSSPropertyID>(hash_table_entry->id);
-  if (!CSSProperty::Get(resolveCSSPropertyID(property)).IsEnabled())
-    return CSSPropertyID::kInvalid;
-  return property;
+  CSSPropertyID property_id = static_cast<CSSPropertyID>(hash_table_entry->id);
+  const CSSProperty& property =
+      CSSProperty::Get(resolveCSSPropertyID(property_id));
+  bool exposed = IsExposedInMode(execution_context, property, mode);
+  return exposed ? property_id : CSSPropertyID::kInvalid;
 }
 
-CSSPropertyID unresolvedCSSPropertyID(const String& string) {
+CSSPropertyID unresolvedCSSPropertyID(const ExecutionContext* execution_context,
+                                      const String& string) {
   unsigned length = string.length();
+  CSSParserMode mode = kHTMLStandardMode;
   return string.Is8Bit()
-             ? UnresolvedCSSPropertyID(string.Characters8(), length)
-             : UnresolvedCSSPropertyID(string.Characters16(), length);
+             ? UnresolvedCSSPropertyID(execution_context, string.Characters8(),
+                                       length, mode)
+             : UnresolvedCSSPropertyID(execution_context, string.Characters16(),
+                                       length, mode);
 }
 
-CSSPropertyID UnresolvedCSSPropertyID(StringView string) {
+CSSPropertyID UnresolvedCSSPropertyID(const ExecutionContext* execution_context,
+                                      StringView string,
+                                      CSSParserMode mode) {
   unsigned length = string.length();
   return string.Is8Bit()
-             ? UnresolvedCSSPropertyID(string.Characters8(), length)
-             : UnresolvedCSSPropertyID(string.Characters16(), length);
+             ? UnresolvedCSSPropertyID(execution_context, string.Characters8(),
+                                       length, mode)
+             : UnresolvedCSSPropertyID(execution_context, string.Characters16(),
+                                       length, mode);
 }
 
 template <typename CharacterType>
@@ -215,18 +269,9 @@ CSSValueID CssValueKeywordID(StringView string) {
 bool CSSPropertyParser::ConsumeCSSWideKeyword(CSSPropertyID unresolved_property,
                                               bool important) {
   CSSParserTokenRange range_copy = range_;
-  CSSValueID id = range_copy.ConsumeIncludingWhitespace().Id();
-  if (!range_copy.AtEnd())
-    return false;
 
-  CSSValue* value = nullptr;
-  if (id == CSSValueID::kInitial)
-    value = CSSInitialValue::Create();
-  else if (id == CSSValueID::kInherit)
-    value = CSSInheritedValue::Create();
-  else if (id == CSSValueID::kUnset)
-    value = cssvalue::CSSUnsetValue::Create();
-  else
+  const CSSValue* value = MaybeConsumeCSSWideKeyword(range_copy);
+  if (!value)
     return false;
 
   CSSPropertyID property = resolveCSSPropertyID(unresolved_property);
@@ -237,8 +282,8 @@ bool CSSPropertyParser::ConsumeCSSWideKeyword(CSSPropertyID unresolved_property,
     AddProperty(property, CSSPropertyID::kInvalid, *value, important,
                 IsImplicitProperty::kNotImplicit, *parsed_properties_);
   } else {
-    AddExpandedPropertyForValue(property, *value, important,
-                                *parsed_properties_);
+    css_property_parser_helpers::AddExpandedPropertyForValue(
+        property, *value, important, *parsed_properties_);
   }
   range_ = range_copy;
   return true;
@@ -247,7 +292,7 @@ bool CSSPropertyParser::ConsumeCSSWideKeyword(CSSPropertyID unresolved_property,
 static CSSValue* ConsumeSingleViewportDescriptor(
     CSSParserTokenRange& range,
     CSSPropertyID prop_id,
-    CSSParserMode css_parser_mode) {
+    const CSSParserContext& context) {
   CSSValueID id = range.Peek().Id();
   switch (prop_id) {
     case CSSPropertyID::kMinWidth:
@@ -256,17 +301,19 @@ static CSSValue* ConsumeSingleViewportDescriptor(
     case CSSPropertyID::kMaxHeight:
       if (id == CSSValueID::kAuto || id == CSSValueID::kInternalExtendToZoom)
         return ConsumeIdent(range);
-      return ConsumeLengthOrPercent(range, css_parser_mode,
-                                    kValueRangeNonNegative);
+      return css_property_parser_helpers::ConsumeLengthOrPercent(
+          range, context, kValueRangeNonNegative);
     case CSSPropertyID::kMinZoom:
     case CSSPropertyID::kMaxZoom:
     case CSSPropertyID::kZoom: {
       if (id == CSSValueID::kAuto)
         return ConsumeIdent(range);
-      CSSValue* parsed_value = ConsumeNumber(range, kValueRangeNonNegative);
+      CSSValue* parsed_value = css_property_parser_helpers::ConsumeNumber(
+          range, context, kValueRangeNonNegative);
       if (parsed_value)
         return parsed_value;
-      return ConsumePercent(range, kValueRangeNonNegative);
+      return css_property_parser_helpers::ConsumePercent(
+          range, context, kValueRangeNonNegative);
     }
     case CSSPropertyID::kUserZoom:
       return ConsumeIdent<CSSValueID::kZoom, CSSValueID::kFixed>(range);
@@ -293,13 +340,13 @@ bool CSSPropertyParser::ParseViewportDescriptor(CSSPropertyID prop_id,
   switch (prop_id) {
     case CSSPropertyID::kWidth: {
       CSSValue* min_width = ConsumeSingleViewportDescriptor(
-          range_, CSSPropertyID::kMinWidth, context_->Mode());
+          range_, CSSPropertyID::kMinWidth, *context_);
       if (!min_width)
         return false;
       CSSValue* max_width = min_width;
       if (!range_.AtEnd()) {
         max_width = ConsumeSingleViewportDescriptor(
-            range_, CSSPropertyID::kMaxWidth, context_->Mode());
+            range_, CSSPropertyID::kMaxWidth, *context_);
       }
       if (!max_width || !range_.AtEnd())
         return false;
@@ -313,13 +360,13 @@ bool CSSPropertyParser::ParseViewportDescriptor(CSSPropertyID prop_id,
     }
     case CSSPropertyID::kHeight: {
       CSSValue* min_height = ConsumeSingleViewportDescriptor(
-          range_, CSSPropertyID::kMinHeight, context_->Mode());
+          range_, CSSPropertyID::kMinHeight, *context_);
       if (!min_height)
         return false;
       CSSValue* max_height = min_height;
       if (!range_.AtEnd()) {
         max_height = ConsumeSingleViewportDescriptor(
-            range_, CSSPropertyID::kMaxHeight, context_->Mode());
+            range_, CSSPropertyID::kMaxHeight, *context_);
       }
       if (!max_height || !range_.AtEnd())
         return false;
@@ -342,7 +389,7 @@ bool CSSPropertyParser::ParseViewportDescriptor(CSSPropertyID prop_id,
     case CSSPropertyID::kUserZoom:
     case CSSPropertyID::kOrientation: {
       CSSValue* parsed_value =
-          ConsumeSingleViewportDescriptor(range_, prop_id, context_->Mode());
+          ConsumeSingleViewportDescriptor(range_, prop_id, *context_);
       if (!parsed_value || !range_.AtEnd())
         return false;
       AddProperty(prop_id, CSSPropertyID::kInvalid, *parsed_value, important,
@@ -359,7 +406,8 @@ bool CSSPropertyParser::ParseFontFaceDescriptor(
   // TODO(meade): This function should eventually take an AtRuleDescriptorID.
   const AtRuleDescriptorID id =
       CSSPropertyIDAsAtRuleDescriptor(resolved_property);
-  DCHECK_NE(id, AtRuleDescriptorID::Invalid);
+  if (id == AtRuleDescriptorID::Invalid)
+    return false;
   CSSValue* parsed_value =
       AtRuleDescriptorParser::ParseFontFaceDescriptor(id, range_, *context_);
   if (!parsed_value)

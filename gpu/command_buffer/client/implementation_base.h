@@ -84,6 +84,7 @@ class GLES2_IMPL_EXPORT ImplementationBase
   bool HasGrContextSupport() const override;
   void WillCallGLFromSkia() override;
   void DidCallGLFromSkia() override;
+  void SetDisplayTransform(gfx::OverlayTransform transform) override;
 
   // base::trace_event::MemoryDumpProvider implementation.
   bool OnMemoryDump(const base::trace_event::MemoryDumpArgs& args,
@@ -155,7 +156,7 @@ class GLES2_IMPL_EXPORT ImplementationBase
 
   CommandBufferHelper* helper_;
 
-  base::WeakPtrFactory<ImplementationBase> weak_ptr_factory_;
+  base::WeakPtrFactory<ImplementationBase> weak_ptr_factory_{this};
 
   DISALLOW_COPY_AND_ASSIGN(ImplementationBase);
 };

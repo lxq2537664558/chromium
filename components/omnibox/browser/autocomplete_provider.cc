@@ -13,6 +13,7 @@
 #include "base/logging.h"
 #include "base/no_destructor.h"
 #include "base/strings/string_split.h"
+#include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/trace_event/memory_usage_estimator.h"
 #include "components/bookmarks/browser/bookmark_utils.h"
@@ -21,18 +22,16 @@
 #include "components/omnibox/browser/autocomplete_match.h"
 #include "components/omnibox/browser/autocomplete_match_classification.h"
 #include "components/omnibox/browser/history_provider.h"
+#include "components/omnibox/browser/omnibox_field_trial.h"
 #include "components/omnibox/browser/scored_history_match.h"
 #include "components/omnibox/common/omnibox_features.h"
 #include "components/url_formatter/url_fixer.h"
 #include "url/gurl.h"
 
-// static
-const size_t AutocompleteProvider::kMaxMatches = 3;
-
 AutocompleteProvider::AutocompleteProvider(Type type)
-    : done_(true),
-      type_(type) {
-}
+    : provider_max_matches_(OmniboxFieldTrial::GetProviderMaxMatches(type)),
+      done_(true),
+      type_(type) {}
 
 // static
 const char* AutocompleteProvider::TypeToString(Type type) {
@@ -41,6 +40,8 @@ const char* AutocompleteProvider::TypeToString(Type type) {
       return "Bookmark";
     case TYPE_BUILTIN:
       return "Builtin";
+    case TYPE_CLIPBOARD:
+      return "Clipboard";
     case TYPE_DOCUMENT:
       return "Document";
     case TYPE_HISTORY_QUICK:
@@ -49,16 +50,16 @@ const char* AutocompleteProvider::TypeToString(Type type) {
       return "HistoryURL";
     case TYPE_KEYWORD:
       return "Keyword";
+    case TYPE_ON_DEVICE_HEAD:
+      return "OnDeviceHead";
     case TYPE_SEARCH:
       return "Search";
     case TYPE_SHORTCUTS:
       return "Shortcuts";
     case TYPE_ZERO_SUGGEST:
       return "ZeroSuggest";
-    case TYPE_CLIPBOARD:
-      return "Clipboard";
-    case TYPE_ON_DEVICE_HEAD:
-      return "OnDeviceHead";
+    case TYPE_ZERO_SUGGEST_LOCAL_HISTORY:
+      return "LocalHistoryZeroSuggest";
     default:
       NOTREACHED() << "Unhandled AutocompleteProvider::Type " << type;
       return "Unknown";
@@ -86,7 +87,7 @@ ACMatchClassifications AutocompleteProvider::ClassifyAllMatchesInString(
   if (text.empty())
     return original_class;
 
-  TermMatches term_matches = FindTermMatches(find_text, text, true, false);
+  TermMatches term_matches = FindTermMatches(find_text, text);
 
   ACMatchClassifications classifications;
   if (text_is_search_query) {
@@ -109,6 +110,8 @@ metrics::OmniboxEventProto_ProviderType AutocompleteProvider::
       return metrics::OmniboxEventProto::BOOKMARK;
     case TYPE_BUILTIN:
       return metrics::OmniboxEventProto::BUILTIN;
+    case TYPE_CLIPBOARD:
+      return metrics::OmniboxEventProto::CLIPBOARD;
     case TYPE_DOCUMENT:
       return metrics::OmniboxEventProto::DOCUMENT;
     case TYPE_HISTORY_QUICK:
@@ -117,14 +120,16 @@ metrics::OmniboxEventProto_ProviderType AutocompleteProvider::
       return metrics::OmniboxEventProto::HISTORY_URL;
     case TYPE_KEYWORD:
       return metrics::OmniboxEventProto::KEYWORD;
+    case TYPE_ON_DEVICE_HEAD:
+      return metrics::OmniboxEventProto::ON_DEVICE_HEAD;
     case TYPE_SEARCH:
       return metrics::OmniboxEventProto::SEARCH;
     case TYPE_SHORTCUTS:
       return metrics::OmniboxEventProto::SHORTCUTS;
     case TYPE_ZERO_SUGGEST:
       return metrics::OmniboxEventProto::ZERO_SUGGEST;
-    case TYPE_CLIPBOARD:
-      return metrics::OmniboxEventProto::CLIPBOARD;
+    case TYPE_ZERO_SUGGEST_LOCAL_HISTORY:
+      return metrics::OmniboxEventProto::ZERO_SUGGEST_LOCAL_HISTORY;
     default:
       NOTREACHED() << "Unhandled AutocompleteProvider::Type " << type_;
       return metrics::OmniboxEventProto::UNKNOWN_PROVIDER;
@@ -205,9 +210,14 @@ AutocompleteProvider::FixupReturn AutocompleteProvider::FixupUserInput(
   // harm in making sure.
   const size_t last_input_nonslash =
       input_text.find_last_not_of(base::ASCIIToUTF16("/\\"));
-  const size_t num_input_slashes =
-      (last_input_nonslash == base::string16::npos) ?
-      input_text.length() : (input_text.length() - 1 - last_input_nonslash);
+  size_t num_input_slashes =
+      (last_input_nonslash == base::string16::npos)
+          ? input_text.length()
+          : (input_text.length() - 1 - last_input_nonslash);
+  // If we appended text, user slashes are irrelevant.
+  if (output.length() > input_text.length() &&
+      base::StartsWith(output, input_text, base::CompareCase::SENSITIVE))
+    num_input_slashes = 0;
   const size_t last_output_nonslash =
       output.find_last_not_of(base::ASCIIToUTF16("/\\"));
   const size_t num_output_slashes =
@@ -239,4 +249,33 @@ size_t AutocompleteProvider::TrimHttpPrefix(base::string16* url) {
     ++prefix_end;
   url->erase(scheme_pos, prefix_end - scheme_pos);
   return (scheme_pos == 0) ? prefix_end : 0;
+}
+
+// static
+bool AutocompleteProvider::InExplicitExperimentalKeywordMode(
+    const AutocompleteInput& input,
+    const base::string16& keyword) {
+  return OmniboxFieldTrial::IsExperimentalKeywordModeEnabled() &&
+         input.prefer_keyword() &&
+         base::StartsWith(input.text(), keyword,
+                          base::CompareCase::SENSITIVE) &&
+         IsExplicitlyInKeywordMode(input, keyword);
+}
+
+// static
+bool AutocompleteProvider::IsExplicitlyInKeywordMode(
+    const AutocompleteInput& input,
+    const base::string16& keyword) {
+  // It is important to this method that we determine if the user entered
+  // keyword mode intentionally, as we use this routine to e.g. filter
+  // all but keyword results. Currently we assume that the user entered
+  // keyword mode intentionally with all entry methods except with a
+  // space (and disregard entry method during a backspace). However, if the
+  // user has typed a char past the space, we again assume keyword mode.
+  return (((input.keyword_mode_entry_method() !=
+                metrics::OmniboxEventProto::SPACE_AT_END &&
+            input.keyword_mode_entry_method() !=
+                metrics::OmniboxEventProto::SPACE_IN_MIDDLE) &&
+           !input.prevent_inline_autocomplete()) ||
+          input.text().size() > keyword.size() + 1);
 }

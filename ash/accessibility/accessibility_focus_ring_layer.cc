@@ -17,10 +17,12 @@ namespace ash {
 
 namespace {
 
-// The number of pixels in the color gradient that fades to transparent.
+// The number of density-indpendent pixels in the color gradient that fades to
+// transparent.
 constexpr int kGradientWidth = 6;
 constexpr int kDefaultStrokeWidth = 2;
-constexpr float kDashLength = 3.f;
+constexpr float kDashLengthDip = 3.f;
+constexpr float kGapLengthDip = 5.f;
 
 int sign(int x) {
   return ((x > 0) ? 1 : (x == 0) ? 0 : -1);
@@ -103,7 +105,7 @@ void AccessibilityFocusRingLayer::Set(const AccessibilityFocusRing& ring) {
   CreateOrUpdateLayer(root_window, "AccessibilityFocusRing", bounds);
 }
 
-void AccessibilityFocusRingLayer::SetAppearance(mojom::FocusRingType type,
+void AccessibilityFocusRingLayer::SetAppearance(FocusRingType type,
                                                 SkColor color,
                                                 SkColor secondary_color) {
   SetColor(color);
@@ -120,13 +122,13 @@ void AccessibilityFocusRingLayer::OnPaintLayer(
   flags.setStyle(cc::PaintFlags::kStroke_Style);
 
   switch (type_) {
-    case mojom::FocusRingType::GLOW:
+    case FocusRingType::GLOW:
       DrawGlowFocusRing(recorder, flags);
       break;
-    case mojom::FocusRingType::SOLID:
+    case FocusRingType::SOLID:
       DrawSolidFocusRing(recorder, flags);
       break;
-    case mojom::FocusRingType::DASHED:
+    case FocusRingType::DASHED:
       DrawDashedFocusRing(recorder, flags);
       break;
   }
@@ -160,7 +162,7 @@ void AccessibilityFocusRingLayer::DrawDashedFocusRing(
   SkPath path;
   gfx::Vector2d offset = layer()->bounds().OffsetFromOrigin();
 
-  SkScalar intervals[] = {kDashLength, kDashLength};
+  SkScalar intervals[] = {kDashLengthDip, kGapLengthDip};
   int intervals_length = 2;
   flags.setPathEffect(SkDashPathEffect::Make(intervals, intervals_length, 0));
 

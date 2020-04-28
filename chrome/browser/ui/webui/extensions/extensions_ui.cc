@@ -10,17 +10,17 @@
 
 #include "base/bind.h"
 #include "base/command_line.h"
+#include "base/metrics/field_trial_params.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/strings/utf_string_conversions.h"
-#include "base/timer/elapsed_timer.h"
 #include "build/build_config.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/extensions/chrome_extension_browser_constants.h"
+#include "chrome/browser/extensions/extension_checkup.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/webui/dark_mode_handler.h"
-#include "chrome/browser/ui/webui/localized_string.h"
 #include "chrome/browser/ui/webui/managed_ui_handler.h"
 #include "chrome/browser/ui/webui/metrics_handler.h"
+#include "chrome/browser/ui/webui/webui_util.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/common/url_constants.h"
@@ -29,20 +29,20 @@
 #include "chrome/grit/extensions_resources.h"
 #include "chrome/grit/extensions_resources_map.h"
 #include "chrome/grit/generated_resources.h"
-#include "chrome/grit/theme_resources.h"
 #include "components/google/core/common/google_util.h"
 #include "components/pref_registry/pref_registry_syncable.h"
 #include "components/prefs/pref_service.h"
 #include "components/strings/grit/components_strings.h"
-#include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/web_contents.h"
-#include "content/public/browser/web_contents_observer.h"
 #include "content/public/browser/web_ui.h"
 #include "content/public/browser/web_ui_data_source.h"
-#include "content/public/common/content_features.h"
+#include "extensions/browser/extension_prefs.h"
+#include "extensions/common/extension_features.h"
 #include "extensions/common/extension_urls.h"
+#include "extensions/grit/extensions_browser_resources.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/resource/resource_bundle.h"
+#include "ui/base/webui/web_ui_util.h"
 
 #if defined(OS_CHROMEOS)
 #include "chrome/browser/chromeos/ownership/owner_settings_service_chromeos_factory.h"
@@ -57,50 +57,10 @@ constexpr char kInDevModeKey[] = "inDevMode";
 constexpr char kShowActivityLogKey[] = "showActivityLog";
 constexpr char kLoadTimeClassesKey[] = "loadTimeClasses";
 
-class ExtensionWebUiTimer : public content::WebContentsObserver {
- public:
-  explicit ExtensionWebUiTimer(content::WebContents* web_contents)
-      : content::WebContentsObserver(web_contents) {}
-  ~ExtensionWebUiTimer() override {}
-
-  void DidStartNavigation(
-      content::NavigationHandle* navigation_handle) override {
-    if (navigation_handle->IsInMainFrame() &&
-        !navigation_handle->IsSameDocument()) {
-      timer_.reset(new base::ElapsedTimer());
-    }
-  }
-
-  void DocumentLoadedInFrame(
-      content::RenderFrameHost* render_frame_host) override {
-    if (render_frame_host != web_contents()->GetMainFrame() ||
-        !timer_) {  // See comment in DocumentOnLoadCompletedInMainFrame()
-      return;
-    }
-    UMA_HISTOGRAM_TIMES("Extensions.WebUi.DocumentLoadedInMainFrameTime.MD",
-                        timer_->Elapsed());
-  }
-
-  void DocumentOnLoadCompletedInMainFrame() override {
-    // TODO(devlin): The usefulness of these metrics remains to be seen.
-    if (!timer_) {
-      // This object could have been created for a child RenderFrameHost so it
-      // would never get a DidStartNavigation with the main frame. However it
-      // will receive this current callback.
-      return;
-    }
-    UMA_HISTOGRAM_TIMES("Extensions.WebUi.LoadCompletedInMainFrame.MD",
-                        timer_->Elapsed());
-    timer_.reset();
-  }
-
-  void WebContentsDestroyed() override { delete this; }
-
- private:
-  std::unique_ptr<base::ElapsedTimer> timer_;
-
-  DISALLOW_COPY_AND_ASSIGN(ExtensionWebUiTimer);
-};
+#if !BUILDFLAG(OPTIMIZE_WEBUI)
+constexpr char kGeneratedPath[] =
+    "@out_folder@/gen/chrome/browser/resources/extensions/";
+#endif
 
 std::string GetLoadTimeClasses(bool in_dev_mode) {
   return in_dev_mode ? "in-dev-mode" : std::string();
@@ -110,18 +70,33 @@ content::WebUIDataSource* CreateMdExtensionsSource(Profile* profile,
                                                    bool in_dev_mode) {
   content::WebUIDataSource* source =
       content::WebUIDataSource::Create(chrome::kChromeUIExtensionsHost);
-  source->SetJsonPath("strings.js");
+#if BUILDFLAG(OPTIMIZE_WEBUI)
+  webui::SetupBundledWebUIDataSource(source, "extensions.js",
+                                     IDR_EXTENSIONS_EXTENSIONS_ROLLUP_JS,
+                                     IDR_EXTENSIONS_EXTENSIONS_HTML);
+  source->AddResourcePath("checkup_image.svg", IDR_EXTENSIONS_CHECKUP_IMAGE);
+  source->AddResourcePath("checkup_image_dark.svg",
+                          IDR_EXTENSIONS_CHECKUP_IMAGE_DARK);
+#else
+  webui::SetupWebUIDataSource(
+      source, base::make_span(kExtensionsResources, kExtensionsResourcesSize),
+      kGeneratedPath, IDR_EXTENSIONS_EXTENSIONS_HTML);
+#endif
 
-  static constexpr LocalizedString kLocalizedStrings[] = {
+  static constexpr webui::LocalizedString kLocalizedStrings[] = {
     // Add common strings.
     {"add", IDS_ADD},
     {"back", IDS_ACCNAME_BACK},
     {"cancel", IDS_CANCEL},
     {"close", IDS_CLOSE},
+    {"clear", IDS_CLEAR},
     {"confirm", IDS_CONFIRM},
+    {"controlledSettingChildRestriction",
+     IDS_CONTROLLED_SETTING_CHILD_RESTRICTION},
     {"controlledSettingPolicy", IDS_CONTROLLED_SETTING_POLICY},
     {"done", IDS_DONE},
     {"learnMore", IDS_LEARN_MORE},
+    {"menu", IDS_MENU},
     {"noSearchResults", IDS_SEARCH_NO_RESULTS},
     {"ok", IDS_OK},
     {"save", IDS_SAVE},
@@ -204,6 +179,7 @@ content::WebUIDataSource* CreateMdExtensionsSource(Profile* profile,
      IDS_EXTENSIONS_ACTIVITY_LOG_MORE_ACTIONS_LABEL},
     {"activityLogExpandAll", IDS_EXTENSIONS_ACTIVITY_LOG_EXPAND_ALL},
     {"activityLogCollapseAll", IDS_EXTENSIONS_ACTIVITY_LOG_COLLAPSE_ALL},
+    {"activityLogExportHistory", IDS_EXTENSIONS_ACTIVITY_LOG_EXPORT_HISTORY},
     {"appIcon", IDS_EXTENSIONS_APP_ICON},
     {"extensionIcon", IDS_EXTENSIONS_EXTENSION_ICON},
     {"extensionA11yAssociation", IDS_EXTENSIONS_EXTENSION_A11Y_ASSOCIATION},
@@ -227,6 +203,8 @@ content::WebUIDataSource* CreateMdExtensionsSource(Profile* profile,
     {"itemSourceUnpacked", IDS_EXTENSIONS_ITEM_SOURCE_UNPACKED},
     {"itemSourceWebstore", IDS_EXTENSIONS_ITEM_SOURCE_WEBSTORE},
     {"itemVersion", IDS_EXTENSIONS_ITEM_VERSION},
+    {"itemReloaded", IDS_EXTENSIONS_ITEM_RELOADED},
+    {"itemReloading", IDS_EXTENSIONS_ITEM_RELOADING},
     // TODO(dpapad): Replace this with an Extensions specific string.
     {"itemSize", IDS_DIRECTORY_LISTING_SIZE},
     {"itemAllowOnFileUrls", IDS_EXTENSIONS_ALLOW_FILE_ACCESS},
@@ -243,6 +221,7 @@ content::WebUIDataSource* CreateMdExtensionsSource(Profile* profile,
     {"loadErrorErrorLabel", IDS_EXTENSIONS_LOAD_ERROR_ERROR_LABEL},
     {"loadErrorRetry", IDS_EXTENSIONS_LOAD_ERROR_RETRY},
     {"loadingActivities", IDS_EXTENSIONS_LOADING_ACTIVITIES},
+    {"missingOrUninstalledExtension", IDS_MISSING_OR_UNINSTALLED_EXTENSION},
     {"noActivities", IDS_EXTENSIONS_NO_ACTIVITIES},
     {"noErrorsToShow", IDS_EXTENSIONS_ERROR_NO_ERRORS_CODE_MESSAGE},
     {"runtimeHostsDialogInputError",
@@ -264,6 +243,7 @@ content::WebUIDataSource* CreateMdExtensionsSource(Profile* profile,
     {"shortcutScopeGlobal", IDS_EXTENSIONS_SHORTCUT_SCOPE_GLOBAL},
     {"shortcutScopeLabel", IDS_EXTENSIONS_SHORTCUT_SCOPE_LABEL},
     {"shortcutScopeInChrome", IDS_EXTENSIONS_SHORTCUT_SCOPE_IN_CHROME},
+    {"shortcutSet", IDS_EXTENSIONS_SHORTCUT_SET},
     {"shortcutTypeAShortcut", IDS_EXTENSIONS_TYPE_A_SHORTCUT},
     {"shortcutIncludeStartModifier", IDS_EXTENSIONS_INCLUDE_START_MODIFIER},
     {"shortcutTooManyModifiers", IDS_EXTENSIONS_TOO_MANY_MODIFIERS},
@@ -297,8 +277,7 @@ content::WebUIDataSource* CreateMdExtensionsSource(Profile* profile,
      IDS_EXTENSIONS_KIOSK_DISABLE_BAILOUT_SHORTCUT_WARNING_TITLE},
 #endif
   };
-  AddLocalizedStringsBulk(source, kLocalizedStrings,
-                          base::size(kLocalizedStrings));
+  AddLocalizedStringsBulk(source, kLocalizedStrings);
 
   source->AddString("errorLinesNotShownSingular",
                     l10n_util::GetPluralStringFUTF16(
@@ -337,30 +316,52 @@ content::WebUIDataSource* CreateMdExtensionsSource(Profile* profile,
   source->AddBoolean(kShowActivityLogKey,
                      base::CommandLine::ForCurrentProcess()->HasSwitch(
                          ::switches::kEnableExtensionActivityLogging));
-  source->AddString(kLoadTimeClassesKey, GetLoadTimeClasses(in_dev_mode));
 
-#if BUILDFLAG(OPTIMIZE_WEBUI)
-  source->AddResourcePath("crisper.js", IDR_EXTENSIONS_CRISPER_JS);
-  source->SetDefaultResource(
-      base::FeatureList::IsEnabled(features::kWebUIPolymer2)
-          ? IDR_EXTENSIONS_VULCANIZED_P2_HTML
-          : IDR_EXTENSIONS_VULCANIZED_HTML);
-  source->UseGzip();
-#else
-  // Add all MD Extensions resources.
-  for (size_t i = 0; i < kExtensionsResourcesSize; ++i) {
-    source->AddResourcePath(kExtensionsResources[i].name,
-                            kExtensionsResources[i].value);
+  bool checkup_enabled =
+      base::FeatureList::IsEnabled(extensions_features::kExtensionsCheckup);
+  source->AddBoolean("showCheckup", checkup_enabled);
+  if (checkup_enabled) {
+    int title_id = 0;
+    int body1_id = 0;
+    int body2_id = 0;
+    switch (GetCheckupMessageFocus()) {
+      case CheckupMessage::PERFORMANCE:
+        title_id = IDS_EXTENSIONS_CHECKUP_BANNER_PERFORMANCE_TITLE;
+        body1_id = IDS_EXTENSIONS_CHECKUP_BANNER_PERFORMANCE_BODY1;
+        body2_id = IDS_EXTENSIONS_CHECKUP_BANNER_PERFORMANCE_BODY2;
+        break;
+      case CheckupMessage::PRIVACY:
+        title_id = IDS_EXTENSIONS_CHECKUP_BANNER_PRIVACY_TITLE;
+        body1_id = IDS_EXTENSIONS_CHECKUP_BANNER_PRIVACY_BODY1;
+        body2_id = IDS_EXTENSIONS_CHECKUP_BANNER_PRIVACY_BODY2;
+        break;
+      case CheckupMessage::NEUTRAL:
+        title_id = IDS_EXTENSIONS_CHECKUP_BANNER_NEUTRAL_TITLE;
+        body1_id = IDS_EXTENSIONS_CHECKUP_BANNER_NEUTRAL_BODY1;
+        body2_id = IDS_EXTENSIONS_CHECKUP_BANNER_NEUTRAL_BODY2;
+        break;
+    }
+    source->AddLocalizedString("checkupTitle", title_id);
+    source->AddLocalizedString("checkupBody1", body1_id);
+    source->AddLocalizedString("checkupBody2", body2_id);
+  } else {
+    source->AddString("checkupTitle", "");
+    source->AddString("checkupBody1", "");
+    source->AddString("checkupBody2", "");
   }
-  source->SetDefaultResource(IDR_EXTENSIONS_EXTENSIONS_HTML);
-#endif
+  source->AddString(kLoadTimeClassesKey, GetLoadTimeClasses(in_dev_mode));
 
   return source;
 }
 
 }  // namespace
 
-ExtensionsUI::ExtensionsUI(content::WebUI* web_ui) : WebUIController(web_ui) {
+ExtensionsUI::ExtensionsUI(content::WebUI* web_ui)
+    : WebContentsObserver(web_ui->GetWebContents()),
+      WebUIController(web_ui),
+      webui_load_timer_(web_ui->GetWebContents(),
+                        "Extensions.WebUi.DocumentLoadedInMainFrameTime.MD",
+                        "Extensions.WebUi.LoadCompletedInMainFrame.MD") {
   Profile* profile = Profile::FromWebUI(web_ui);
   content::WebUIDataSource* source = nullptr;
 
@@ -369,7 +370,6 @@ ExtensionsUI::ExtensionsUI(content::WebUI* web_ui) : WebUIController(web_ui) {
       base::Bind(&ExtensionsUI::OnDevModeChanged, base::Unretained(this)));
 
   source = CreateMdExtensionsSource(profile, *in_dev_mode_);
-  DarkModeHandler::Initialize(web_ui, source);
   ManagedUIHandler::Initialize(web_ui, source);
 
 #if defined(OS_CHROMEOS)
@@ -385,11 +385,26 @@ ExtensionsUI::ExtensionsUI(content::WebUI* web_ui) : WebUIController(web_ui) {
 
   content::WebUIDataSource::Add(profile, source);
 
-  // Handles its own lifetime.
-  new ExtensionWebUiTimer(web_ui->GetWebContents());
+  // Stores a boolean in ExtensionPrefs so we can make sure that the user is
+  // redirected to the extensions page upon startup once. We're using
+  // GetVisibleURL() because the load hasn't committed and this check isn't used
+  // for a security decision, however a stronger check will be implemented if we
+  // decide to invest more in this experiment.
+  if (web_ui->GetWebContents()->GetVisibleURL().query_piece().starts_with(
+          "checkup")) {
+    ExtensionPrefs::Get(profile)->SetUserHasSeenExtensionsCheckupOnStartup(
+        true);
+  }
 }
 
-ExtensionsUI::~ExtensionsUI() {}
+ExtensionsUI::~ExtensionsUI() {
+  if (timer_.has_value())
+    UMA_HISTOGRAM_LONG_TIMES("Extensions.Checkup.TimeSpent", timer_->Elapsed());
+}
+
+void ExtensionsUI::DidStopLoading() {
+  timer_ = base::ElapsedTimer();
+}
 
 // static
 base::RefCountedMemory* ExtensionsUI::GetFaviconResourceBytes(

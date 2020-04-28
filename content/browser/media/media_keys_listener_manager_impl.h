@@ -14,28 +14,12 @@
 #include "content/common/content_export.h"
 #include "content/public/browser/media_keys_listener_manager.h"
 #include "ui/base/accelerators/media_keys_listener.h"
-#include "ui/base/mpris/buildflags/buildflags.h"
 #include "ui/events/keycodes/keyboard_codes.h"
-
-namespace service_manager {
-class Connector;
-}  // namespace service_manager
 
 namespace content {
 
 class HardwareKeyMediaController;
-
-#if defined(OS_MACOSX)
-class NowPlayingInfoCenterNotifier;
-#endif
-
-#if BUILDFLAG(USE_MPRIS)
-class MprisNotifier;
-#endif
-
-#if defined(OS_WIN)
 class SystemMediaControlsNotifier;
-#endif  // defined(OS_WIN)
 
 // Listens for media keys and decides which listeners receive which events. In
 // particular, it owns one of its delegates (HardwareKeyMediaController), and
@@ -45,7 +29,7 @@ class CONTENT_EXPORT MediaKeysListenerManagerImpl
     : public MediaKeysListenerManager,
       public ui::MediaKeysListener::Delegate {
  public:
-  explicit MediaKeysListenerManagerImpl(service_manager::Connector* connector);
+  MediaKeysListenerManagerImpl();
   ~MediaKeysListenerManagerImpl() override;
 
   // MediaKeysListenerManager implementation.
@@ -59,6 +43,12 @@ class CONTENT_EXPORT MediaKeysListenerManagerImpl
 
   // ui::MediaKeysListener::Delegate:
   void OnMediaKeysAccelerator(const ui::Accelerator& accelerator) override;
+
+  // Informs the MediaKeysListener whether or not media is playing.
+  // TODO(https://crbug.com/974035): Once the MediaKeysListenerManager has been
+  // refactored to work with system media controls this should no longer be
+  // needed and should be deleted.
+  void SetIsMediaPlaying(bool is_playing);
 
   HardwareKeyMediaController* hardware_key_media_controller_for_testing() {
     return hardware_key_media_controller_.get();
@@ -108,8 +98,8 @@ class CONTENT_EXPORT MediaKeysListenerManagerImpl
   base::flat_map<ui::KeyboardCode, std::unique_ptr<ListeningData>>
       delegate_map_;
   std::unique_ptr<ui::MediaKeysListener> media_keys_listener_;
-  service_manager::Connector* connector_;
   std::unique_ptr<HardwareKeyMediaController> hardware_key_media_controller_;
+  std::unique_ptr<SystemMediaControlsNotifier> system_media_controls_notifier_;
 
   // False if media key handling has been explicitly disabled by a call to
   // |DisableInternalMediaKeyHandling()|.
@@ -118,18 +108,7 @@ class CONTENT_EXPORT MediaKeysListenerManagerImpl
   // True if auxiliary services have already been started.
   bool auxiliary_services_started_;
 
-#if defined(OS_MACOSX)
-  std::unique_ptr<NowPlayingInfoCenterNotifier>
-      now_playing_info_center_notifier_;
-#endif
-
-#if defined(OS_WIN)
-  std::unique_ptr<SystemMediaControlsNotifier> system_media_controls_notifier_;
-#endif  // defined(OS_WIN)
-
-#if BUILDFLAG(USE_MPRIS)
-  std::unique_ptr<MprisNotifier> mpris_notifier_;
-#endif
+  bool is_media_playing_ = false;
 
   DISALLOW_COPY_AND_ASSIGN(MediaKeysListenerManagerImpl);
 };

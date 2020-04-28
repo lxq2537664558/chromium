@@ -37,8 +37,7 @@ import java.util.concurrent.TimeoutException;
  * See also chrome layer org.chromium.chrome.browser.VideoFullscreenOrientationLockChromeTest
  */
 @RunWith(ContentJUnit4ClassRunner.class)
-@CommandLineFlags.Add({MediaSwitches.AUTOPLAY_NO_GESTURE_REQUIRED_POLICY,
-        "disable-features=" + MediaSwitches.USE_MODERN_MEDIA_CONTROLS})
+@CommandLineFlags.Add({MediaSwitches.AUTOPLAY_NO_GESTURE_REQUIRED_POLICY})
 public class VideoFullscreenOrientationLockTest {
     @Rule
     public ContentShellActivityTestRule mActivityTestRule = new ContentShellActivityTestRule();
@@ -50,11 +49,10 @@ public class VideoFullscreenOrientationLockTest {
         CriteriaHelper.pollInstrumentationThread(
                 Criteria.equals(fullscreenValue, new Callable<Boolean>() {
                     @Override
-                    public Boolean call() throws InterruptedException, TimeoutException {
+                    public Boolean call() throws TimeoutException {
                         return DOMUtils.isFullscreen(mActivityTestRule.getWebContents());
                     }
-                })
-        );
+                }));
     }
 
     private boolean isScreenOrientationLocked() {
@@ -62,7 +60,7 @@ public class VideoFullscreenOrientationLockTest {
                 != ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED;
     }
 
-    private boolean isScreenOrientationLandscape() throws InterruptedException, TimeoutException {
+    private boolean isScreenOrientationLandscape() throws TimeoutException {
         StringBuilder sb = new StringBuilder();
         sb.append("(function() {");
         sb.append("  return  screen.orientation.type.startsWith('landscape');");
@@ -74,61 +72,54 @@ public class VideoFullscreenOrientationLockTest {
                 .equals("true");
     }
 
-    private void waitUntilLockedToLandscape() throws InterruptedException {
-        CriteriaHelper.pollInstrumentationThread(new Criteria() {
-            @Override
-            public boolean isSatisfied() {
-                try {
-                    return isScreenOrientationLocked() && isScreenOrientationLandscape();
-                } catch (InterruptedException e) {
-                    return false;
-                } catch (TimeoutException e) {
-                    return false;
-                }
+    private void waitUntilLockedToLandscape() {
+        CriteriaHelper.pollInstrumentationThread(() -> {
+            try {
+                Assert.assertTrue(isScreenOrientationLocked());
+                Assert.assertTrue(isScreenOrientationLandscape());
+            } catch (TimeoutException e) {
+                Assert.fail(e.toString());
             }
         });
     }
 
-    private void waitUntilUnlocked() throws InterruptedException {
-        CriteriaHelper.pollInstrumentationThread(new Criteria() {
-            @Override
-            public boolean isSatisfied() {
-                return !isScreenOrientationLocked();
-            }
-        });
+    private void waitUntilUnlocked() {
+        CriteriaHelper.pollInstrumentationThread(
+                Criteria.equals(false, this::isScreenOrientationLocked));
     }
 
-    // TODO(mlamouri): move this constants and the controlBar(), fullscreenButton() methods to a
-    // dedicated helper file for media tests.
-    private static final int CONTROLS_HEIGHT = 35;
-    private static final int BUTTON_WIDTH = 35;
-    private static final int CONTROL_BAR_MARGIN = 5;
-    private static final int BUTTON_RIGHT_MARGIN = 9;
-    private static final int FULLSCREEN_BUTTON_LEFT_MARGIN = -5;
+    // TODO(mlamouri): move these constants and bounds  methods to a dedicated helper file for
+    // media tests.
+    private static final int TIMELINE_HEIGHT = 24;
+    private static final int BUTTON_PANEL_HEIGHT = 48;
+    private static final int BUTTON_WIDTH = 48;
 
-    private Rect controlBarBounds(Rect videoRect) {
-        int left = videoRect.left + CONTROL_BAR_MARGIN;
-        int right = videoRect.right - CONTROL_BAR_MARGIN;
-        int bottom = videoRect.bottom - CONTROL_BAR_MARGIN;
-        int top = videoRect.bottom - CONTROLS_HEIGHT;
+    private Rect buttonPanelBounds(Rect videoRect) {
+        int left = videoRect.left;
+        int right = videoRect.right;
+        int bottom = videoRect.bottom - TIMELINE_HEIGHT;
+        int top = bottom - BUTTON_PANEL_HEIGHT;
         return new Rect(left, top, right, bottom);
     }
 
     private Rect fullscreenButtonBounds(Rect videoRect) {
-        Rect bar = controlBarBounds(videoRect);
-        int right = bar.right - BUTTON_RIGHT_MARGIN;
+        Rect panel = buttonPanelBounds(videoRect);
+
+        // In these tests, we have no overflow items, so the fullscreen button is the rightmost
+        // button in the panel.
+        int right = panel.right;
         int left = right - BUTTON_WIDTH;
-        return new Rect(left, bar.top, right, bar.bottom);
+        return new Rect(left, panel.top, right, panel.bottom);
     }
 
-    private boolean clickFullscreenButton() throws InterruptedException, TimeoutException {
+    private boolean clickFullscreenButton() throws TimeoutException {
         return DOMUtils.clickRect(mActivityTestRule.getWebContents(),
                 fullscreenButtonBounds(
                         DOMUtils.getNodeBounds(mActivityTestRule.getWebContents(), VIDEO_ID)));
     }
 
     @Before
-    public void setUp() throws Exception {
+    public void setUp() {
         mActivityTestRule.launchContentShellWithUrlSync(TEST_URL);
     }
 

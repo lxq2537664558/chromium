@@ -15,9 +15,8 @@
 #include "cc/trees/layer_tree_host.h"
 #include "cc/trees/layer_tree_impl.h"
 #include "cc/trees/transform_node.h"
+#include "third_party/skia/include/core/SkPictureRecorder.h"
 #include "ui/gfx/geometry/rect_conversions.h"
-
-static constexpr int kMaxNumberOfSlowPathsBeforeReporting = 5;
 
 namespace cc {
 
@@ -30,9 +29,7 @@ scoped_refptr<PictureLayer> PictureLayer::Create(ContentLayerClient* client) {
 }
 
 PictureLayer::PictureLayer(ContentLayerClient* client)
-    : instrumentation_object_tracker_(id()),
-      update_source_frame_number_(-1),
-      mask_type_(LayerMaskType::NOT_MASK) {
+    : instrumentation_object_tracker_(id()), update_source_frame_number_(-1) {
   picture_layer_inputs_.client = client;
 }
 
@@ -46,25 +43,28 @@ PictureLayer::~PictureLayer() = default;
 
 std::unique_ptr<LayerImpl> PictureLayer::CreateLayerImpl(
     LayerTreeImpl* tree_impl) {
-  return PictureLayerImpl::Create(tree_impl, id(), mask_type_);
+  return PictureLayerImpl::Create(tree_impl, id());
 }
 
 void PictureLayer::PushPropertiesTo(LayerImpl* base_layer) {
   // TODO(enne): http://crbug.com/918126 debugging
   CHECK(this);
 
+  PictureLayerImpl* layer_impl = static_cast<PictureLayerImpl*>(base_layer);
+
   Layer::PushPropertiesTo(base_layer);
   TRACE_EVENT0(TRACE_DISABLED_BY_DEFAULT("cc.debug"),
                "PictureLayer::PushPropertiesTo");
-  PictureLayerImpl* layer_impl = static_cast<PictureLayerImpl*>(base_layer);
-  layer_impl->SetLayerMaskType(mask_type());
   DropRecordingSourceContentIfInvalid();
 
   layer_impl->SetNearestNeighbor(picture_layer_inputs_.nearest_neighbor);
   layer_impl->SetUseTransformedRasterization(
       ShouldUseTransformedRasterization());
   layer_impl->set_gpu_raster_max_texture_size(
-      layer_tree_host()->device_viewport_size());
+      layer_tree_host()->device_viewport_rect().size());
+  layer_impl->SetIsBackdropFilterMask(is_backdrop_filter_mask());
+  layer_impl->SetDirectlyCompositedImageSize(
+      picture_layer_inputs_.directly_composited_image_size);
 
   // TODO(enne): http://crbug.com/918126 debugging
   CHECK(this);
@@ -82,7 +82,7 @@ void PictureLayer::PushPropertiesTo(LayerImpl* base_layer) {
   }
 
   layer_impl->UpdateRasterSource(recording_source_->CreateRasterSource(),
-                                 &last_updated_invalidation_, nullptr);
+                                 &last_updated_invalidation_, nullptr, nullptr);
   DCHECK(last_updated_invalidation_.IsEmpty());
 }
 
@@ -91,10 +91,6 @@ void PictureLayer::SetLayerTreeHost(LayerTreeHost* host) {
 
   if (!host)
     return;
-
-  if (!host->GetSettings().enable_mask_tiling &&
-      mask_type_ == LayerMaskType::MULTI_TEXTURE_MASK)
-    mask_type_ = LayerMaskType::SINGLE_TEXTURE_MASK;
 
   if (!recording_source_)
     recording_source_.reset(new RecordingSource);
@@ -135,17 +131,35 @@ bool PictureLayer::Update() {
   // for them.
   DCHECK(picture_layer_inputs_.client);
 
-  picture_layer_inputs_.recorded_viewport =
-      picture_layer_inputs_.client->PaintableRegion();
+  auto recorded_viewport = picture_layer_inputs_.client->PaintableRegion();
 
   updated |= recording_source_->UpdateAndExpandInvalidation(
-      &last_updated_invalidation_, layer_size,
-      picture_layer_inputs_.recorded_viewport);
+      &last_updated_invalidation_, layer_size, recorded_viewport);
 
   if (updated) {
     picture_layer_inputs_.display_list =
         picture_layer_inputs_.client->PaintContentsToDisplayList(
             ContentLayerClient::PAINTING_BEHAVIOR_NORMAL);
+
+    // Clear out previous directly composited image state - if the layer
+    // qualifies we'll set up the state below.
+    picture_layer_inputs_.directly_composited_image_size = base::nullopt;
+    picture_layer_inputs_.nearest_neighbor = false;
+    if (QualifiesForDirectlyCompositedImage()) {
+      base::Optional<DisplayItemList::DirectlyCompositedImageResult> result =
+          picture_layer_inputs_.display_list->GetDirectlyCompositedImageResult(
+              bounds());
+      if (result) {
+        // Directly composited images are not guaranteed to fully cover every
+        // pixel in the layer due to ceiling when calculating the tile content
+        // rect from the layer bounds.
+        recording_source_->SetRequiresClear(true);
+        picture_layer_inputs_.directly_composited_image_size =
+            result->intrinsic_image_size;
+        picture_layer_inputs_.nearest_neighbor = result->nearest_neighbor;
+      }
+    }
+
     picture_layer_inputs_.painter_reported_memory_usage =
         picture_layer_inputs_.client->GetApproximateUnsharedMemoryUsage();
     recording_source_->UpdateDisplayItemList(
@@ -154,7 +168,7 @@ bool PictureLayer::Update() {
         layer_tree_host()->recording_scale_factor());
 
     SetNeedsPushProperties();
-    paint_count_++;
+    IncreasePaintCount();
   } else {
     // If this invalidation did not affect the recording source, then it can be
     // cleared as an optimization.
@@ -164,59 +178,34 @@ bool PictureLayer::Update() {
   return updated;
 }
 
-void PictureLayer::SetLayerMaskType(LayerMaskType mask_type) {
-  // We do not allow converting SINGLE_TEXTURE_MASK to MULTI_TEXTURE_MASK in
-  // order to avoid rerastering when a mask's transform is being animated.
-  if (mask_type_ == LayerMaskType::SINGLE_TEXTURE_MASK &&
-      mask_type == LayerMaskType::MULTI_TEXTURE_MASK)
-    return;
-  mask_type_ = mask_type;
+bool PictureLayer::QualifiesForDirectlyCompositedImage() const {
+  // Filters and backdrop-filters disqualify a layer from being a directly
+  // composited image.
+  // TODO(dlibby): crbug.com/875110 - remove this in an upcoming change and
+  // update baselines.
+  const EffectNode* effect_node =
+      layer_tree_host()->property_trees()->effect_tree.Node(
+          effect_tree_index());
+  if (!effect_node)
+    return true;
+
+  return (effect_node->filters.IsEmpty() &&
+          effect_node->backdrop_filters.IsEmpty());
 }
 
 sk_sp<SkPicture> PictureLayer::GetPicture() const {
-  // We could either flatten the RecordingSource into a single SkPicture, or
-  // paint a fresh one depending on what we intend to do with it.  For now we
-  // just paint a fresh one to get consistent results.
-  if (!DrawsContent())
+  if (!DrawsContent() || bounds().IsEmpty())
     return nullptr;
 
-  gfx::Size layer_size = bounds();
-  RecordingSource recording_source;
-  Region recording_invalidation;
-
-  gfx::Rect new_recorded_viewport =
-      picture_layer_inputs_.client->PaintableRegion();
   scoped_refptr<DisplayItemList> display_list =
       picture_layer_inputs_.client->PaintContentsToDisplayList(
           ContentLayerClient::PAINTING_BEHAVIOR_NORMAL);
-  size_t painter_reported_memory_usage =
-      picture_layer_inputs_.client->GetApproximateUnsharedMemoryUsage();
-
-  recording_source.UpdateAndExpandInvalidation(
-      &recording_invalidation, layer_size, new_recorded_viewport);
-  recording_source.UpdateDisplayItemList(
-      display_list, painter_reported_memory_usage,
-      layer_tree_host()->recording_scale_factor());
-
-  scoped_refptr<RasterSource> raster_source =
-      recording_source.CreateRasterSource();
-  return raster_source->GetFlattenedPicture();
-}
-
-bool PictureLayer::HasSlowPaths() const {
-  // The display list needs to be created (see: UpdateAndExpandInvalidation)
-  // before checking for slow paths. There are cases where an update will not
-  // create a display list (e.g., if the size is empty). We return false in
-  // these cases because the slow paths bit sticks true.
-  return picture_layer_inputs_.display_list &&
-         picture_layer_inputs_.display_list->NumSlowPaths() >
-             kMaxNumberOfSlowPathsBeforeReporting;
-}
-
-bool PictureLayer::HasNonAAPaint() const {
-  // We return false by default, as this bit sticks true.
-  return picture_layer_inputs_.display_list &&
-         picture_layer_inputs_.display_list->HasNonAAPaint();
+  SkPictureRecorder recorder;
+  SkCanvas* canvas =
+      recorder.beginRecording(bounds().width(), bounds().height());
+  canvas->clear(SK_ColorTRANSPARENT);
+  display_list->Raster(canvas);
+  return recorder.finishRecordingAsPicture();
 }
 
 void PictureLayer::ClearClient() {
@@ -244,17 +233,29 @@ bool PictureLayer::HasDrawableContent() const {
   return picture_layer_inputs_.client && Layer::HasDrawableContent();
 }
 
+void PictureLayer::SetIsBackdropFilterMask(bool is_backdrop_filter_mask) {
+  if (picture_layer_inputs_.is_backdrop_filter_mask == is_backdrop_filter_mask)
+    return;
+
+  picture_layer_inputs_.is_backdrop_filter_mask = is_backdrop_filter_mask;
+  SetNeedsCommit();
+}
+
 void PictureLayer::RunMicroBenchmark(MicroBenchmark* benchmark) {
   benchmark->RunOnLayer(this);
 }
 
 void PictureLayer::CaptureContent(const gfx::Rect& rect,
-                                  std::vector<NodeHolder>* content) {
+                                  std::vector<NodeId>* content) {
   if (!DrawsContent())
     return;
 
   const DisplayItemList* display_item_list = GetDisplayItemList();
   if (!display_item_list)
+    return;
+
+  // We could run into this situation as CaptureContent could start at any time.
+  if (transform_tree_index() == TransformTree::kInvalidNodeId)
     return;
 
   gfx::Transform inverse_screen_space_transform;
@@ -289,7 +290,6 @@ void PictureLayer::DropRecordingSourceContentIfInvalid() {
     // for example), even though it has resized making the recording source no
     // longer valid. In this case just destroy the recording source.
     recording_source_->SetEmptyBounds();
-    picture_layer_inputs_.recorded_viewport = gfx::Rect();
     picture_layer_inputs_.display_list = nullptr;
     picture_layer_inputs_.painter_reported_memory_usage = 0;
   }

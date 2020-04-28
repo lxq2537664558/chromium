@@ -8,6 +8,7 @@
 #include <limits>
 #include <memory>
 
+#include "base/callback.h"
 #include "base/files/file.h"
 #include "base/macros.h"
 #include "base/memory/ref_counted.h"
@@ -22,8 +23,6 @@ class SequencedTaskRunner;
 }  // namespace base
 
 namespace net {
-
-class NetLogCaptureMode;
 
 // FileNetLogObserver watches the NetLog event stream and sends all entries to
 // a file.

@@ -4,23 +4,36 @@
 
 #include "chrome/browser/chromeos/login/screens/arc_terms_of_service_screen.h"
 
-#include "chrome/browser/chromeos/login/screens/arc_terms_of_service_screen_view.h"
+#include "base/feature_list.h"
+#include "base/metrics/histogram_functions.h"
 #include "chrome/browser/chromeos/login/wizard_controller.h"
 #include "chrome/browser/metrics/metrics_reporting_state.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/ui/settings_window_manager_chromeos.h"
+#include "chrome/browser/ui/webui/chromeos/login/arc_terms_of_service_screen_handler.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/common/webui_url_constants.h"
 #include "components/prefs/pref_service.h"
 
 namespace {
 
+constexpr char kUserActionAccepted[] = "accepted";
 constexpr char kUserActionBack[] = "go-back";
 
 }  // namespace
 
 namespace chromeos {
+
+// static
+std::string ArcTermsOfServiceScreen::GetResultString(Result result) {
+  switch (result) {
+    case Result::ACCEPTED:
+      return "Accepted";
+    case Result::BACK:
+      return "Back";
+  }
+}
 
 // static
 void ArcTermsOfServiceScreen::MaybeLaunchArcSettings(Profile* profile) {
@@ -37,7 +50,8 @@ void ArcTermsOfServiceScreen::MaybeLaunchArcSettings(Profile* profile) {
 ArcTermsOfServiceScreen::ArcTermsOfServiceScreen(
     ArcTermsOfServiceScreenView* view,
     const ScreenExitCallback& exit_callback)
-    : BaseScreen(OobeScreen::SCREEN_ARC_TERMS_OF_SERVICE),
+    : BaseScreen(ArcTermsOfServiceScreenView::kScreenId,
+                 OobeScreenPriority::DEFAULT),
       view_(view),
       exit_callback_(exit_callback) {
   DCHECK(view_);
@@ -54,7 +68,7 @@ ArcTermsOfServiceScreen::~ArcTermsOfServiceScreen() {
   }
 }
 
-void ArcTermsOfServiceScreen::Show() {
+void ArcTermsOfServiceScreen::ShowImpl() {
   if (!view_)
     return;
 
@@ -62,31 +76,33 @@ void ArcTermsOfServiceScreen::Show() {
   view_->Show();
 }
 
-void ArcTermsOfServiceScreen::Hide() {
+void ArcTermsOfServiceScreen::HideImpl() {
   if (view_)
     view_->Hide();
 }
 
 void ArcTermsOfServiceScreen::OnUserAction(const std::string& action_id) {
-  if (action_id == kUserActionBack) {
+  if (action_id == kUserActionAccepted) {
+    exit_callback_.Run(Result::ACCEPTED);
+  } else if (action_id == kUserActionBack) {
     exit_callback_.Run(Result::BACK);
   } else {
     BaseScreen::OnUserAction(action_id);
   }
 }
 
-void ArcTermsOfServiceScreen::OnSkip() {
-  exit_callback_.Run(Result::SKIPPED);
-}
-
 void ArcTermsOfServiceScreen::OnAccept(bool review_arc_settings) {
+  if (is_hidden())
+    return;
+  base::UmaHistogramBoolean("OOBE.ArcTermsOfServiceScreen.ReviewFollowingSetup",
+                            review_arc_settings);
   if (review_arc_settings) {
     Profile* const profile = ProfileManager::GetActiveUserProfile();
     CHECK(profile);
     profile->GetPrefs()->SetBoolean(prefs::kShowArcSettingsOnSessionStart,
                                     true);
   }
-  exit_callback_.Run(Result::ACCEPTED);
+  HandleUserAction(kUserActionAccepted);
 }
 
 void ArcTermsOfServiceScreen::OnViewDestroyed(

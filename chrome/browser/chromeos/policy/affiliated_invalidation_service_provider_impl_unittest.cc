@@ -12,11 +12,12 @@
 #include "base/macros.h"
 #include "base/memory/ptr_util.h"
 #include "base/memory/ref_counted.h"
+#include "base/task/post_task.h"
 #include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/chromeos/login/users/fake_chrome_user_manager.h"
-#include "chrome/browser/chromeos/settings/device_oauth2_token_service_factory.h"
 #include "chrome/browser/chromeos/settings/scoped_cros_settings_test_helper.h"
-#include "chrome/browser/invalidation/deprecated_profile_invalidation_provider_factory.h"
+#include "chrome/browser/device_identity/device_oauth2_token_service_factory.h"
+#include "chrome/browser/invalidation/profile_invalidation_provider_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/test/base/testing_browser_process.h"
 #include "chrome/test/base/testing_profile_manager.h"
@@ -24,17 +25,21 @@
 #include "chromeos/dbus/cryptohome/cryptohome_client.h"
 #include "components/invalidation/impl/fake_invalidation_handler.h"
 #include "components/invalidation/impl/fake_invalidation_service.h"
+#include "components/invalidation/impl/fcm_invalidation_service.h"
 #include "components/invalidation/impl/profile_invalidation_provider.h"
-#include "components/invalidation/impl/ticl_invalidation_service.h"
 #include "components/invalidation/public/invalidation_service.h"
 #include "components/invalidation/public/invalidator_state.h"
 #include "components/keyed_service/core/keyed_service.h"
 #include "components/policy/core/common/cloud/cloud_policy_constants.h"
 #include "components/user_manager/scoped_user_manager.h"
 #include "content/public/browser/browser_context.h"
+#include "content/public/browser/browser_task_traits.h"
+#include "content/public/browser/browser_thread.h"
 #include "content/public/browser/notification_details.h"
 #include "content/public/browser/notification_service.h"
-#include "content/public/test/test_browser_thread_bundle.h"
+#include "content/public/test/browser_task_environment.h"
+#include "services/data_decoder/public/cpp/data_decoder.h"
+#include "services/data_decoder/public/cpp/test_support/in_process_data_decoder.h"
 #include "services/network/public/cpp/weak_wrapper_shared_url_loader_factory.h"
 #include "services/network/test/test_url_loader_factory.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -47,14 +52,27 @@ const char kAffiliatedUserID1[] = "test_1@example.com";
 const char kAffiliatedUserID2[] = "test_2@example.com";
 const char kUnaffiliatedUserID[] = "test@other_domain.test";
 
-std::unique_ptr<KeyedService> BuildProfileInvalidationProvider(
-    content::BrowserContext* context) {
+std::unique_ptr<invalidation::InvalidationService>
+CreateInvalidationServiceForSenderId(const std::string& fcm_sender_id) {
   std::unique_ptr<invalidation::FakeInvalidationService> invalidation_service(
       new invalidation::FakeInvalidationService);
   invalidation_service->SetInvalidatorState(
       syncer::TRANSIENT_INVALIDATION_ERROR);
+  return invalidation_service;
+}
+
+std::unique_ptr<KeyedService> BuildProfileInvalidationProvider(
+    content::BrowserContext* context) {
   return std::make_unique<invalidation::ProfileInvalidationProvider>(
-      std::move(invalidation_service), nullptr);
+      nullptr, nullptr,
+      base::BindRepeating(&CreateInvalidationServiceForSenderId));
+}
+
+void SendInvalidatorStateChangeNotification(
+    invalidation::InvalidationService* service,
+    syncer::InvalidatorState state) {
+  static_cast<invalidation::FCMInvalidationService*>(service)
+      ->OnInvalidatorStateChange(state);
 }
 
 }  // namespace
@@ -87,7 +105,6 @@ class FakeConsumer : public AffiliatedInvalidationServiceProvider::Consumer {
 class AffiliatedInvalidationServiceProviderImplTest : public testing::Test {
  public:
   AffiliatedInvalidationServiceProviderImplTest();
-
   // testing::Test:
   void SetUp() override;
   void TearDown() override;
@@ -128,11 +145,12 @@ class AffiliatedInvalidationServiceProviderImplTest : public testing::Test {
                                  bool is_affiliated);
   std::unique_ptr<AffiliatedInvalidationServiceProviderImpl> provider_;
   std::unique_ptr<FakeConsumer> consumer_;
-  invalidation::TiclInvalidationService* device_invalidation_service_;
+  invalidation::InvalidationService* device_invalidation_service_;
   invalidation::FakeInvalidationService* profile_invalidation_service_;
 
  private:
-  content::TestBrowserThreadBundle thread_bundle_;
+  content::BrowserTaskEnvironment task_environment_;
+  data_decoder::test::InProcessDataDecoder in_process_data_decoder_;
   chromeos::FakeChromeUserManager* fake_user_manager_;
   user_manager::ScopedUserManager user_manager_enabler_;
   chromeos::ScopedCrosSettingsTestHelper cros_settings_test_helper_;
@@ -203,11 +221,11 @@ void AffiliatedInvalidationServiceProviderImplTest::SetUp() {
   chromeos::CryptohomeClient::InitializeFake();
   ASSERT_TRUE(profile_manager_.SetUp());
 
-  chromeos::DeviceOAuth2TokenServiceFactory::Initialize(
+  DeviceOAuth2TokenServiceFactory::Initialize(
       test_url_loader_factory_.GetSafeWeakWrapper(),
       TestingBrowserProcess::GetGlobal()->local_state());
 
-  invalidation::DeprecatedProfileInvalidationProviderFactory::GetInstance()
+  invalidation::ProfileInvalidationProviderFactory::GetInstance()
       ->RegisterTestingFactory(
           base::BindRepeating(&BuildProfileInvalidationProvider));
 
@@ -219,10 +237,10 @@ void AffiliatedInvalidationServiceProviderImplTest::TearDown() {
   provider_->Shutdown();
   provider_.reset();
 
-  invalidation::DeprecatedProfileInvalidationProviderFactory::GetInstance()
+  invalidation::ProfileInvalidationProviderFactory::GetInstance()
       ->RegisterTestingFactory(
           BrowserContextKeyedServiceFactory::TestingFactory());
-  chromeos::DeviceOAuth2TokenServiceFactory::Shutdown();
+  DeviceOAuth2TokenServiceFactory::Shutdown();
   chromeos::CryptohomeClient::Shutdown();
   chromeos::SystemSaltGetter::Shutdown();
 }
@@ -311,8 +329,8 @@ void AffiliatedInvalidationServiceProviderImplTest::
   // Indicate that the device-global invalidation service has connected. Verify
   // that the consumer is informed about this.
   EXPECT_EQ(0, consumer_->GetAndClearInvalidationServiceSetCount());
-  device_invalidation_service_->OnInvalidatorStateChange(
-      syncer::INVALIDATIONS_ENABLED);
+  SendInvalidatorStateChangeNotification(device_invalidation_service_,
+                                         syncer::INVALIDATIONS_ENABLED);
   EXPECT_EQ(1, consumer_->GetAndClearInvalidationServiceSetCount());
   EXPECT_EQ(device_invalidation_service_, consumer_->GetInvalidationService());
 }
@@ -335,16 +353,18 @@ void AffiliatedInvalidationServiceProviderImplTest::
 
 invalidation::FakeInvalidationService*
 AffiliatedInvalidationServiceProviderImplTest::GetProfileInvalidationService(
-    Profile* profile, bool create) {
-  invalidation::ProfileInvalidationProvider* invalidation_provider =
+    Profile* profile,
+    bool create) {
+  invalidation::ProfileInvalidationProvider* invalidation_provider;
+  invalidation_provider =
       static_cast<invalidation::ProfileInvalidationProvider*>(
-          invalidation::DeprecatedProfileInvalidationProviderFactory::
-              GetInstance()
-                  ->GetServiceForBrowserContext(profile, create));
+          invalidation::ProfileInvalidationProviderFactory::GetInstance()
+              ->GetServiceForBrowserContext(profile, create));
   if (!invalidation_provider)
     return nullptr;
   return static_cast<invalidation::FakeInvalidationService*>(
-      invalidation_provider->GetInvalidationService());
+      invalidation_provider->GetInvalidationServiceForCustomSender(
+          policy::kPolicyFCMInvalidationSenderID));
 }
 
 // No consumers are registered with the
@@ -388,8 +408,8 @@ TEST_F(AffiliatedInvalidationServiceProviderImplTest,
   // Indicate that the device-global invalidation service has disconnected.
   // Verify that the consumer is informed about this.
   EXPECT_EQ(0, consumer_->GetAndClearInvalidationServiceSetCount());
-  device_invalidation_service_->OnInvalidatorStateChange(
-      syncer::INVALIDATION_CREDENTIALS_REJECTED);
+  SendInvalidatorStateChangeNotification(
+      device_invalidation_service_, syncer::INVALIDATION_CREDENTIALS_REJECTED);
   EXPECT_EQ(1, consumer_->GetAndClearInvalidationServiceSetCount());
   EXPECT_EQ(nullptr, consumer_->GetInvalidationService());
 

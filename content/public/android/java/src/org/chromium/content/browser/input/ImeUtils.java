@@ -16,6 +16,7 @@ import android.view.inputmethod.EditorInfo;
 import org.chromium.base.ThreadUtils;
 import org.chromium.blink_public.web.WebTextInputFlags;
 import org.chromium.blink_public.web.WebTextInputMode;
+import org.chromium.ui.base.ime.TextInputAction;
 import org.chromium.ui.base.ime.TextInputType;
 
 import java.util.Locale;
@@ -31,12 +32,13 @@ public class ImeUtils {
      * @param inputType Type defined in {@link TextInputType}.
      * @param inputFlags Flags defined in {@link WebTextInputFlags}.
      * @param inputMode Flags defined in {@link WebTextInputMode}.
+     * @param inputAction Flags defined in {@link TextInputAction}.
      * @param initialSelStart The initial selection start position.
      * @param initialSelEnd The initial selection end position.
      * @param outAttrs An instance of {@link EditorInfo} that we are going to change.
      */
     public static void computeEditorInfo(int inputType, int inputFlags, int inputMode,
-            int initialSelStart, int initialSelEnd, EditorInfo outAttrs) {
+            int inputAction, int initialSelStart, int initialSelEnd, EditorInfo outAttrs) {
         outAttrs.inputType =
                 EditorInfo.TYPE_CLASS_TEXT | EditorInfo.TYPE_TEXT_VARIATION_WEB_EDIT_TEXT;
 
@@ -73,7 +75,6 @@ public class ImeUtils {
             } else if (inputType == TextInputType.NUMBER) {
                 // Number
                 outAttrs.inputType = InputType.TYPE_CLASS_NUMBER
-                        | InputType.TYPE_NUMBER_VARIATION_NORMAL
                         | InputType.TYPE_NUMBER_FLAG_DECIMAL;
             }
         } else {
@@ -99,8 +100,10 @@ public class ImeUtils {
                             | InputType.TYPE_TEXT_VARIATION_WEB_EMAIL_ADDRESS;
                     break;
                 case WebTextInputMode.NUMERIC:
-                    outAttrs.inputType =
-                            InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_VARIATION_NORMAL;
+                    outAttrs.inputType = InputType.TYPE_CLASS_NUMBER;
+                    if (inputType == TextInputType.PASSWORD) {
+                        outAttrs.inputType |= InputType.TYPE_NUMBER_VARIATION_PASSWORD;
+                    }
                     break;
                 case WebTextInputMode.DECIMAL:
                     outAttrs.inputType =
@@ -109,7 +112,7 @@ public class ImeUtils {
             }
         }
 
-        outAttrs.imeOptions |= getImeAction(inputType, inputFlags, inputMode,
+        outAttrs.imeOptions |= getImeAction(inputType, inputFlags, inputMode, inputAction,
                 (outAttrs.inputType & EditorInfo.TYPE_TEXT_FLAG_MULTI_LINE) != 0);
 
         // Handling of autocapitalize. Blink will send the flag taking into account the element's
@@ -124,7 +127,8 @@ public class ImeUtils {
             outAttrs.inputType |= InputType.TYPE_TEXT_FLAG_CAP_SENTENCES;
         }
 
-        if ((inputFlags & WebTextInputFlags.HAS_BEEN_PASSWORD_FIELD) != 0) {
+        if ((inputFlags & WebTextInputFlags.HAS_BEEN_PASSWORD_FIELD) != 0
+                && (outAttrs.inputType & InputType.TYPE_NUMBER_VARIATION_PASSWORD) == 0) {
             outAttrs.inputType =
                     InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_WEB_PASSWORD;
         }
@@ -133,21 +137,47 @@ public class ImeUtils {
         outAttrs.initialSelEnd = initialSelEnd;
     }
 
-    private static int getImeAction(
-            int inputType, int inputFlags, int inputMode, boolean isMultiLineInput) {
+    private static int getImeAction(int inputType, int inputFlags, int inputMode, int inputAction,
+            boolean isMultiLineInput) {
         int imeAction = 0;
-        if (inputMode == WebTextInputMode.DEFAULT && inputType == TextInputType.SEARCH) {
-            imeAction |= EditorInfo.IME_ACTION_SEARCH;
-        } else if (isMultiLineInput) {
-            // For textarea that sends you to another webpage on enter key press using
-            // JavaScript, we will only show ENTER.
-            imeAction |= EditorInfo.IME_ACTION_NONE;
-        } else if ((inputFlags & WebTextInputFlags.HAVE_NEXT_FOCUSABLE_ELEMENT) != 0) {
-            imeAction |= EditorInfo.IME_ACTION_NEXT;
+        if (inputAction == TextInputAction.DEFAULT) {
+            if (inputMode == WebTextInputMode.DEFAULT && inputType == TextInputType.SEARCH) {
+                imeAction |= EditorInfo.IME_ACTION_SEARCH;
+            } else if (isMultiLineInput) {
+                // For textarea that sends you to another webpage on enter key press using
+                // JavaScript, we will only show ENTER.
+                imeAction |= EditorInfo.IME_ACTION_NONE;
+            } else if ((inputFlags & WebTextInputFlags.HAVE_NEXT_FOCUSABLE_ELEMENT) != 0) {
+                imeAction |= EditorInfo.IME_ACTION_NEXT;
+            } else {
+                // For last element inside form, we should give preference to GO key as PREVIOUS
+                // has less importance in those cases.
+                imeAction |= EditorInfo.IME_ACTION_GO;
+            }
         } else {
-            // For last element inside form, we should give preference to GO key as PREVIOUS
-            // has less importance in those cases.
-            imeAction |= EditorInfo.IME_ACTION_GO;
+            switch (inputAction) {
+                case TextInputAction.ENTER:
+                    imeAction |= EditorInfo.IME_ACTION_NONE;
+                    break;
+                case TextInputAction.GO:
+                    imeAction |= EditorInfo.IME_ACTION_GO;
+                    break;
+                case TextInputAction.DONE:
+                    imeAction |= EditorInfo.IME_ACTION_DONE;
+                    break;
+                case TextInputAction.NEXT:
+                    imeAction |= EditorInfo.IME_ACTION_NEXT;
+                    break;
+                case TextInputAction.PREVIOUS:
+                    imeAction |= EditorInfo.IME_ACTION_PREVIOUS;
+                    break;
+                case TextInputAction.SEARCH:
+                    imeAction |= EditorInfo.IME_ACTION_SEARCH;
+                    break;
+                case TextInputAction.SEND:
+                    imeAction |= EditorInfo.IME_ACTION_SEND;
+                    break;
+            }
         }
         return imeAction;
     }

@@ -5,7 +5,6 @@
 #include "third_party/blink/renderer/modules/manifest/manifest_uma_util.h"
 
 #include "base/metrics/histogram_macros.h"
-#include "third_party/blink/public/common/manifest/manifest.h"
 
 namespace blink {
 
@@ -21,7 +20,7 @@ enum ManifestFetchResultType {
   MANIFEST_FETCH_SUCCESS = 0,
   MANIFEST_FETCH_ERROR_EMPTY_URL = 1,
   MANIFEST_FETCH_ERROR_UNSPECIFIED = 2,
-  MANIFEST_FETCH_ERROR_FROM_UNIQUE_ORIGIN = 3,
+  MANIFEST_FETCH_ERROR_FROM_OPAQUE_ORIGIN = 3,
 
   // Must stay at the end.
   MANIFEST_FETCH_RESULT_TYPE_COUNT
@@ -29,27 +28,31 @@ enum ManifestFetchResultType {
 
 }  // anonymous namespace
 
-void ManifestUmaUtil::ParseSucceeded(const Manifest& manifest) {
+void ManifestUmaUtil::ParseSucceeded(
+    const mojom::blink::ManifestPtr& manifest) {
   UMA_HISTOGRAM_BOOLEAN(kUMANameParseSuccess, true);
-  UMA_HISTOGRAM_BOOLEAN("Manifest.IsEmpty", manifest.IsEmpty());
-  if (manifest.IsEmpty())
+
+  auto empty_manifest = mojom::blink::Manifest::New();
+  if (manifest == empty_manifest)
     return;
 
-  UMA_HISTOGRAM_BOOLEAN("Manifest.HasProperty.name", !manifest.name.is_null());
+  UMA_HISTOGRAM_BOOLEAN("Manifest.HasProperty.name", !manifest->name.IsEmpty());
   UMA_HISTOGRAM_BOOLEAN("Manifest.HasProperty.short_name",
-                        !manifest.short_name.is_null());
+                        !manifest->short_name.IsEmpty());
   UMA_HISTOGRAM_BOOLEAN("Manifest.HasProperty.start_url",
-                        !manifest.start_url.is_empty());
-  UMA_HISTOGRAM_BOOLEAN("Manifest.HasProperty.display",
-                        manifest.display != kWebDisplayModeUndefined);
+                        !manifest->start_url.IsEmpty());
+  UMA_HISTOGRAM_BOOLEAN(
+      "Manifest.HasProperty.display",
+      manifest->display != blink::mojom::DisplayMode::kUndefined);
   UMA_HISTOGRAM_BOOLEAN(
       "Manifest.HasProperty.orientation",
-      manifest.orientation != kWebScreenOrientationLockDefault);
-  UMA_HISTOGRAM_BOOLEAN("Manifest.HasProperty.icons", !manifest.icons.empty());
+      manifest->orientation != kWebScreenOrientationLockDefault);
+  UMA_HISTOGRAM_BOOLEAN("Manifest.HasProperty.icons",
+                        !manifest->icons.IsEmpty());
   UMA_HISTOGRAM_BOOLEAN("Manifest.HasProperty.share_target",
-                        manifest.share_target.has_value());
+                        manifest->share_target.get());
   UMA_HISTOGRAM_BOOLEAN("Manifest.HasProperty.gcm_sender_id",
-                        !manifest.gcm_sender_id.is_null());
+                        !manifest->gcm_sender_id.IsEmpty());
 }
 
 void ManifestUmaUtil::ParseFailed() {
@@ -67,8 +70,8 @@ void ManifestUmaUtil::FetchFailed(FetchFailureReason reason) {
     case FETCH_EMPTY_URL:
       fetch_result_type = MANIFEST_FETCH_ERROR_EMPTY_URL;
       break;
-    case FETCH_FROM_UNIQUE_ORIGIN:
-      fetch_result_type = MANIFEST_FETCH_ERROR_FROM_UNIQUE_ORIGIN;
+    case FETCH_FROM_OPAQUE_ORIGIN:
+      fetch_result_type = MANIFEST_FETCH_ERROR_FROM_OPAQUE_ORIGIN;
       break;
     case FETCH_UNSPECIFIED_REASON:
       fetch_result_type = MANIFEST_FETCH_ERROR_UNSPECIFIED;

@@ -2,14 +2,14 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#import "ios/web/public/crw_session_storage.h"
+#import "ios/web/public/session/crw_session_storage.h"
 
 #include "base/strings/sys_string_conversions.h"
 #import "ios/web/navigation/navigation_item_impl.h"
 #import "ios/web/navigation/navigation_item_storage_test_util.h"
 #import "ios/web/navigation/serializable_user_data_manager_impl.h"
-#import "ios/web/public/crw_navigation_item_storage.h"
-#include "ios/web/public/referrer.h"
+#include "ios/web/public/navigation/referrer.h"
+#import "ios/web/public/session/crw_navigation_item_storage.h"
 #import "net/base/mac/url_conversions.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #import "testing/gtest_mac.h"
@@ -53,7 +53,6 @@ BOOL SessionStoragesAreEqual(CRWSessionStorage* session1,
   return ItemStorageListsAreEqual(items1, items2) &&
          session1.hasOpener == session2.hasOpener &&
          session1.lastCommittedItemIndex == session2.lastCommittedItemIndex &&
-         session1.previousItemIndex == session2.previousItemIndex &&
          UserDataAreEqual(session1.userData, session2.userData);
 }
 }  // namespace
@@ -65,7 +64,6 @@ class CRWNSessionStorageTest : public PlatformTest {
     // Set up |session_storage_|.
     [session_storage_ setHasOpener:YES];
     [session_storage_ setLastCommittedItemIndex:4];
-    [session_storage_ setPreviousItemIndex:3];
     // Create an item storage.
     CRWNavigationItemStorage* item_storage =
         [[CRWNavigationItemStorage alloc] init];
@@ -95,7 +93,14 @@ class CRWNSessionStorageTest : public PlatformTest {
 // Tests that unarchiving CRWSessionStorage data results in an equivalent
 // storage.
 TEST_F(CRWNSessionStorageTest, EncodeDecode) {
-  NSData* data = [NSKeyedArchiver archivedDataWithRootObject:session_storage_];
-  id decoded = [NSKeyedUnarchiver unarchiveObjectWithData:data];
+  NSKeyedArchiver* archiver =
+      [[NSKeyedArchiver alloc] initRequiringSecureCoding:NO];
+  [archiver encodeObject:session_storage_ forKey:NSKeyedArchiveRootObjectKey];
+  [archiver finishEncoding];
+  NSData* data = [archiver encodedData];
+  NSKeyedUnarchiver* unarchiver =
+      [[NSKeyedUnarchiver alloc] initForReadingFromData:data error:nil];
+  unarchiver.requiresSecureCoding = NO;
+  id decoded = [unarchiver decodeObjectForKey:NSKeyedArchiveRootObjectKey];
   EXPECT_TRUE(SessionStoragesAreEqual(session_storage_, decoded));
 }

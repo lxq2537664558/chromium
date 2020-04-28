@@ -15,7 +15,7 @@ let DropdownMenuOption;
 /**
  * @typedef {!Array<!DropdownMenuOption>}
  */
-let DropdownMenuOptionList;
+/* #export */ let DropdownMenuOptionList;
 
 /**
  * 'settings-dropdown-menu' is a control for displaying options
@@ -34,15 +34,9 @@ Polymer({
   properties: {
     /**
      * List of options for the drop-down menu.
-     * @type {?DropdownMenuOptionList}
+     * @type {!DropdownMenuOptionList}
      */
-    menuOptions: {
-      type: Array,
-      // TODO(dpapad): This seems unnecessary in Polymer 2, since any
-      // bindings/observers will execute anyway, even if this is undefined.
-      // Consider removing once migration is done.
-      value: null,
-    },
+    menuOptions: Array,
 
     /** Whether the dropdown menu should be disabled. */
     disabled: {
@@ -82,7 +76,7 @@ Polymer({
    * Pass the selection change to the pref value.
    * @private
    */
-  onChange_: function() {
+  onChange_() {
     const selected = this.$.dropdownMenu.value;
 
     if (selected == this.notFoundValue_) {
@@ -109,13 +103,13 @@ Polymer({
    * Updates the selected item when the pref or menuOptions change.
    * @private
    */
-  updateSelected_: function() {
+  updateSelected_() {
     if (this.menuOptions === undefined || this.pref === undefined ||
         this.prefKey === undefined) {
       return;
     }
 
-    if (this.menuOptions === null || !this.menuOptions.length) {
+    if (!this.menuOptions.length) {
       return;
     }
 
@@ -137,7 +131,7 @@ Polymer({
    * @return {string}
    * @private
    */
-  prefStringValue_: function() {
+  prefStringValue_() {
     if (this.prefKey) {
       // Dictionary pref, values are always strings.
       return this.pref.value[this.prefKey];
@@ -152,7 +146,7 @@ Polymer({
    * @return {boolean}
    * @private
    */
-  showNotFoundValue_: function(menuOptions, prefValue) {
+  showNotFoundValue_(menuOptions, prefValue) {
     if (menuOptions === undefined || prefValue === undefined) {
       return false;
     }
@@ -172,8 +166,8 @@ Polymer({
    * @return {boolean}
    * @private
    */
-  shouldDisableMenu_: function() {
+  shouldDisableMenu_() {
     return this.disabled || this.isPrefEnforced() ||
-        this.menuOptions === null || this.menuOptions.length == 0;
+        this.menuOptions === undefined || this.menuOptions.length == 0;
   },
 });

@@ -38,8 +38,9 @@ class FlashTemporaryPermissionTracker::GrantObserver
 
 // static
 scoped_refptr<FlashTemporaryPermissionTracker>
-FlashTemporaryPermissionTracker::Get(Profile* profile) {
-  return FlashTemporaryPermissionTrackerFactory::GetForProfile(profile);
+FlashTemporaryPermissionTracker::Get(content::BrowserContext* browser_context) {
+  return FlashTemporaryPermissionTrackerFactory::GetForBrowserContext(
+      browser_context);
 }
 
 FlashTemporaryPermissionTracker::FlashTemporaryPermissionTracker(
@@ -50,7 +51,7 @@ FlashTemporaryPermissionTracker::~FlashTemporaryPermissionTracker() {}
 
 bool FlashTemporaryPermissionTracker::IsFlashEnabled(const GURL& url) {
   base::AutoLock lock(granted_origins_lock_);
-  return base::ContainsKey(granted_origins_, url.GetOrigin());
+  return base::Contains(granted_origins_, url.GetOrigin());
 }
 
 void FlashTemporaryPermissionTracker::FlashEnabledForWebContents(

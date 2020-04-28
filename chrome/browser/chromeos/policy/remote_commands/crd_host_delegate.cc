@@ -11,20 +11,19 @@
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/chromeos/app_mode/arc/arc_kiosk_app_manager.h"
 #include "chrome/browser/chromeos/app_mode/kiosk_app_manager.h"
+#include "chrome/browser/chromeos/app_mode/web_app/web_kiosk_app_manager.h"
 #include "chrome/browser/chromeos/profiles/profile_helper.h"
-#include "chrome/browser/chromeos/settings/device_oauth2_token_service.h"
-#include "chrome/browser/chromeos/settings/device_oauth2_token_service_factory.h"
+#include "chrome/browser/device_identity/device_oauth2_token_service.h"
+#include "chrome/browser/device_identity/device_oauth2_token_service_factory.h"
 #include "components/user_manager/user_manager.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/storage_partition.h"
 #include "extensions/browser/api/messaging/native_message_host.h"
 #include "google_apis/gaia/gaia_constants.h"
-#include "google_apis/gaia/oauth2_token_service.h"
 #include "net/base/load_flags.h"
 #include "net/http/http_request_headers.h"
 #include "remoting/host/it2me/it2me_native_messaging_host_chromeos.h"
-#include "services/network/public/cpp/simple_url_loader.h"
 #include "ui/base/user_activity/user_activity_detector.h"
 
 namespace policy {
@@ -46,6 +45,7 @@ constexpr char kCRDResponseHello[] = "helloResponse";
 constexpr char kCRDResponseConnect[] = "connectResponse";
 constexpr char kCRDStateChanged[] = "hostStateChanged";
 constexpr char kCRDResponseDisconnect[] = "disconnectResponse";
+constexpr char kCRDResponseError[] = "error";
 
 // Connect message parameters:
 constexpr char kCRDConnectUserName[] = "userName";
@@ -53,8 +53,9 @@ constexpr char kCRDConnectAuth[] = "authServiceWithToken";
 constexpr char kCRDConnectXMPPServer[] = "xmppServerAddress";
 constexpr char kCRDConnectXMPPTLS[] = "xmppServerUseTls";
 constexpr char kCRDConnectDirectoryBot[] = "directoryBotJid";
-constexpr char kCRDConnectICEConfig[] = "iceConfig";
-constexpr char kCRDConnectNoDialogs[] = "noDialogs";
+constexpr char kCRDConnectSuppressUserDialogs[] = "suppressUserDialogs";
+constexpr char kCRDConnectSuppressNotifications[] = "suppressNotifications";
+constexpr char kCRDTerminateUponInput[] = "terminateUponInput";
 
 // Connect message parameter values:
 constexpr char kCRDConnectXMPPServerValue[] = "talk.google.com:443";
@@ -76,62 +77,20 @@ constexpr char kCRDAccessCodeLifetimeKey[] = "accessCodeLifetime";
 
 constexpr char kCRDConnectClientKey[] = "client";
 
-constexpr char kICEConfigURL[] =
-    "https://www.googleapis.com/chromoting/v1/@me/iceconfig";
-
 // OAuth2 Token scopes
 constexpr char kCloudDevicesOAuth2Scope[] =
     "https://www.googleapis.com/auth/clouddevices";
-constexpr char kChromotingOAuth2Scope[] =
-    "https://www.googleapis.com/auth/chromoting";
-
-net::NetworkTrafficAnnotationTag CreateIceConfigRequestAnnotation() {
-  return net::DefineNetworkTrafficAnnotation("CRD_ice_config_request", R"(
-        semantics {
-          sender: "Chrome Remote Desktop"
-          description:
-            "Request is used by Chrome Remote Desktop to fetch ICE "
-            "configuration which contains list of STUN & TURN servers and TURN "
-            "credentials."
-          trigger:
-            "When a Chrome Remote Desktop session is being connected and "
-            "periodically while a session is active, as necessary. Currently "
-            "the API issues credentials that expire every 24 hours, so this "
-            "request will only be sent again while session is active more than "
-            "24 hours and it needs to renegotiate the ICE connection. The 24 "
-            "hour period is controlled by the server and may change. In some "
-            "cases, e.g. if direct connection is used, it will not trigger "
-            "periodically."
-          data: "None."
-          destination: GOOGLE_OWNED_SERVICE
-        }
-        policy {
-          cookies_allowed: NO
-          setting:
-            "This feature cannot be disabled by settings. You can block Chrome "
-            "Remote Desktop as specified here: "
-            "https://support.google.com/chrome/?p=remote_desktop"
-          chrome_policy {
-            RemoteAccessHostFirewallTraversal {
-              policy_options {mode: MANDATORY}
-              RemoteAccessHostFirewallTraversal: false
-            }
-          }
-        }
-        comments:
-          "Above specified policy is only applicable on the host side and "
-          "doesn't have effect in Android and iOS client apps. The product "
-          "is shipped separately from Chromium, except on Chrome OS."
-        )");
-}
+constexpr char kChromotingRemoteSupportOAuth2Scope[] =
+    "https://www.googleapis.com/auth/chromoting.remote.support";
+constexpr char kTachyonOAuth2Scope[] =
+    "https://www.googleapis.com/auth/tachyon";
 
 }  // namespace
 
 CRDHostDelegate::CRDHostDelegate()
-    : OAuth2TokenService::Consumer("crd_host_delegate"), weak_factory_(this) {}
+    : OAuth2AccessTokenManager::Consumer("crd_host_delegate") {}
 
-CRDHostDelegate::~CRDHostDelegate() {
-}
+CRDHostDelegate::~CRDHostDelegate() {}
 
 bool CRDHostDelegate::HasActiveSession() const {
   return host_ != nullptr;
@@ -146,13 +105,12 @@ bool CRDHostDelegate::AreServicesReady() const {
   return user_manager::UserManager::IsInitialized() &&
          ui::UserActivityDetector::Get() != nullptr &&
          chromeos::ProfileHelper::Get() != nullptr &&
-         chromeos::DeviceOAuth2TokenServiceFactory::Get() != nullptr;
+         DeviceOAuth2TokenServiceFactory::Get() != nullptr;
 }
 
 bool CRDHostDelegate::IsRunningKiosk() const {
   auto* user_manager = user_manager::UserManager::Get();
-  if (!user_manager->IsLoggedInAsKioskApp() &&
-      !user_manager->IsLoggedInAsArcKioskApp()) {
+  if (!user_manager->IsLoggedInAsAnyKioskApp()) {
     return false;
   }
   if (!GetKioskProfile())
@@ -165,10 +123,15 @@ bool CRDHostDelegate::IsRunningKiosk() const {
     chromeos::KioskAppManager::App app;
     CHECK(manager->GetApp(manager->GetAutoLaunchApp(), &app));
     return app.was_auto_launched_with_zero_delay;
-  } else {  // ARC Kiosk
+  } else if (user_manager->IsLoggedInAsArcKioskApp()) {
     return chromeos::ArcKioskAppManager::Get()
         ->current_app_was_auto_launched_with_zero_delay();
+  } else if (user_manager->IsLoggedInAsWebKioskApp()) {
+    return chromeos::WebKioskAppManager::Get()
+        ->current_app_was_auto_launched_with_zero_delay();
   }
+  NOTREACHED();
+  return false;
 }
 
 base::TimeDelta CRDHostDelegate::GetIdlenessPeriod() const {
@@ -181,24 +144,21 @@ void CRDHostDelegate::FetchOAuthToken(
     DeviceCommandStartCRDSessionJob::ErrorCallback error_callback) {
   DCHECK(!oauth_success_callback_);
   DCHECK(!error_callback_);
-  chromeos::DeviceOAuth2TokenService* oauth_service =
-      chromeos::DeviceOAuth2TokenServiceFactory::Get();
+  DeviceOAuth2TokenService* oauth_service =
+      DeviceOAuth2TokenServiceFactory::Get();
 
-  OAuth2TokenService::ScopeSet scopes;
-  scopes.insert(GaiaConstants::kGoogleUserInfoEmail);
-  scopes.insert(GaiaConstants::kGoogleTalkOAuth2Scope);
-  scopes.insert(kCloudDevicesOAuth2Scope);
-  scopes.insert(kChromotingOAuth2Scope);
+  OAuth2AccessTokenManager::ScopeSet scopes{
+      GaiaConstants::kGoogleUserInfoEmail, kCloudDevicesOAuth2Scope,
+      kChromotingRemoteSupportOAuth2Scope, kTachyonOAuth2Scope};
 
   oauth_success_callback_ = std::move(success_callback);
   error_callback_ = std::move(error_callback);
 
-  oauth_request_ = oauth_service->StartRequest(
-      oauth_service->GetRobotAccountId(), scopes, this);
+  oauth_request_ = oauth_service->StartAccessTokenRequest(scopes, this);
 }
 
 void CRDHostDelegate::OnGetTokenSuccess(
-    const OAuth2TokenService::Request* request,
+    const OAuth2AccessTokenManager::Request* request,
     const OAuth2AccessTokenConsumer::TokenResponse& token_response) {
   oauth_request_.reset();
   error_callback_.Reset();
@@ -206,7 +166,7 @@ void CRDHostDelegate::OnGetTokenSuccess(
 }
 
 void CRDHostDelegate::OnGetTokenFailure(
-    const OAuth2TokenService::Request* request,
+    const OAuth2AccessTokenManager::Request* request,
     const GoogleServiceAuthError& error) {
   oauth_request_.reset();
   oauth_success_callback_.Reset();
@@ -215,66 +175,9 @@ void CRDHostDelegate::OnGetTokenFailure(
            error.ToString());
 }
 
-void CRDHostDelegate::FetchICEConfig(
-    const std::string& oauth_token,
-    DeviceCommandStartCRDSessionJob::ICEConfigCallback success_callback,
-    DeviceCommandStartCRDSessionJob::ErrorCallback error_callback) {
-  DCHECK(!ice_success_callback_);
-  DCHECK(!error_callback_);
-
-  ice_success_callback_ = std::move(success_callback);
-  error_callback_ = std::move(error_callback);
-
-  auto ice_request = std::make_unique<network::ResourceRequest>();
-  ice_request->url = GURL(kICEConfigURL);
-  ice_request->load_flags =
-      net::LOAD_DO_NOT_SEND_COOKIES | net::LOAD_DO_NOT_SAVE_COOKIES;
-
-  ice_request->headers.SetHeader(net::HttpRequestHeaders::kAuthorization,
-                                 "Bearer " + oauth_token);
-  auto loader_factory =
-      content::BrowserContext::GetDefaultStoragePartition(GetKioskProfile())
-          ->GetURLLoaderFactoryForBrowserProcess();
-
-  ice_config_loader_ = network::SimpleURLLoader::Create(
-      std::move(ice_request), CreateIceConfigRequestAnnotation());
-  ice_config_loader_->DownloadToString(
-      loader_factory.get(),
-      base::BindOnce(&CRDHostDelegate::OnICEConfigurationLoaded,
-                     weak_factory_.GetWeakPtr()),
-      network::SimpleURLLoader::kMaxBoundedStringDownloadSize);
-}
-
-void CRDHostDelegate::OnICEConfigurationLoaded(
-    std::unique_ptr<std::string> response_body) {
-  ice_config_loader_.reset();
-  if (response_body) {
-    std::unique_ptr<base::Value> value =
-        base::JSONReader::ReadDeprecated(*response_body);
-    if (!value || !value->is_dict()) {
-      ice_success_callback_.Reset();
-      std::move(error_callback_)
-          .Run(DeviceCommandStartCRDSessionJob::FAILURE_NO_ICE_CONFIG,
-               "Could not parse config");
-      return;
-    }
-    auto* config = value->FindKeyOfType("data", base::Value::Type::DICTIONARY);
-    if (config) {
-      error_callback_.Reset();
-      std::move(ice_success_callback_).Run(std::move(*config));
-      return;
-    }
-  }
-
-  ice_success_callback_.Reset();
-  std::move(error_callback_)
-      .Run(DeviceCommandStartCRDSessionJob::FAILURE_NO_ICE_CONFIG,
-           std::string());
-}
-
 void CRDHostDelegate::StartCRDHostAndGetCode(
     const std::string& oauth_token,
-    base::Value ice_config,
+    bool terminate_upon_input,
     DeviceCommandStartCRDSessionJob::AccessCodeCallback success_callback,
     DeviceCommandStartCRDSessionJob::ErrorCallback error_callback) {
   DCHECK(!host_);
@@ -283,8 +186,12 @@ void CRDHostDelegate::StartCRDHostAndGetCode(
 
   // Store all parameters for future connect call.
   base::Value connect_params(base::Value::Type::DICTIONARY);
-  std::string username =
-      chromeos::DeviceOAuth2TokenServiceFactory::Get()->GetRobotAccountId();
+  CoreAccountId account_id =
+      DeviceOAuth2TokenServiceFactory::Get()->GetRobotAccountId();
+
+  // TODO(msarda): This conversion will not be correct once account id is
+  // migrated to be the Gaia ID on ChromeOS. Fix it.
+  std::string username = account_id.ToString();
 
   connect_params.SetKey(kCRDConnectUserName, base::Value(username));
   connect_params.SetKey(kCRDConnectAuth, base::Value("oauth2:" + oauth_token));
@@ -293,8 +200,10 @@ void CRDHostDelegate::StartCRDHostAndGetCode(
   connect_params.SetKey(kCRDConnectXMPPTLS, base::Value(true));
   connect_params.SetKey(kCRDConnectDirectoryBot,
                         base::Value(kCRDConnectDirectoryBotValue));
-  connect_params.SetKey(kCRDConnectICEConfig, std::move(ice_config));
-  connect_params.SetKey(kCRDConnectNoDialogs, base::Value(true));
+  connect_params.SetKey(kCRDConnectSuppressUserDialogs, base::Value(true));
+  connect_params.SetKey(kCRDConnectSuppressNotifications, base::Value(true));
+  connect_params.SetKey(kCRDTerminateUponInput,
+                        base::Value(terminate_upon_input));
   connect_params_ = std::move(connect_params);
 
   remote_connected_ = false;
@@ -305,10 +214,8 @@ void CRDHostDelegate::StartCRDHostAndGetCode(
 
   // TODO(antrim): set up watchdog timer (reasonable cutoff).
   host_ = remoting::CreateIt2MeNativeMessagingHostForChromeOS(
-      base::CreateSingleThreadTaskRunnerWithTraits(
-          {content::BrowserThread::IO}),
-      base::CreateSingleThreadTaskRunnerWithTraits(
-          {content::BrowserThread::UI}),
+      base::CreateSingleThreadTaskRunner({content::BrowserThread::IO}),
+      base::CreateSingleThreadTaskRunner({content::BrowserThread::UI}),
       g_browser_process->policy_service());
   host_->Start(this);
 
@@ -341,7 +248,7 @@ void CRDHostDelegate::PostMessageFromNativeHost(const std::string& message) {
   } else if (type == kCRDResponseDisconnect) {
     OnDisconnectResponse();
     return;
-  } else if (type == kCRDStateChanged) {
+  } else if (type == kCRDStateChanged || type == kCRDResponseError) {
     // Handle CRD host state changes
     auto* state_value =
         message_value->FindKeyOfType(kCRDStateKey, base::Value::Type::STRING);
@@ -367,7 +274,7 @@ void CRDHostDelegate::PostMessageFromNativeHost(const std::string& message) {
     }
     return;
   }
-  LOG(WARNING) << "Unknown message type :" << type;
+  LOG(WARNING) << "Unknown message type: " << type;
 }
 
 void CRDHostDelegate::OnHelloResponse() {

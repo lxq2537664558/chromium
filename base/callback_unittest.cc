@@ -8,9 +8,9 @@
 #include <utility>
 
 #include "base/bind.h"
-#include "base/callback_helpers.h"
 #include "base/callback_internal.h"
 #include "base/memory/ref_counted.h"
+#include "base/notreached.h"
 #include "base/test/test_timeouts.h"
 #include "base/threading/thread.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -122,43 +122,25 @@ TEST_F(CallbackTest, Move) {
   EXPECT_EQ(callback_a_, null_callback_);
 }
 
-struct TestForReentrancy {
-  TestForReentrancy()
-      : cb_already_run(false),
-        cb(BindRepeating(&TestForReentrancy::AssertCBIsNull,
-                         Unretained(this))) {}
-  void AssertCBIsNull() {
-    ASSERT_TRUE(cb.is_null());
-    cb_already_run = true;
-  }
-  bool cb_already_run;
-  RepeatingClosure cb;
-};
-
-TEST_F(CallbackTest, ResetAndReturn) {
-  TestForReentrancy tfr;
-  ASSERT_FALSE(tfr.cb.is_null());
-  ASSERT_FALSE(tfr.cb_already_run);
-  ResetAndReturn(&tfr.cb).Run();
-  ASSERT_TRUE(tfr.cb.is_null());
-  ASSERT_TRUE(tfr.cb_already_run);
-}
-
 TEST_F(CallbackTest, NullAfterMoveRun) {
-  RepeatingClosure cb = BindRepeating([] {});
+  RepeatingCallback<void(void*)> cb = BindRepeating([](void* param) {
+    EXPECT_TRUE(static_cast<RepeatingCallback<void(void*)>*>(param)->is_null());
+  });
   ASSERT_TRUE(cb);
-  std::move(cb).Run();
-  ASSERT_FALSE(cb);
+  std::move(cb).Run(&cb);
+  EXPECT_FALSE(cb);
 
   const RepeatingClosure cb2 = BindRepeating([] {});
   ASSERT_TRUE(cb2);
   std::move(cb2).Run();
-  ASSERT_TRUE(cb2);
+  EXPECT_TRUE(cb2);
 
-  OnceClosure cb3 = BindOnce([] {});
+  OnceCallback<void(void*)> cb3 = BindOnce([](void* param) {
+    EXPECT_TRUE(static_cast<OnceCallback<void(void*)>*>(param)->is_null());
+  });
   ASSERT_TRUE(cb3);
-  std::move(cb3).Run();
-  ASSERT_FALSE(cb3);
+  std::move(cb3).Run(&cb3);
+  EXPECT_FALSE(cb3);
 }
 
 TEST_F(CallbackTest, MaybeValidReturnsTrue) {
@@ -184,11 +166,15 @@ TEST_F(CallbackTest, MaybeValidInvalidateWeakPtrsOnSameSequence) {
   RepeatingCallback<void()> cb =
       BindRepeating(&ClassWithAMethod::TheMethod, ptr);
   EXPECT_TRUE(cb.MaybeValid());
+  EXPECT_FALSE(cb.IsCancelled());
 
   factory.InvalidateWeakPtrs();
-  // MaybeValid() should be false because InvalidateWeakPtrs() was called on
-  // the same thread.
+  // MaybeValid() should be false and IsCancelled() should become true because
+  // InvalidateWeakPtrs() was called on the same thread.
   EXPECT_FALSE(cb.MaybeValid());
+  EXPECT_TRUE(cb.IsCancelled());
+  // is_null() is not affected by the invalidated WeakPtr.
+  EXPECT_FALSE(cb.is_null());
 }
 
 TEST_F(CallbackTest, MaybeValidInvalidateWeakPtrsOnOtherSequence) {

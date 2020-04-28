@@ -48,6 +48,10 @@ class [[clang::lto_visibility_public]] OSUserManager {
   virtual HRESULT SetUserPassword(
       const wchar_t* domain, const wchar_t* username, const wchar_t* password);
 
+  // Updates the full name on the given OS account.
+  virtual HRESULT SetUserFullname(
+      const wchar_t* domain, const wchar_t* username, const wchar_t* full_name);
+
   // Checks if the given user's password matches |password|. Returns S_OK if it
   // matches, S_FALSE if not. Otherwise will return the windows error code.
   virtual HRESULT IsWindowsPasswordValid(
@@ -77,6 +81,9 @@ class [[clang::lto_visibility_public]] OSUserManager {
                                 DWORD username_size, wchar_t* domain,
                                 DWORD domain_size);
 
+  // Verify if a user with provided sid is domain joined.
+  virtual bool IsUserDomainJoined(const base::string16& sid);
+
   // Removes the user from the machine.
   virtual HRESULT RemoveUser(const wchar_t* username, const wchar_t* password);
 
@@ -95,6 +102,9 @@ class [[clang::lto_visibility_public]] OSUserManager {
   // This method is called from dllmain.cc when setting fakes from one modul
   // to another.
   static void SetInstanceForTesting(OSUserManager* instance);
+
+  // Checks if the device is domain joined.
+  virtual bool IsDeviceDomainJoined();
 
  protected:
   OSUserManager() {}

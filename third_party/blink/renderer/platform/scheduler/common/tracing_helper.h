@@ -13,7 +13,7 @@
 #include "base/time/time.h"
 #include "base/trace_event/trace_event.h"
 #include "third_party/blink/renderer/platform/platform_export.h"
-#include "third_party/blink/renderer/platform/wtf/allocator.h"
+#include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
 
 namespace blink {
@@ -100,12 +100,12 @@ class StateTracer {
 
   ~StateTracer() {
     if (slice_is_open_)
-      TRACE_EVENT_ASYNC_END0(category, name_, object_);
+      TRACE_EVENT_NESTABLE_ASYNC_END0(category, name_, TRACE_ID_LOCAL(object_));
   }
 
   // String will be copied before leaving this function.
   void TraceString(const String& state) {
-    TraceImpl(state.Utf8().data(), true);
+    TraceImpl(state.Utf8().c_str(), true);
   }
 
   // Trace compile-time defined const string, so no copy needed.
@@ -122,22 +122,19 @@ class StateTracer {
  private:
   void TraceImpl(const char* state, bool need_copy) {
     if (slice_is_open_) {
-      TRACE_EVENT_ASYNC_END0(category, name_, object_);
+      TRACE_EVENT_NESTABLE_ASYNC_END0(category, name_, TRACE_ID_LOCAL(object_));
       slice_is_open_ = false;
     }
     if (!state || !is_enabled())
       return;
 
-    // Trace viewer logic relies on subslice starting at the exact same time
-    // as the async event.
-    base::TimeTicks now = TRACE_TIME_TICKS_NOW();
-    TRACE_EVENT_ASYNC_BEGIN_WITH_TIMESTAMP0(category, name_, object_, now);
     if (need_copy) {
-      TRACE_EVENT_ASYNC_STEP_INTO_WITH_TIMESTAMP0(category, name_, object_,
-                                                  TRACE_STR_COPY(state), now);
+      TRACE_EVENT_NESTABLE_ASYNC_BEGIN1(category, name_,
+                                        TRACE_ID_LOCAL(object_), "state",
+                                        TRACE_STR_COPY(state));
     } else {
-      TRACE_EVENT_ASYNC_STEP_INTO_WITH_TIMESTAMP0(category, name_, object_,
-                                                  state, now);
+      TRACE_EVENT_NESTABLE_ASYNC_BEGIN1(
+          category, name_, TRACE_ID_LOCAL(object_), "state", state);
     }
     slice_is_open_ = true;
   }

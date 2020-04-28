@@ -11,6 +11,7 @@
 #include "base/auto_reset.h"
 #include "base/bind.h"
 #include "base/command_line.h"
+#include "base/metrics/histogram_macros.h"
 #include "ui/base/ime/ime_bridge.h"
 #include "ui/base/ime/ime_engine_handler_interface.h"
 #include "ui/base/ime/text_input_client.h"
@@ -158,7 +159,8 @@ void InputMethodWinImm32::OnWillChangeFocusedClient(
     TextInputClient* focused_before,
     TextInputClient* focused) {
   if (IsWindowFocused(focused_before))
-    ConfirmCompositionText();
+    ConfirmCompositionText(/* reset_engine */ true,
+                           /* keep_selection */ false);
 }
 
 void InputMethodWinImm32::OnDidChangeFocusedClient(
@@ -212,6 +214,8 @@ LRESULT InputMethodWinImm32::OnImeStartComposition(HWND window_handle,
   composing_window_handle_ = window_handle;
   imm32_manager_.CreateImeWindow(window_handle);
   imm32_manager_.ResetComposition(window_handle);
+  UMA_HISTOGRAM_BOOLEAN("InputMethod.CompositionWithImm32BasedIme",
+                        imm32_manager_.IsImm32ImeActive());
   return 0;
 }
 
@@ -319,18 +323,16 @@ void InputMethodWinImm32::RefreshInputLanguage() {
   }
 }
 
-void InputMethodWinImm32::ConfirmCompositionText() {
+void InputMethodWinImm32::ConfirmCompositionText(bool reset_engine,
+                                                 bool keep_selection) {
+  InputMethodBase::ConfirmCompositionText(reset_engine, keep_selection);
+  if (reset_engine)
+    InputMethodWinBase::ResetEngine();
+
+  // Makes sure the native IME app can be informed about the composition is
+  // cleared, so that it can clean up its internal states.
   if (composing_window_handle_)
     imm32_manager_.CleanupComposition(composing_window_handle_);
-
-  // Though above line should confirm the client's composition text by sending a
-  // result text to us, in case the input method and the client are in
-  // inconsistent states, we check the client's composition state again.
-  if (!IsTextInputTypeNone() && GetTextInputClient()->HasCompositionText()) {
-    GetTextInputClient()->ConfirmCompositionText();
-
-    InputMethodWinBase::ResetEngine();
-  }
 }
 
 void InputMethodWinImm32::UpdateIMEState() {
@@ -338,9 +340,7 @@ void InputMethodWinImm32::UpdateIMEState() {
   // We disable input method in password field.
   const HWND window_handle = toplevel_window_handle_;
   const TextInputType text_input_type =
-      (GetEngine() && GetEngine()->IsInterestedInKeyEvent())
-          ? TEXT_INPUT_TYPE_NONE
-          : GetTextInputType();
+      GetEngine() ? TEXT_INPUT_TYPE_NONE : GetTextInputType();
   const TextInputMode text_input_mode = GetTextInputMode();
   switch (text_input_type) {
     case ui::TEXT_INPUT_TYPE_NONE:

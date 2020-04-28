@@ -35,6 +35,9 @@ class SearchProvider {
   // training signals for results of any |RankingItemType|, so it is the
   // |SearchProvider|'s responsibility to check |type| and ignore if necessary.
   virtual void Train(const std::string& id, RankingItemType type) {}
+  // Invoked when the app list is shown. This can optionally be used by a
+  // provider to eg. warm up a cache of results.
+  virtual void AppListShown() {}
 
   void set_result_changed_callback(const ResultChangedCallback& callback) {
     result_changed_callback_ = callback;
@@ -51,7 +54,11 @@ class SearchProvider {
   // desired to be done only once when all results are added.
   void SwapResults(Results* new_results);
 
+  // Clear results and call the |result_changed_callback_|.
   void ClearResults();
+
+  // Clear the results without calling the |result_changed_callback_|.
+  void ClearResultsSilently();
 
  private:
   void FireResultChanged();

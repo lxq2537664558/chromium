@@ -6,12 +6,13 @@
 
 #include <numeric>
 
-#include "ash/accessibility/accessibility_controller.h"
+#include "ash/accessibility/accessibility_controller_impl.h"
+#include "ash/public/cpp/ash_pref_names.h"
 #include "ash/public/cpp/ash_view_ids.h"
 #include "ash/resources/vector_icons/vector_icons.h"
-#include "ash/session/session_controller.h"
+#include "ash/session/session_controller_impl.h"
 #include "ash/shell.h"
-#include "ash/shutdown_controller.h"
+#include "ash/shutdown_controller_impl.h"
 #include "ash/strings/grit/ash_strings.h"
 #include "ash/system/tray/tray_constants.h"
 #include "ash/system/tray/tray_popup_utils.h"
@@ -19,9 +20,15 @@
 #include "ash/system/unified/sign_out_button.h"
 #include "ash/system/unified/top_shortcut_button.h"
 #include "ash/system/unified/unified_system_tray_controller.h"
+#include "ash/system/unified/unified_system_tray_view.h"
+#include "ash/system/unified/user_chooser_detailed_view_controller.h"
 #include "ash/system/unified/user_chooser_view.h"
 #include "base/numerics/ranges.h"
+#include "components/prefs/pref_registry_simple.h"
+#include "components/prefs/pref_service.h"
 #include "ui/gfx/paint_vector_icon.h"
+#include "ui/views/controls/button/button.h"
+#include "ui/views/controls/highlight_path_generator.h"
 #include "ui/views/layout/box_layout.h"
 #include "ui/views/layout/fill_layout.h"
 #include "ui/views/view_class_properties.h"
@@ -40,6 +47,7 @@ class UserAvatarButton : public views::Button {
 
 UserAvatarButton::UserAvatarButton(views::ButtonListener* listener)
     : Button(listener) {
+  SetID(VIEW_ID_USER_AVATAR_BUTTON);
   SetLayoutManager(std::make_unique<views::FillLayout>());
   SetBorder(views::CreateEmptyBorder(kUnifiedCircularButtonFocusPadding));
   AddChildView(CreateUserAvatarView(0 /* user_index */));
@@ -48,12 +56,8 @@ UserAvatarButton::UserAvatarButton(views::ButtonListener* listener)
   SetInstallFocusRingOnFocus(true);
   SetFocusForPlatform();
 
-  int focus_ring_radius =
-      kTrayItemSize + kUnifiedCircularButtonFocusPadding.width();
-  auto path = std::make_unique<SkPath>();
-  path->addOval(gfx::RectToSkRect(
-      gfx::Rect(gfx::Size(focus_ring_radius, focus_ring_radius))));
-  SetProperty(views::kHighlightPathKey, path.release());
+  views::InstallCircleHighlightPathGenerator(this);
+  focus_ring()->SetColor(UnifiedSystemTrayView::GetFocusRingColor());
 }
 
 }  // namespace
@@ -70,7 +74,7 @@ void TopShortcutButtonContainer::Layout() {
   views::View::Views visible_children;
   std::copy_if(children().cbegin(), children().cend(),
                std::back_inserter(visible_children), [](const auto* v) {
-                 return v->visible() && (v->GetPreferredSize().width() > 0);
+                 return v->GetVisible() && (v->GetPreferredSize().width() > 0);
                });
   if (visible_children.empty())
     return;
@@ -117,9 +121,8 @@ void TopShortcutButtonContainer::Layout() {
 gfx::Size TopShortcutButtonContainer::CalculatePreferredSize() const {
   int total_horizontal_size = 0;
   int num_visible = 0;
-  for (int i = 0; i < child_count(); i++) {
-    const views::View* child = child_at(i);
-    if (!child->visible())
+  for (const auto* child : children()) {
+    if (!child->GetVisible())
       continue;
     int child_horizontal_size = child->GetPreferredSize().width();
     if (child_horizontal_size == 0)
@@ -135,6 +138,10 @@ gfx::Size TopShortcutButtonContainer::CalculatePreferredSize() const {
   int height = kTrayItemSize + kUnifiedCircularButtonFocusPadding.height() +
                kUnifiedTopShortcutContainerTopPadding;
   return gfx::Size(width, height);
+}
+
+const char* TopShortcutButtonContainer::GetClassName() const {
+  return "TopShortcutButtonContainer";
 }
 
 void TopShortcutButtonContainer::AddUserAvatarButton(
@@ -154,45 +161,54 @@ TopShortcutsView::TopShortcutsView(UnifiedSystemTrayController* controller)
   DCHECK(controller_);
 
   auto* layout = SetLayoutManager(std::make_unique<views::BoxLayout>(
-      views::BoxLayout::kHorizontal, kUnifiedTopShortcutPadding,
+      views::BoxLayout::Orientation::kHorizontal, kUnifiedTopShortcutPadding,
       kUnifiedTopShortcutSpacing));
   layout->set_cross_axis_alignment(
-      views::BoxLayout::CROSS_AXIS_ALIGNMENT_START);
+      views::BoxLayout::CrossAxisAlignment::kStart);
   container_ = new TopShortcutButtonContainer();
   AddChildView(container_);
 
-  if (Shell::Get()->session_controller()->login_status() !=
-      LoginStatus::NOT_LOGGED_IN) {
+  Shell* shell = Shell::Get();
+
+  bool is_on_login_screen =
+      shell->session_controller()->login_status() == LoginStatus::NOT_LOGGED_IN;
+  bool can_show_settings = TrayPopupUtils::CanOpenWebUISettings();
+  bool can_lock_screen = shell->session_controller()->CanLockScreen();
+
+  if (!is_on_login_screen) {
     user_avatar_button_ = new UserAvatarButton(this);
-    user_avatar_button_->SetEnabled(controller->IsUserChooserEnabled());
+    user_avatar_button_->SetEnabled(
+        UserChooserDetailedViewController::IsUserChooserEnabled());
     container_->AddUserAvatarButton(user_avatar_button_);
+
+    sign_out_button_ = new SignOutButton(this);
+    container_->AddSignOutButton(sign_out_button_);
   }
 
-  // Show the buttons in this row as disabled if the user is at the login
-  // screen, lock screen, or in a secondary account flow. The exception is
-  // |power_button_| which is always shown as enabled.
-  const bool can_show_web_ui = TrayPopupUtils::CanOpenWebUISettings();
-
-  sign_out_button_ = new SignOutButton(this);
-  container_->AddSignOutButton(sign_out_button_);
-
-  bool reboot = Shell::Get()->shutdown_controller()->reboot_on_shutdown();
+  bool reboot = shell->shutdown_controller()->reboot_on_shutdown();
   power_button_ = new TopShortcutButton(
       this, kUnifiedMenuPowerIcon,
       reboot ? IDS_ASH_STATUS_TRAY_REBOOT : IDS_ASH_STATUS_TRAY_SHUTDOWN);
-  power_button_->set_id(VIEW_ID_POWER_BUTTON);
+  power_button_->SetID(VIEW_ID_POWER_BUTTON);
   container_->AddChildView(power_button_);
 
-  lock_button_ = new TopShortcutButton(this, kUnifiedMenuLockIcon,
-                                       IDS_ASH_STATUS_TRAY_LOCK);
-  lock_button_->SetVisible(can_show_web_ui &&
-                           Shell::Get()->session_controller()->CanLockScreen());
-  container_->AddChildView(lock_button_);
+  if (can_show_settings && can_lock_screen) {
+    lock_button_ = new TopShortcutButton(this, kUnifiedMenuLockIcon,
+                                         IDS_ASH_STATUS_TRAY_LOCK);
+    container_->AddChildView(lock_button_);
+  }
 
-  settings_button_ = new TopShortcutButton(this, kUnifiedMenuSettingsIcon,
-                                           IDS_ASH_STATUS_TRAY_SETTINGS);
-  settings_button_->SetVisible(can_show_web_ui);
-  container_->AddChildView(settings_button_);
+  if (can_show_settings) {
+    settings_button_ = new TopShortcutButton(this, kUnifiedMenuSettingsIcon,
+                                             IDS_ASH_STATUS_TRAY_SETTINGS);
+    container_->AddChildView(settings_button_);
+    local_state_pref_change_registrar_.Init(Shell::Get()->local_state());
+    local_state_pref_change_registrar_.Add(
+        prefs::kOsSettingsEnabled,
+        base::BindRepeating(&TopShortcutsView::UpdateSettingsButtonState,
+                            base::Unretained(this)));
+    UpdateSettingsButtonState();
+  }
 
   // |collapse_button_| should be right-aligned, so we make the buttons
   // container flex occupying all remaining space.
@@ -200,14 +216,11 @@ TopShortcutsView::TopShortcutsView(UnifiedSystemTrayController* controller)
 
   collapse_button_ = new CollapseButton(this);
   AddChildView(collapse_button_);
-
-  OnAccessibilityStatusChanged();
-
-  Shell::Get()->accessibility_controller()->AddObserver(this);
 }
 
-TopShortcutsView::~TopShortcutsView() {
-  Shell::Get()->accessibility_controller()->RemoveObserver(this);
+// static
+void TopShortcutsView::RegisterLocalStatePrefs(PrefRegistrySimple* registry) {
+  registry->RegisterBooleanPref(prefs::kOsSettingsEnabled, true);
 }
 
 void TopShortcutsView::SetExpandedAmount(double expanded_amount) {
@@ -230,9 +243,18 @@ void TopShortcutsView::ButtonPressed(views::Button* sender,
     controller_->ToggleExpanded();
 }
 
-void TopShortcutsView::OnAccessibilityStatusChanged() {
-  collapse_button_->SetEnabled(
-      !Shell::Get()->accessibility_controller()->spoken_feedback_enabled());
+const char* TopShortcutsView::GetClassName() const {
+  return "TopShortcutsView";
+}
+
+void TopShortcutsView::UpdateSettingsButtonState() {
+  PrefService* const local_state = Shell::Get()->local_state();
+  const bool settings_icon_enabled =
+      local_state->GetBoolean(prefs::kOsSettingsEnabled);
+
+  settings_button_->SetState(settings_icon_enabled
+                                 ? views::Button::STATE_NORMAL
+                                 : views::Button::STATE_DISABLED);
 }
 
 }  // namespace ash

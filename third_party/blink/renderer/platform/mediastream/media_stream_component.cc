@@ -35,9 +35,8 @@
 #include "third_party/blink/public/platform/web_media_stream_track.h"
 #include "third_party/blink/renderer/platform/audio/audio_bus.h"
 #include "third_party/blink/renderer/platform/heap/heap.h"
-#include "third_party/blink/renderer/platform/mediastream/media_stream_center.h"
 #include "third_party/blink/renderer/platform/mediastream/media_stream_source.h"
-#include "third_party/blink/renderer/platform/uuid.h"
+#include "third_party/blink/renderer/platform/wtf/uuid.h"
 
 namespace blink {
 
@@ -53,7 +52,7 @@ int MediaStreamComponent::GenerateUniqueId() {
 }
 
 MediaStreamComponent::MediaStreamComponent(MediaStreamSource* source)
-    : MediaStreamComponent(CreateCanonicalUUIDString(), source) {}
+    : MediaStreamComponent(WTF::CreateCanonicalUUIDString(), source) {}
 MediaStreamComponent::MediaStreamComponent(const String& id,
                                            MediaStreamSource* source)
     : source_(source), id_(id), unique_id_(GenerateUniqueId()) {
@@ -106,7 +105,9 @@ void MediaStreamComponent::SetContentHint(
     return;
   content_hint_ = hint;
 
-  MediaStreamCenter::Instance().DidSetContentHint(this);
+  WebPlatformMediaStreamTrack* native_track = GetPlatformTrack();
+  if (native_track)
+    native_track->SetContentHint(ContentHint());
 }
 
 void MediaStreamComponent::AudioSourceProviderImpl::ProvideInput(
@@ -131,7 +132,7 @@ void MediaStreamComponent::AudioSourceProviderImpl::ProvideInput(
   web_audio_source_provider_->ProvideInput(web_audio_data, frames_to_process);
 }
 
-void MediaStreamComponent::Trace(blink::Visitor* visitor) {
+void MediaStreamComponent::Trace(Visitor* visitor) {
   visitor->Trace(source_);
 }
 

@@ -30,6 +30,7 @@
 
 namespace cc {
 namespace {
+using Rects = base::StackVector<gfx::Rect, 1>;
 
 struct PositionScaleDrawImage {
   PositionScaleDrawImage(const PaintImage& image,
@@ -56,11 +57,14 @@ class DiscardableImageMapTest : public testing::Test {
       const DiscardableImageMap& image_map,
       const gfx::Rect& rect) {
     std::vector<const DrawImage*> draw_image_ptrs;
+    // Choose a not-SRGB-and-not-invalid target color space to verify that it
+    // is passed correctly to the resulting DrawImages.
+    gfx::ColorSpace target_color_space = gfx::ColorSpace::CreateXYZD50();
     image_map.GetDiscardableImagesInRect(rect, &draw_image_ptrs);
     std::vector<DrawImage> draw_images;
     for (const auto* image : draw_image_ptrs)
-      draw_images.push_back(
-          DrawImage(*image, 1.f, PaintImage::kDefaultFrameIndex));
+      draw_images.push_back(DrawImage(
+          *image, 1.f, PaintImage::kDefaultFrameIndex, target_color_space));
 
     std::vector<PositionScaleDrawImage> position_draw_images;
     std::vector<DrawImage> results;
@@ -77,6 +81,7 @@ class DiscardableImageMapTest : public testing::Test {
     for (size_t i = 0; i < draw_images.size(); ++i) {
       EXPECT_TRUE(draw_images[i].paint_image() ==
                   position_draw_images[i].image);
+      EXPECT_EQ(draw_images[i].target_color_space(), target_color_space);
     }
     return position_draw_images;
   }
@@ -372,6 +377,65 @@ TEST_F(DiscardableImageMapTest, PaintDestroyedWhileImageIsDrawn) {
       GetDiscardableImagesInRect(image_map, gfx::Rect(0, 0, 1, 1));
   EXPECT_EQ(1u, images.size());
   EXPECT_TRUE(images[0].image == discardable_image);
+}
+
+// Check if SkNoDrawCanvas does not crash for large layers.
+TEST_F(DiscardableImageMapTest, RestoreSavedBigLayers) {
+  PaintFlags flags;
+  SkRect rect = SkRect::MakeWH(INT_MAX, INT_MAX);
+  scoped_refptr<DisplayItemList> display_list = new DisplayItemList;
+  display_list->StartPaint();
+  display_list->push<DrawRectOp>(rect, flags);
+  display_list->EndPaintOfUnpaired(gfx::Rect(INT_MAX, INT_MAX));
+  display_list->Finalize();
+  display_list->GenerateDiscardableImagesMetadata();
+}
+
+// Test if SaveLayer and Restore work together.
+// 1. Move cursor to (25, 25) draw a black rect of size 25x25.
+// 2. save layer, move the cursor by (100, 100) or to point (125, 125), draw a
+// red rect of size 25x25.
+// 3. Restore layer, so the cursor moved back to (25, 25), move cursor by (100,
+// 0) or at the point (125, 25), draw a yellow rect of size 25x25.
+//  (25, 25)
+//  +---+
+//  |   |
+//  +---+
+//  (25, 125) (125, 125)
+//  +---+     +---+
+//  |   |     |   |
+//  +---+     +---+
+TEST_F(DiscardableImageMapTest, RestoreSavedTransformedLayers) {
+  scoped_refptr<DisplayItemList> display_list = new DisplayItemList;
+  PaintFlags paint;
+  gfx::Rect visible_rect(200, 200);
+  display_list->StartPaint();
+
+  PaintImage discardable_image1 =
+      CreateDiscardablePaintImage(gfx::Size(25, 25));
+  PaintImage discardable_image2 =
+      CreateDiscardablePaintImage(gfx::Size(25, 25));
+  PaintImage discardable_image3 =
+      CreateDiscardablePaintImage(gfx::Size(25, 25));
+  display_list->push<TranslateOp>(25, 25);
+  display_list->push<DrawImageOp>(discardable_image1, 0.f, 0.f, nullptr);
+  display_list->push<SaveLayerOp>(nullptr, &paint);
+  display_list->push<TranslateOp>(100, 100);
+  display_list->push<DrawImageOp>(discardable_image2, 0.f, 0.f, nullptr);
+  display_list->push<RestoreOp>();
+  display_list->push<TranslateOp>(0, 100);
+  display_list->push<DrawImageOp>(discardable_image3, 0.f, 0.f, nullptr);
+  display_list->EndPaintOfUnpaired(visible_rect);
+  display_list->Finalize();
+
+  display_list->GenerateDiscardableImagesMetadata();
+  const DiscardableImageMap& image_map = display_list->discardable_image_map();
+  std::vector<PositionScaleDrawImage> images =
+      GetDiscardableImagesInRect(image_map, gfx::Rect(0, 0, 200, 200));
+  EXPECT_EQ(3u, images.size());
+  EXPECT_EQ(gfx::Rect(25, 25, 25, 25), InsetImageRects(images)[0]);
+  EXPECT_EQ(gfx::Rect(125, 125, 25, 25), InsetImageRects(images)[1]);
+  EXPECT_EQ(gfx::Rect(25, 125, 25, 25), InsetImageRects(images)[2]);
 }
 
 TEST_F(DiscardableImageMapTest, NullPaintOnSaveLayer) {
@@ -728,6 +792,39 @@ TEST_F(DiscardableImageMapTest, GathersAnimatedImages) {
   EXPECT_DCHECK_DEATH(images[2]->frame_index());
 }
 
+TEST_F(DiscardableImageMapTest, GathersPaintWorklets) {
+  gfx::Rect visible_rect(1000, 1000);
+  FakeContentLayerClient content_layer_client;
+  content_layer_client.set_bounds(visible_rect.size());
+
+  gfx::Size image_size(100, 100);
+  PaintImage static_image = CreateDiscardablePaintImage(image_size);
+  scoped_refptr<TestPaintWorkletInput> input =
+      base::MakeRefCounted<TestPaintWorkletInput>(gfx::SizeF(image_size));
+  PaintImage paint_worklet_image = CreatePaintWorkletPaintImage(input);
+
+  PaintFlags flags;
+  content_layer_client.add_draw_image(static_image, gfx::Point(0, 0), flags);
+  content_layer_client.add_draw_image(paint_worklet_image, gfx::Point(100, 100),
+                                      flags);
+
+  scoped_refptr<DisplayItemList> display_list =
+      content_layer_client.PaintContentsToDisplayList(
+          ContentLayerClient::PAINTING_BEHAVIOR_NORMAL);
+  display_list->GenerateDiscardableImagesMetadata();
+
+  const auto& paint_worklet_inputs =
+      display_list->discardable_image_map().paint_worklet_inputs();
+  ASSERT_EQ(paint_worklet_inputs.size(), 1u);
+  EXPECT_EQ(paint_worklet_inputs[0].first, input);
+
+  // PaintWorklets are not considered discardable images.
+  std::vector<PositionScaleDrawImage> images = GetDiscardableImagesInRect(
+      display_list->discardable_image_map(), visible_rect);
+  ASSERT_EQ(images.size(), 1u);
+  EXPECT_EQ(images[0].image, static_image);
+}
+
 TEST_F(DiscardableImageMapTest, CapturesImagesInPaintRecordShaders) {
   // Create the record to use in the shader.
   auto shader_record = sk_make_sp<PaintOpBuffer>();
@@ -878,19 +975,6 @@ TEST_F(DiscardableImageMapTest, EmbeddedShaderWithAnimatedImages) {
             ImageAnalysisState::kAnimatedImages);
   EXPECT_EQ(shader_with_shader_with_image->image_analysis_state(),
             ImageAnalysisState::kAnimatedImages);
-}
-
-TEST_F(DiscardableImageMapTest, BuildPaintWorkletImage) {
-  gfx::SizeF size(100, 50);
-  scoped_refptr<TestPaintWorkletInput> input =
-      base::MakeRefCounted<TestPaintWorkletInput>(size);
-  PaintImage paint_image = PaintImageBuilder::WithDefault()
-                               .set_id(1)
-                               .set_paint_worklet_input(std::move(input))
-                               .TakePaintImage();
-  EXPECT_TRUE(paint_image.paint_worklet_input());
-  EXPECT_EQ(paint_image.width(), size.width());
-  EXPECT_EQ(paint_image.height(), size.height());
 }
 
 TEST_F(DiscardableImageMapTest, DecodingModeHintsBasic) {
@@ -1059,20 +1143,28 @@ TEST_P(DiscardableImageMapColorSpaceTest, ColorSpace) {
 
   FakeContentLayerClient content_layer_client;
   content_layer_client.set_bounds(visible_rect.size());
-  content_layer_client.add_draw_image(discardable_image, gfx::Point(0, 0),
-                                      PaintFlags());
+
   scoped_refptr<DisplayItemList> display_list =
       content_layer_client.PaintContentsToDisplayList(
           ContentLayerClient::PAINTING_BEHAVIOR_NORMAL);
   display_list->GenerateDiscardableImagesMetadata();
   const DiscardableImageMap& image_map = display_list->discardable_image_map();
 
+  EXPECT_TRUE(image_map.contains_only_srgb_images());
+
+  content_layer_client.add_draw_image(discardable_image, gfx::Point(0, 0),
+                                      PaintFlags());
+  display_list = content_layer_client.PaintContentsToDisplayList(
+      ContentLayerClient::PAINTING_BEHAVIOR_NORMAL);
+  display_list->GenerateDiscardableImagesMetadata();
+  const DiscardableImageMap& image_map2 = display_list->discardable_image_map();
+
   if (!image_color_space.IsValid())
-    EXPECT_TRUE(image_map.all_images_are_srgb());
+    EXPECT_TRUE(image_map2.contains_only_srgb_images());
   else if (image_color_space == gfx::ColorSpace::CreateSRGB())
-    EXPECT_TRUE(image_map.all_images_are_srgb());
+    EXPECT_TRUE(image_map2.contains_only_srgb_images());
   else
-    EXPECT_FALSE(image_map.all_images_are_srgb());
+    EXPECT_FALSE(image_map2.contains_only_srgb_images());
 }
 
 gfx::ColorSpace test_color_spaces[] = {

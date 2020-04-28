@@ -27,11 +27,18 @@ class SimRequestBase {
  public:
   // Additional params which can be passed to the SimRequest.
   struct Params {
+    Params() : response_http_status(200) {}
+
     // Redirect the request to |redirect_url|. Don't call Start() or Complete()
     // if |redirect_url| is non-empty.
     String redirect_url;
 
     WTF::HashMap<String, String> response_http_headers;
+
+    // The HTTP status code of the response. |response_http_status| is ignored
+    // if |redirect_url| is non-empty, since a redirect implies a 302 status
+    // code.
+    int response_http_status;
   };
 
   // Write a chunk of the response body.
@@ -39,7 +46,8 @@ class SimRequestBase {
   void Write(const Vector<char>& data);
 
   // Finish the response, this is as if the server closed the connection.
-  void Finish();
+  // If |navigation_body_loader| already finished, skip calling Finish on it.
+  void Finish(bool body_loader_finished = false);
 
   // Shorthand to complete a request (start/write/finish) sequence in order.
   void Complete(const String& data = String());
@@ -60,6 +68,9 @@ class SimRequestBase {
 
   void Reset();
 
+  // Internal function to write a chunk of the response body
+  void WriteInternal(base::span<const char>);
+
   // Used by SimNetwork.
   void DidReceiveResponse(WebURLLoaderClient*, const WebURLResponse&);
   void DidFail(const WebURLError&);
@@ -75,6 +86,7 @@ class SimRequestBase {
   WebURLLoaderClient* client_;
   unsigned total_encoded_data_length_;
   WTF::HashMap<String, String> response_http_headers_;
+  int response_http_status_;
   StaticDataNavigationBodyLoader* navigation_body_loader_ = nullptr;
 };
 

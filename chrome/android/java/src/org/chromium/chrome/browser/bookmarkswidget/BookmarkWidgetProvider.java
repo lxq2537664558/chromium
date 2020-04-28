@@ -17,8 +17,8 @@ import android.widget.RemoteViews;
 import com.google.android.apps.chrome.appwidget.bookmarks.BookmarkThumbnailWidgetProvider;
 
 import org.chromium.base.ContextUtils;
+import org.chromium.base.IntentUtils;
 import org.chromium.chrome.R;
-import org.chromium.chrome.browser.util.IntentUtils;
 
 /**
  * Widget that shows a preview of the user's bookmarks.
@@ -66,7 +66,7 @@ public class BookmarkWidgetProvider extends AppWidgetProvider {
     public void onDeleted(Context context, int[] appWidgetIds) {
         super.onDeleted(context, appWidgetIds);
         for (int widgetId : appWidgetIds) {
-            BookmarkWidgetService.deleteWidgetState(context, widgetId);
+            BookmarkWidgetService.deleteWidgetState(widgetId);
         }
         removeOrphanedStates(context);
     }
@@ -100,7 +100,7 @@ public class BookmarkWidgetProvider extends AppWidgetProvider {
         AppWidgetManager wm = AppWidgetManager.getInstance(context);
         int[] ids = wm.getAppWidgetIds(getComponentName(context));
         for (int id : ids) {
-            BookmarkWidgetService.deleteWidgetState(context, id);
+            BookmarkWidgetService.deleteWidgetState(id);
         }
     }
 

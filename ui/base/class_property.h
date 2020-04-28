@@ -8,11 +8,9 @@
 #include <stdint.h>
 
 #include <map>
-#include <memory>
 #include <set>
 
 #include "base/time/time.h"
-#include "ui/base/property_data.h"
 #include "ui/base/ui_base_export.h"
 #include "ui/base/ui_base_types.h"
 
@@ -69,13 +67,35 @@ class PropertyHelper;
 class UI_BASE_EXPORT PropertyHandler {
  public:
   PropertyHandler();
-  ~PropertyHandler();
+  PropertyHandler(PropertyHandler&& other);
+  virtual ~PropertyHandler();
+  PropertyHandler& operator=(PropertyHandler&& rhs) = default;
+
+  // Takes the ownership of all the properties in |other|, overwriting any
+  // similarly-keyed existing properties without affecting existing ones with
+  // different keys.
+  void AcquireAllPropertiesFrom(PropertyHandler&& other);
 
   // Sets the |value| of the given class |property|. Setting to the default
-  // value (e.g., NULL) removes the property. The caller is responsible for the
-  // lifetime of any object set as a property on the class.
+  // value (e.g., NULL) removes the property. The lifetime of objects set as
+  // values of unowned properties is managed by the caller (owned properties are
+  // freed when they are overwritten or cleared).
   template<typename T>
   void SetProperty(const ClassProperty<T>* property, T value);
+
+  // Sets the |value| of the given class |property|, which must be an owned
+  // property of pointer type. The property will be assigned a copy of |value|;
+  // if no property object exists one will be allocated. T must support copy
+  // construction and assignment.
+  template <typename T>
+  void SetProperty(const ClassProperty<T*>* property, const T& value);
+
+  // Sets the |value| of the given class |property|, which must be an owned
+  // property and of pointer type. The property will be move-assigned or move-
+  // constructed from |value|; if no property object exists one will be
+  // allocated. T must support at least copy (and ideally move) semantics.
+  template <typename T>
+  void SetProperty(const ClassProperty<T*>* property, T&& value);
 
   // Returns the value of the given class |property|.  Returns the
   // property-specific default value if the property was not previously set.
@@ -93,16 +113,7 @@ class UI_BASE_EXPORT PropertyHandler {
  protected:
   friend class subtle::PropertyHelper;
 
-  // Called from SetPropertyInternal() prior to changing the value. If
-  // |is_value_changing| is false, the new value is the same as the old value
-  // (in other words, the value isn't really changing, but observers will
-  // still be notified).
-  virtual std::unique_ptr<PropertyData> BeforePropertyChange(
-      const void* key,
-      bool is_value_changing);
-  virtual void AfterPropertyChange(const void* key,
-                                   int64_t old_value,
-                                   std::unique_ptr<PropertyData> data) {}
+  virtual void AfterPropertyChange(const void* key, int64_t old_value) {}
   void ClearProperties();
 
   // Called by the public {Set,Get,Clear}Property functions.
@@ -129,9 +140,7 @@ class UI_BASE_EXPORT PropertyHandler {
 namespace {
 
 // No single new-style cast works for every conversion to/from int64_t, so we
-// need this helper class. A third specialization is needed for bool because
-// MSVC warning C4800 (forcing value to bool) is not suppressed by an explicit
-// cast (!).
+// need this helper class.
 template<typename T>
 class ClassPropertyCaster {
  public:
@@ -143,12 +152,6 @@ class ClassPropertyCaster<T*> {
  public:
   static int64_t ToInt64(T* x) { return reinterpret_cast<int64_t>(x); }
   static T* FromInt64(int64_t x) { return reinterpret_cast<T*>(x); }
-};
-template<>
-class ClassPropertyCaster<bool> {
- public:
-  static int64_t ToInt64(bool x) { return static_cast<int64_t>(x); }
-  static bool FromInt64(int64_t x) { return x != 0; }
 };
 template <>
 class ClassPropertyCaster<base::TimeDelta> {
@@ -192,6 +195,40 @@ class UI_BASE_EXPORT PropertyHelper {
 };
 
 }  // namespace subtle
+
+// Template implementation is necessary in the .h file unless we want to break
+// [DECLARE|DEFINE]_EXPORTED_UI_CLASS_PROPERTY_TYPE() below into different
+// macros for owned and unowned properties; implementing them as pure templates
+// makes them nearly impossible to implement or use incorrectly at the cost of a
+// small amount of code duplication across libraries.
+
+template <typename T>
+void PropertyHandler::SetProperty(const ClassProperty<T*>* property,
+                                  const T& value) {
+  // Prevent additional heap allocation if possible.
+  T* const old = GetProperty(property);
+  if (old) {
+    T temp(*old);
+    *old = value;
+    AfterPropertyChange(property, reinterpret_cast<int64_t>(&temp));
+  } else {
+    SetProperty(property, new T(value));
+  }
+}
+
+template <typename T>
+void PropertyHandler::SetProperty(const ClassProperty<T*>* property,
+                                  T&& value) {
+  // Prevent additional heap allocation if possible.
+  T* const old = GetProperty(property);
+  if (old) {
+    T temp(std::move(*old));
+    *old = std::forward<T>(value);
+    AfterPropertyChange(property, reinterpret_cast<int64_t>(&temp));
+  } else {
+    SetProperty(property, new T(std::forward<T>(value)));
+  }
+}
 
 }  // namespace ui
 

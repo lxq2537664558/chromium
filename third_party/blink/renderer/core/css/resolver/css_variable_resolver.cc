@@ -52,7 +52,7 @@ CSSVariableResolver::Fallback CSSVariableResolver::ResolveFallback(
     const CSSParserContext* context =
         StrictCSSParserContext(state_.GetDocument().GetSecureContextMode());
     const bool is_animation_tainted = false;
-    if (!registration->Syntax().Parse(resolved_range, context,
+    if (!registration->Syntax().Parse(resolved_range, *context,
                                       is_animation_tainted))
       return Fallback::kFail;
   }
@@ -61,7 +61,8 @@ CSSVariableResolver::Fallback CSSVariableResolver::ResolveFallback(
 
 scoped_refptr<CSSVariableData> CSSVariableResolver::ValueForCustomProperty(
     AtomicString name,
-    const Options& options) {
+    const Options& options,
+    bool& unit_cycle) {
   if (variables_seen_.Contains(name)) {
     cycle_start_points_.insert(name);
     return nullptr;
@@ -71,23 +72,10 @@ scoped_refptr<CSSVariableData> CSSVariableResolver::ValueForCustomProperty(
   const PropertyRegistration* registration =
       registry_ ? registry_->Registration(name) : nullptr;
 
-  CSSVariableData* variable_data = GetVariable(name, registration);
+  CSSVariableData* variable_data = GetVariableData(name, registration);
 
-  if (!variable_data) {
-    // For unregistered properties, not having a CSSVariableData here means
-    // that it either never existed, or we have resolved it earlier, but
-    // resolution failed. Either way, we return nullptr to signify that this is
-    // an invalid variable.
-    if (!registration)
-      return nullptr;
-    // For registered properties, it's more complicated. Here too, it can mean
-    // that it never existed, or that resolution failed earlier, but now we need
-    // to know which; in the former case we must provide the initial value, and
-    // in the latter case the variable is invalid.
-    return IsRegisteredVariableInvalid(name, *registration)
-               ? nullptr
-               : registration->InitialVariableData();
-  }
+  if (!variable_data)
+    return nullptr;
 
   bool cycle_detected = false;
   scoped_refptr<CSSVariableData> resolved_data = ResolveCustomPropertyIfNeeded(
@@ -100,17 +88,22 @@ scoped_refptr<CSSVariableData> CSSVariableResolver::ValueForCustomProperty(
   }
 
   if (resolved_data) {
-    if (IsVariableDisallowed(*resolved_data, options, registration))
+    if (IsDisallowedByFontUnitFlags(*resolved_data, options, registration)) {
+      unit_cycle = true;
+      SetInvalidVariable(name, registration);
+      return nullptr;
+    }
+    if (IsDisallowedByAnimationTaintedFlag(*resolved_data, options))
       return nullptr;
   }
 
   if (!registration) {
     if (resolved_data != variable_data && options.absolutize)
-      SetVariable(name, registration, resolved_data);
+      SetVariableData(name, registration, resolved_data);
     return resolved_data;
   }
 
-  const CSSValue* value = GetRegisteredVariable(name, *registration);
+  const CSSValue* value = GetVariableValue(name, *registration);
   const CSSValue* resolved_value = value;
 
   // The computed value of a registered property must be stored as a CSSValue
@@ -126,15 +119,16 @@ scoped_refptr<CSSVariableData> CSSVariableResolver::ValueForCustomProperty(
     }
   }
 
-  // If either parsing or resolution failed, and this property inherits,
-  // take inherited values instead of falling back on initial.
-  if (registration->Inherits() && !resolved_data) {
-    resolved_data = state_.ParentStyle()->GetVariable(name, true);
-    resolved_value =
-        state_.ParentStyle()->GetNonInitialRegisteredVariable(name, true);
+  // If either parsing or resolution failed, fall back on "unset".
+  if (!resolved_data) {
+    if (registration->Inherits()) {
+      resolved_data = state_.ParentStyle()->GetVariableData(name, true);
+      resolved_value = state_.ParentStyle()->GetVariableValue(name, true);
+    } else {
+      resolved_data = registration->InitialVariableData();
+      resolved_value = registration->Initial();
+    }
   }
-
-  DCHECK(!!resolved_data == !!resolved_value);
 
   // Registered custom properties substitute as token sequences equivalent to
   // their computed values. CSSVariableData instances which represent such token
@@ -153,18 +147,14 @@ scoped_refptr<CSSVariableData> CSSVariableResolver::ValueForCustomProperty(
   // token sequence to retain any var()-references. This makes it possible to
   // resolve the var()-reference again, using a different (e.g. animated) value.
   if (options.absolutize && resolved_data != variable_data)
-    SetVariable(name, registration, resolved_data);
+    SetVariableData(name, registration, resolved_data);
 
   // The options.absolutize flag does not apply to the computed value, only
   // to the tokens used for substitution. Hence, store the computed value on
   // ComputedStyle, regardless of the flag. This is needed to correctly
   // calculate animations.
   if (value != resolved_value)
-    SetRegisteredVariable(name, *registration, resolved_value);
-
-  if (!resolved_data) {
-    return registration->InitialVariableData();
-  }
+    SetVariableValue(name, *registration, resolved_value);
 
   return resolved_data;
 }
@@ -214,84 +204,77 @@ CSSVariableResolver::ResolveCustomPropertyIfNeeded(
   return ResolveCustomProperty(name, *variable_data, options, cycle_detected);
 }
 
-bool CSSVariableResolver::IsVariableDisallowed(
+bool CSSVariableResolver::IsDisallowedByFontUnitFlags(
     const CSSVariableData& variable_data,
     const Options& options,
     const PropertyRegistration* registration) {
-  return (options.disallow_animation_tainted &&
-          variable_data.IsAnimationTainted()) ||
-         (registration && options.disallow_registered_font_units &&
+  return (registration && options.disallow_registered_font_units &&
           variable_data.HasFontUnits()) ||
          (registration && options.disallow_registered_root_font_units &&
           variable_data.HasRootFontUnits());
 }
 
-CSSVariableData* CSSVariableResolver::GetVariable(
+bool CSSVariableResolver::IsDisallowedByAnimationTaintedFlag(
+    const CSSVariableData& variable_data,
+    const Options& options) {
+  return options.disallow_animation_tainted &&
+         variable_data.IsAnimationTainted();
+}
+
+CSSVariableData* CSSVariableResolver::GetVariableData(
     const AtomicString& name,
     const PropertyRegistration* registration) {
-  if (!registration || registration->Inherits()) {
-    return inherited_variables_ ? inherited_variables_->GetVariable(name)
-                                : nullptr;
-  }
-  return non_inherited_variables_ ? non_inherited_variables_->GetVariable(name)
-                                  : nullptr;
+  return state_.Style()->GetVariableData(
+      name, !registration || registration->Inherits());
 }
 
-const CSSValue* CSSVariableResolver::GetRegisteredVariable(
+const CSSValue* CSSVariableResolver::GetVariableValue(
     const AtomicString& name,
     const PropertyRegistration& registration) {
-  if (registration.Inherits()) {
-    return inherited_variables_ ? inherited_variables_->RegisteredVariable(name)
-                                : nullptr;
-  }
-  return non_inherited_variables_
-             ? non_inherited_variables_->RegisteredVariable(name)
-             : nullptr;
+  return state_.Style()->GetVariableValue(name, registration.Inherits());
 }
 
-void CSSVariableResolver::SetVariable(
+void CSSVariableResolver::SetVariableData(
     const AtomicString& name,
     const PropertyRegistration* registration,
     scoped_refptr<CSSVariableData> variable_data) {
   if (!registration || registration->Inherits()) {
     DCHECK(inherited_variables_);
-    inherited_variables_->SetVariable(name, std::move(variable_data));
+    inherited_variables_->SetData(name, std::move(variable_data));
   } else {
     DCHECK(non_inherited_variables_);
-    non_inherited_variables_->SetVariable(name, std::move(variable_data));
+    non_inherited_variables_->SetData(name, std::move(variable_data));
   }
 }
 
-void CSSVariableResolver::SetRegisteredVariable(
+void CSSVariableResolver::SetVariableValue(
     const AtomicString& name,
     const PropertyRegistration& registration,
     const CSSValue* value) {
   if (registration.Inherits()) {
     DCHECK(inherited_variables_);
-    inherited_variables_->SetRegisteredVariable(name, value);
+    inherited_variables_->SetValue(name, value);
   } else {
     DCHECK(non_inherited_variables_);
-    non_inherited_variables_->SetRegisteredVariable(name, value);
+    non_inherited_variables_->SetValue(name, value);
   }
 }
 
 void CSSVariableResolver::SetInvalidVariable(
     const AtomicString& name,
     const PropertyRegistration* registration) {
-  // TODO(andruud): Use RemoveVariable instead, but currently it also does
-  // a lookup in the registered map, which seems wasteful.
-  SetVariable(name, registration, nullptr);
-  if (registration) {
-    const CSSValue* value = CSSInvalidVariableValue::Create();
-    SetRegisteredVariable(name, *registration, value);
-  }
+  SetVariableData(name, registration, nullptr);
+  if (registration)
+    SetVariableValue(name, *registration, nullptr);
 }
 
-bool CSSVariableResolver::IsRegisteredVariableInvalid(
-    const AtomicString& name,
-    const PropertyRegistration& registration) {
-  const CSSValue* value = GetRegisteredVariable(name, registration);
-  return value && value->IsInvalidVariableValue();
+const CSSParserContext* CSSVariableResolver::GetParserContext(
+    const CSSVariableReferenceValue& value) const {
+  // TODO(crbug.com/985028): CSSVariableReferenceValue should always have
+  // a CSSParserContext.
+  if (value.ParserContext())
+    return value.ParserContext();
+  return StrictCSSParserContext(state_.GetDocument().GetSecureContextMode());
 }
 
 bool CSSVariableResolver::ResolveVariableReference(CSSParserTokenRange range,
@@ -319,9 +302,14 @@ bool CSSVariableResolver::ResolveVariableReference(CSSParserTokenRange range,
       registry_->MarkReferenced(variable_name);
   }
 
+  bool unit_cycle = false;
   scoped_refptr<CSSVariableData> variable_data =
-      is_env_variable ? ValueForEnvironmentVariable(variable_name)
-                      : ValueForCustomProperty(variable_name, options);
+      is_env_variable
+          ? ValueForEnvironmentVariable(variable_name)
+          : ValueForCustomProperty(variable_name, options, unit_cycle);
+
+  if (unit_cycle)
+    return false;
 
   if (!variable_data) {
     // TODO(alancutter): Append the registered initial custom property value if
@@ -394,8 +382,7 @@ const CSSValue* CSSVariableResolver::ResolveVariableReferences(
 
   if (id == CSSPropertyID::kFontSize) {
     bool is_root =
-        state_.GetElement() &&
-        state_.GetElement() == state_.GetDocument().documentElement();
+        &state_.GetElement() == state_.GetDocument().documentElement();
     options.disallow_registered_font_units = true;
     options.disallow_registered_root_font_units = is_root;
   }
@@ -425,7 +412,7 @@ const CSSValue* CSSVariableResolver::ResolveVariableReferences(
     return cssvalue::CSSUnsetValue::Create();
   }
   const CSSValue* resolved_value = CSSPropertyParser::ParseSingleValue(
-      id, result.tokens, value.ParserContext());
+      id, result.tokens, GetParserContext(value));
   if (!resolved_value)
     return cssvalue::CSSUnsetValue::Create();
   return resolved_value;
@@ -435,11 +422,22 @@ const CSSValue* CSSVariableResolver::ResolvePendingSubstitutions(
     CSSPropertyID id,
     const cssvalue::CSSPendingSubstitutionValue& pending_value,
     const Options& options) {
+  DCHECK_NE(CSSPropertyID::kVariable, id);
+
+  // For -internal-visited-* properties, we pretend that we're resolving the
+  // unvisited counterpart. This is because the CSSPendingSubstitutionValue
+  // held by the -internal-visited-* property contains a shorthand that expands
+  // to unvisited properties.
+  const CSSProperty& property = CSSProperty::Get(id);
+  CSSPropertyID cache_id = id;
+  if (property.IsVisited())
+    cache_id = property.GetUnvisitedProperty()->PropertyID();
+
   // Longhands from shorthand references follow this path.
   HeapHashMap<CSSPropertyID, Member<const CSSValue>>& property_cache =
       state_.ParsedPropertiesForPendingSubstitutionCache(pending_value);
 
-  const CSSValue* value = property_cache.at(id);
+  const CSSValue* value = property_cache.at(cache_id);
   if (!value) {
     // TODO(timloh): We shouldn't retry this for all longhands if the shorthand
     // ends up invalid.
@@ -462,7 +460,7 @@ const CSSValue* CSSVariableResolver::ResolvePendingSubstitutions(
         }
       }
     }
-    value = property_cache.at(id);
+    value = property_cache.at(cache_id);
   }
 
   if (value)
@@ -498,16 +496,20 @@ void CSSVariableResolver::ResolveVariableDefinitions() {
 
   int variable_count = 0;
   if (inherited_variables_ && inherited_variables_->NeedsResolution()) {
-    for (auto& variable : inherited_variables_->data_)
-      ValueForCustomProperty(variable.key, options);
+    for (auto& variable : inherited_variables_->Data()) {
+      bool cycle_detected = false;
+      ValueForCustomProperty(variable.key, options, cycle_detected);
+    }
     inherited_variables_->ClearNeedsResolution();
-    variable_count += inherited_variables_->data_.size();
+    variable_count += inherited_variables_->Data().size();
   }
   if (non_inherited_variables_ && non_inherited_variables_->NeedsResolution()) {
-    for (auto& variable : non_inherited_variables_->data_)
-      ValueForCustomProperty(variable.key, options);
+    for (auto& variable : non_inherited_variables_->Data()) {
+      bool cycle_detected = false;
+      ValueForCustomProperty(variable.key, options, cycle_detected);
+    }
     non_inherited_variables_->ClearNeedsResolution();
-    variable_count += non_inherited_variables_->data_.size();
+    variable_count += non_inherited_variables_->Data().size();
   }
   INCREMENT_STYLE_STATS_COUNTER(state_.GetDocument().GetStyleEngine(),
                                 custom_properties_applied, variable_count);
@@ -517,12 +519,16 @@ void CSSVariableResolver::ComputeRegisteredVariables() {
   Options options;
 
   if (inherited_variables_) {
-    for (auto& variable : *inherited_variables_->registered_data_)
-      ValueForCustomProperty(variable.key, options);
+    for (auto& variable : inherited_variables_->Values()) {
+      bool cycle_detected = false;
+      ValueForCustomProperty(variable.key, options, cycle_detected);
+    }
   }
   if (non_inherited_variables_) {
-    for (auto& variable : *non_inherited_variables_->registered_data_)
-      ValueForCustomProperty(variable.key, options);
+    for (auto& variable : non_inherited_variables_->Values()) {
+      bool cycle_detected = false;
+      ValueForCustomProperty(variable.key, options, cycle_detected);
+    }
   }
 }
 
@@ -530,6 +536,9 @@ CSSVariableResolver::CSSVariableResolver(const StyleResolverState& state)
     : state_(state),
       inherited_variables_(state.Style()->InheritedVariables()),
       non_inherited_variables_(state.Style()->NonInheritedVariables()),
-      registry_(state.GetDocument().GetPropertyRegistry()) {}
+      registry_(state.GetDocument().GetPropertyRegistry()) {
+  DCHECK(!RuntimeEnabledFeatures::CSSCascadeEnabled())
+      << "Use StyleCascade instead";
+}
 
 }  // namespace blink

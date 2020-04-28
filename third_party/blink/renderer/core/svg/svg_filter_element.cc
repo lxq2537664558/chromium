@@ -30,7 +30,7 @@
 
 namespace blink {
 
-inline SVGFilterElement::SVGFilterElement(Document& document)
+SVGFilterElement::SVGFilterElement(Document& document)
     : SVGElement(svg_names::kFilterTag, document),
       SVGURIReference(this),
       // Spec: If the x/y attribute is not specified, the effect is as if a
@@ -77,9 +77,7 @@ inline SVGFilterElement::SVGFilterElement(Document& document)
 
 SVGFilterElement::~SVGFilterElement() = default;
 
-DEFINE_NODE_FACTORY(SVGFilterElement)
-
-void SVGFilterElement::Trace(blink::Visitor* visitor) {
+void SVGFilterElement::Trace(Visitor* visitor) {
   visitor->Trace(x_);
   visitor->Trace(y_);
   visitor->Trace(width_);
@@ -115,18 +113,12 @@ LocalSVGResource* SVGFilterElement::AssociatedResource() const {
 void SVGFilterElement::PrimitiveAttributeChanged(
     SVGFilterPrimitiveStandardAttributes& primitive,
     const QualifiedName& attribute) {
-  if (LayoutObject* layout_object = GetLayoutObject()) {
-    ToLayoutSVGResourceFilter(layout_object)
-        ->PrimitiveAttributeChanged(primitive, attribute);
-  } else if (LocalSVGResource* resource = AssociatedResource()) {
-    resource->NotifyContentChanged(SVGResourceClient::kPaintInvalidation);
-  }
+  if (LocalSVGResource* resource = AssociatedResource())
+    resource->NotifyFilterPrimitiveChanged(primitive, attribute);
 }
 
 void SVGFilterElement::InvalidateFilterChain() {
-  if (LayoutObject* layout_object = GetLayoutObject()) {
-    ToLayoutSVGResourceFilter(layout_object)->RemoveAllClientsFromCache();
-  } else if (LocalSVGResource* resource = AssociatedResource()) {
+  if (LocalSVGResource* resource = AssociatedResource()) {
     resource->NotifyContentChanged(SVGResourceClient::kLayoutInvalidation |
                                    SVGResourceClient::kBoundariesInvalidation);
   }
@@ -135,7 +127,7 @@ void SVGFilterElement::InvalidateFilterChain() {
 void SVGFilterElement::ChildrenChanged(const ChildrenChange& change) {
   SVGElement::ChildrenChanged(change);
 
-  if (change.by_parser)
+  if (change.ByParser())
     return;
 
   if (LayoutObject* object = GetLayoutObject()) {

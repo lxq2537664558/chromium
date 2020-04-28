@@ -5,83 +5,46 @@
 #include "ui/accessibility/platform/ax_platform_node_win.h"
 
 #include "base/win/scoped_variant.h"
+#include "content/browser/accessibility/accessibility_content_browsertest.h"
 #include "content/browser/accessibility/browser_accessibility.h"
 #include "content/browser/accessibility/browser_accessibility_com_win.h"
+#include "content/browser/renderer_host/render_widget_host_view_aura.h"
 #include "content/browser/web_contents/web_contents_impl.h"
+#include "content/public/test/accessibility_notification_waiter.h"
+#include "content/public/test/browser_test_utils.h"
 #include "content/public/test/content_browser_test.h"
 #include "content/public/test/content_browser_test_utils.h"
 #include "content/shell/browser/shell.h"
-#include "content/test/accessibility_browser_test_utils.h"
-#include "net/base/escape.h"
-#include "net/test/embedded_test_server/embedded_test_server.h"
 #include "testing/gmock/include/gmock/gmock-matchers.h"
 
 using Microsoft::WRL::ComPtr;
 
 namespace content {
-class AXPlatformNodeWinBrowserTest : public ContentBrowserTest {
+class AXPlatformNodeWinBrowserTest : public AccessibilityContentBrowserTest {
  protected:
-  void LoadInitialAccessibilityTreeFromUrl(
-      const GURL& url,
-      ui::AXMode accessibility_mode = ui::kAXModeComplete) {
-    AccessibilityNotificationWaiter waiter(shell()->web_contents(),
-                                           accessibility_mode,
-                                           ax::mojom::Event::kLoadComplete);
-    NavigateToURL(shell(), url);
-    waiter.WaitForNotification();
+  template <typename T>
+  ComPtr<T> QueryInterfaceFromNode(
+      BrowserAccessibility* browser_accessibility) {
+    ComPtr<T> result;
+    EXPECT_HRESULT_SUCCEEDED(
+        browser_accessibility->GetNativeViewAccessible()->QueryInterface(
+            __uuidof(T), &result));
+    return result;
   }
 
-  void LoadInitialAccessibilityTreeFromHtmlFilePath(
-      const std::string& html_file_path,
-      ui::AXMode accessibility_mode = ui::kAXModeComplete) {
-    if (!embedded_test_server()->Started())
-      ASSERT_TRUE(embedded_test_server()->Start());
-    ASSERT_TRUE(embedded_test_server()->Started());
-    LoadInitialAccessibilityTreeFromUrl(
-        embedded_test_server()->GetURL(html_file_path), accessibility_mode);
+  ComPtr<IAccessible> IAccessibleFromNode(
+      BrowserAccessibility* browser_accessibility) {
+    return QueryInterfaceFromNode<IAccessible>(browser_accessibility);
   }
 
-  void LoadInitialAccessibilityTreeFromHtml(
-      const std::string& html,
-      ui::AXMode accessibility_mode = ui::kAXModeComplete) {
-    LoadInitialAccessibilityTreeFromUrl(
-        GURL("data:text/html," + net::EscapeQueryParamValue(html, false)),
-        accessibility_mode);
-  }
-
-  BrowserAccessibilityManager* GetManagerAndAssertNonNull() {
-    auto GetManagerAndAssertNonNull =
-        [this](BrowserAccessibilityManager** result) {
-          WebContentsImpl* web_contents_impl =
-              static_cast<WebContentsImpl*>(shell()->web_contents());
-          ASSERT_NE(nullptr, web_contents_impl);
-          BrowserAccessibilityManager* browser_accessibility_manager =
-              web_contents_impl->GetRootBrowserAccessibilityManager();
-          ASSERT_NE(nullptr, browser_accessibility_manager);
-          *result = browser_accessibility_manager;
-        };
-
-    BrowserAccessibilityManager* browser_accessibility_manager;
-    GetManagerAndAssertNonNull(&browser_accessibility_manager);
-    return browser_accessibility_manager;
-  }
-
-  BrowserAccessibility* GetRootAndAssertNonNull() {
-    auto GetRootAndAssertNonNull = [this](BrowserAccessibility** result) {
-      BrowserAccessibility* root_browser_accessibility =
-          GetManagerAndAssertNonNull()->GetRoot();
-      ASSERT_NE(nullptr, result);
-      *result = root_browser_accessibility;
-    };
-
-    BrowserAccessibility* root_browser_accessibility;
-    GetRootAndAssertNonNull(&root_browser_accessibility);
-    return root_browser_accessibility;
-  }
-
-  BrowserAccessibility* FindNode(ax::mojom::Role role,
-                                 const std::string& name_or_value) {
-    return FindNodeInSubtree(*GetRootAndAssertNonNull(), role, name_or_value);
+  ComPtr<IAccessible2> ToIAccessible2(ComPtr<IAccessible> accessible) {
+    CHECK(accessible);
+    ComPtr<IServiceProvider> service_provider;
+    accessible.As(&service_provider);
+    ComPtr<IAccessible2> result;
+    CHECK(SUCCEEDED(service_provider->QueryService(IID_IAccessible2,
+                                                   IID_PPV_ARGS(&result))));
+    return result;
   }
 
   void UIAGetPropertyValueFlowsFromBrowserTestTemplate(
@@ -109,14 +72,15 @@ class AXPlatformNodeWinBrowserTest : public ContentBrowserTest {
 
     std::vector<std::string> names;
     for (LONG i = 0; i < size; ++i) {
-      CComPtr<IUnknown> unknown_element = nullptr;
-      ASSERT_HRESULT_SUCCEEDED(SafeArrayGetElement(
-          V_ARRAY(flows_from_variant.ptr()), &i, &unknown_element));
+      ComPtr<IUnknown> unknown_element;
+      ASSERT_HRESULT_SUCCEEDED(
+          SafeArrayGetElement(V_ARRAY(flows_from_variant.ptr()), &i,
+                              static_cast<void**>(&unknown_element)));
       ASSERT_NE(nullptr, unknown_element);
 
-      CComPtr<IRawElementProviderSimple> raw_element_provider_simple = nullptr;
+      ComPtr<IRawElementProviderSimple> raw_element_provider_simple = nullptr;
       ASSERT_HRESULT_SUCCEEDED(
-          unknown_element->QueryInterface(&raw_element_provider_simple));
+          unknown_element.As(&raw_element_provider_simple));
       ASSERT_NE(nullptr, raw_element_provider_simple);
 
       base::win::ScopedVariant name;
@@ -164,38 +128,60 @@ class AXPlatformNodeWinBrowserTest : public ContentBrowserTest {
       ASSERT_EQ(nullptr, window_provider.Get());
     }
   }
-
- private:
-  BrowserAccessibility* FindNodeInSubtree(BrowserAccessibility& node,
-                                          ax::mojom::Role role,
-                                          const std::string& name_or_value) {
-    const auto& name =
-        node.GetStringAttribute(ax::mojom::StringAttribute::kName);
-    const auto& value =
-        node.GetStringAttribute(ax::mojom::StringAttribute::kValue);
-    if (node.GetRole() == role &&
-        (name == name_or_value || value == name_or_value)) {
-      return &node;
-    }
-
-    for (unsigned int i = 0; i < node.PlatformChildCount(); ++i) {
-      BrowserAccessibility* result =
-          FindNodeInSubtree(*node.PlatformGetChild(i), role, name_or_value);
-      if (result)
-        return result;
-    }
-
-    return nullptr;
-  }
 };
+
+IN_PROC_BROWSER_TEST_F(AXPlatformNodeWinBrowserTest,
+                       IA2ScrollToPointIframeText) {
+  LoadInitialAccessibilityTreeFromHtmlFilePath(
+      "/accessibility/scrolling/iframe-text.html");
+  WaitForAccessibilityTreeToContainNodeWithName(
+      shell()->web_contents(),
+      "Game theory is \"the study of Mathematical model mathematical models of "
+      "conflict and cooperation between intelligent rational decision-makers."
+      "\"");
+
+  BrowserAccessibility* browser_accessibility =
+      GetRootAndAssertNonNull()->PlatformDeepestLastChild();
+  ASSERT_NE(nullptr, browser_accessibility);
+  ASSERT_EQ(ax::mojom::Role::kStaticText, browser_accessibility->GetRole());
+
+  BrowserAccessibility* iframe_browser_accessibility =
+      browser_accessibility->manager()->GetRoot();
+  ASSERT_NE(nullptr, iframe_browser_accessibility);
+  ASSERT_EQ(ax::mojom::Role::kRootWebArea,
+            iframe_browser_accessibility->GetRole());
+
+  gfx::Rect iframe_screen_bounds = iframe_browser_accessibility->GetBoundsRect(
+      ui::AXCoordinateSystem::kScreenDIPs, ui::AXClippingBehavior::kUnclipped);
+
+  AccessibilityNotificationWaiter location_changed_waiter(
+      shell()->web_contents(), ui::kAXModeComplete,
+      ax::mojom::Event::kLocationChanged);
+  ComPtr<IAccessible2> root_iaccessible2 =
+      ToIAccessible2(IAccessibleFromNode(browser_accessibility));
+  ASSERT_EQ(S_OK, root_iaccessible2->scrollToPoint(
+                      IA2_COORDTYPE_SCREEN_RELATIVE, iframe_screen_bounds.x(),
+                      iframe_screen_bounds.y()));
+  location_changed_waiter.WaitForNotification();
+
+  gfx::Rect bounds = browser_accessibility->GetBoundsRect(
+      ui::AXCoordinateSystem::kScreenDIPs, ui::AXClippingBehavior::kUnclipped);
+  ASSERT_EQ(iframe_screen_bounds.y(), bounds.y());
+}
 
 IN_PROC_BROWSER_TEST_F(AXPlatformNodeWinBrowserTest,
                        UIAGetPropertyValueFlowsFromNone) {
   LoadInitialAccessibilityTreeFromHtmlFilePath(
       "/accessibility/aria/aria-label.html");
 
-  UIAGetPropertyValueFlowsFromBrowserTestTemplate(
-      FindNode(ax::mojom::Role::kCheckBox, "aria label"), {});
+  base::win::ScopedVariant flows_from_variant;
+  ComPtr<IRawElementProviderSimple> node_provider =
+      QueryInterfaceFromNode<IRawElementProviderSimple>(
+          FindNode(ax::mojom::Role::kCheckBox, "aria label"));
+  node_provider->GetPropertyValue(UIA_FlowsFromPropertyId,
+                                  flows_from_variant.Receive());
+  ASSERT_EQ(VT_ARRAY | VT_UNKNOWN, flows_from_variant.type());
+  ASSERT_EQ(nullptr, V_ARRAY(flows_from_variant.ptr()));
 }
 
 IN_PROC_BROWSER_TEST_F(AXPlatformNodeWinBrowserTest,
@@ -409,4 +395,117 @@ IN_PROC_BROWSER_TEST_F(
       ax::mojom::Role::kAlertDialog, &BrowserAccessibility::PlatformGetChild, 0,
       true, true);
 }
+
+IN_PROC_BROWSER_TEST_F(AXPlatformNodeWinBrowserTest,
+                       UIAGetPropertyValueAutomationId) {
+  LoadInitialAccessibilityTreeFromHtml(std::string(R"HTML(
+      <!DOCTYPE html>
+      <html>
+        </body>
+          <div id="id"></div>
+        </body>
+      </html>
+  )HTML"));
+
+  BrowserAccessibility* root_browser_accessibility = GetRootAndAssertNonNull();
+  BrowserAccessibilityComWin* root_browser_accessibility_com_win =
+      ToBrowserAccessibilityWin(root_browser_accessibility)->GetCOM();
+  ASSERT_NE(nullptr, root_browser_accessibility_com_win);
+
+  BrowserAccessibility* browser_accessibility =
+      root_browser_accessibility->PlatformDeepestLastChild();
+  ASSERT_NE(nullptr, browser_accessibility);
+  ASSERT_EQ(ax::mojom::Role::kGenericContainer,
+            browser_accessibility->GetRole());
+  BrowserAccessibilityComWin* browser_accessibility_com_win =
+      ToBrowserAccessibilityWin(browser_accessibility)->GetCOM();
+  ASSERT_NE(nullptr, browser_accessibility_com_win);
+
+  base::win::ScopedVariant expected_scoped_variant;
+  expected_scoped_variant.Set(SysAllocString(L"id"));
+  base::win::ScopedVariant scoped_variant;
+  EXPECT_HRESULT_SUCCEEDED(browser_accessibility_com_win->GetPropertyValue(
+      UIA_AutomationIdPropertyId, scoped_variant.Receive()));
+  EXPECT_EQ(0, expected_scoped_variant.Compare(scoped_variant));
+}
+
+IN_PROC_BROWSER_TEST_F(AXPlatformNodeWinBrowserTest,
+                       HitTestOnAncestorOfWebRoot) {
+  EXPECT_TRUE(NavigateToURL(shell(), GURL(url::kAboutBlankURL)));
+
+  // Load the page.
+  AccessibilityNotificationWaiter waiter(shell()->web_contents(),
+                                         ui::kAXModeComplete,
+                                         ax::mojom::Event::kLoadComplete);
+  const char url_str[] =
+      "data:text/html,"
+      "<!doctype html>"
+      "<html><head><title>Accessibility Test</title></head>"
+      "<body>"
+      "<button>This is a button</button>"
+      "</body></html>";
+  GURL url(url_str);
+  EXPECT_TRUE(NavigateToURL(shell(), url));
+  waiter.WaitForNotification();
+
+  WebContentsImpl* web_contents =
+      static_cast<WebContentsImpl*>(shell()->web_contents());
+  BrowserAccessibilityManager* manager =
+      web_contents->GetRootBrowserAccessibilityManager();
+
+  // Find a node to hit test. Note that this is a really simple page,
+  // so synchronous hit testing will work fine.
+  BrowserAccessibility* node = manager->GetRoot();
+  while (node && node->GetRole() != ax::mojom::Role::kButton)
+    node = manager->NextInTreeOrder(node);
+  DCHECK(node);
+
+  // Get the screen bounds of the hit target and find the point in the middle.
+  gfx::Rect bounds = node->GetClippedScreenBoundsRect();
+  gfx::Point point = bounds.CenterPoint();
+
+  // Get the root AXPlatformNodeWin.
+  ui::AXPlatformNodeWin* root_platform_node =
+      static_cast<ui::AXPlatformNodeWin*>(
+          ui::AXPlatformNode::FromNativeViewAccessible(
+              manager->GetRoot()->GetNativeViewAccessible()));
+
+  // First test that calling accHitTest on the root node returns the button.
+  {
+    base::win::ScopedVariant hit_child_variant;
+    ASSERT_EQ(S_OK, root_platform_node->accHitTest(
+                        point.x(), point.y(), hit_child_variant.Receive()));
+    ASSERT_EQ(VT_DISPATCH, hit_child_variant.type());
+    ASSERT_NE(nullptr, hit_child_variant.ptr());
+    ComPtr<IAccessible> accessible;
+    ASSERT_HRESULT_SUCCEEDED(V_DISPATCH(hit_child_variant.ptr())
+                                 ->QueryInterface(IID_PPV_ARGS(&accessible)));
+    ui::AXPlatformNode* hit_child =
+        ui::AXPlatformNode::FromNativeViewAccessible(accessible.Get());
+    ASSERT_NE(nullptr, hit_child);
+    EXPECT_EQ(node->GetId(), hit_child->GetDelegate()->GetData().id);
+  }
+
+  // Now test it again, but this time caliing accHitTest on the parent
+  // IAccessible of the web root node.
+  {
+    RenderWidgetHostViewAura* rwhva = static_cast<RenderWidgetHostViewAura*>(
+        shell()->web_contents()->GetRenderWidgetHostView());
+    IAccessible* ancestor = rwhva->GetParentNativeViewAccessible();
+
+    base::win::ScopedVariant hit_child_variant;
+    ASSERT_EQ(S_OK, ancestor->accHitTest(point.x(), point.y(),
+                                         hit_child_variant.Receive()));
+    ASSERT_EQ(VT_DISPATCH, hit_child_variant.type());
+    ASSERT_NE(nullptr, hit_child_variant.ptr());
+    ComPtr<IAccessible> accessible;
+    ASSERT_HRESULT_SUCCEEDED(V_DISPATCH(hit_child_variant.ptr())
+                                 ->QueryInterface(IID_PPV_ARGS(&accessible)));
+    ui::AXPlatformNode* hit_child =
+        ui::AXPlatformNode::FromNativeViewAccessible(accessible.Get());
+    ASSERT_NE(nullptr, hit_child);
+    EXPECT_EQ(node->GetId(), hit_child->GetDelegate()->GetData().id);
+  }
+}
+
 }  // namespace content

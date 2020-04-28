@@ -27,17 +27,31 @@
 #include "components/sync/engine/model_type_configurer.h"
 #include "components/sync/engine/shutdown_reason.h"
 #include "components/sync/engine/sync_encryption_handler.h"
+#include "components/sync/engine/sync_status_observer.h"
+#include "components/sync/syncable/user_share.h"
 #include "url/gurl.h"
 
 namespace syncer {
 
+class ModelTypeController;
 class SyncEngineImpl;
+
+namespace syncable {
+
+class NigoriHandlerProxy;
+
+}  // namespace syncable
 
 class SyncEngineBackend : public base::RefCountedThreadSafe<SyncEngineBackend>,
                           public base::trace_event::MemoryDumpProvider,
                           public SyncManager::Observer,
-                          public TypeDebugInfoObserver {
+                          public TypeDebugInfoObserver,
+                          public SyncStatusObserver {
  public:
+  using AllNodesCallback =
+      base::OnceCallback<void(const ModelType,
+                              std::unique_ptr<base::ListValue>)>;
+
   SyncEngineBackend(const std::string& name,
                     const base::FilePath& sync_data_folder,
                     const base::WeakPtr<SyncEngineImpl>& host);
@@ -53,8 +67,7 @@ class SyncEngineBackend : public base::RefCountedThreadSafe<SyncEngineBackend>,
   void OnInitializationComplete(
       const WeakHandle<JsBackend>& js_backend,
       const WeakHandle<DataTypeDebugInfoListener>& debug_info_listener,
-      bool success,
-      ModelTypeSet restored_types) override;
+      bool success) override;
   void OnConnectionStatusChange(ConnectionStatus status) override;
   void OnActionableError(const SyncProtocolError& sync_error) override;
   void OnMigrationRequested(ModelTypeSet types) override;
@@ -68,12 +81,14 @@ class SyncEngineBackend : public base::RefCountedThreadSafe<SyncEngineBackend>,
   void OnStatusCountersUpdated(ModelType type,
                                const StatusCounters& counters) override;
 
+  // SyncStatusObserver implementation.
+  void OnSyncStatusChanged(const SyncStatus& status) override;
+
   // Forwards an invalidation state change to the sync manager.
   void DoOnInvalidatorStateChange(InvalidatorState state);
 
   // Forwards an invalidation to the sync manager.
-  void DoOnIncomingInvalidation(
-      const ObjectIdInvalidationMap& invalidation_map);
+  void DoOnIncomingInvalidation(const TopicInvalidationMap& invalidation_map);
 
   // Note:
   //
@@ -105,8 +120,12 @@ class SyncEngineBackend : public base::RefCountedThreadSafe<SyncEngineBackend>,
   // Called to set the passphrase for encryption.
   void DoSetEncryptionPassphrase(const std::string& passphrase);
 
-  // Called to decrypt the pending keys.
+  // Called to decrypt the pending keys using user-entered passphrases.
   void DoSetDecryptionPassphrase(const std::string& passphrase);
+
+  // Called to decrypt the pending keys using trusted vault keys.
+  void DoAddTrustedVaultDecryptionKeys(
+      const std::vector<std::vector<uint8_t>>& keys);
 
   // Called to turn on encryption of all sync data as well as
   // reencrypt everything.
@@ -114,10 +133,6 @@ class SyncEngineBackend : public base::RefCountedThreadSafe<SyncEngineBackend>,
 
   // Ask the syncer to check for updates for the specified types.
   void DoRefreshTypes(ModelTypeSet types);
-
-  // Invoked if we failed to download the necessary control types at startup.
-  // Invokes SyncEngine::HandleControlTypesDownloadRetry.
-  void OnControlTypesDownloadRetry();
 
   // Called to perform tasks which require the control data to be downloaded.
   // This includes refreshing encryption, etc.
@@ -139,8 +154,7 @@ class SyncEngineBackend : public base::RefCountedThreadSafe<SyncEngineBackend>,
   void DoConfigureSyncer(ModelTypeConfigurer::ConfigureParams params);
   void DoFinishConfigureDataTypes(
       ModelTypeSet types_to_config,
-      const base::Callback<void(ModelTypeSet, ModelTypeSet)>& ready_task);
-  void DoRetryConfiguration(const base::Closure& retry_callback);
+      base::OnceCallback<void(ModelTypeSet, ModelTypeSet)> ready_task);
 
   // Set the base request context to use when making HTTP calls.
   // This method will add a reference to the context to persist it
@@ -167,13 +181,13 @@ class SyncEngineBackend : public base::RefCountedThreadSafe<SyncEngineBackend>,
   // Notify the syncer that the cookie jar has changed.
   void DoOnCookieJarChanged(bool account_mismatch,
                             bool empty_jar,
-                            const base::Closure& callback);
+                            base::OnceClosure callback);
 
   // Notify about change in client id.
   void DoOnInvalidatorClientIdChange(const std::string& client_id);
 
-  // Return ModelTypeControllerDelegate for Nigori.
-  base::WeakPtr<ModelTypeControllerDelegate> GetNigoriControllerDelegate();
+  // Returns a ListValue representing Nigori node.
+  void GetNigoriNodeForDebugging(AllNodesCallback callback);
 
   bool HasUnsyncedItemsForTest() const;
 
@@ -193,6 +207,8 @@ class SyncEngineBackend : public base::RefCountedThreadSafe<SyncEngineBackend>,
   // be run on; the host's |registrar_->sync_thread()|.
   void StartSavingChanges();
 
+  void LoadAndConnectNigoriController();
+
   // Name used for debugging.
   const std::string name_;
 
@@ -205,17 +221,32 @@ class SyncEngineBackend : public base::RefCountedThreadSafe<SyncEngineBackend>,
   // Non-null only between calls to DoInitialize() and DoShutdown().
   std::unique_ptr<SyncBackendRegistrar> registrar_;
 
-  // Non-null only between calls to DoInitialize() and DoShutdown().
-  std::unique_ptr<SyncEncryptionHandler::Observer> encryption_observer_proxy_;
-
   // The timer used to periodically call SaveChanges.
   std::unique_ptr<base::RepeatingTimer> save_changes_timer_;
 
   // Our encryptor, which uses Chrome's encryption functions.
   SystemEncryptor encryptor_;
 
+  // We hold |user_share_| here as a dependency for |sync_encryption_handler_|.
+  // Should outlive |sync_encryption_handler_| and |sync_manager_|.
+  UserShare user_share_;
+
+  // Points to either SyncEncryptionHandlerImpl or NigoriSyncBridgeImpl
+  // depending on whether USS implementation of Nigori is enabled or not.
+  // Should outlive |sync_manager_|.
+  std::unique_ptr<SyncEncryptionHandler> sync_encryption_handler_;
+
+  std::unique_ptr<syncable::NigoriHandlerProxy> nigori_handler_proxy_;
+
   // The top-level syncapi entry point.  Lives on the sync thread.
   std::unique_ptr<SyncManager> sync_manager_;
+
+  // Required for |nigori_controller_| LoadModels().
+  CoreAccountId authenticated_account_id_;
+
+  // Initialized in OnInitializationComplete() iff USS implementation of Nigori
+  // is enabled.
+  std::unique_ptr<ModelTypeController> nigori_controller_;
 
   // Temporary holder of sync manager's initialization results. Set by
   // OnInitializeComplete, and consumed when we pass it via OnEngineInitialized
@@ -223,12 +254,11 @@ class SyncEngineBackend : public base::RefCountedThreadSafe<SyncEngineBackend>,
   WeakHandle<JsBackend> js_backend_;
   WeakHandle<DataTypeDebugInfoListener> debug_info_listener_;
 
-  // These signals allow us to send requests to shut down the HttpBridgeFactory
-  // and ServerConnectionManager without having to wait for those classes to
-  // finish initializing first.
+  // This signal allows us to send requests to shut down the
+  // ServerConnectionManager without having to wait for it to finish
+  // initializing first.
   //
-  // See comments in SyncEngineBackend::ShutdownOnUIThread() for more details.
-  CancelationSignal release_request_context_signal_;
+  // See comment in ShutdownOnUIThread() for more details.
   CancelationSignal stop_syncing_signal_;
 
   // Set when we've been asked to forward sync protocol events to the frontend.
@@ -246,7 +276,7 @@ class SyncEngineBackend : public base::RefCountedThreadSafe<SyncEngineBackend>,
   // Checks that we are on the sync thread.
   SEQUENCE_CHECKER(sequence_checker_);
 
-  base::WeakPtrFactory<SyncEngineBackend> weak_ptr_factory_;
+  base::WeakPtrFactory<SyncEngineBackend> weak_ptr_factory_{this};
 
   DISALLOW_COPY_AND_ASSIGN(SyncEngineBackend);
 };

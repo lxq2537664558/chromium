@@ -12,11 +12,12 @@
 #include "third_party/blink/public/platform/web_set_sink_id_callbacks.h"
 #include "third_party/blink/public/web/web_local_frame_client.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_promise_resolver.h"
-#include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/dom/dom_exception.h"
 #include "third_party/blink/renderer/core/execution_context/execution_context.h"
+#include "third_party/blink/renderer/core/frame/local_dom_window.h"
 #include "third_party/blink/renderer/core/frame/web_local_frame_impl.h"
 #include "third_party/blink/renderer/platform/bindings/script_state.h"
+#include "third_party/blink/renderer/platform/heap/heap.h"
 #include "third_party/blink/renderer/platform/heap/persistent.h"
 #include "third_party/blink/renderer/platform/wtf/functional.h"
 
@@ -27,22 +28,23 @@ namespace {
 DOMException* ToException(WebSetSinkIdError error) {
   switch (error) {
     case WebSetSinkIdError::kNotFound:
-      return DOMException::Create(DOMExceptionCode::kNotFoundError,
-                                  "Requested device not found");
+      return MakeGarbageCollected<DOMException>(
+          DOMExceptionCode::kNotFoundError, "Requested device not found");
     case WebSetSinkIdError::kNotAuthorized:
-      return DOMException::Create(DOMExceptionCode::kSecurityError,
-                                  "No permission to use requested device");
+      return MakeGarbageCollected<DOMException>(
+          DOMExceptionCode::kSecurityError,
+          "No permission to use requested device");
     case WebSetSinkIdError::kAborted:
-      return DOMException::Create(
+      return MakeGarbageCollected<DOMException>(
           DOMExceptionCode::kAbortError,
           "The operation could not be performed and was aborted");
     case WebSetSinkIdError::kNotSupported:
-      return DOMException::Create(DOMExceptionCode::kNotSupportedError,
-                                  "Operation not supported");
+      return MakeGarbageCollected<DOMException>(
+          DOMExceptionCode::kNotSupportedError, "Operation not supported");
     default:
       NOTREACHED();
-      return DOMException::Create(DOMExceptionCode::kAbortError,
-                                  "Invalid error code");
+      return MakeGarbageCollected<DOMException>(DOMExceptionCode::kAbortError,
+                                                "Invalid error code");
   }
 }
 
@@ -55,7 +57,7 @@ class SetSinkIdResolver : public ScriptPromiseResolver {
   ~SetSinkIdResolver() override = default;
   void StartAsync();
 
-  void Trace(blink::Visitor*) override;
+  void Trace(Visitor*) override;
 
  private:
   void DoSetSinkId();
@@ -108,21 +110,19 @@ void SetSinkIdResolver::DoSetSinkId() {
     // Detached contexts shouldn't be playing audio. Note that despite this
     // explicit Reject(), any associated JS callbacks will never be called
     // because the context is already detached...
-    Reject(DOMException::Create(
+    Reject(MakeGarbageCollected<DOMException>(
         DOMExceptionCode::kSecurityError,
         "Impossible to authorize device for detached context"));
     return;
   }
 
-  // This is associated with an HTML element, so the context must be a Document.
-  auto& document = To<Document>(*context);
-  WebLocalFrameImpl* web_frame =
-      WebLocalFrameImpl::FromFrame(document.GetFrame());
-  if (web_frame && web_frame->Client()) {
+  // This is associated with an HTML element, so the context must be a window.
+  if (WebLocalFrameImpl* web_frame = WebLocalFrameImpl::FromFrame(
+          To<LocalDOMWindow>(context)->GetFrame())) {
     web_frame->Client()->CheckIfAudioSinkExistsAndIsAuthorized(
         sink_id_, std::move(set_sink_id_completion_callback));
   } else {
-    Reject(DOMException::Create(
+    Reject(MakeGarbageCollected<DOMException>(
         DOMExceptionCode::kSecurityError,
         "Impossible to authorize device if there is no frame"));
     return;
@@ -145,7 +145,7 @@ void SetSinkIdResolver::OnSetSinkIdComplete(
   Resolve();
 }
 
-void SetSinkIdResolver::Trace(blink::Visitor* visitor) {
+void SetSinkIdResolver::Trace(Visitor* visitor) {
   visitor->Trace(element_);
   ScriptPromiseResolver::Trace(visitor);
 }
@@ -194,7 +194,7 @@ HTMLMediaElementAudioOutputDevice& HTMLMediaElementAudioOutputDevice::From(
   return *supplement;
 }
 
-void HTMLMediaElementAudioOutputDevice::Trace(blink::Visitor* visitor) {
+void HTMLMediaElementAudioOutputDevice::Trace(Visitor* visitor) {
   Supplement<HTMLMediaElement>::Trace(visitor);
 }
 

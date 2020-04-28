@@ -4,8 +4,10 @@
 
 #include "cc/paint/paint_cache.h"
 
+#include "base/check_op.h"
 #include "base/containers/flat_set.h"
 #include "base/no_destructor.h"
+#include "base/notreached.h"
 #include "base/synchronization/lock.h"
 
 namespace cc {
@@ -89,7 +91,7 @@ void ServicePaintCache::PutTextBlob(PaintCacheId id, sk_sp<SkTextBlob> blob) {
   cached_blobs_.emplace(id, std::move(blob));
 }
 
-sk_sp<SkTextBlob> ServicePaintCache::GetTextBlob(PaintCacheId id) {
+sk_sp<SkTextBlob> ServicePaintCache::GetTextBlob(PaintCacheId id) const {
   auto it = cached_blobs_.find(id);
   return it == cached_blobs_.end() ? nullptr : it->second;
 }
@@ -98,9 +100,12 @@ void ServicePaintCache::PutPath(PaintCacheId id, SkPath path) {
   cached_paths_.emplace(id, std::move(path));
 }
 
-SkPath* ServicePaintCache::GetPath(PaintCacheId id) {
+bool ServicePaintCache::GetPath(PaintCacheId id, SkPath* path) const {
   auto it = cached_paths_.find(id);
-  return it == cached_paths_.end() ? nullptr : &it->second;
+  if (it == cached_paths_.end())
+    return false;
+  *path = it->second;
+  return true;
 }
 
 void ServicePaintCache::Purge(PaintCacheDataType type,

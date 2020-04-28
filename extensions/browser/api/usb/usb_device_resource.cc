@@ -31,17 +31,23 @@ ApiResourceManager<UsbDeviceResource>::GetFactoryInstance() {
   return g_factory.Pointer();
 }
 
-UsbDeviceResource::UsbDeviceResource(const std::string& owner_extension_id,
-                                     const std::string& guid,
-                                     device::mojom::UsbDevicePtr device)
-    : ApiResource(owner_extension_id),
-      guid_(guid),
-      device_(std::move(device)) {}
+UsbDeviceResource::UsbDeviceResource(
+    const std::string& owner_extension_id,
+    const std::string& guid,
+    mojo::Remote<device::mojom::UsbDevice> device)
+    : ApiResource(owner_extension_id), guid_(guid), device_(std::move(device)) {
+  device_.set_disconnect_handler(base::BindOnce(
+      &UsbDeviceResource::OnConnectionError, base::Unretained(this)));
+}
 
 UsbDeviceResource::~UsbDeviceResource() {}
 
 bool UsbDeviceResource::IsPersistent() const {
   return false;
+}
+
+void UsbDeviceResource::OnConnectionError() {
+  device_.reset();
 }
 
 }  // namespace extensions

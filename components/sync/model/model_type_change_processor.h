@@ -19,6 +19,7 @@
 
 namespace syncer {
 
+class ClientTagHash;
 class MetadataBatch;
 class MetadataChangeList;
 class ModelTypeSyncBridge;
@@ -61,18 +62,14 @@ class ModelTypeChangeProcessor {
   virtual void UntrackEntityForStorageKey(const std::string& storage_key) = 0;
 
   // Remove entity metadata and do not track the entity, exactly like
-  // UntrackEntityForStorageKey() above. This function should only be called by
-  // datatypes that can't generate storage keys. The call is ignored if
-  // |client_tag_hash| is unknown.
+  // UntrackEntityForStorageKey() above. This method may be called even if
+  // entity does not have storage key. The call is ignored if |client_tag_hash|
+  // is unknown.
   virtual void UntrackEntityForClientTagHash(
-      const std::string& client_tag_hash) = 0;
+      const ClientTagHash& client_tag_hash) = 0;
 
   // Returns true if a tracked entity has local changes. A commit may or may not
   // be in progress at this time.
-  // TODO(mastiz): The only user of this is HISTORY_DELETE_DIRECTIVES which
-  // needs it for a rather questionable reason. Revisit this, for example by
-  // moving the SyncableService to history's backend thread, and leveraging
-  // USS's ability to delete local data upcon commit completion.
   virtual bool IsEntityUnsynced(const std::string& storage_key) = 0;
 
   // Returns the creation timestamp of the sync entity, or a null time if the
@@ -107,6 +104,10 @@ class ModelTypeChangeProcessor {
   // Returns the account ID for which metadata is being tracked, or empty if not
   // tracking metadata.
   virtual std::string TrackedAccountId() = 0;
+
+  // Returns the cache guid for which metadata is being tracked, or empty if not
+  // tracking metadata.
+  virtual std::string TrackedCacheGuid() = 0;
 
   // Report an error in the model to sync. Should be called for any persistence
   // or consistency error the bridge encounters outside of a method that allows

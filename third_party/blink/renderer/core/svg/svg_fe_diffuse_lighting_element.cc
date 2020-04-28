@@ -28,8 +28,7 @@
 
 namespace blink {
 
-inline SVGFEDiffuseLightingElement::SVGFEDiffuseLightingElement(
-    Document& document)
+SVGFEDiffuseLightingElement::SVGFEDiffuseLightingElement(Document& document)
     : SVGFilterPrimitiveStandardAttributes(svg_names::kFEDiffuseLightingTag,
                                            document),
       diffuse_constant_(MakeGarbageCollected<SVGAnimatedNumber>(
@@ -51,15 +50,13 @@ inline SVGFEDiffuseLightingElement::SVGFEDiffuseLightingElement(
   AddToPropertyMap(in1_);
 }
 
-void SVGFEDiffuseLightingElement::Trace(blink::Visitor* visitor) {
+void SVGFEDiffuseLightingElement::Trace(Visitor* visitor) {
   visitor->Trace(diffuse_constant_);
   visitor->Trace(surface_scale_);
   visitor->Trace(kernel_unit_length_);
   visitor->Trace(in1_);
   SVGFilterPrimitiveStandardAttributes::Trace(visitor);
 }
-
-DEFINE_NODE_FACTORY(SVGFEDiffuseLightingElement)
 
 bool SVGFEDiffuseLightingElement::SetFilterEffectAttribute(
     FilterEffect* effect,

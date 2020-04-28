@@ -10,7 +10,7 @@
 
 #include "base/logging.h"
 #include "base/stl_util.h"
-#include "components/sync/base/cryptographer.h"
+#include "components/sync/nigori/cryptographer.h"
 #include "components/sync/protocol/password_specifics.pb.h"
 #include "components/sync/protocol/sync.pb.h"
 
@@ -25,7 +25,7 @@ bool EndsWithSpace(const std::string& string) {
 
 std::unique_ptr<sync_pb::PasswordSpecificsData> DecryptPasswordSpecifics(
     const sync_pb::EntitySpecifics& specifics,
-    Cryptographer* crypto) {
+    const Cryptographer* crypto) {
   if (!specifics.has_password())
     return nullptr;
   const sync_pb::PasswordSpecifics& password_specifics = specifics.password();

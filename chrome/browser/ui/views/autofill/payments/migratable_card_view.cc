@@ -15,8 +15,8 @@
 #include "components/vector_icons/vector_icons.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/resource/resource_bundle.h"
-#include "ui/gfx/color_palette.h"
 #include "ui/gfx/paint_vector_icon.h"
+#include "ui/native_theme/native_theme.h"
 #include "ui/views/controls/button/button.h"
 #include "ui/views/controls/button/checkbox.h"
 #include "ui/views/controls/button/image_button.h"
@@ -37,7 +37,7 @@ MigratableCardView::MigratableCardView(
       parent_dialog_(parent_dialog) {
   ChromeLayoutProvider* provider = ChromeLayoutProvider::Get();
   SetLayoutManager(std::make_unique<views::BoxLayout>(
-      views::BoxLayout::kVertical, gfx::Insets(),
+      views::BoxLayout::Orientation::kVertical, gfx::Insets(),
       provider->GetDistanceMetric(DISTANCE_CONTENT_LIST_VERTICAL_MULTI)));
 
   AddChildView(GetMigratableCardDescriptionView(migratable_credit_card,
@@ -47,7 +47,7 @@ MigratableCardView::MigratableCardView(
   checkbox_uncheck_text_container_ = new views::View();
   views::BoxLayout* layout = checkbox_uncheck_text_container_->SetLayoutManager(
       std::make_unique<views::BoxLayout>(
-          views::BoxLayout::kVertical,
+          views::BoxLayout::Orientation::kVertical,
           gfx::Insets(provider->GetDistanceMetric(
                           views::DISTANCE_RELATED_CONTROL_VERTICAL),
                       provider->GetDistanceMetric(
@@ -55,7 +55,7 @@ MigratableCardView::MigratableCardView(
           provider->GetDistanceMetric(
               views::DISTANCE_RELATED_CONTROL_HORIZONTAL)));
   layout->set_cross_axis_alignment(
-      views::BoxLayout::CROSS_AXIS_ALIGNMENT_START);
+      views::BoxLayout::CrossAxisAlignment::kStart);
 
   views::Label* checkbox_uncheck_text_ = new views::Label(
       l10n_util::GetStringUTF16(
@@ -63,9 +63,9 @@ MigratableCardView::MigratableCardView(
       CONTEXT_BODY_TEXT_SMALL, ChromeTextStyle::STYLE_RED);
 
   checkbox_uncheck_text_container_->AddChildView(checkbox_uncheck_text_);
-  checkbox_uncheck_text_container_->SetBackground(views::CreateSolidBackground(
-      GetNativeTheme()->SystemDarkModeEnabled() ? gfx::kGoogleGrey800
-                                                : gfx::kGoogleGrey050));
+  checkbox_uncheck_text_container_->SetBackground(
+      views::CreateSolidBackground(GetNativeTheme()->GetSystemColor(
+          ui::NativeTheme::kColorId_BubbleFooterBackground)));
   checkbox_uncheck_text_container_->SetVisible(false);
 
   AddChildView(checkbox_uncheck_text_container_);
@@ -74,7 +74,7 @@ MigratableCardView::MigratableCardView(
 MigratableCardView::~MigratableCardView() = default;
 
 bool MigratableCardView::IsSelected() {
-  return !checkbox_ || checkbox_->checked();
+  return !checkbox_ || checkbox_->GetChecked();
 }
 
 std::string MigratableCardView::GetGuid() {
@@ -95,7 +95,7 @@ MigratableCardView::GetMigratableCardDescriptionView(
 
   migratable_card_description_view->SetLayoutManager(
       std::make_unique<views::BoxLayout>(
-          views::BoxLayout::kHorizontal, gfx::Insets(),
+          views::BoxLayout::Orientation::kHorizontal, gfx::Insets(),
           provider->GetDistanceMetric(
               views::DISTANCE_RELATED_CONTROL_HORIZONTAL)));
 
@@ -123,8 +123,8 @@ MigratableCardView::GetMigratableCardDescriptionView(
       auto* migration_succeeded_image = new views::ImageView();
       migration_succeeded_image->SetImage(gfx::CreateVectorIcon(
           vector_icons::kCheckCircleIcon, kMigrationResultImageSize,
-          GetNativeTheme()->SystemDarkModeEnabled() ? gfx::kGoogleGreen200
-                                                    : gfx::kGoogleGreen700));
+          GetNativeTheme()->GetSystemColor(
+              ui::NativeTheme::kColorId_AlertSeverityLow)));
       migratable_card_description_view->AddChildView(migration_succeeded_image);
       break;
     }
@@ -132,8 +132,8 @@ MigratableCardView::GetMigratableCardDescriptionView(
       auto* migration_failed_image = new views::ImageView();
       migration_failed_image->SetImage(gfx::CreateVectorIcon(
           vector_icons::kErrorIcon, kMigrationResultImageSize,
-          GetNativeTheme()->SystemDarkModeEnabled() ? gfx::kGoogleRed300
-                                                    : gfx::kGoogleRed700));
+          GetNativeTheme()->GetSystemColor(
+              ui::NativeTheme::kColorId_AlertSeverityHigh)));
       migratable_card_description_view->AddChildView(migration_failed_image);
       break;
     }
@@ -143,7 +143,7 @@ MigratableCardView::GetMigratableCardDescriptionView(
       std::make_unique<views::View>();
   card_network_and_last_four_digits->SetLayoutManager(
       std::make_unique<views::BoxLayout>(
-          views::BoxLayout::kHorizontal, gfx::Insets(),
+          views::BoxLayout::Orientation::kHorizontal, gfx::Insets(),
           provider->GetDistanceMetric(DISTANCE_RELATED_LABEL_HORIZONTAL_LIST)));
 
   ui::ResourceBundle& rb = ui::ResourceBundle::GetSharedInstance();
@@ -164,7 +164,7 @@ MigratableCardView::GetMigratableCardDescriptionView(
       std::make_unique<views::Label>(
           migratable_credit_card.credit_card()
               .AbbreviatedExpirationDateForDisplay(/*with_prefix=*/true),
-          views::style::CONTEXT_LABEL, ChromeTextStyle::STYLE_SECONDARY);
+          views::style::CONTEXT_LABEL, views::style::STYLE_SECONDARY);
   migratable_card_description_view->AddChildView(card_expiration.release());
 
   // If card is not successfully uploaded we show the invalid card
@@ -176,13 +176,13 @@ MigratableCardView::GetMigratableCardDescriptionView(
             IDS_AUTOFILL_LOCAL_CARD_MIGRATION_DIALOG_LABEL_INVALID_CARDS),
         views::style::CONTEXT_LABEL, ChromeTextStyle::STYLE_RED));
 
-    delete_card_from_local_button_ = views::CreateVectorImageButton(listener);
-    views::SetImageFromVectorIcon(delete_card_from_local_button_,
-                                  kTrashCanIcon);
-    delete_card_from_local_button_->SetTooltipText(l10n_util::GetStringUTF16(
+    auto delete_card_from_local_button =
+        views::CreateVectorImageButtonWithNativeTheme(listener, kTrashCanIcon);
+    delete_card_from_local_button->SetTooltipText(l10n_util::GetStringUTF16(
         IDS_AUTOFILL_LOCAL_CARD_MIGRATION_DIALOG_TRASH_CAN_BUTTON_TOOLTIP));
-    migratable_card_description_view->AddChildView(
-        delete_card_from_local_button_);
+    delete_card_from_local_button_ =
+        migratable_card_description_view->AddChildView(
+            std::move(delete_card_from_local_button));
   }
 
   return migratable_card_description_view;
@@ -199,7 +199,7 @@ void MigratableCardView::ButtonPressed(views::Button* sender,
     // button if needed.
     parent_dialog_->DialogModelChanged();
     // The warning text will be visible only when user unchecks the checkbox.
-    checkbox_uncheck_text_container_->SetVisible(!checkbox_->checked());
+    checkbox_uncheck_text_container_->SetVisible(!checkbox_->GetChecked());
     InvalidateLayout();
     parent_dialog_->UpdateLayout();
   } else {

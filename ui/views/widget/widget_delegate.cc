@@ -6,7 +6,9 @@
 
 #include "base/logging.h"
 #include "base/strings/utf_string_conversions.h"
-#include "services/ws/public/mojom/window_tree_constants.mojom.h"
+#include "ui/accessibility/ax_enums.mojom.h"
+#include "ui/display/display.h"
+#include "ui/display/screen.h"
 #include "ui/gfx/image/image_skia.h"
 #include "ui/views/view.h"
 #include "ui/views/views_delegate.h"
@@ -24,26 +26,14 @@ WidgetDelegate::~WidgetDelegate() {
 }
 
 void WidgetDelegate::SetCanActivate(bool can_activate) {
-  if (can_activate == can_activate_)
-    return;
-
-  const bool previous_value = CanActivate();
   can_activate_ = can_activate;
-  if (previous_value != CanActivate()) {
-    Widget* widget = GetWidget();
-    if (widget)
-      widget->OnCanActivateChanged();
-  }
 }
 
-void WidgetDelegate::OnWidgetMove() {
-}
+void WidgetDelegate::OnWidgetMove() {}
 
-void WidgetDelegate::OnDisplayChanged() {
-}
+void WidgetDelegate::OnDisplayChanged() {}
 
-void WidgetDelegate::OnWorkAreaChanged() {
-}
+void WidgetDelegate::OnWorkAreaChanged() {}
 
 bool WidgetDelegate::OnCloseRequested(Widget::ClosedReason close_reason) {
   return true;
@@ -73,17 +63,6 @@ bool WidgetDelegate::CanMinimize() const {
   return false;
 }
 
-int32_t WidgetDelegate::GetResizeBehavior() const {
-  int32_t behavior = ws::mojom::kResizeBehaviorNone;
-  if (CanResize())
-    behavior |= ws::mojom::kResizeBehaviorCanResize;
-  if (CanMaximize())
-    behavior |= ws::mojom::kResizeBehaviorCanMaximize;
-  if (CanMinimize())
-    behavior |= ws::mojom::kResizeBehaviorCanMinimize;
-  return behavior;
-}
-
 bool WidgetDelegate::CanActivate() const {
   return can_activate_;
 }
@@ -101,11 +80,15 @@ base::string16 WidgetDelegate::GetAccessibleWindowTitle() const {
 }
 
 base::string16 WidgetDelegate::GetWindowTitle() const {
-  return base::string16();
+  return params_.title;
 }
 
 bool WidgetDelegate::ShouldShowWindowTitle() const {
   return true;
+}
+
+bool WidgetDelegate::ShouldCenterWindowTitleText() const {
+  return false;
 }
 
 bool WidgetDelegate::ShouldShowCloseButton() const {
@@ -137,11 +120,10 @@ std::string WidgetDelegate::GetWindowName() const {
 void WidgetDelegate::SaveWindowPlacement(const gfx::Rect& bounds,
                                          ui::WindowShowState show_state) {
   std::string window_name = GetWindowName();
-  if (!ViewsDelegate::GetInstance() || window_name.empty())
-    return;
-
-  ViewsDelegate::GetInstance()->SaveWindowPlacement(GetWidget(), window_name,
-                                                    bounds, show_state);
+  if (!window_name.empty()) {
+    ViewsDelegate::GetInstance()->SaveWindowPlacement(GetWidget(), window_name,
+                                                      bounds, show_state);
+  }
 }
 
 bool WidgetDelegate::GetSavedWindowPlacement(
@@ -149,11 +131,14 @@ bool WidgetDelegate::GetSavedWindowPlacement(
     gfx::Rect* bounds,
     ui::WindowShowState* show_state) const {
   std::string window_name = GetWindowName();
-  if (!ViewsDelegate::GetInstance() || window_name.empty())
+  if (window_name.empty() ||
+      !ViewsDelegate::GetInstance()->GetSavedWindowPlacement(
+          widget, window_name, bounds, show_state))
     return false;
-
-  return ViewsDelegate::GetInstance()->GetSavedWindowPlacement(
-      widget, window_name, bounds, show_state);
+  // Try to find a display intersecting the saved bounds.
+  const auto& display =
+      display::Screen::GetScreen()->GetDisplayMatching(*bounds);
+  return display.bounds().Intersects(*bounds);
 }
 
 bool WidgetDelegate::ShouldRestoreWindowSize() const {
@@ -200,11 +185,16 @@ bool WidgetDelegate::ShouldDescendIntoChildForEventHandling(
   return true;
 }
 
+void WidgetDelegate::SetWindowTitle(const base::string16& title) {
+  if (params_.title == title)
+    return;
+  params_.title = title;
+  if (GetWidget())
+    GetWidget()->UpdateWindowTitle();
+}
+
 ////////////////////////////////////////////////////////////////////////////////
 // WidgetDelegateView:
-
-// static
-const char WidgetDelegateView::kViewClassName[] = "WidgetDelegateView";
 
 WidgetDelegateView::WidgetDelegateView() {
   // A WidgetDelegate should be deleted on DeleteDelegate.
@@ -229,8 +219,8 @@ views::View* WidgetDelegateView::GetContentsView() {
   return this;
 }
 
-const char* WidgetDelegateView::GetClassName() const {
-  return kViewClassName;
-}
+BEGIN_METADATA(WidgetDelegateView)
+METADATA_PARENT_CLASS(View)
+END_METADATA()
 
 }  // namespace views

@@ -6,13 +6,13 @@
 
 #include "third_party/blink/public/platform/task_type.h"
 #include "third_party/blink/renderer/bindings/core/v8/serialization/serialized_script_value.h"
+#include "third_party/blink/renderer/bindings/modules/v8/v8_audio_param_descriptor.h"
 #include "third_party/blink/renderer/core/messaging/message_channel.h"
 #include "third_party/blink/renderer/core/messaging/message_port.h"
 #include "third_party/blink/renderer/modules/event_modules.h"
 #include "third_party/blink/renderer/modules/webaudio/audio_buffer.h"
 #include "third_party/blink/renderer/modules/webaudio/audio_node_input.h"
 #include "third_party/blink/renderer/modules/webaudio/audio_node_output.h"
-#include "third_party/blink/renderer/modules/webaudio/audio_param_descriptor.h"
 #include "third_party/blink/renderer/modules/webaudio/audio_worklet.h"
 #include "third_party/blink/renderer/modules/webaudio/audio_worklet_processor.h"
 #include "third_party/blink/renderer/modules/webaudio/audio_worklet_processor_definition.h"
@@ -20,9 +20,10 @@
 #include "third_party/blink/renderer/platform/audio/audio_bus.h"
 #include "third_party/blink/renderer/platform/audio/audio_utilities.h"
 #include "third_party/blink/renderer/platform/bindings/exception_messages.h"
-#include "third_party/blink/renderer/platform/cross_thread_functional.h"
 #include "third_party/blink/renderer/platform/heap/persistent.h"
+#include "third_party/blink/renderer/platform/instrumentation/tracing/trace_event.h"
 #include "third_party/blink/renderer/platform/scheduler/public/post_cross_thread_task.h"
+#include "third_party/blink/renderer/platform/wtf/cross_thread_functional.h"
 
 namespace blink {
 
@@ -85,16 +86,20 @@ scoped_refptr<AudioWorkletHandler> AudioWorkletHandler::Create(
 void AudioWorkletHandler::Process(uint32_t frames_to_process) {
   DCHECK(Context()->IsAudioThread());
 
+  TRACE_EVENT0(TRACE_DISABLED_BY_DEFAULT("webaudio.audionode"),
+               "AudioWorkletHandler::Process");
+
   // Render and update the node state when the processor is ready with no error.
   // We also need to check if the global scope is valid before we request
   // the rendering in the AudioWorkletGlobalScope.
   if (processor_ && !processor_->hasErrorOccured()) {
-    Vector<AudioBus*> input_buses;
+    Vector<scoped_refptr<AudioBus>> input_buses;
     Vector<AudioBus*> output_buses;
     for (unsigned i = 0; i < NumberOfInputs(); ++i) {
       // If the input is not connected, inform the processor of that
       // fact by setting the bus to null.
-      AudioBus* bus = Input(i).IsConnected() ? Input(i).Bus() : nullptr;
+      scoped_refptr<AudioBus> bus =
+          Input(i).IsConnected() ? Input(i).Bus() : nullptr;
       input_buses.push_back(bus);
     }
     for (unsigned i = 0; i < NumberOfOutputs(); ++i)
@@ -148,25 +153,33 @@ void AudioWorkletHandler::CheckNumberOfChannelsForInput(AudioNodeInput* input) {
     }
   }
 
-  // If the node has zero output, it becomes the "automatic pull" node. This
-  // does not apply to the general case where we have outputs that aren't
-  // connected.
-  if (NumberOfOutputs() == 0) {
-    Context()->GetDeferredTaskHandler().AddAutomaticPullNode(this);
+  AudioHandler::CheckNumberOfChannelsForInput(input);
+  UpdatePullStatusIfNeeded();
+}
+
+void AudioWorkletHandler::UpdatePullStatusIfNeeded() {
+  Context()->AssertGraphOwner();
+
+  bool is_output_connected = false;
+  for (unsigned i = 0; i < NumberOfOutputs(); ++i) {
+    if (Output(i).IsConnected()) {
+      is_output_connected = true;
+      break;
+    }
   }
 
-  AudioHandler::CheckNumberOfChannelsForInput(input);
+  // If no output is connected, add the node to the automatic pull list.
+  // Otherwise, remove it out of the list.
+  if (!is_output_connected) {
+    Context()->GetDeferredTaskHandler().AddAutomaticPullNode(this);
+  } else {
+    Context()->GetDeferredTaskHandler().RemoveAutomaticPullNode(this);
+  }
 }
 
 double AudioWorkletHandler::TailTime() const {
   DCHECK(Context()->IsAudioThread());
-  return 0;
-}
-
-bool AudioWorkletHandler::PropagatesSilence() const {
-  // Can't assume silent inputs produce silent outputs since the behavior
-  // depends on the user-specified script.
-  return false;
+  return tail_time_;
 }
 
 void AudioWorkletHandler::SetProcessorOnRenderThread(
@@ -182,9 +195,9 @@ void AudioWorkletHandler::SetProcessorOnRenderThread(
   } else {
     PostCrossThreadTask(
         *main_thread_task_runner_, FROM_HERE,
-        CrossThreadBind(&AudioWorkletHandler::NotifyProcessorError,
-                        WrapRefCounted(this),
-                        AudioWorkletProcessorErrorState::kConstructionError));
+        CrossThreadBindOnce(
+            &AudioWorkletHandler::NotifyProcessorError, AsWeakPtr(),
+            AudioWorkletProcessorErrorState::kConstructionError));
   }
 }
 
@@ -197,15 +210,15 @@ void AudioWorkletHandler::FinishProcessorOnRenderThread() {
   if (error_state == AudioWorkletProcessorErrorState::kProcessError) {
     PostCrossThreadTask(
         *main_thread_task_runner_, FROM_HERE,
-        CrossThreadBind(&AudioWorkletHandler::NotifyProcessorError,
-                        WrapRefCounted(this),
-                        error_state));
+        CrossThreadBindOnce(&AudioWorkletHandler::NotifyProcessorError,
+                            AsWeakPtr(), error_state));
   }
 
   // TODO(hongchan): After this point, The handler has no more pending activity
   // and ready for GC.
   Context()->NotifySourceNodeFinishedProcessing(this);
   processor_.Clear();
+  tail_time_ = 0;
 }
 
 void AudioWorkletHandler::NotifyProcessorError(
@@ -231,7 +244,7 @@ AudioWorkletNode::AudioWorkletNode(
   for (const auto& param_info : param_info_list) {
     String param_name = param_info.Name().IsolatedCopy();
     AudioParam* audio_param = AudioParam::Create(
-        context, kParamTypeAudioWorklet,
+        context, Uuid(), AudioParamHandler::kParamTypeAudioWorklet,
         param_info.DefaultValue(), AudioParamHandler::AutomationRate::kAudio,
         AudioParamHandler::AutomationRateMode::kVariable, param_info.MinValue(),
         param_info.MaxValue());
@@ -316,6 +329,13 @@ AudioWorkletNode* AudioWorkletNode::Create(
     return nullptr;
   }
 
+  if (context->IsContextClosed()) {
+    exception_state.ThrowDOMException(
+        DOMExceptionCode::kInvalidStateError,
+        "AudioWorkletNode cannot be created: No execution context available.");
+    return nullptr;
+  }
+
   auto* channel =
       MakeGarbageCollected<MessageChannel>(context->GetExecutionContext());
   MessagePortChannel processor_port_channel = channel->port2()->Disentangle();
@@ -366,6 +386,13 @@ AudioWorkletNode* AudioWorkletNode::Create(
                                            std::move(processor_port_channel),
                                            std::move(serialized_node_options));
 
+  {
+    // The node should be manually added to the automatic pull node list,
+    // even without a |connect()| call.
+    BaseAudioContext::GraphAutoLocker locker(context);
+    node->Handler().UpdatePullStatusIfNeeded();
+  }
+
   return node;
 }
 
@@ -389,10 +416,26 @@ scoped_refptr<AudioWorkletHandler> AudioWorkletNode::GetWorkletHandler() const {
   return WrapRefCounted(&static_cast<AudioWorkletHandler&>(Handler()));
 }
 
-void AudioWorkletNode::Trace(blink::Visitor* visitor) {
+void AudioWorkletNode::Trace(Visitor* visitor) {
   visitor->Trace(parameter_map_);
   visitor->Trace(node_port_);
   AudioNode::Trace(visitor);
+}
+
+void AudioWorkletNode::ReportDidCreate() {
+  GraphTracer().DidCreateAudioNode(this);
+  for (const auto& param_name : parameter_map_->GetHashMap().Keys()) {
+    GraphTracer().DidCreateAudioParam(
+        parameter_map_->GetHashMap().at(param_name));
+  }
+}
+
+void AudioWorkletNode::ReportWillBeDestroyed() {
+  for (const auto& param_name : parameter_map_->GetHashMap().Keys()) {
+    GraphTracer().WillDestroyAudioParam(
+        parameter_map_->GetHashMap().at(param_name));
+  }
+  GraphTracer().WillDestroyAudioNode(this);
 }
 
 }  // namespace blink

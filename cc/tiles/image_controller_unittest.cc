@@ -107,11 +107,16 @@ class TestableCache : public StubDecodeCache {
     if (image.paint_image() &&
         image.paint_image().width() * image.paint_image().height() >=
             1000 * 1000) {
-      return TaskResult(false);
+      return TaskResult(/*need_unref=*/false, /*is_at_raster_decode=*/true,
+                        /*can_do_hardware_accelerated_decode=*/false);
     }
 
     ++number_of_refs_;
-    return TaskResult(task_to_use_);
+    if (task_to_use_)
+      return TaskResult(task_to_use_,
+                        /*can_do_hardware_accelerated_decode=*/false);
+    return TaskResult(/*need_unref=*/true, /*is_at_raster_decode=*/false,
+                      /*can_do_hardware_accelerated_decode=*/false);
   }
   TaskResult GetOutOfRasterDecodeTaskForImageAndRef(
       const DrawImage& image) override {
@@ -233,7 +238,7 @@ DrawImage CreateDiscardableDrawImage(gfx::Size size) {
   return DrawImage(CreateDiscardablePaintImage(size),
                    SkIRect::MakeWH(size.width(), size.height()),
                    kNone_SkFilterQuality, SkMatrix::I(),
-                   PaintImage::kDefaultFrameIndex);
+                   PaintImage::kDefaultFrameIndex, gfx::ColorSpace());
 }
 
 DrawImage CreateBitmapDrawImage(gfx::Size size) {
@@ -244,9 +249,7 @@ DrawImage CreateBitmapDrawImage(gfx::Size size) {
 
 class ImageControllerTest : public testing::Test {
  public:
-  ImageControllerTest()
-      : task_runner_(base::SequencedTaskRunnerHandle::Get()),
-        weak_ptr_factory_(this) {
+  ImageControllerTest() : task_runner_(base::SequencedTaskRunnerHandle::Get()) {
     image_ = CreateDiscardableDrawImage(gfx::Size(1, 1));
   }
   ~ImageControllerTest() override = default;
@@ -314,30 +317,8 @@ class ImageControllerTest : public testing::Test {
   std::unique_ptr<ImageController> controller_;
   DrawImage image_;
 
-  base::WeakPtrFactory<ImageControllerTest> weak_ptr_factory_;
+  base::WeakPtrFactory<ImageControllerTest> weak_ptr_factory_{this};
 };
-
-// Test that GetTasksForImagesAndRef does not generate task for PaintWorklet
-// images.
-TEST_F(ImageControllerTest, GetTasksForImagesAndRefForPaintWorkletImages) {
-  std::vector<DrawImage> images(1);
-  ImageDecodeCache::TracingInfo tracing_info;
-
-  PaintImage paint_image = CreatePaintImage(100, 100);
-  DrawImage draw_image(
-      paint_image, SkIRect::MakeWH(paint_image.width(), paint_image.height()),
-      kNone_SkFilterQuality, CreateMatrix(SkSize::Make(1.f, 1.f), true),
-      PaintImage::kDefaultFrameIndex);
-  images[0] = draw_image;
-
-  ASSERT_EQ(1u, images.size());
-
-  std::vector<scoped_refptr<TileTask>> tasks;
-  bool has_at_raster_images = false;
-  controller()->ConvertDataImagesToTasks(&images, &tasks, &has_at_raster_images,
-                                         tracing_info);
-  EXPECT_EQ(tasks.size(), 0u);
-}
 
 TEST_F(ImageControllerTest, NullControllerUnrefsImages) {
   std::vector<DrawImage> images(10);

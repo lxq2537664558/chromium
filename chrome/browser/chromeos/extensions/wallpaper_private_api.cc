@@ -11,6 +11,7 @@
 #include "base/bind.h"
 #include "base/command_line.h"
 #include "base/files/file_enumerator.h"
+#include "base/files/file_util.h"
 #include "base/macros.h"
 #include "base/memory/ref_counted_memory.h"
 #include "base/metrics/histogram_macros.h"
@@ -22,16 +23,21 @@
 #include "base/task_runner_util.h"
 #include "base/values.h"
 #include "chrome/browser/browser_process.h"
-#include "chrome/browser/chromeos/extensions/backdrop_wallpaper_handlers/backdrop_wallpaper_handlers.h"
+#include "chrome/browser/chromeos/backdrop_wallpaper_handlers/backdrop_wallpaper.pb.h"
+#include "chrome/browser/chromeos/backdrop_wallpaper_handlers/backdrop_wallpaper_handlers.h"
 #include "chrome/browser/chromeos/file_manager/path_util.h"
 #include "chrome/browser/chromeos/profiles/profile_helper.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/sync/profile_sync_service_factory.h"
 #include "chrome/browser/ui/ash/wallpaper_controller_client.h"
+#include "chrome/browser/ui/webui/settings/chromeos/pref_names.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/grit/generated_resources.h"
+#include "chromeos/constants/chromeos_features.h"
 #include "chromeos/constants/chromeos_switches.h"
+#include "components/prefs/pref_service.h"
 #include "components/strings/grit/components_strings.h"
+#include "components/sync/base/pref_names.h"
 #include "components/sync/driver/sync_service.h"
 #include "components/sync/driver/sync_user_settings.h"
 #include "components/user_manager/user.h"
@@ -57,8 +63,6 @@ namespace set_custom_wallpaper_layout =
     wallpaper_private::SetCustomWallpaperLayout;
 namespace get_thumbnail = wallpaper_private::GetThumbnail;
 namespace save_thumbnail = wallpaper_private::SaveThumbnail;
-namespace get_offline_wallpaper_list =
-    wallpaper_private::GetOfflineWallpaperList;
 namespace record_wallpaper_uma = wallpaper_private::RecordWallpaperUMA;
 namespace get_collections_info = wallpaper_private::GetCollectionsInfo;
 namespace get_images_info = wallpaper_private::GetImagesInfo;
@@ -76,6 +80,8 @@ namespace {
 constexpr base::TimeDelta kRetryDelay = base::TimeDelta::FromSeconds(10);
 constexpr int kRetryLimit = 3;
 
+// TODO(https://crbug.com/1037624): Update "themes" terminology after sync-split
+// ships.
 constexpr char kSyncThemes[] = "syncThemes";
 
 constexpr char kPngFilePattern[] = "*.[pP][nN][gG]";
@@ -191,6 +197,20 @@ std::vector<std::string> GetImagePaths(const base::FilePath& path) {
   return image_paths;
 }
 
+// Helper function to parse the data from a |backdrop::Image| object and save it
+// to |image_info_out|.
+void ParseImageInfo(
+    const backdrop::Image& image,
+    extensions::api::wallpaper_private::ImageInfo* image_info_out) {
+  // The info of each image should contain image url, action url and display
+  // text.
+  image_info_out->image_url = image.image_url();
+  image_info_out->action_url = image.action_url();
+  // Display text may have more than one strings.
+  for (int i = 0; i < image.attribution_size(); ++i)
+    image_info_out->display_text.push_back(image.attribution()[i].text());
+}
+
 }  // namespace
 
 ExtensionFunction::ResponseAction WallpaperPrivateGetStringsFunction::Run() {
@@ -232,6 +252,7 @@ ExtensionFunction::ResponseAction WallpaperPrivateGetStringsFunction::Run() {
   SET_STRING("setSuccessfullyMessage",
              IDS_WALLPAPER_MANAGER_SET_SUCCESSFULLY_MESSAGE);
   SET_STRING("defaultWallpaperLabel", IDS_DEFAULT_WALLPAPER_ACCESSIBLE_LABEL);
+  SET_STRING("backButton", IDS_ACCNAME_BACK);
 #undef SET_STRING
 
   const std::string& app_locale = g_browser_process->GetApplicationLocale();
@@ -242,25 +263,17 @@ ExtensionFunction::ResponseAction WallpaperPrivateGetStringsFunction::Run() {
                   wallpaper_api_util::kCancelWallpaperMessage);
   dict->SetString("highResolutionSuffix", GetBackdropWallpaperSuffix());
 
-  WallpaperControllerClient::Get()->GetActiveUserWallpaperInfo(base::BindOnce(
-      &WallpaperPrivateGetStringsFunction::OnWallpaperInfoReturned, this,
-      std::move(dict)));
-  return RespondLater();
-}
-
-void WallpaperPrivateGetStringsFunction::OnWallpaperInfoReturned(
-    std::unique_ptr<base::DictionaryValue> dict,
-    const std::string& location,
-    ash::WallpaperLayout layout) {
-  dict->SetString("currentWallpaper", location);
+  auto info = WallpaperControllerClient::Get()->GetActiveUserWallpaperInfo();
+  dict->SetString("currentWallpaper", info.location);
   dict->SetString("currentWallpaperLayout",
-                  wallpaper_api_util::GetLayoutString(layout));
-  Respond(OneArgument(std::move(dict)));
+                  wallpaper_api_util::GetLayoutString(info.layout));
+
+  return RespondNow(OneArgument(std::move(dict)));
 }
 
 ExtensionFunction::ResponseAction
 WallpaperPrivateGetSyncSettingFunction::Run() {
-  base::PostTaskWithTraits(
+  base::PostTask(
       FROM_HERE, {BrowserThread::UI},
       base::BindOnce(
           &WallpaperPrivateGetSyncSettingFunction::CheckSyncServiceStatus,
@@ -283,28 +296,48 @@ void WallpaperPrivateGetSyncSettingFunction::CheckSyncServiceStatus() {
   Profile* profile =  Profile::FromBrowserContext(browser_context());
   syncer::SyncService* sync_service =
       ProfileSyncServiceFactory::GetForProfile(profile);
-  if (!sync_service || !sync_service->CanSyncFeatureStart()) {
-    // Sync as a whole is disabled.
+  if (!sync_service) {
+    // Sync flag is disabled (perhaps prohibited by policy).
+    dict->SetBoolean(kSyncThemes, false);
+    Respond(OneArgument(std::move(dict)));
+    return;
+  }
+
+  if (chromeos::features::IsSplitSettingsSyncEnabled()) {
+    // When the split settings sync flag is on, the user must have opted into
+    // OS-level sync as a whole and wallpaper sync must be enabled.
+    bool os_wallpaper_sync_enabled =
+        sync_service->GetUserSettings()->IsOsSyncFeatureEnabled() &&
+        profile->GetPrefs()->GetBoolean(
+            chromeos::settings::prefs::kSyncOsWallpaper);
+    dict->SetBoolean(kSyncThemes, os_wallpaper_sync_enabled);
+    Respond(OneArgument(std::move(dict)));
+    return;
+  }
+
+  if (!sync_service->CanSyncFeatureStart()) {
+    // Sync-the-feature is disabled.
     dict->SetBoolean(kSyncThemes, false);
     Respond(OneArgument(std::move(dict)));
     return;
   }
 
   if (sync_service->GetUserSettings()->IsFirstSetupComplete()) {
-    // Sync is set up. Report whether the user has chosen to sync themes.
+    // When sync split is disabled, wallpaper is synced as a group with
+    // browser themes.
     dict->SetBoolean(kSyncThemes,
-                     sync_service->GetUserSettings()->GetChosenDataTypes().Has(
-                         syncer::THEMES));
+                     sync_service->GetUserSettings()->GetSelectedTypes().Has(
+                         syncer::UserSelectableType::kThemes));
     Respond(OneArgument(std::move(dict)));
     return;
   }
 
   // The user hasn't finished setting up sync, so we don't know whether they'll
   // want to sync themes. Try again in a bit.
-  // TODO(xdai): It would be cleaner to implement a SyncServiceObserver and wait
-  // for OnStateChanged() instead of polling.
+  // TODO(https://crbug.com/1036448): It would be cleaner to implement a
+  // SyncServiceObserver and wait for OnStateChanged() instead of polling.
   retry_number_++;
-  base::PostDelayedTaskWithTraits(
+  base::PostDelayedTask(
       FROM_HERE, {BrowserThread::UI},
       base::BindOnce(
           &WallpaperPrivateGetSyncSettingFunction::CheckSyncServiceStatus,
@@ -558,18 +591,18 @@ void WallpaperPrivateGetThumbnailFunction::Get(const base::FilePath& path) {
   std::string data;
   if (GetData(path, &data)) {
     if (data.empty()) {
-      base::PostTaskWithTraits(
+      base::PostTask(
           FROM_HERE, {BrowserThread::UI},
           base::BindOnce(&WallpaperPrivateGetThumbnailFunction::FileNotLoaded,
                          this));
     } else {
-      base::PostTaskWithTraits(
+      base::PostTask(
           FROM_HERE, {BrowserThread::UI},
           base::BindOnce(&WallpaperPrivateGetThumbnailFunction::FileLoaded,
                          this, data));
     }
   } else {
-    base::PostTaskWithTraits(
+    base::PostTask(
         FROM_HERE, {BrowserThread::UI},
         base::BindOnce(&WallpaperPrivateGetThumbnailFunction::Failure, this,
                        path.BaseName().value()));
@@ -612,11 +645,11 @@ void WallpaperPrivateSaveThumbnailFunction::Save(
   WallpaperFunctionBase::AssertCalledOnWallpaperSequence(
       WallpaperFunctionBase::GetNonBlockingTaskRunner());
   if (SaveData(chrome::DIR_CHROMEOS_WALLPAPER_THUMBNAILS, file_name, data)) {
-    base::PostTaskWithTraits(
+    base::PostTask(
         FROM_HERE, {BrowserThread::UI},
         base::BindOnce(&WallpaperPrivateSaveThumbnailFunction::Success, this));
   } else {
-    base::PostTaskWithTraits(
+    base::PostTask(
         FROM_HERE, {BrowserThread::UI},
         base::BindOnce(&WallpaperPrivateSaveThumbnailFunction::Failure, this,
                        file_name));
@@ -677,11 +710,19 @@ WallpaperPrivateGetCollectionsInfoFunction::Run() {
 
 void WallpaperPrivateGetCollectionsInfoFunction::OnCollectionsInfoFetched(
     bool success,
-    const std::vector<extensions::api::wallpaper_private::CollectionInfo>&
-        collections_info_list) {
+    const std::vector<backdrop::Collection>& collections) {
   if (!success) {
     Respond(Error("Collection names are not available."));
     return;
+  }
+
+  std::vector<extensions::api::wallpaper_private::CollectionInfo>
+      collections_info_list;
+  for (const auto& collection : collections) {
+    extensions::api::wallpaper_private::CollectionInfo collection_info;
+    collection_info.collection_name = collection.collection_name();
+    collection_info.collection_id = collection.collection_id();
+    collections_info_list.push_back(std::move(collection_info));
   }
   Respond(ArgumentList(
       get_collections_info::Results::Create(collections_info_list)));
@@ -708,11 +749,17 @@ ExtensionFunction::ResponseAction WallpaperPrivateGetImagesInfoFunction::Run() {
 
 void WallpaperPrivateGetImagesInfoFunction::OnImagesInfoFetched(
     bool success,
-    const std::vector<extensions::api::wallpaper_private::ImageInfo>&
-        images_info_list) {
+    const std::vector<backdrop::Image>& images) {
   if (!success) {
     Respond(Error("Images info is not available."));
     return;
+  }
+
+  std::vector<extensions::api::wallpaper_private::ImageInfo> images_info_list;
+  for (const auto& image : images) {
+    extensions::api::wallpaper_private::ImageInfo image_info;
+    ParseImageInfo(image, &image_info);
+    images_info_list.push_back(std::move(image_info));
   }
   Respond(ArgumentList(get_images_info::Results::Create(images_info_list)));
 }
@@ -815,20 +862,12 @@ WallpaperPrivateGetCurrentWallpaperThumbnailFunction::Run() {
       get_current_wallpaper_thumbnail::Params::Create(*args_));
   EXTENSION_FUNCTION_VALIDATE(params);
 
-  WallpaperControllerClient::Get()->GetWallpaperImage(base::BindOnce(
-      &WallpaperPrivateGetCurrentWallpaperThumbnailFunction::
-          OnWallpaperImageReturned,
-      this, gfx::Size(params->thumbnail_width, params->thumbnail_height)));
-  return RespondLater();
-}
-
-void WallpaperPrivateGetCurrentWallpaperThumbnailFunction::
-    OnWallpaperImageReturned(const gfx::Size& thumbnail_size,
-                             const gfx::ImageSkia& image) {
+  auto image = WallpaperControllerClient::Get()->GetWallpaperImage();
+  gfx::Size thumbnail_size(params->thumbnail_width, params->thumbnail_height);
   image.EnsureRepsForSupportedScales();
   scoped_refptr<base::RefCountedBytes> thumbnail_data;
   GenerateThumbnail(image, thumbnail_size, &thumbnail_data);
-  Respond(OneArgument(std::make_unique<Value>(
+  return RespondNow(OneArgument(std::make_unique<Value>(
       Value::BlobStorage(thumbnail_data->front(),
                          thumbnail_data->front() + thumbnail_data->size()))));
 }
@@ -860,12 +899,15 @@ WallpaperPrivateGetSurpriseMeImageFunction::Run() {
 
 void WallpaperPrivateGetSurpriseMeImageFunction::OnSurpriseMeImageFetched(
     bool success,
-    const extensions::api::wallpaper_private::ImageInfo& image_info,
+    const backdrop::Image& image,
     const std::string& next_resume_token) {
   if (!success) {
     Respond(Error("Image not available."));
     return;
   }
+
+  extensions::api::wallpaper_private::ImageInfo image_info;
+  ParseImageInfo(image, &image_info);
   Respond(TwoArguments(image_info.ToValue(),
                        std::make_unique<Value>(next_resume_token)));
 }

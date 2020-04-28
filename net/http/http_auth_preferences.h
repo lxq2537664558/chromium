@@ -24,6 +24,13 @@ class URLSecurityManager;
 // them accessible from the IO thread.
 class NET_EXPORT HttpAuthPreferences {
  public:
+  // |DefaultCredentials| influences the behavior of codepaths that use
+  // IdentitySource::IDENT_SRC_DEFAULT_CREDENTIALS in |HttpAuthController|
+  enum DefaultCredentials {
+    DISALLOW_DEFAULT_CREDENTIALS = 0,
+    ALLOW_DEFAULT_CREDENTIALS = 1,
+  };
+
   HttpAuthPreferences();
   virtual ~HttpAuthPreferences();
 
@@ -34,6 +41,9 @@ class NET_EXPORT HttpAuthPreferences {
 #endif
 #if defined(OS_ANDROID)
   virtual std::string AuthAndroidNegotiateAccountType() const;
+#endif
+#if defined(OS_CHROMEOS)
+  virtual bool AllowGssapiLibraryLoad() const;
 #endif
   virtual bool CanUseDefaultCredentials(const GURL& auth_origin) const;
   virtual HttpAuth::DelegationType GetDelegationType(
@@ -59,9 +69,17 @@ class NET_EXPORT HttpAuthPreferences {
   }
 #endif
 
-  void SetServerWhitelist(const std::string& server_whitelist);
+#if defined(OS_CHROMEOS)
+  void set_allow_gssapi_library_load(bool allow_gssapi_library_load) {
+    allow_gssapi_library_load_ = allow_gssapi_library_load;
+  }
+#endif
 
-  void SetDelegateWhitelist(const std::string& delegate_whitelist);
+  void SetServerAllowlist(const std::string& server_allowlist);
+
+  void SetDelegateAllowlist(const std::string& delegate_allowlist);
+
+  void SetAllowDefaultCredentials(DefaultCredentials creds);
 
 #if defined(OS_ANDROID)
   void set_auth_android_negotiate_account_type(
@@ -75,12 +93,18 @@ class NET_EXPORT HttpAuthPreferences {
   bool negotiate_disable_cname_lookup_ = false;
   bool negotiate_enable_port_ = false;
 
+  DefaultCredentials allow_default_credentials_ = ALLOW_DEFAULT_CREDENTIALS;
+
 #if defined(OS_POSIX) || defined(OS_FUCHSIA)
   bool ntlm_v2_enabled_ = true;
 #endif
 
 #if defined(OS_ANDROID)
   std::string auth_android_negotiate_account_type_;
+#endif
+
+#if defined(OS_CHROMEOS)
+  bool allow_gssapi_library_load_ = true;
 #endif
 
   std::unique_ptr<URLSecurityManager> security_manager_;

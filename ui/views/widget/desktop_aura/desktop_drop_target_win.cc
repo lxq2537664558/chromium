@@ -4,6 +4,8 @@
 
 #include "ui/views/widget/desktop_aura/desktop_drop_target_win.h"
 
+#include <utility>
+
 #include "base/metrics/histogram_macros.h"
 #include "base/win/win_util.h"
 #include "ui/aura/client/drag_drop_client.h"
@@ -22,8 +24,7 @@ using ui::OSExchangeDataProviderWin;
 
 namespace {
 
-int ConvertKeyStateToAuraEventFlags(DWORD key_state)
-{
+int ConvertKeyStateToAuraEventFlags(DWORD key_state) {
   int flags = 0;
 
   if (key_state & MK_CONTROL)
@@ -98,7 +99,7 @@ DWORD DesktopDropTargetWin::OnDrop(IDataObject* data_object,
   DragDropDelegate* delegate;
   Translate(data_object, key_state, position, effect, &data, &event, &delegate);
   if (delegate) {
-    drag_operation = delegate->OnPerformDrop(*event);
+    drag_operation = delegate->OnPerformDrop(*event, std::move(data));
     DragDropClient* client = aura::client::GetDragDropClient(root_window_);
     if (client && !client->IsDragDropInProgress() &&
         drag_operation != ui::DragDropTypes::DRAG_NONE) {

@@ -7,11 +7,10 @@
 
 #include <memory>
 
-#include "base/optional.h"
 #include "base/strings/string16.h"
 
 namespace gfx {
-class ImageSkia;
+struct VectorIcon;
 }
 
 namespace ui {
@@ -54,13 +53,14 @@ class AuthenticatorRequestSheetModel {
   virtual bool IsAcceptButtonEnabled() const = 0;
   virtual base::string16 GetAcceptButtonLabel() const = 0;
 
-  virtual gfx::ImageSkia* GetStepIllustration(
+  virtual const gfx::VectorIcon& GetStepIllustration(
       ImageColorScheme color_scheme) const = 0;
   virtual base::string16 GetStepTitle() const = 0;
   virtual base::string16 GetStepDescription() const = 0;
-  virtual base::Optional<base::string16> GetAdditionalDescription() const = 0;
+  virtual base::string16 GetAdditionalDescription() const;
+  virtual base::string16 GetError() const;
 
-  virtual ui::MenuModel* GetOtherTransportsMenuModel() = 0;
+  virtual ui::MenuModel* GetOtherTransportsMenuModel();
 
   virtual void OnBack() = 0;
   virtual void OnAccept() = 0;

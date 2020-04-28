@@ -10,7 +10,7 @@
 
 #include "base/callback_forward.h"
 #include "base/macros.h"
-#include "remoting/signaling/ftl.pb.h"
+#include "remoting/proto/ftl/v1/ftl_messages.pb.h"
 #include "third_party/grpc/src/include/grpcpp/support/status.h"
 
 namespace remoting {
@@ -23,6 +23,7 @@ class MessageReceptionChannel {
  public:
   using StreamOpener =
       base::RepeatingCallback<std::unique_ptr<ScopedGrpcServerStream>(
+          base::OnceClosure on_channel_ready,
           const base::RepeatingCallback<void(
               const ftl::ReceiveMessagesResponse&)>& on_incoming_msg,
           base::OnceCallback<void(const grpc::Status&)> on_channel_closed)>;
@@ -45,11 +46,12 @@ class MessageReceptionChannel {
   virtual void StartReceivingMessages(base::OnceClosure on_ready,
                                       DoneCallback on_closed) = 0;
 
-  // Closes the streaming channel.
+  // Closes the streaming channel. Note that |on_closed| callback will be
+  // silently dropped.
   virtual void StopReceivingMessages() = 0;
 
   // Returns true if the streaming channel is open.
-  virtual bool IsReceivingMessages() = 0;
+  virtual bool IsReceivingMessages() const = 0;
 
  private:
   DISALLOW_COPY_AND_ASSIGN(MessageReceptionChannel);

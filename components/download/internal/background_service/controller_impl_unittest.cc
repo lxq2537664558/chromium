@@ -127,14 +127,14 @@ class MockFileMonitor : public FileMonitor {
   void TriggerInit(bool success);
   void TriggerHardRecover(bool success);
 
-  void Initialize(const FileMonitor::InitCallback& callback) override;
+  void Initialize(FileMonitor::InitCallback callback) override;
   MOCK_METHOD2(DeleteUnknownFiles,
                void(const Model::EntryList&, const std::vector<DriverEntry>&));
   MOCK_METHOD2(CleanupFilesForCompletedEntries,
-               void(const Model::EntryList&, const base::Closure&));
+               void(const Model::EntryList&, base::OnceClosure));
   MOCK_METHOD2(DeleteFiles,
                void(const std::set<base::FilePath>&, stats::FileCleanupReason));
-  void HardRecover(const FileMonitor::InitCallback&) override;
+  void HardRecover(FileMonitor::InitCallback) override;
 
  private:
   FileMonitor::InitCallback init_callback_;
@@ -142,19 +142,19 @@ class MockFileMonitor : public FileMonitor {
 };
 
 void MockFileMonitor::TriggerInit(bool success) {
-  init_callback_.Run(success);
+  std::move(init_callback_).Run(success);
 }
 
 void MockFileMonitor::TriggerHardRecover(bool success) {
-  recover_callback_.Run(success);
+  std::move(recover_callback_).Run(success);
 }
 
-void MockFileMonitor::Initialize(const FileMonitor::InitCallback& callback) {
-  init_callback_ = callback;
+void MockFileMonitor::Initialize(FileMonitor::InitCallback callback) {
+  init_callback_ = std::move(callback);
 }
 
-void MockFileMonitor::HardRecover(const FileMonitor::InitCallback& callback) {
-  recover_callback_ = callback;
+void MockFileMonitor::HardRecover(FileMonitor::InitCallback callback) {
+  recover_callback_ = std::move(callback);
 }
 
 class DownloadServiceControllerImplTest : public testing::Test {
@@ -172,8 +172,8 @@ class DownloadServiceControllerImplTest : public testing::Test {
         file_monitor_(nullptr),
         init_callback_called_(false) {
     start_callback_ =
-        base::Bind(&DownloadServiceControllerImplTest::StartCallback,
-                   base::Unretained(this));
+        base::BindRepeating(&DownloadServiceControllerImplTest::StartCallback,
+                            base::Unretained(this));
   }
 
   ~DownloadServiceControllerImplTest() override = default;
@@ -235,8 +235,8 @@ class DownloadServiceControllerImplTest : public testing::Test {
 
   void InitializeController() {
     controller_->Initialize(
-        base::Bind(&DownloadServiceControllerImplTest::OnInitCompleted,
-                   base::Unretained(this)));
+        base::BindOnce(&DownloadServiceControllerImplTest::OnInitCompleted,
+                       base::Unretained(this)));
   }
 
   DownloadParams MakeDownloadParams() {
@@ -1221,23 +1221,20 @@ TEST_F(DownloadServiceControllerImplTest, DownloadCompletionTest) {
   Entry entry1 = test::BuildBasicEntry(Entry::State::ACTIVE);
   Entry entry2 = test::BuildBasicEntry(Entry::State::ACTIVE);
   Entry entry3 = test::BuildBasicEntry(Entry::State::ACTIVE);
-  Entry entry4 = test::BuildBasicEntry(Entry::State::ACTIVE);
-  entry4.scheduling_params.cancel_time = base::Time::Now();
-  std::vector<Entry> entries = {entry1, entry2, entry3, entry4};
+  entry3.scheduling_params.cancel_time = base::Time::Now();
+  std::vector<Entry> entries = {entry1, entry2, entry3};
 
   DriverEntry dentry1 =
       BuildDriverEntry(entry1, DriverEntry::State::IN_PROGRESS);
-  // dentry2 will effectively be created by the test to simulate a start
-  // download.
-  DriverEntry dentry3 =
-      BuildDriverEntry(entry3, DriverEntry::State::IN_PROGRESS);
-  driver_->AddTestData(std::vector<DriverEntry>{dentry1, dentry3});
+  DriverEntry dentry2 =
+      BuildDriverEntry(entry2, DriverEntry::State::IN_PROGRESS);
+  driver_->AddTestData(std::vector<DriverEntry>{dentry1, dentry2});
 
   EXPECT_CALL(*client_, OnServiceInitialized(false, _)).Times(1);
 
   // Test FailureReason::TIMEDOUT.
   EXPECT_CALL(*client_,
-              OnDownloadFailed(entry4.guid, _, Client::FailureReason::TIMEDOUT))
+              OnDownloadFailed(entry3.guid, _, Client::FailureReason::TIMEDOUT))
       .Times(1);
 
   // Set up the Controller.
@@ -1254,21 +1251,11 @@ TEST_F(DownloadServiceControllerImplTest, DownloadCompletionTest) {
       .Times(1);
   controller_->CancelDownload(entry1.guid);
 
-  // Test FailureReason::ABORTED.
-  EXPECT_CALL(*client_, OnDownloadStarted(entry2.guid, _, _))
-      .Times(1)
-      .WillOnce(Return(Client::ShouldDownload::ABORT));
-  EXPECT_CALL(*client_,
-              OnDownloadFailed(entry2.guid, _, Client::FailureReason::ABORTED))
-      .Times(1);
-  driver_->Start(RequestParams(), entry2.guid, entry2.target_file_path, nullptr,
-                 TRAFFIC_ANNOTATION_FOR_TESTS);
-
   // Test FailureReason::NETWORK.
   EXPECT_CALL(*client_,
-              OnDownloadFailed(entry3.guid, _, Client::FailureReason::NETWORK))
+              OnDownloadFailed(entry2.guid, _, Client::FailureReason::NETWORK))
       .Times(1);
-  driver_->NotifyDownloadFailed(dentry3, FailureType::NOT_RECOVERABLE);
+  driver_->NotifyDownloadFailed(dentry2, FailureType::NOT_RECOVERABLE);
 
   task_runner_->RunUntilIdle();
 }

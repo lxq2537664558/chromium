@@ -7,18 +7,17 @@
 #include <utility>
 
 #include "base/bind.h"
-#include "base/callback_helpers.h"
 #include "base/location.h"
 #include "base/logging.h"
 #include "base/single_thread_task_runner.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/threading/thread_task_runner_handle.h"
+#include "chromecast/media/api/decoder_buffer_base.h"
 #include "chromecast/media/base/decrypt_context_impl.h"
 #include "chromecast/media/cdm/cast_cdm_context.h"
 #include "chromecast/media/cma/base/buffering_frame_provider.h"
 #include "chromecast/media/cma/base/buffering_state.h"
 #include "chromecast/media/cma/base/coded_frame_provider.h"
-#include "chromecast/media/cma/base/decoder_buffer_base.h"
 #include "chromecast/media/cma/pipeline/cdm_decryptor.h"
 #include "chromecast/media/cma/pipeline/decrypt_util.h"
 #include "chromecast/public/media/cast_decrypt_config.h"
@@ -159,7 +158,7 @@ void AvPipelineImpl::OnFlushDone() {
   }
   DCHECK_EQ(state_, kFlushing);
   set_state(kFlushed);
-  base::ResetAndReturn(&flush_cb_).Run();
+  std::move(flush_cb_).Run();
 }
 
 void AvPipelineImpl::SetCdm(CastCdmContext* cast_cdm_context) {
@@ -343,7 +342,7 @@ void AvPipelineImpl::OnDecoderError() {
     client_.playback_error_cb.Run(::media::PIPELINE_ERROR_COULD_NOT_RENDER);
 
   if (!flush_cb_.is_null())
-    base::ResetAndReturn(&flush_cb_).Run();
+    std::move(flush_cb_).Run();
 }
 
 void AvPipelineImpl::OnKeyStatusChanged(const std::string& key_id,

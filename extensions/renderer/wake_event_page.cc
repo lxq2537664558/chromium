@@ -10,8 +10,8 @@
 #include "base/atomic_sequence_num.h"
 #include "base/bind.h"
 #include "base/bind_helpers.h"
+#include "base/check_op.h"
 #include "base/lazy_instance.h"
-#include "base/logging.h"
 #include "base/stl_util.h"
 #include "content/public/renderer/render_thread.h"
 #include "content/public/renderer/worker_thread.h"
@@ -23,8 +23,6 @@
 #include "ipc/ipc_message_macros.h"
 
 namespace extensions {
-
-using namespace v8_helpers;
 
 namespace {
 
@@ -41,9 +39,7 @@ class WakeEventPage::WakeEventPageNativeHandler
   // Handles own lifetime.
   WakeEventPageNativeHandler(ScriptContext* context,
                              const MakeRequestCallback& make_request)
-      : ObjectBackedNativeHandler(context),
-        make_request_(make_request),
-        weak_ptr_factory_(this) {
+      : ObjectBackedNativeHandler(context), make_request_(make_request) {
     // Delete self on invalidation. base::Unretained because by definition this
     // can't be deleted before it's deleted.
     context->AddInvalidationObserver(base::BindOnce(
@@ -97,7 +93,7 @@ class WakeEventPage::WakeEventPageNativeHandler
   }
 
   MakeRequestCallback make_request_;
-  base::WeakPtrFactory<WakeEventPageNativeHandler> weak_ptr_factory_;
+  base::WeakPtrFactory<WakeEventPageNativeHandler> weak_ptr_factory_{this};
 
   DISALLOW_COPY_AND_ASSIGN(WakeEventPageNativeHandler);
 };
@@ -126,8 +122,8 @@ v8::Local<v8::Function> WakeEventPage::GetForContext(ScriptContext* context) {
 
   // Cache the imported function as a hidden property on the global object of
   // |v8_context|. Creating it isn't free.
-  v8::Local<v8::Private> kWakeEventPageKey =
-      v8::Private::ForApi(isolate, ToV8StringUnsafe(isolate, "WakeEventPage"));
+  v8::Local<v8::Private> kWakeEventPageKey = v8::Private::ForApi(
+      isolate, v8_helpers::ToV8StringUnsafe(isolate, "WakeEventPage"));
   v8::Local<v8::Value> wake_event_page;
   if (!v8_context->Global()
            ->GetPrivate(v8_context, kWakeEventPageKey)
@@ -142,7 +138,7 @@ v8::Local<v8::Function> WakeEventPage::GetForContext(ScriptContext* context) {
     native_handler->Initialize();
 
     // Extract and cache the wake-event-page function from the native handler.
-    wake_event_page = GetPropertyUnsafe(
+    wake_event_page = v8_helpers::GetPropertyUnsafe(
         v8_context, native_handler->NewInstance(), kWakeEventPageFunctionName);
     v8_context->Global()
         ->SetPrivate(v8_context, kWakeEventPageKey, wake_event_page)
@@ -202,7 +198,7 @@ void WakeEventPage::OnWakeEventPageResponse(int request_id, bool success) {
   } else {
     content::WorkerThread::PostTask(
         request_data->thread_id,
-        base::Bind(request_data->on_response, success));
+        base::BindOnce(request_data->on_response, success));
   }
 }
 

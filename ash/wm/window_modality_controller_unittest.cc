@@ -9,7 +9,6 @@
 #include "ash/wm/test_child_modal_parent.h"
 #include "ash/wm/window_util.h"
 #include "base/stl_util.h"
-#include "services/ws/public/mojom/window_manager.mojom.h"
 #include "ui/aura/client/aura_constants.h"
 #include "ui/aura/client/capture_client.h"
 #include "ui/aura/test/test_window_delegate.h"
@@ -275,11 +274,10 @@ TEST_F(WindowModalityControllerTest, GetModalTransient) {
 // Verifies we generate a capture lost when showing a modal window.
 TEST_F(WindowModalityControllerTest, ChangeCapture) {
   views::Widget* widget = views::Widget::CreateWindowWithContext(
-      NULL, Shell::GetPrimaryRootWindow());
+      nullptr, Shell::GetPrimaryRootWindow(), gfx::Rect(0, 0, 200, 200));
   std::unique_ptr<aura::Window> widget_window(widget->GetNativeView());
   views::test::CaptureTrackingView* view = new views::test::CaptureTrackingView;
   widget->client_view()->AddChildView(view);
-  widget->SetBounds(gfx::Rect(0, 0, 200, 200));
   view->SetBoundsRect(widget->client_view()->GetLocalBounds());
   widget->Show();
 
@@ -289,14 +287,13 @@ TEST_F(WindowModalityControllerTest, ChangeCapture) {
   generator.PressLeftButton();
   EXPECT_TRUE(view->got_press());
 
-  views::Widget* modal_widget =
-      views::Widget::CreateWindowWithParent(NULL, widget->GetNativeView());
+  views::Widget* modal_widget = views::Widget::CreateWindowWithParent(
+      nullptr, widget->GetNativeView(), gfx::Rect(50, 50, 200, 200));
   std::unique_ptr<aura::Window> modal_window(modal_widget->GetNativeView());
   modal_window->SetProperty(aura::client::kModalKey, ui::MODAL_TYPE_WINDOW);
   views::test::CaptureTrackingView* modal_view =
       new views::test::CaptureTrackingView;
   modal_widget->client_view()->AddChildView(modal_view);
-  modal_widget->SetBounds(gfx::Rect(50, 50, 200, 200));
   modal_view->SetBoundsRect(modal_widget->client_view()->GetLocalBounds());
   modal_widget->Show();
 
@@ -426,11 +423,11 @@ TEST_F(WindowModalityControllerTest, TouchEvent) {
   // transient parent |w1| from going to them because of
   // EasyResizeWindowTargeter.
   w11->SetProperty(aura::client::kResizeBehaviorKey,
-                   ws::mojom::kResizeBehaviorCanMaximize |
-                       ws::mojom::kResizeBehaviorCanMinimize);
+                   aura::client::kResizeBehaviorCanMaximize |
+                       aura::client::kResizeBehaviorCanMinimize);
   w12->SetProperty(aura::client::kResizeBehaviorKey,
-                   ws::mojom::kResizeBehaviorCanMaximize |
-                       ws::mojom::kResizeBehaviorCanMinimize);
+                   aura::client::kResizeBehaviorCanMaximize |
+                       aura::client::kResizeBehaviorCanMinimize);
   ui::test::EventGenerator generator(Shell::GetPrimaryRootWindow(),
                                      gfx::Point(10, 10));
 
@@ -546,7 +543,7 @@ TEST_F(WindowModalityControllerTest, TouchEvent) {
 //   the |modal_child| window.
 // - Focus should follow the active window.
 TEST_F(WindowModalityControllerTest, ChildModal) {
-  TestChildModalParent* delegate = TestChildModalParent::Show(CurrentContext());
+  TestChildModalParent* delegate = TestChildModalParent::Show(GetContext());
   aura::Window* top_level = delegate->GetWidget()->GetNativeView();
   EXPECT_TRUE(wm::IsActiveWindow(top_level));
 
@@ -599,7 +596,7 @@ TEST_F(WindowModalityControllerTest, ChildModal) {
 // Same as |ChildModal| test, but using |EventGenerator| rather than bypassing
 // it by calling |ActivateWindow|.
 TEST_F(WindowModalityControllerTest, ChildModalEventGenerator) {
-  TestChildModalParent* delegate = TestChildModalParent::Show(CurrentContext());
+  TestChildModalParent* delegate = TestChildModalParent::Show(GetContext());
   aura::Window* top_level = delegate->GetWidget()->GetNativeView();
   EXPECT_TRUE(wm::IsActiveWindow(top_level));
 

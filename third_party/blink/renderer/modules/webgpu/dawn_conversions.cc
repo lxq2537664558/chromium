@@ -4,519 +4,675 @@
 
 #include "third_party/blink/renderer/modules/webgpu/dawn_conversions.h"
 
-#include <dawn/dawn.h>
+#include <dawn/webgpu.h>
 
-#include "third_party/blink/renderer/modules/webgpu/gpu_color.h"
-#include "third_party/blink/renderer/modules/webgpu/gpu_extent_3d.h"
-#include "third_party/blink/renderer/modules/webgpu/gpu_origin_3d.h"
-#include "third_party/blink/renderer/modules/webgpu/gpu_pipeline_stage_descriptor.h"
+#include "third_party/blink/renderer/bindings/modules/v8/double_sequence_or_gpu_color_dict.h"
+#include "third_party/blink/renderer/bindings/modules/v8/unsigned_long_enforce_range_sequence_or_gpu_extent_3d_dict.h"
+#include "third_party/blink/renderer/bindings/modules/v8/unsigned_long_enforce_range_sequence_or_gpu_origin_3d_dict.h"
+#include "third_party/blink/renderer/bindings/modules/v8/v8_gpu_programmable_stage_descriptor.h"
+#include "third_party/blink/renderer/bindings/modules/v8/v8_gpu_texture_copy_view.h"
 #include "third_party/blink/renderer/modules/webgpu/gpu_shader_module.h"
+#include "third_party/blink/renderer/modules/webgpu/gpu_texture.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
 
 namespace blink {
 
 template <>
-DawnBindingType AsDawnEnum<DawnBindingType>(const WTF::String& webgpu_enum) {
-  if (webgpu_enum == "sampler") {
-    return DAWN_BINDING_TYPE_SAMPLER;
-  }
-  if (webgpu_enum == "sampled-texture") {
-    return DAWN_BINDING_TYPE_SAMPLED_TEXTURE;
+WGPUBindingType AsDawnEnum<WGPUBindingType>(const WTF::String& webgpu_enum) {
+  if (webgpu_enum == "uniform-buffer") {
+    return WGPUBindingType_UniformBuffer;
   }
   if (webgpu_enum == "storage-buffer") {
-    return DAWN_BINDING_TYPE_STORAGE_BUFFER;
+    return WGPUBindingType_StorageBuffer;
   }
-  if (webgpu_enum == "uniform-buffer") {
-    return DAWN_BINDING_TYPE_UNIFORM_BUFFER;
+  if (webgpu_enum == "readonly-storage-buffer") {
+    return WGPUBindingType_ReadonlyStorageBuffer;
+  }
+  if (webgpu_enum == "sampler") {
+    return WGPUBindingType_Sampler;
+  }
+  if (webgpu_enum == "comparison-sampler") {
+    return WGPUBindingType_ComparisonSampler;
+  }
+  if (webgpu_enum == "sampled-texture") {
+    return WGPUBindingType_SampledTexture;
+  }
+  if (webgpu_enum == "readonly-storage-texture") {
+    return WGPUBindingType_ReadonlyStorageTexture;
+  }
+  if (webgpu_enum == "writeonly-storage-texture") {
+    return WGPUBindingType_WriteonlyStorageTexture;
   }
   NOTREACHED();
-  return DAWN_BINDING_TYPE_FORCE32;
+  return WGPUBindingType_Force32;
 }
 
 template <>
-DawnCompareFunction AsDawnEnum<DawnCompareFunction>(
+WGPUTextureComponentType AsDawnEnum<WGPUTextureComponentType>(
     const WTF::String& webgpu_enum) {
-  if (webgpu_enum == "never") {
-    return DAWN_COMPARE_FUNCTION_NEVER;
-  }
-  if (webgpu_enum == "less") {
-    return DAWN_COMPARE_FUNCTION_LESS;
-  }
-  if (webgpu_enum == "equal") {
-    return DAWN_COMPARE_FUNCTION_EQUAL;
-  }
-  if (webgpu_enum == "less-equal") {
-    return DAWN_COMPARE_FUNCTION_LESS_EQUAL;
-  }
-  if (webgpu_enum == "greater") {
-    return DAWN_COMPARE_FUNCTION_GREATER;
-  }
-  if (webgpu_enum == "not-equal") {
-    return DAWN_COMPARE_FUNCTION_NOT_EQUAL;
-  }
-  if (webgpu_enum == "greater-equal") {
-    return DAWN_COMPARE_FUNCTION_GREATER_EQUAL;
-  }
-  if (webgpu_enum == "always") {
-    return DAWN_COMPARE_FUNCTION_ALWAYS;
-  }
-  NOTREACHED();
-  return DAWN_COMPARE_FUNCTION_FORCE32;
-}
-
-template <>
-DawnTextureFormat AsDawnEnum<DawnTextureFormat>(
-    const WTF::String& webgpu_enum) {
-  if (webgpu_enum == "rgba8unorm") {
-    return DAWN_TEXTURE_FORMAT_R8_G8_B8_A8_UNORM;
-  }
-  if (webgpu_enum == "rg8unorm") {
-    return DAWN_TEXTURE_FORMAT_R8_G8_UNORM;
-  }
-  if (webgpu_enum == "r8unorm") {
-    return DAWN_TEXTURE_FORMAT_R8_UNORM;
-  }
-  if (webgpu_enum == "rgba8uint") {
-    return DAWN_TEXTURE_FORMAT_R8_G8_B8_A8_UINT;
-  }
-  if (webgpu_enum == "r8g8uint") {
-    return DAWN_TEXTURE_FORMAT_R8_G8_UINT;
-  }
-  if (webgpu_enum == "r8uint") {
-    return DAWN_TEXTURE_FORMAT_R8_UINT;
-  }
-  if (webgpu_enum == "bgra8unorm") {
-    return DAWN_TEXTURE_FORMAT_B8_G8_R8_A8_UNORM;
-  }
-  if (webgpu_enum == "depth32float-stencil8") {
-    return DAWN_TEXTURE_FORMAT_D32_FLOAT_S8_UINT;
-  }
-  // TODO(crbug.com/dawn/128): Implement the remaining texture formats.
-  NOTREACHED();
-  return DAWN_TEXTURE_FORMAT_FORCE32;
-}
-
-template <>
-DawnTextureDimension AsDawnEnum<DawnTextureDimension>(
-    const WTF::String& webgpu_enum) {
-  if (webgpu_enum == "2d") {
-    return DAWN_TEXTURE_DIMENSION_2D;
-  }
-  // TODO(crbug.com/dawn/129): Implement "1d" and "3d".
-  NOTREACHED();
-  return DAWN_TEXTURE_DIMENSION_FORCE32;
-}
-
-template <>
-DawnTextureViewDimension AsDawnEnum<DawnTextureViewDimension>(
-    const WTF::String& webgpu_enum) {
-  if (webgpu_enum == "2d") {
-    return DAWN_TEXTURE_VIEW_DIMENSION_2D;
-  }
-  if (webgpu_enum == "2d-array") {
-    return DAWN_TEXTURE_VIEW_DIMENSION_2D_ARRAY;
-  }
-  if (webgpu_enum == "cube") {
-    return DAWN_TEXTURE_VIEW_DIMENSION_CUBE;
-  }
-  if (webgpu_enum == "cube-array") {
-    return DAWN_TEXTURE_VIEW_DIMENSION_CUBE_ARRAY;
-  }
-  // TODO(crbug.com/dawn/129): Implement "1d" and "3d".
-  NOTREACHED();
-  return DAWN_TEXTURE_VIEW_DIMENSION_FORCE32;
-}
-
-template <>
-DawnStencilOperation AsDawnEnum<DawnStencilOperation>(
-    const WTF::String& webgpu_enum) {
-  if (webgpu_enum == "keep") {
-    return DAWN_STENCIL_OPERATION_KEEP;
-  }
-  if (webgpu_enum == "zero") {
-    return DAWN_STENCIL_OPERATION_ZERO;
-  }
-  if (webgpu_enum == "replace") {
-    return DAWN_STENCIL_OPERATION_REPLACE;
-  }
-  if (webgpu_enum == "invert") {
-    return DAWN_STENCIL_OPERATION_INVERT;
-  }
-  if (webgpu_enum == "increment-clamp") {
-    return DAWN_STENCIL_OPERATION_INCREMENT_CLAMP;
-  }
-  if (webgpu_enum == "decrement-clamp") {
-    return DAWN_STENCIL_OPERATION_DECREMENT_CLAMP;
-  }
-  if (webgpu_enum == "increment-wrap") {
-    return DAWN_STENCIL_OPERATION_INCREMENT_WRAP;
-  }
-  if (webgpu_enum == "decrement-wrap") {
-    return DAWN_STENCIL_OPERATION_DECREMENT_WRAP;
-  }
-  NOTREACHED();
-  return DAWN_STENCIL_OPERATION_FORCE32;
-}
-
-template <>
-DawnStoreOp AsDawnEnum<DawnStoreOp>(const WTF::String& webgpu_enum) {
-  if (webgpu_enum == "store") {
-    return DAWN_STORE_OP_STORE;
-  }
-  NOTREACHED();
-  return DAWN_STORE_OP_FORCE32;
-}
-
-template <>
-DawnLoadOp AsDawnEnum<DawnLoadOp>(const WTF::String& webgpu_enum) {
-  if (webgpu_enum == "clear") {
-    return DAWN_LOAD_OP_CLEAR;
-  }
-  if (webgpu_enum == "load") {
-    return DAWN_LOAD_OP_LOAD;
-  }
-  NOTREACHED();
-  return DAWN_LOAD_OP_FORCE32;
-}
-
-template <>
-DawnIndexFormat AsDawnEnum<DawnIndexFormat>(const WTF::String& webgpu_enum) {
-  if (webgpu_enum == "uint16") {
-    return DAWN_INDEX_FORMAT_UINT16;
-  }
-  if (webgpu_enum == "uint32") {
-    return DAWN_INDEX_FORMAT_UINT32;
-  }
-  NOTREACHED();
-  return DAWN_INDEX_FORMAT_FORCE32;
-}
-
-template <>
-DawnPrimitiveTopology AsDawnEnum<DawnPrimitiveTopology>(
-    const WTF::String& webgpu_enum) {
-  if (webgpu_enum == "point-list") {
-    return DAWN_PRIMITIVE_TOPOLOGY_POINT_LIST;
-  }
-  if (webgpu_enum == "line-list") {
-    return DAWN_PRIMITIVE_TOPOLOGY_LINE_LIST;
-  }
-  if (webgpu_enum == "line-strip") {
-    return DAWN_PRIMITIVE_TOPOLOGY_LINE_STRIP;
-  }
-  if (webgpu_enum == "triangle-list") {
-    return DAWN_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
-  }
-  if (webgpu_enum == "triangle-strip") {
-    return DAWN_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP;
-  }
-  NOTREACHED();
-  return DAWN_PRIMITIVE_TOPOLOGY_FORCE32;
-}
-
-template <>
-DawnBlendFactor AsDawnEnum<DawnBlendFactor>(const WTF::String& webgpu_enum) {
-  if (webgpu_enum == "zero") {
-    return DAWN_BLEND_FACTOR_ZERO;
-  }
-  if (webgpu_enum == "one") {
-    return DAWN_BLEND_FACTOR_ONE;
-  }
-  if (webgpu_enum == "src-color") {
-    return DAWN_BLEND_FACTOR_SRC_COLOR;
-  }
-  if (webgpu_enum == "one-minus-src-color") {
-    return DAWN_BLEND_FACTOR_ONE_MINUS_SRC_COLOR;
-  }
-  if (webgpu_enum == "src-alpha") {
-    return DAWN_BLEND_FACTOR_SRC_ALPHA;
-  }
-  if (webgpu_enum == "one-minus-src-alpha") {
-    return DAWN_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
-  }
-  if (webgpu_enum == "dst-color") {
-    return DAWN_BLEND_FACTOR_DST_COLOR;
-  }
-  if (webgpu_enum == "one-minus-dst-color") {
-    return DAWN_BLEND_FACTOR_ONE_MINUS_DST_COLOR;
-  }
-  if (webgpu_enum == "dst-alpha") {
-    return DAWN_BLEND_FACTOR_DST_ALPHA;
-  }
-  if (webgpu_enum == "one-minus-dst-alpha") {
-    return DAWN_BLEND_FACTOR_ONE_MINUS_DST_ALPHA;
-  }
-  if (webgpu_enum == "src-alpha-saturated") {
-    return DAWN_BLEND_FACTOR_SRC_ALPHA_SATURATED;
-  }
-  if (webgpu_enum == "blend-color") {
-    return DAWN_BLEND_FACTOR_BLEND_COLOR;
-  }
-  if (webgpu_enum == "one-minus-blend-color") {
-    return DAWN_BLEND_FACTOR_ONE_MINUS_BLEND_COLOR;
-  }
-  NOTREACHED();
-  return DAWN_BLEND_FACTOR_FORCE32;
-}
-
-template <>
-DawnBlendOperation AsDawnEnum<DawnBlendOperation>(
-    const WTF::String& webgpu_enum) {
-  if (webgpu_enum == "add") {
-    return DAWN_BLEND_OPERATION_ADD;
-  }
-  if (webgpu_enum == "subtract") {
-    return DAWN_BLEND_OPERATION_SUBTRACT;
-  }
-  if (webgpu_enum == "reverse-subtract") {
-    return DAWN_BLEND_OPERATION_REVERSE_SUBTRACT;
-  }
-  if (webgpu_enum == "min") {
-    return DAWN_BLEND_OPERATION_MIN;
-  }
-  if (webgpu_enum == "max") {
-    return DAWN_BLEND_OPERATION_MAX;
-  }
-  NOTREACHED();
-  return DAWN_BLEND_OPERATION_FORCE32;
-}
-
-template <>
-DawnInputStepMode AsDawnEnum<DawnInputStepMode>(
-    const WTF::String& webgpu_enum) {
-  if (webgpu_enum == "vertex") {
-    return DAWN_INPUT_STEP_MODE_VERTEX;
-  }
-  if (webgpu_enum == "instance") {
-    return DAWN_INPUT_STEP_MODE_INSTANCE;
-  }
-  NOTREACHED();
-  return DAWN_INPUT_STEP_MODE_FORCE32;
-}
-
-template <>
-DawnVertexFormat AsDawnEnum<DawnVertexFormat>(const WTF::String& webgpu_enum) {
-  if (webgpu_enum == "uchar") {
-    // TODO(crbug.com/dawn/41): Implement remaining vertex formats
-    NOTREACHED();
-    return DAWN_VERTEX_FORMAT_FORCE32;
-  }
-  if (webgpu_enum == "uchar2") {
-    return DAWN_VERTEX_FORMAT_UCHAR2;
-  }
-  if (webgpu_enum == "uchar3") {
-    // TODO(crbug.com/dawn/41): Implement remaining vertex formats
-    NOTREACHED();
-    return DAWN_VERTEX_FORMAT_FORCE32;
-  }
-  if (webgpu_enum == "uchar4") {
-    return DAWN_VERTEX_FORMAT_UCHAR4;
-  }
-  if (webgpu_enum == "char") {
-    // TODO(crbug.com/dawn/41): Implement remaining vertex formats
-    NOTREACHED();
-    return DAWN_VERTEX_FORMAT_FORCE32;
-  }
-  if (webgpu_enum == "char2") {
-    // TODO(crbug.com/dawn/41): Implement remaining vertex formats
-    NOTREACHED();
-    return DAWN_VERTEX_FORMAT_FORCE32;
-  }
-  if (webgpu_enum == "char3") {
-    // TODO(crbug.com/dawn/41): Implement remaining vertex formats
-    NOTREACHED();
-    return DAWN_VERTEX_FORMAT_FORCE32;
-  }
-  if (webgpu_enum == "char4") {
-    return DAWN_VERTEX_FORMAT_CHAR4;
-  }
-  if (webgpu_enum == "ucharnorm") {
-    // TODO(crbug.com/dawn/41): Implement remaining vertex formats
-    NOTREACHED();
-    return DAWN_VERTEX_FORMAT_FORCE32;
-  }
-  if (webgpu_enum == "uchar2norm") {
-    return DAWN_VERTEX_FORMAT_UCHAR2_NORM;
-  }
-  if (webgpu_enum == "uchar3norm") {
-    // TODO(crbug.com/dawn/41): Implement remaining vertex formats
-    NOTREACHED();
-    return DAWN_VERTEX_FORMAT_FORCE32;
-  }
-  if (webgpu_enum == "uchar4norm") {
-    return DAWN_VERTEX_FORMAT_UCHAR4_NORM;
-  }
-  if (webgpu_enum == "uchar4norm-bgra") {
-    // TODO(crbug.com/dawn/41): Implement remaining vertex formats
-    NOTREACHED();
-    return DAWN_VERTEX_FORMAT_FORCE32;
-  }
-  if (webgpu_enum == "charnorm") {
-    // TODO(crbug.com/dawn/41): Implement remaining vertex formats
-    NOTREACHED();
-    return DAWN_VERTEX_FORMAT_FORCE32;
-  }
-  if (webgpu_enum == "char2norm") {
-    return DAWN_VERTEX_FORMAT_CHAR2_NORM;
-  }
-  if (webgpu_enum == "char3norm") {
-    // TODO(crbug.com/dawn/41): Implement remaining vertex formats
-    NOTREACHED();
-    return DAWN_VERTEX_FORMAT_FORCE32;
-  }
-  if (webgpu_enum == "char4norm") {
-    return DAWN_VERTEX_FORMAT_CHAR4_NORM;
-  }
-  if (webgpu_enum == "ushort") {
-    // TODO(crbug.com/dawn/41): Implement remaining vertex formats
-    NOTREACHED();
-    return DAWN_VERTEX_FORMAT_FORCE32;
-  }
-  if (webgpu_enum == "ushort2") {
-    return DAWN_VERTEX_FORMAT_USHORT2;
-  }
-  if (webgpu_enum == "ushort3") {
-    // TODO(crbug.com/dawn/41): Implement remaining vertex formats
-    NOTREACHED();
-    return DAWN_VERTEX_FORMAT_FORCE32;
-  }
-  if (webgpu_enum == "ushort4") {
-    return DAWN_VERTEX_FORMAT_USHORT4;
-  }
-  if (webgpu_enum == "short") {
-    // TODO(crbug.com/dawn/41): Implement remaining vertex formats
-    NOTREACHED();
-    return DAWN_VERTEX_FORMAT_FORCE32;
-  }
-  if (webgpu_enum == "short2") {
-    return DAWN_VERTEX_FORMAT_SHORT2;
-  }
-  if (webgpu_enum == "short3") {
-    // TODO(crbug.com/dawn/41): Implement remaining vertex formats
-    NOTREACHED();
-    return DAWN_VERTEX_FORMAT_FORCE32;
-  }
-  if (webgpu_enum == "short4") {
-    return DAWN_VERTEX_FORMAT_SHORT4;
-  }
-  if (webgpu_enum == "ushortnorm") {
-    // TODO(crbug.com/dawn/41): Implement remaining vertex formats
-    NOTREACHED();
-    return DAWN_VERTEX_FORMAT_FORCE32;
-  }
-  if (webgpu_enum == "ushort2norm") {
-    return DAWN_VERTEX_FORMAT_USHORT2_NORM;
-  }
-  if (webgpu_enum == "ushort3norm") {
-    // TODO(crbug.com/dawn/41): Implement remaining vertex formats
-    NOTREACHED();
-    return DAWN_VERTEX_FORMAT_FORCE32;
-  }
-  if (webgpu_enum == "ushort4norm") {
-    return DAWN_VERTEX_FORMAT_USHORT4_NORM;
-  }
-  if (webgpu_enum == "shortnorm") {
-    // TODO(crbug.com/dawn/41): Implement remaining vertex formats
-    NOTREACHED();
-    return DAWN_VERTEX_FORMAT_FORCE32;
-  }
-  if (webgpu_enum == "short2norm") {
-    return DAWN_VERTEX_FORMAT_SHORT2_NORM;
-  }
-  if (webgpu_enum == "short3norm") {
-    // TODO(crbug.com/dawn/41): Implement remaining vertex formats
-    NOTREACHED();
-    return DAWN_VERTEX_FORMAT_FORCE32;
-  }
-  if (webgpu_enum == "short4norm") {
-    return DAWN_VERTEX_FORMAT_SHORT4_NORM;
-  }
-  if (webgpu_enum == "half") {
-    // TODO(crbug.com/dawn/41): Implement remaining vertex formats
-    NOTREACHED();
-    return DAWN_VERTEX_FORMAT_FORCE32;
-  }
-  if (webgpu_enum == "half2") {
-    return DAWN_VERTEX_FORMAT_HALF2;
-  }
-  if (webgpu_enum == "half3") {
-    // TODO(crbug.com/dawn/41): Implement remaining vertex formats
-    NOTREACHED();
-    return DAWN_VERTEX_FORMAT_FORCE32;
-  }
-  if (webgpu_enum == "half4") {
-    return DAWN_VERTEX_FORMAT_HALF4;
-  }
   if (webgpu_enum == "float") {
-    return DAWN_VERTEX_FORMAT_FLOAT;
-  }
-  if (webgpu_enum == "float2") {
-    return DAWN_VERTEX_FORMAT_FLOAT2;
-  }
-  if (webgpu_enum == "float3") {
-    return DAWN_VERTEX_FORMAT_FLOAT3;
-  }
-  if (webgpu_enum == "float4") {
-    return DAWN_VERTEX_FORMAT_FLOAT4;
+    return WGPUTextureComponentType_Float;
   }
   if (webgpu_enum == "uint") {
-    return DAWN_VERTEX_FORMAT_UINT;
+    return WGPUTextureComponentType_Uint;
+  }
+  if (webgpu_enum == "sint") {
+    return WGPUTextureComponentType_Sint;
+  }
+  NOTREACHED();
+  return WGPUTextureComponentType_Force32;
+}
+
+template <>
+WGPUCompareFunction AsDawnEnum<WGPUCompareFunction>(
+    const WTF::String& webgpu_enum) {
+  if (webgpu_enum == "never") {
+    return WGPUCompareFunction_Never;
+  }
+  if (webgpu_enum == "less") {
+    return WGPUCompareFunction_Less;
+  }
+  if (webgpu_enum == "equal") {
+    return WGPUCompareFunction_Equal;
+  }
+  if (webgpu_enum == "less-equal") {
+    return WGPUCompareFunction_LessEqual;
+  }
+  if (webgpu_enum == "greater") {
+    return WGPUCompareFunction_Greater;
+  }
+  if (webgpu_enum == "not-equal") {
+    return WGPUCompareFunction_NotEqual;
+  }
+  if (webgpu_enum == "greater-equal") {
+    return WGPUCompareFunction_GreaterEqual;
+  }
+  if (webgpu_enum == "always") {
+    return WGPUCompareFunction_Always;
+  }
+  NOTREACHED();
+  return WGPUCompareFunction_Force32;
+}
+
+template <>
+WGPUTextureFormat AsDawnEnum<WGPUTextureFormat>(
+    const WTF::String& webgpu_enum) {
+  if (webgpu_enum.IsNull()) {
+    return WGPUTextureFormat_Undefined;
+  }
+
+  // Normal 8 bit formats
+  if (webgpu_enum == "r8unorm") {
+    return WGPUTextureFormat_R8Unorm;
+  }
+  if (webgpu_enum == "r8snorm") {
+    return WGPUTextureFormat_R8Snorm;
+  }
+  if (webgpu_enum == "r8uint") {
+    return WGPUTextureFormat_R8Uint;
+  }
+  if (webgpu_enum == "r8sint") {
+    return WGPUTextureFormat_R8Sint;
+  }
+
+  // Normal 16 bit formats
+  if (webgpu_enum == "r16uint") {
+    return WGPUTextureFormat_R16Uint;
+  }
+  if (webgpu_enum == "r16sint") {
+    return WGPUTextureFormat_R16Sint;
+  }
+  if (webgpu_enum == "r16float") {
+    return WGPUTextureFormat_R16Float;
+  }
+  if (webgpu_enum == "rg8unorm") {
+    return WGPUTextureFormat_RG8Unorm;
+  }
+  if (webgpu_enum == "rg8snorm") {
+    return WGPUTextureFormat_RG8Snorm;
+  }
+  if (webgpu_enum == "rg8uint") {
+    return WGPUTextureFormat_RG8Uint;
+  }
+  if (webgpu_enum == "rg8sint") {
+    return WGPUTextureFormat_RG8Sint;
+  }
+
+  // Normal 32 bit formats
+  if (webgpu_enum == "r32uint") {
+    return WGPUTextureFormat_R32Uint;
+  }
+  if (webgpu_enum == "r32sint") {
+    return WGPUTextureFormat_R32Sint;
+  }
+  if (webgpu_enum == "r32float") {
+    return WGPUTextureFormat_R32Float;
+  }
+  if (webgpu_enum == "rg16uint") {
+    return WGPUTextureFormat_RG16Uint;
+  }
+  if (webgpu_enum == "rg16sint") {
+    return WGPUTextureFormat_RG16Sint;
+  }
+  if (webgpu_enum == "rg16float") {
+    return WGPUTextureFormat_RG16Float;
+  }
+  if (webgpu_enum == "rgba8unorm") {
+    return WGPUTextureFormat_RGBA8Unorm;
+  }
+  if (webgpu_enum == "rgba8unorm-srgb") {
+    return WGPUTextureFormat_RGBA8UnormSrgb;
+  }
+  if (webgpu_enum == "rgba8snorm") {
+    return WGPUTextureFormat_RGBA8Snorm;
+  }
+  if (webgpu_enum == "rgba8uint") {
+    return WGPUTextureFormat_RGBA8Uint;
+  }
+  if (webgpu_enum == "rgba8sint") {
+    return WGPUTextureFormat_RGBA8Sint;
+  }
+  if (webgpu_enum == "bgra8unorm") {
+    return WGPUTextureFormat_BGRA8Unorm;
+  }
+  if (webgpu_enum == "bgra8unorm-srgb") {
+    return WGPUTextureFormat_BGRA8UnormSrgb;
+  }
+
+  // Packed 32 bit formats
+  if (webgpu_enum == "rgb10a2unorm") {
+    return WGPUTextureFormat_RGB10A2Unorm;
+  }
+  if (webgpu_enum == "rg11b10float") {
+    return WGPUTextureFormat_RG11B10Float;
+  }
+
+  // Normal 64 bit formats
+  if (webgpu_enum == "rg32uint") {
+    return WGPUTextureFormat_RG32Uint;
+  }
+  if (webgpu_enum == "rg32sint") {
+    return WGPUTextureFormat_RG32Sint;
+  }
+  if (webgpu_enum == "rg32float") {
+    return WGPUTextureFormat_RG32Float;
+  }
+  if (webgpu_enum == "rgba16uint") {
+    return WGPUTextureFormat_RGBA16Uint;
+  }
+  if (webgpu_enum == "rgba16sint") {
+    return WGPUTextureFormat_RGBA16Sint;
+  }
+  if (webgpu_enum == "rgba16float") {
+    return WGPUTextureFormat_RGBA16Float;
+  }
+
+  // Normal 128 bit formats
+  if (webgpu_enum == "rgba32uint") {
+    return WGPUTextureFormat_RGBA32Uint;
+  }
+  if (webgpu_enum == "rgba32sint") {
+    return WGPUTextureFormat_RGBA32Sint;
+  }
+  if (webgpu_enum == "rgba32float") {
+    return WGPUTextureFormat_RGBA32Float;
+  }
+
+  // Depth / Stencil formats
+  if (webgpu_enum == "depth32float") {
+    return WGPUTextureFormat_Depth32Float;
+  }
+  if (webgpu_enum == "depth24plus") {
+    return WGPUTextureFormat_Depth24Plus;
+  }
+  if (webgpu_enum == "depth24plus-stencil8") {
+    return WGPUTextureFormat_Depth24PlusStencil8;
+  }
+
+  // Block Compression (BC) formats
+  if (webgpu_enum == "bc1-rgba-unorm") {
+    return WGPUTextureFormat_BC1RGBAUnorm;
+  }
+  if (webgpu_enum == "bc1-rgba-unorm-srgb") {
+    return WGPUTextureFormat_BC1RGBAUnormSrgb;
+  }
+  if (webgpu_enum == "bc2-rgba-unorm") {
+    return WGPUTextureFormat_BC2RGBAUnorm;
+  }
+  if (webgpu_enum == "bc2-rgba-unorm-srgb") {
+    return WGPUTextureFormat_BC2RGBAUnormSrgb;
+  }
+  if (webgpu_enum == "bc3-rgba-unorm") {
+    return WGPUTextureFormat_BC3RGBAUnorm;
+  }
+  if (webgpu_enum == "bc3-rgba-unorm-srgb") {
+    return WGPUTextureFormat_BC3RGBAUnormSrgb;
+  }
+  if (webgpu_enum == "bc4-r-unorm") {
+    return WGPUTextureFormat_BC4RUnorm;
+  }
+  if (webgpu_enum == "bc4-r-snorm") {
+    return WGPUTextureFormat_BC4RSnorm;
+  }
+  if (webgpu_enum == "bc5-rg-unorm") {
+    return WGPUTextureFormat_BC5RGUnorm;
+  }
+  if (webgpu_enum == "bc5-rg-snorm") {
+    return WGPUTextureFormat_BC5RGSnorm;
+  }
+  if (webgpu_enum == "bc6h-rgb-ufloat") {
+    return WGPUTextureFormat_BC6HRGBUfloat;
+  }
+  if (webgpu_enum == "bc6h-rgb-sfloat") {
+    return WGPUTextureFormat_BC6HRGBSfloat;
+  }
+  if (webgpu_enum == "bc7-rgba-unorm") {
+    return WGPUTextureFormat_BC7RGBAUnorm;
+  }
+  if (webgpu_enum == "bc7-rgba-unorm-srgb") {
+    return WGPUTextureFormat_BC7RGBAUnormSrgb;
+  }
+
+  return WGPUTextureFormat_Force32;
+}
+
+template <>
+WGPUTextureDimension AsDawnEnum<WGPUTextureDimension>(
+    const WTF::String& webgpu_enum) {
+  if (webgpu_enum == "2d") {
+    return WGPUTextureDimension_2D;
+  }
+  // TODO(crbug.com/dawn/129): Implement "1d" and "3d".
+  NOTREACHED();
+  return WGPUTextureDimension_Force32;
+}
+
+template <>
+WGPUTextureViewDimension AsDawnEnum<WGPUTextureViewDimension>(
+    const WTF::String& webgpu_enum) {
+  if (webgpu_enum.IsNull()) {
+    return WGPUTextureViewDimension_Undefined;
+  }
+  if (webgpu_enum == "2d") {
+    return WGPUTextureViewDimension_2D;
+  }
+  if (webgpu_enum == "2d-array") {
+    return WGPUTextureViewDimension_2DArray;
+  }
+  if (webgpu_enum == "cube") {
+    return WGPUTextureViewDimension_Cube;
+  }
+  if (webgpu_enum == "cube-array") {
+    return WGPUTextureViewDimension_CubeArray;
+  }
+  // TODO(crbug.com/dawn/129): Implement "1d" and "3d".
+  NOTREACHED();
+  return WGPUTextureViewDimension_Force32;
+}
+
+template <>
+WGPUStencilOperation AsDawnEnum<WGPUStencilOperation>(
+    const WTF::String& webgpu_enum) {
+  if (webgpu_enum == "keep") {
+    return WGPUStencilOperation_Keep;
+  }
+  if (webgpu_enum == "zero") {
+    return WGPUStencilOperation_Zero;
+  }
+  if (webgpu_enum == "replace") {
+    return WGPUStencilOperation_Replace;
+  }
+  if (webgpu_enum == "invert") {
+    return WGPUStencilOperation_Invert;
+  }
+  if (webgpu_enum == "increment-clamp") {
+    return WGPUStencilOperation_IncrementClamp;
+  }
+  if (webgpu_enum == "decrement-clamp") {
+    return WGPUStencilOperation_DecrementClamp;
+  }
+  if (webgpu_enum == "increment-wrap") {
+    return WGPUStencilOperation_IncrementWrap;
+  }
+  if (webgpu_enum == "decrement-wrap") {
+    return WGPUStencilOperation_DecrementWrap;
+  }
+  NOTREACHED();
+  return WGPUStencilOperation_Force32;
+}
+
+template <>
+WGPUStoreOp AsDawnEnum<WGPUStoreOp>(const WTF::String& webgpu_enum) {
+  if (webgpu_enum == "store") {
+    return WGPUStoreOp_Store;
+  }
+  if (webgpu_enum == "clear") {
+    return WGPUStoreOp_Clear;
+  }
+  NOTREACHED();
+  return WGPUStoreOp_Force32;
+}
+
+template <>
+WGPULoadOp AsDawnEnum<WGPULoadOp>(const WTF::String& webgpu_enum) {
+  if (webgpu_enum == "load") {
+    return WGPULoadOp_Load;
+  }
+  NOTREACHED();
+  return WGPULoadOp_Force32;
+}
+
+template <>
+WGPUIndexFormat AsDawnEnum<WGPUIndexFormat>(const WTF::String& webgpu_enum) {
+  if (webgpu_enum == "uint16") {
+    return WGPUIndexFormat_Uint16;
+  }
+  if (webgpu_enum == "uint32") {
+    return WGPUIndexFormat_Uint32;
+  }
+  NOTREACHED();
+  return WGPUIndexFormat_Force32;
+}
+
+template <>
+WGPUPrimitiveTopology AsDawnEnum<WGPUPrimitiveTopology>(
+    const WTF::String& webgpu_enum) {
+  if (webgpu_enum == "point-list") {
+    return WGPUPrimitiveTopology_PointList;
+  }
+  if (webgpu_enum == "line-list") {
+    return WGPUPrimitiveTopology_LineList;
+  }
+  if (webgpu_enum == "line-strip") {
+    return WGPUPrimitiveTopology_LineStrip;
+  }
+  if (webgpu_enum == "triangle-list") {
+    return WGPUPrimitiveTopology_TriangleList;
+  }
+  if (webgpu_enum == "triangle-strip") {
+    return WGPUPrimitiveTopology_TriangleStrip;
+  }
+  NOTREACHED();
+  return WGPUPrimitiveTopology_Force32;
+}
+
+template <>
+WGPUBlendFactor AsDawnEnum<WGPUBlendFactor>(const WTF::String& webgpu_enum) {
+  if (webgpu_enum == "zero") {
+    return WGPUBlendFactor_Zero;
+  }
+  if (webgpu_enum == "one") {
+    return WGPUBlendFactor_One;
+  }
+  if (webgpu_enum == "src-color") {
+    return WGPUBlendFactor_SrcColor;
+  }
+  if (webgpu_enum == "one-minus-src-color") {
+    return WGPUBlendFactor_OneMinusSrcColor;
+  }
+  if (webgpu_enum == "src-alpha") {
+    return WGPUBlendFactor_SrcAlpha;
+  }
+  if (webgpu_enum == "one-minus-src-alpha") {
+    return WGPUBlendFactor_OneMinusSrcAlpha;
+  }
+  if (webgpu_enum == "dst-color") {
+    return WGPUBlendFactor_DstColor;
+  }
+  if (webgpu_enum == "one-minus-dst-color") {
+    return WGPUBlendFactor_OneMinusDstColor;
+  }
+  if (webgpu_enum == "dst-alpha") {
+    return WGPUBlendFactor_DstAlpha;
+  }
+  if (webgpu_enum == "one-minus-dst-alpha") {
+    return WGPUBlendFactor_OneMinusDstAlpha;
+  }
+  if (webgpu_enum == "src-alpha-saturated") {
+    return WGPUBlendFactor_SrcAlphaSaturated;
+  }
+  if (webgpu_enum == "blend-color") {
+    return WGPUBlendFactor_BlendColor;
+  }
+  if (webgpu_enum == "one-minus-blend-color") {
+    return WGPUBlendFactor_OneMinusBlendColor;
+  }
+  NOTREACHED();
+  return WGPUBlendFactor_Force32;
+}
+
+template <>
+WGPUBlendOperation AsDawnEnum<WGPUBlendOperation>(
+    const WTF::String& webgpu_enum) {
+  if (webgpu_enum == "add") {
+    return WGPUBlendOperation_Add;
+  }
+  if (webgpu_enum == "subtract") {
+    return WGPUBlendOperation_Subtract;
+  }
+  if (webgpu_enum == "reverse-subtract") {
+    return WGPUBlendOperation_ReverseSubtract;
+  }
+  if (webgpu_enum == "min") {
+    return WGPUBlendOperation_Min;
+  }
+  if (webgpu_enum == "max") {
+    return WGPUBlendOperation_Max;
+  }
+  NOTREACHED();
+  return WGPUBlendOperation_Force32;
+}
+
+template <>
+WGPUInputStepMode AsDawnEnum<WGPUInputStepMode>(
+    const WTF::String& webgpu_enum) {
+  if (webgpu_enum == "vertex") {
+    return WGPUInputStepMode_Vertex;
+  }
+  if (webgpu_enum == "instance") {
+    return WGPUInputStepMode_Instance;
+  }
+  NOTREACHED();
+  return WGPUInputStepMode_Force32;
+}
+
+template <>
+WGPUVertexFormat AsDawnEnum<WGPUVertexFormat>(const WTF::String& webgpu_enum) {
+  if (webgpu_enum == "uchar2") {
+    return WGPUVertexFormat_UChar2;
+  }
+  if (webgpu_enum == "uchar4") {
+    return WGPUVertexFormat_UChar4;
+  }
+  if (webgpu_enum == "char2") {
+    return WGPUVertexFormat_Char2;
+  }
+  if (webgpu_enum == "char4") {
+    return WGPUVertexFormat_Char4;
+  }
+  if (webgpu_enum == "uchar2norm") {
+    return WGPUVertexFormat_UChar2Norm;
+  }
+  if (webgpu_enum == "uchar4norm") {
+    return WGPUVertexFormat_UChar4Norm;
+  }
+  if (webgpu_enum == "char2norm") {
+    return WGPUVertexFormat_Char2Norm;
+  }
+  if (webgpu_enum == "char4norm") {
+    return WGPUVertexFormat_Char4Norm;
+  }
+  if (webgpu_enum == "ushort2") {
+    return WGPUVertexFormat_UShort2;
+  }
+  if (webgpu_enum == "ushort4") {
+    return WGPUVertexFormat_UShort4;
+  }
+  if (webgpu_enum == "short2") {
+    return WGPUVertexFormat_Short2;
+  }
+  if (webgpu_enum == "short4") {
+    return WGPUVertexFormat_Short4;
+  }
+  if (webgpu_enum == "ushort2norm") {
+    return WGPUVertexFormat_UShort2Norm;
+  }
+  if (webgpu_enum == "ushort4norm") {
+    return WGPUVertexFormat_UShort4Norm;
+  }
+  if (webgpu_enum == "short2norm") {
+    return WGPUVertexFormat_Short2Norm;
+  }
+  if (webgpu_enum == "short4norm") {
+    return WGPUVertexFormat_Short4Norm;
+  }
+  if (webgpu_enum == "half2") {
+    return WGPUVertexFormat_Half2;
+  }
+  if (webgpu_enum == "half4") {
+    return WGPUVertexFormat_Half4;
+  }
+  if (webgpu_enum == "float") {
+    return WGPUVertexFormat_Float;
+  }
+  if (webgpu_enum == "float2") {
+    return WGPUVertexFormat_Float2;
+  }
+  if (webgpu_enum == "float3") {
+    return WGPUVertexFormat_Float3;
+  }
+  if (webgpu_enum == "float4") {
+    return WGPUVertexFormat_Float4;
+  }
+  if (webgpu_enum == "uint") {
+    return WGPUVertexFormat_UInt;
   }
   if (webgpu_enum == "uint2") {
-    return DAWN_VERTEX_FORMAT_UINT2;
+    return WGPUVertexFormat_UInt2;
   }
   if (webgpu_enum == "uint3") {
-    return DAWN_VERTEX_FORMAT_UINT3;
+    return WGPUVertexFormat_UInt3;
   }
   if (webgpu_enum == "uint4") {
-    return DAWN_VERTEX_FORMAT_UINT4;
+    return WGPUVertexFormat_UInt4;
   }
   if (webgpu_enum == "int") {
-    return DAWN_VERTEX_FORMAT_INT;
+    return WGPUVertexFormat_Int;
   }
   if (webgpu_enum == "int2") {
-    return DAWN_VERTEX_FORMAT_INT2;
+    return WGPUVertexFormat_Int2;
   }
   if (webgpu_enum == "int3") {
-    return DAWN_VERTEX_FORMAT_INT3;
+    return WGPUVertexFormat_Int3;
   }
   if (webgpu_enum == "int4") {
-    return DAWN_VERTEX_FORMAT_INT4;
+    return WGPUVertexFormat_Int4;
   }
   NOTREACHED();
-  return DAWN_VERTEX_FORMAT_FORCE32;
+  return WGPUVertexFormat_Force32;
 }
 
 template <>
-DawnAddressMode AsDawnEnum<DawnAddressMode>(const WTF::String& webgpu_enum) {
+WGPUAddressMode AsDawnEnum<WGPUAddressMode>(const WTF::String& webgpu_enum) {
   if (webgpu_enum == "clamp-to-edge") {
-    return DAWN_ADDRESS_MODE_CLAMP_TO_EDGE;
+    return WGPUAddressMode_ClampToEdge;
   }
   if (webgpu_enum == "repeat") {
-    return DAWN_ADDRESS_MODE_REPEAT;
+    return WGPUAddressMode_Repeat;
   }
   if (webgpu_enum == "mirror-repeat") {
-    return DAWN_ADDRESS_MODE_MIRRORED_REPEAT;
+    return WGPUAddressMode_MirrorRepeat;
   }
   NOTREACHED();
-  return DAWN_ADDRESS_MODE_FORCE32;
+  return WGPUAddressMode_Force32;
 }
 
 template <>
-DawnFilterMode AsDawnEnum<DawnFilterMode>(const WTF::String& webgpu_enum) {
+WGPUFilterMode AsDawnEnum<WGPUFilterMode>(const WTF::String& webgpu_enum) {
   if (webgpu_enum == "nearest") {
-    return DAWN_FILTER_MODE_NEAREST;
+    return WGPUFilterMode_Nearest;
   }
   if (webgpu_enum == "linear") {
-    return DAWN_FILTER_MODE_LINEAR;
+    return WGPUFilterMode_Linear;
   }
   NOTREACHED();
-  return DAWN_FILTER_MODE_FORCE32;
+  return WGPUFilterMode_Force32;
 }
 
-DawnColor AsDawnType(const GPUColor* webgpu_color) {
+template <>
+WGPUCullMode AsDawnEnum<WGPUCullMode>(const WTF::String& webgpu_enum) {
+  if (webgpu_enum == "none") {
+    return WGPUCullMode_None;
+  }
+  if (webgpu_enum == "front") {
+    return WGPUCullMode_Front;
+  }
+  if (webgpu_enum == "back") {
+    return WGPUCullMode_Back;
+  }
+  NOTREACHED();
+  return WGPUCullMode_Force32;
+}
+
+template <>
+WGPUFrontFace AsDawnEnum<WGPUFrontFace>(const WTF::String& webgpu_enum) {
+  if (webgpu_enum == "ccw") {
+    return WGPUFrontFace_CCW;
+  }
+  if (webgpu_enum == "cw") {
+    return WGPUFrontFace_CW;
+  }
+  NOTREACHED();
+  return WGPUFrontFace_Force32;
+}
+
+template <>
+WGPUTextureAspect AsDawnEnum<WGPUTextureAspect>(
+    const WTF::String& webgpu_enum) {
+  if (webgpu_enum == "all") {
+    return WGPUTextureAspect_All;
+  }
+  if (webgpu_enum == "stencil-only") {
+    return WGPUTextureAspect_StencilOnly;
+  }
+  if (webgpu_enum == "depth-only") {
+    return WGPUTextureAspect_DepthOnly;
+  }
+  NOTREACHED();
+  return WGPUTextureAspect_Force32;
+}
+
+template <>
+WGPUErrorFilter AsDawnEnum<WGPUErrorFilter>(const WTF::String& webgpu_enum) {
+  if (webgpu_enum == "none") {
+    return WGPUErrorFilter_None;
+  }
+  if (webgpu_enum == "out-of-memory") {
+    return WGPUErrorFilter_OutOfMemory;
+  }
+  if (webgpu_enum == "validation") {
+    return WGPUErrorFilter_Validation;
+  }
+  NOTREACHED();
+  return WGPUErrorFilter_Force32;
+}
+
+WGPUColor AsDawnColor(const Vector<double>& webgpu_color) {
+  DCHECK_EQ(webgpu_color.size(), 4UL);
+
+  WGPUColor dawn_color = {};
+  dawn_color.r = webgpu_color[0];
+  dawn_color.g = webgpu_color[1];
+  dawn_color.b = webgpu_color[2];
+  dawn_color.a = webgpu_color[3];
+
+  return dawn_color;
+}
+
+WGPUColor AsDawnType(const GPUColorDict* webgpu_color) {
   DCHECK(webgpu_color);
 
-  DawnColor dawn_color;
+  WGPUColor dawn_color = {};
   dawn_color.r = webgpu_color->r();
   dawn_color.g = webgpu_color->g();
   dawn_color.b = webgpu_color->b();
@@ -525,41 +681,107 @@ DawnColor AsDawnType(const GPUColor* webgpu_color) {
   return dawn_color;
 }
 
-DawnExtent3D AsDawnType(const GPUExtent3D* webgpu_extent) {
+WGPUColor AsDawnType(const DoubleSequenceOrGPUColorDict* webgpu_color) {
+  DCHECK(webgpu_color);
+
+  if (webgpu_color->IsDoubleSequence()) {
+    return AsDawnColor(webgpu_color->GetAsDoubleSequence());
+  } else if (webgpu_color->IsGPUColorDict()) {
+    return AsDawnType(webgpu_color->GetAsGPUColorDict());
+  }
+  NOTREACHED();
+  WGPUColor dawn_color = {};
+  return dawn_color;
+}
+
+WGPUExtent3D AsDawnType(
+    const UnsignedLongEnforceRangeSequenceOrGPUExtent3DDict* webgpu_extent) {
   DCHECK(webgpu_extent);
 
-  DawnExtent3D dawn_extent;
-  dawn_extent.width = webgpu_extent->width();
-  dawn_extent.height = webgpu_extent->height();
-  dawn_extent.depth = webgpu_extent->depth();
+  WGPUExtent3D dawn_extent = {};
+
+  if (webgpu_extent->IsUnsignedLongEnforceRangeSequence()) {
+    const Vector<uint32_t>& webgpu_extent_sequence =
+        webgpu_extent->GetAsUnsignedLongEnforceRangeSequence();
+    DCHECK_EQ(webgpu_extent_sequence.size(), 3UL);
+    dawn_extent.width = webgpu_extent_sequence[0];
+    dawn_extent.height = webgpu_extent_sequence[1];
+    dawn_extent.depth = webgpu_extent_sequence[2];
+
+  } else if (webgpu_extent->IsGPUExtent3DDict()) {
+    const GPUExtent3DDict* webgpu_extent_3d_dict =
+        webgpu_extent->GetAsGPUExtent3DDict();
+    dawn_extent.width = webgpu_extent_3d_dict->width();
+    dawn_extent.height = webgpu_extent_3d_dict->height();
+    dawn_extent.depth = webgpu_extent_3d_dict->depth();
+
+  } else {
+    NOTREACHED();
+  }
 
   return dawn_extent;
 }
 
-DawnOrigin3D AsDawnType(const GPUOrigin3D* webgpu_origin) {
+WGPUOrigin3D AsDawnType(
+    const UnsignedLongEnforceRangeSequenceOrGPUOrigin3DDict* webgpu_origin) {
   DCHECK(webgpu_origin);
 
-  DawnOrigin3D dawn_origin;
-  dawn_origin.x = webgpu_origin->x();
-  dawn_origin.y = webgpu_origin->y();
-  dawn_origin.z = webgpu_origin->z();
+  WGPUOrigin3D dawn_origin = {};
+
+  if (webgpu_origin->IsUnsignedLongEnforceRangeSequence()) {
+    const Vector<uint32_t>& webgpu_origin_sequence =
+        webgpu_origin->GetAsUnsignedLongEnforceRangeSequence();
+    DCHECK_EQ(webgpu_origin_sequence.size(), 3UL);
+    dawn_origin.x = webgpu_origin_sequence[0];
+    dawn_origin.y = webgpu_origin_sequence[1];
+    dawn_origin.z = webgpu_origin_sequence[2];
+
+  } else if (webgpu_origin->IsGPUOrigin3DDict()) {
+    const GPUOrigin3DDict* webgpu_origin_3d_dict =
+        webgpu_origin->GetAsGPUOrigin3DDict();
+    dawn_origin.x = webgpu_origin_3d_dict->x();
+    dawn_origin.y = webgpu_origin_3d_dict->y();
+    dawn_origin.z = webgpu_origin_3d_dict->z();
+
+  } else {
+    NOTREACHED();
+  }
 
   return dawn_origin;
 }
 
-std::tuple<DawnPipelineStageDescriptor, CString> AsDawnType(
-    const GPUPipelineStageDescriptor* webgpu_stage) {
+WGPUTextureCopyView AsDawnType(const GPUTextureCopyView* webgpu_view) {
+  DCHECK(webgpu_view);
+  DCHECK(webgpu_view->texture());
+
+  WGPUTextureCopyView dawn_view;
+  dawn_view.nextInChain = nullptr;
+  dawn_view.texture = webgpu_view->texture()->GetHandle();
+  dawn_view.mipLevel = webgpu_view->mipLevel();
+  dawn_view.arrayLayer = webgpu_view->arrayLayer();
+  dawn_view.origin = AsDawnType(&webgpu_view->origin());
+
+  return dawn_view;
+}
+
+OwnedProgrammableStageDescriptor AsDawnType(
+    const GPUProgrammableStageDescriptor* webgpu_stage) {
   DCHECK(webgpu_stage);
 
-  CString entry_point_string = webgpu_stage->entryPoint().Ascii();
+  std::string entry_point = webgpu_stage->entryPoint().Ascii();
+  // length() is in bytes (not utf-8 characters or something), so this is ok.
+  size_t byte_size = entry_point.length() + 1;
 
-  DawnPipelineStageDescriptor dawn_stage;
+  std::unique_ptr<char[]> entry_point_keepalive =
+      std::make_unique<char[]>(byte_size);
+  char* entry_point_ptr = entry_point_keepalive.get();
+  memcpy(entry_point_ptr, entry_point.c_str(), byte_size);
+
+  WGPUProgrammableStageDescriptor dawn_stage = {};
   dawn_stage.module = webgpu_stage->module()->GetHandle();
-  dawn_stage.entryPoint = entry_point_string.data();
+  dawn_stage.entryPoint = entry_point_ptr;
 
-  // CString holds a scoped_refptr to the string data so it is valid to move
-  // it into the return value without invalidating the entryPoint.
-  return std::make_tuple(dawn_stage, std::move(entry_point_string));
+  return std::make_tuple(dawn_stage, std::move(entry_point_keepalive));
 }
 
 }  // namespace blink

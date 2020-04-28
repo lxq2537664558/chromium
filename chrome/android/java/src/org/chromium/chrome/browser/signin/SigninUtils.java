@@ -10,16 +10,17 @@ import android.content.Context;
 import android.content.Intent;
 import android.os.Build;
 import android.provider.Settings;
-import android.support.annotation.Nullable;
 
-import org.chromium.base.ContextUtils;
+import androidx.annotation.Nullable;
+
+import org.chromium.base.IntentUtils;
 import org.chromium.base.ThreadUtils;
 import org.chromium.base.annotations.CalledByNative;
-import org.chromium.chrome.browser.ChromeFeatureList;
-import org.chromium.chrome.browser.profiles.ProfileAccountManagementMetrics;
-import org.chromium.chrome.browser.util.IntentUtils;
-import org.chromium.components.signin.AccountManagerFacade;
+import org.chromium.base.annotations.NativeMethods;
+import org.chromium.chrome.browser.sync.settings.AccountManagementFragment;
+import org.chromium.components.browser_ui.settings.ManagedPreferencesUtils;
 import org.chromium.components.signin.GAIAServiceType;
+import org.chromium.components.signin.metrics.SigninAccessPoint;
 import org.chromium.ui.base.WindowAndroid;
 
 /**
@@ -33,7 +34,6 @@ public class SigninUtils {
 
     /**
      * Opens a Settings page to configure settings for a single account.
-     * Note: on Android O+, this method is identical to {@link #openSettingsForAllAccounts}.
      * @param context Context to use when starting the Activity.
      * @param account The account for which the Settings page should be opened.
      * @return Whether or not Android accepted the Intent.
@@ -64,55 +64,25 @@ public class SigninUtils {
     private static void openAccountManagementScreen(WindowAndroid windowAndroid,
             @GAIAServiceType int gaiaServiceType, @Nullable String email) {
         ThreadUtils.assertOnUiThread();
-
-        if (ChromeFeatureList.isEnabled(ChromeFeatureList.MOBILE_IDENTITY_CONSISTENCY)) {
-            // If Mice is enabled, directly use the system account management flows.
-            switch (gaiaServiceType) {
-                case GAIAServiceType.GAIA_SERVICE_TYPE_SIGNUP:
-                case GAIAServiceType.GAIA_SERVICE_TYPE_ADDSESSION:
-                    AccountManagerFacade accountManagerFacade = AccountManagerFacade.get();
-                    @Nullable
-                    Account account =
-                            email == null ? null : accountManagerFacade.getAccountFromName(email);
-                    if (account == null) {
-                        // Empty or unknown account: add a new account.
-                        // TODO(bsazonov): if email is not empty, pre-fill the account name.
-                        startAddAccountActivity(windowAndroid, gaiaServiceType);
-                    } else {
-                        // Existing account indicates authentication error. Fix it.
-                        accountManagerFacade.updateCredentials(
-                                account, windowAndroid.getActivity().get(), null);
-                    }
-                    break;
-                default:
-                    // Open generic accounts settings.
-                    SigninUtils.openSettingsForAllAccounts(ContextUtils.getApplicationContext());
-                    break;
-            }
-            return;
-        }
-
-        // If Mice is not enabled, open Chrome's account management screen.
         AccountManagementFragment.openAccountManagementScreen(gaiaServiceType);
     }
 
     /**
-     * Tries starting an Activity to add a Google account to the device. If this activity cannot
-     * be started, opens "Accounts" page in the Android Settings app.
+     * Launches the {@link SigninActivity} if signin is allowed.
+     * @param accessPoint {@link SigninAccessPoint} for starting sign-in flow.
+     * @return a boolean indicating if the SigninActivity is launched.
      */
-    private static void startAddAccountActivity(
-            WindowAndroid windowAndroid, @GAIAServiceType int gaiaServiceTypeSignup) {
-        logEvent(ProfileAccountManagementMetrics.DIRECT_ADD_ACCOUNT, gaiaServiceTypeSignup);
-
-        AccountManagerFacade.get().createAddAccountIntent((@Nullable Intent intent) -> {
-            Activity activity = windowAndroid.getActivity().get();
-            if (intent == null || activity == null
-                    || !IntentUtils.safeStartActivity(activity, intent)) {
-                // Failed to create or show an intent, open settings for all accounts so
-                // the user has a chance to create an account manually.
-                SigninUtils.openSettingsForAllAccounts(ContextUtils.getApplicationContext());
-            }
-        });
+    public static boolean startSigninActivityIfAllowed(
+            Context context, @SigninAccessPoint int accessPoint) {
+        SigninManager signinManager = IdentityServicesProvider.get().getSigninManager();
+        if (signinManager.isSignInAllowed()) {
+            SigninActivityLauncher.get().launchActivity(context, accessPoint);
+            return true;
+        }
+        if (signinManager.isSigninDisabledByPolicy()) {
+            ManagedPreferencesUtils.showManagedByAdministratorToast(context);
+        }
+        return false;
     }
 
     /**
@@ -121,9 +91,11 @@ public class SigninUtils {
      * @param gaiaServiceType A signin::GAIAServiceType.
      */
     public static void logEvent(int metric, int gaiaServiceType) {
-        nativeLogEvent(metric, gaiaServiceType);
+        SigninUtilsJni.get().logEvent(metric, gaiaServiceType);
     }
 
-    // Native methods.
-    private static native void nativeLogEvent(int metric, int gaiaServiceType);
+    @NativeMethods
+    interface Natives {
+        void logEvent(int metric, int gaiaServiceType);
+    }
 }

@@ -6,14 +6,17 @@
 
 #include <stddef.h>
 
+#include <utility>
+
 #include "base/bind.h"
-#include "base/callback_helpers.h"
+#include "base/i18n/number_formatting.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/chromeos/ui/passphrase_textfield.h"
 #include "chrome/browser/ui/browser_dialogs.h"
 #include "chrome/browser/ui/views/chrome_layout_provider.h"
 #include "chrome/grit/generated_resources.h"
+#include "chromeos/components/security_token_pin/error_generator.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/resource/resource_bundle.h"
 #include "ui/events/event.h"
@@ -32,31 +35,24 @@ constexpr int kDefaultTextWidth = 200;
 
 }  // namespace
 
-RequestPinView::RequestPinView(const std::string& extension_name,
-                               RequestPinView::RequestPinCodeType code_type,
-                               int attempts_left,
-                               const RequestPinCallback& callback,
-                               Delegate* delegate)
-    : callback_(callback), delegate_(delegate), weak_ptr_factory_(this) {
-  DCHECK(code_type != RequestPinCodeType::UNCHANGED);
-  DCHECK(delegate);
+RequestPinView::RequestPinView(
+    const std::string& extension_name,
+    security_token_pin::CodeType code_type,
+    int attempts_left,
+    const PinEnteredCallback& pin_entered_callback,
+    ViewDestructionCallback view_destruction_callback)
+    : pin_entered_callback_(pin_entered_callback),
+      view_destruction_callback_(std::move(view_destruction_callback)) {
   Init();
   SetExtensionName(extension_name);
   const bool accept_input = (attempts_left != 0);
-  SetDialogParameters(code_type, RequestPinErrorType::NONE, attempts_left,
-                      accept_input);
+  SetDialogParameters(code_type, security_token_pin::ErrorLabel::kNone,
+                      attempts_left, accept_input);
   chrome::RecordDialogCreation(chrome::DialogIdentifier::REQUEST_PIN);
 }
 
-// When the parent window is closed while the dialog is active, this object is
-// destroyed without triggering Accept or Cancel. If the callback_ wasn't called
-// it needs to send the response.
 RequestPinView::~RequestPinView() {
-  if (!callback_.is_null()) {
-    base::ResetAndReturn(&callback_).Run(base::string16());
-  }
-
-  delegate_->OnPinDialogClosed();
+  std::move(view_destruction_callback_).Run();
 }
 
 void RequestPinView::ContentsChanged(views::Textfield* sender,
@@ -64,31 +60,24 @@ void RequestPinView::ContentsChanged(views::Textfield* sender,
   DialogModelChanged();
 }
 
-bool RequestPinView::Cancel() {
-  // Destructor will be called after this which notifies the delegate.
-  return true;
-}
-
 bool RequestPinView::Accept() {
-  DCHECK(!callback_.is_null());
-
-  if (!textfield_->enabled()) {
+  if (!textfield_->GetEnabled())
     return true;
-  }
-  DCHECK(!textfield_->text().empty());
+  DCHECK(!textfield_->GetText().empty());
+  DCHECK(!locked_);
 
   error_label_->SetVisible(true);
   error_label_->SetText(
       l10n_util::GetStringUTF16(IDS_REQUEST_PIN_DIALOG_PROCESSING));
-  error_label_->SetTooltipText(error_label_->text());
+  error_label_->SetTooltipText(error_label_->GetText());
   error_label_->SetEnabledColor(SK_ColorGRAY);
   error_label_->SizeToPreferredSize();
   // The |textfield_| and OK button become disabled, but the user still can
   // close the dialog.
   SetAcceptInput(false);
-  base::ResetAndReturn(&callback_).Run(textfield_->text());
+  pin_entered_callback_.Run(base::UTF16ToUTF8(textfield_->GetText()));
+  locked_ = true;
   DialogModelChanged();
-  delegate_->OnPinDialogInput();
 
   return false;
 }
@@ -98,16 +87,14 @@ bool RequestPinView::IsDialogButtonEnabled(ui::DialogButton button) const {
     case ui::DialogButton::DIALOG_BUTTON_CANCEL:
       return true;
     case ui::DialogButton::DIALOG_BUTTON_OK:
-      if (callback_.is_null()) {
+      if (locked_)
         return false;
-      }
       // Not locked but the |textfield_| is not enabled. It's just a
       // notification to the user and [OK] button can be used to close the
       // dialog.
-      if (!textfield_->enabled()) {
+      if (!textfield_->GetEnabled())
         return true;
-      }
-      return textfield_->text().size() > 0;
+      return textfield_->GetText().size() > 0;
     case ui::DialogButton::DIALOG_BUTTON_NONE:
       return true;
   }
@@ -134,31 +121,21 @@ gfx::Size RequestPinView::CalculatePreferredSize() const {
   return gfx::Size(default_width, GetHeightForWidth(default_width));
 }
 
-bool RequestPinView::IsLocked() {
-  return callback_.is_null();
-}
-
-void RequestPinView::SetCallback(const RequestPinCallback& callback) {
-  DCHECK(callback_.is_null());
-  callback_ = callback;
-}
-
 void RequestPinView::SetDialogParameters(
-    RequestPinView::RequestPinCodeType code_type,
-    RequestPinView::RequestPinErrorType error_type,
+    security_token_pin::CodeType code_type,
+    security_token_pin::ErrorLabel error_label,
     int attempts_left,
     bool accept_input) {
-  SetErrorMessage(error_type, attempts_left);
+  locked_ = false;
+  SetErrorMessage(error_label, attempts_left, accept_input);
   SetAcceptInput(accept_input);
 
   switch (code_type) {
-    case RequestPinCodeType::PIN:
+    case security_token_pin::CodeType::kPin:
       code_type_ = l10n_util::GetStringUTF16(IDS_REQUEST_PIN_DIALOG_PIN);
       break;
-    case RequestPinCodeType::PUK:
+    case security_token_pin::CodeType::kPuk:
       code_type_ = l10n_util::GetStringUTF16(IDS_REQUEST_PIN_DIALOG_PUK);
-      break;
-    case RequestPinCodeType::UNCHANGED:
       break;
   }
 
@@ -184,7 +161,7 @@ void RequestPinView::Init() {
       provider->GetDialogInsetsForContentType(views::TEXT, views::TEXT)));
 
   views::GridLayout* layout =
-      SetLayoutManager(std::make_unique<views::GridLayout>(this));
+      SetLayoutManager(std::make_unique<views::GridLayout>());
 
   int column_view_set_id = 0;
   views::ColumnSet* column_set = layout->AddColumnSet(column_view_set_id);
@@ -193,12 +170,12 @@ void RequestPinView::Init() {
                         views::GridLayout::USE_PREF, 0, 0);
   layout->StartRow(0, column_view_set_id);
 
-  // Infomation label.
+  // Information label.
   int label_text_id = IDS_REQUEST_PIN_DIALOG_HEADER;
   base::string16 label_text = l10n_util::GetStringUTF16(label_text_id);
-  header_label_ = new views::Label(label_text);
-  header_label_->SetEnabled(true);
-  layout->AddView(header_label_);
+  auto header_label = std::make_unique<views::Label>(label_text);
+  header_label->SetEnabled(true);
+  header_label_ = layout->AddView(std::move(header_label));
 
   const int related_vertical_spacing =
       provider->GetDistanceMetric(views::DISTANCE_RELATED_CONTROL_VERTICAL);
@@ -211,12 +188,13 @@ void RequestPinView::Init() {
 
   // Textfield to enter the PIN/PUK.
   layout->StartRow(0, column_view_set_id);
-  textfield_ = new PassphraseTextfield();
-  textfield_->set_controller(this);
-  textfield_->SetEnabled(true);
-  textfield_->SetAssociatedLabel(header_label_);
-  layout->AddView(textfield_, 1, 1, views::GridLayout::LEADING,
-                  views::GridLayout::FILL, kDefaultTextWidth, 0);
+  auto textfield = std::make_unique<PassphraseTextfield>();
+  textfield->set_controller(this);
+  textfield->SetEnabled(true);
+  textfield->SetAssociatedLabel(header_label_);
+  textfield_ =
+      layout->AddView(std::move(textfield), 1, 1, views::GridLayout::LEADING,
+                      views::GridLayout::FILL, kDefaultTextWidth, 0);
 
   layout->AddPaddingRow(0, related_vertical_spacing);
 
@@ -227,10 +205,10 @@ void RequestPinView::Init() {
 
   // Error label.
   layout->StartRow(0, column_view_set_id);
-  error_label_ = new views::Label();
-  error_label_->SetVisible(false);
-  error_label_->SetHorizontalAlignment(gfx::ALIGN_LEFT);
-  layout->AddView(error_label_);
+  auto error_label = std::make_unique<views::Label>();
+  error_label->SetVisible(false);
+  error_label->SetHorizontalAlignment(gfx::ALIGN_LEFT);
+  error_label_ = layout->AddView(std::move(error_label));
 }
 
 void RequestPinView::SetAcceptInput(bool accept_input) {
@@ -244,42 +222,18 @@ void RequestPinView::SetAcceptInput(bool accept_input) {
   }
 }
 
-void RequestPinView::SetErrorMessage(RequestPinErrorType error_type,
-                                     int attempts_left) {
-  base::string16 error_message;
-  switch (error_type) {
-    case RequestPinErrorType::INVALID_PIN:
-      error_message =
-          l10n_util::GetStringUTF16(IDS_REQUEST_PIN_DIALOG_INVALID_PIN_ERROR);
-      break;
-    case RequestPinErrorType::INVALID_PUK:
-      error_message =
-          l10n_util::GetStringUTF16(IDS_REQUEST_PIN_DIALOG_INVALID_PUK_ERROR);
-      break;
-    case RequestPinErrorType::MAX_ATTEMPTS_EXCEEDED:
-      error_message = l10n_util::GetStringUTF16(
-          IDS_REQUEST_PIN_DIALOG_MAX_ATTEMPTS_EXCEEDED_ERROR);
-      break;
-    case RequestPinErrorType::UNKNOWN_ERROR:
-      error_message =
-          l10n_util::GetStringUTF16(IDS_REQUEST_PIN_DIALOG_UNKNOWN_ERROR);
-      break;
-    case RequestPinErrorType::NONE:
-      if (attempts_left < 0) {
-        error_label_->SetVisible(false);
-        textfield_->SetInvalid(false);
-        return;
-      }
-      break;
+void RequestPinView::SetErrorMessage(security_token_pin::ErrorLabel error_label,
+                                     int attempts_left,
+                                     bool accept_input) {
+  if (error_label == security_token_pin::ErrorLabel::kNone &&
+      attempts_left < 0) {
+    error_label_->SetVisible(false);
+    textfield_->SetInvalid(false);
+    return;
   }
 
-  if (attempts_left >= 0) {
-    if (!error_message.empty())
-      error_message.append(base::ASCIIToUTF16(" "));
-    error_message.append(l10n_util::GetStringFUTF16(
-        IDS_REQUEST_PIN_DIALOG_ATTEMPTS_LEFT,
-        base::ASCIIToUTF16(std::to_string(attempts_left))));
-  }
+  base::string16 error_message = security_token_pin::GenerateErrorMessage(
+      error_label, attempts_left, accept_input);
 
   error_label_->SetVisible(true);
   error_label_->SetText(error_message);

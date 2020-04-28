@@ -28,7 +28,7 @@ class CONTENT_EXPORT MediaPlayerRendererClientFactory
     : public media::RendererFactory {
  public:
   using GetStreamTextureWrapperCB =
-      base::Callback<media::ScopedStreamTextureWrapper()>;
+      base::RepeatingCallback<media::ScopedStreamTextureWrapper()>;
 
   MediaPlayerRendererClientFactory(
       scoped_refptr<base::SingleThreadTaskRunner> compositor_task_runner,
@@ -41,7 +41,7 @@ class CONTENT_EXPORT MediaPlayerRendererClientFactory
       const scoped_refptr<base::TaskRunner>& worker_task_runner,
       media::AudioRendererSink* audio_renderer_sink,
       media::VideoRendererSink* video_renderer_sink,
-      const media::RequestOverlayInfoCB& request_surface_cb,
+      media::RequestOverlayInfoCB request_surface_cb,
       const gfx::ColorSpace& target_color_space) override;
 
   // The MediaPlayerRenderer uses a Type::URL.

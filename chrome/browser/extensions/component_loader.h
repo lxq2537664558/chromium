@@ -22,7 +22,6 @@
 #include "build/build_config.h"
 #include "chrome/common/buildflags.h"
 
-class PrefService;
 class Profile;
 
 namespace extensions {
@@ -34,8 +33,6 @@ class ExtensionServiceInterface;
 class ComponentLoader {
  public:
   ComponentLoader(ExtensionServiceInterface* extension_service,
-                  PrefService* prefs,
-                  PrefService* local_state,
                   Profile* browser_context);
   virtual ~ComponentLoader();
 
@@ -92,6 +89,9 @@ class ComponentLoader {
   // Reloads a registered component extension.
   void Reload(const std::string& extension_id);
 
+  // Return ids of all registered extensions.
+  std::vector<std::string> GetRegisteredComponentExtensionsIds() const;
+
 #if defined(OS_CHROMEOS)
   // Add a component extension from a specific directory. Assumes that the
   // extension uses a different manifest file when this is a guest session
@@ -100,6 +100,15 @@ class ComponentLoader {
   void AddComponentFromDir(
       const base::FilePath& root_directory,
       const char* extension_id,
+      const base::Closure& done_cb);
+
+  // Identical to above except allows for the caller to supply the name of the
+  // manifest file.
+  void AddComponentFromDirWithManifestFilename(
+      const base::FilePath& root_directory,
+      const char* extension_id,
+      const base::FilePath::CharType* manifest_file_name,
+      const base::FilePath::CharType* guest_manifest_file_name,
       const base::Closure& done_cb);
 
   // Add a component extension from a specific directory. Assumes that the
@@ -173,13 +182,10 @@ class ComponentLoader {
                                  const base::FilePath& root_directory,
                                  const std::string& name_string,
                                  const std::string& description_string);
-#if BUILDFLAG(ENABLE_APP_LIST)
-  void AddChromeApp();
-#endif  // BUILDFLAG(ENABLE_APP_LIST)
-
   void AddWebStoreApp();
 
 #if defined(OS_CHROMEOS)
+  void AddChromeApp();
   void AddFileManagerExtension();
   void AddVideoPlayerExtension();
   void AddAudioPlayerExtension();
@@ -197,9 +203,6 @@ class ComponentLoader {
   void UnloadComponent(ComponentExtensionInfo* component);
 
 #if defined(OS_CHROMEOS)
-  // Enable HTML5 FileSystem for given component extension in Guest mode.
-  void EnableFileSystemInGuestMode(const std::string& id);
-
   // Used as a reply callback by |AddComponentFromDir|.
   // Called with a |root_directory| and parsed |manifest| and invokes
   // |done_cb| after adding the extension.
@@ -215,8 +218,6 @@ class ComponentLoader {
   void FinishLoadSpeechSynthesisExtension(const char* extension_id);
 #endif
 
-  PrefService* profile_prefs_;
-  PrefService* local_state_;
   Profile* profile_;
 
   ExtensionServiceInterface* extension_service_;
@@ -227,7 +228,7 @@ class ComponentLoader {
 
   bool ignore_whitelist_for_testing_;
 
-  base::WeakPtrFactory<ComponentLoader> weak_factory_;
+  base::WeakPtrFactory<ComponentLoader> weak_factory_{this};
 
   friend class TtsApiTest;
 

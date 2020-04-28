@@ -28,9 +28,10 @@ class MockExtensionSystem : public ExtensionSystem {
 
   content::BrowserContext* browser_context() { return browser_context_; }
 
+  void SetReady();
+
   // ExtensionSystem overrides:
   void InitForRegularProfile(bool extensions_enabled) override;
-  void InitForIncognitoProfile() override;
   ExtensionService* extension_service() override;
   RuntimeData* runtime_data() override;
   ManagementPolicy* management_policy() override;
@@ -51,6 +52,9 @@ class MockExtensionSystem : public ExtensionSystem {
                      const base::FilePath& temp_dir,
                      bool install_immediately,
                      InstallUpdateCallback install_update_callback) override;
+  void PerformActionBasedOnOmahaAttributes(
+      const std::string& extension_id,
+      const base::Value& attributes) override;
   bool FinishDelayedInstallationIfReady(const std::string& extension_id,
                                         bool install_immediately) override;
 

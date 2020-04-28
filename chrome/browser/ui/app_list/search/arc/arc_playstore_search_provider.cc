@@ -88,14 +88,18 @@ ArcPlayStoreSearchProvider::ArcPlayStoreSearchProvider(
     AppListControllerDelegate* list_controller)
     : max_results_(max_results),
       profile_(profile),
-      list_controller_(list_controller),
-      weak_ptr_factory_(this) {
+      list_controller_(list_controller) {
   DCHECK_EQ(kHistogramBuckets, max_results + 1);
 }
 
 ArcPlayStoreSearchProvider::~ArcPlayStoreSearchProvider() = default;
 
 void ArcPlayStoreSearchProvider::Start(const base::string16& query) {
+  last_query_ = query;
+
+  // Clear any results from the previous query.
+  ClearResultsSilently();
+
   arc::mojom::AppInstance* app_instance =
       arc::ArcServiceManager::Get()
           ? ARC_GET_INSTANCE_FOR_METHOD(
@@ -104,17 +108,18 @@ void ArcPlayStoreSearchProvider::Start(const base::string16& query) {
           : nullptr;
 
   if (app_instance == nullptr || query.empty()) {
-    ClearResults();
     return;
   }
 
   app_instance->GetRecentAndSuggestedAppsFromPlayStore(
       base::UTF16ToUTF8(query), max_results_,
-      base::Bind(&ArcPlayStoreSearchProvider::OnResults,
-                 weak_ptr_factory_.GetWeakPtr(), base::TimeTicks::Now()));
+      base::BindOnce(&ArcPlayStoreSearchProvider::OnResults,
+                     weak_ptr_factory_.GetWeakPtr(), query,
+                     base::TimeTicks::Now()));
 }
 
 void ArcPlayStoreSearchProvider::OnResults(
+    const base::string16& query,
     base::TimeTicks query_start_time,
     arc::ArcPlayStoreSearchRequestState state,
     std::vector<arc::mojom::AppDiscoveryResultPtr> results) {
@@ -122,7 +127,17 @@ void ArcPlayStoreSearchProvider::OnResults(
     DCHECK(results.empty());
     UMA_HISTOGRAM_ENUMERATION(kAppListPlayStoreQueryStateHistogram, state,
                               arc::ArcPlayStoreSearchRequestState::STATE_COUNT);
-    ClearResults();
+    return;
+  }
+
+  // Play store could have a long latency that when the results come back,
+  // user has entered a different query. Do not return the staled results
+  // from the previous query in such case.
+  if (query != last_query_) {
+    UMA_HISTOGRAM_ENUMERATION(
+        kAppListPlayStoreQueryStateHistogram,
+        arc::ArcPlayStoreSearchRequestState::FAILED_TO_CALL_CANCEL,
+        arc::ArcPlayStoreSearchRequestState::STATE_COUNT);
     return;
   }
 
@@ -134,7 +149,6 @@ void ArcPlayStoreSearchProvider::OnResults(
           kAppListPlayStoreQueryStateHistogram,
           arc::ArcPlayStoreSearchRequestState::CHROME_GOT_INVALID_RESULT,
           arc::ArcPlayStoreSearchRequestState::STATE_COUNT);
-      ClearResults();
       return;
     }
 
@@ -155,13 +169,19 @@ void ArcPlayStoreSearchProvider::OnResults(
                             arc::ArcPlayStoreSearchRequestState::STATE_COUNT);
   UMA_HISTOGRAM_TIMES("Arc.PlayStoreSearch.QueryTime",
                       base::TimeTicks::Now() - query_start_time);
-  UMA_HISTOGRAM_EXACT_LINEAR("Arc.PlayStoreSearch.ReturnedAppsTotal",
-                             results.size(), kHistogramBuckets);
-  UMA_HISTOGRAM_EXACT_LINEAR("Arc.PlayStoreSearch.ReturnedUninstalledApps",
-                             results.size() - instant_app_count,
-                             kHistogramBuckets);
-  UMA_HISTOGRAM_EXACT_LINEAR("Arc.PlayStoreSearch.ReturnedInstantApps",
-                             instant_app_count, kHistogramBuckets);
+  if (results.size() > 0) {
+    UMA_HISTOGRAM_EXACT_LINEAR("Arc.PlayStoreSearch.ReturnedAppsTotal",
+                               results.size(), kHistogramBuckets);
+  }
+  if (results.size() - instant_app_count > 0) {
+    UMA_HISTOGRAM_EXACT_LINEAR("Arc.PlayStoreSearch.ReturnedUninstalledApps",
+                               results.size() - instant_app_count,
+                               kHistogramBuckets);
+  }
+  if (instant_app_count > 0) {
+    UMA_HISTOGRAM_EXACT_LINEAR("Arc.PlayStoreSearch.ReturnedInstantApps",
+                               instant_app_count, kHistogramBuckets);
+  }
 }
 
 }  // namespace app_list

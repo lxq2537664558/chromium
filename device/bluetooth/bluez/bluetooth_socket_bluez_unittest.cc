@@ -10,13 +10,13 @@
 #include "base/bind_helpers.h"
 #include "base/memory/ref_counted.h"
 #include "base/run_loop.h"
-#include "base/test/scoped_task_environment.h"
+#include "base/test/bind_test_util.h"
+#include "base/test/task_environment.h"
 #include "device/bluetooth/bluetooth_adapter.h"
 #include "device/bluetooth/bluetooth_adapter_factory.h"
 #include "device/bluetooth/bluetooth_device.h"
 #include "device/bluetooth/bluetooth_socket.h"
 #include "device/bluetooth/bluetooth_socket_thread.h"
-#include "device/bluetooth/bluetooth_uuid.h"
 #include "device/bluetooth/bluez/bluetooth_adapter_bluez.h"
 #include "device/bluetooth/bluez/bluetooth_device_bluez.h"
 #include "device/bluetooth/dbus/bluez_dbus_manager.h"
@@ -27,6 +27,7 @@
 #include "device/bluetooth/dbus/fake_bluetooth_input_client.h"
 #include "device/bluetooth/dbus/fake_bluetooth_profile_manager_client.h"
 #include "device/bluetooth/dbus/fake_bluetooth_profile_service_provider.h"
+#include "device/bluetooth/public/cpp/bluetooth_uuid.h"
 #include "net/base/io_buffer.h"
 #include "net/base/net_errors.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -76,13 +77,16 @@ class BluetoothSocketBlueZTest : public testing::Test {
     // Grab a pointer to the adapter.
     {
       base::RunLoop run_loop;
-      device::BluetoothAdapterFactory::GetAdapter(base::BindOnce(
-          &BluetoothSocketBlueZTest::AdapterCallback, base::Unretained(this),
-          run_loop.QuitWhenIdleClosure()));
+      device::BluetoothAdapterFactory::Get()->GetAdapter(
+          base::BindLambdaForTesting(
+              [&](scoped_refptr<BluetoothAdapter> adapter) {
+                adapter_ = std::move(adapter);
+                run_loop.Quit();
+              }));
       run_loop.Run();
     }
 
-    ASSERT_TRUE(adapter_.get() != nullptr);
+    ASSERT_TRUE(adapter_);
     ASSERT_TRUE(adapter_->IsInitialized());
     ASSERT_TRUE(adapter_->IsPresent());
 
@@ -95,12 +99,6 @@ class BluetoothSocketBlueZTest : public testing::Test {
     adapter_ = nullptr;
     BluetoothSocketThread::CleanupForTesting();
     bluez::BluezDBusManager::Shutdown();
-  }
-
-  void AdapterCallback(base::OnceClosure continuation,
-                       scoped_refptr<BluetoothAdapter> adapter) {
-    adapter_ = adapter;
-    std::move(continuation).Run();
   }
 
   void SuccessCallback(base::OnceClosure continuation) {
@@ -165,7 +163,7 @@ class BluetoothSocketBlueZTest : public testing::Test {
   void ImmediateSuccessCallback() { ++success_callback_count_; }
 
  protected:
-  base::test::ScopedTaskEnvironment scoped_task_environment_;
+  base::test::TaskEnvironment task_environment_;
 
   scoped_refptr<BluetoothAdapter> adapter_;
 

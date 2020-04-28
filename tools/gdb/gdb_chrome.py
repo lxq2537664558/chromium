@@ -25,6 +25,7 @@ import datetime
 import gdb
 import gdb.printing
 import os
+import re
 import sys
 
 sys.path.insert(
@@ -161,8 +162,14 @@ class WeakPtrPrinter(SmartPtrPrinter):
   typename = 'base::WeakPtr'
 
   def ptr(self):
-    flag = ScopedRefPtrPrinter(self.val['ref_']['flag_']).ptr()
-    if flag and flag['is_valid_']:
+    # Check that the pointer is valid. The invalidated flag is stored at
+    # val.ref_.flag_.ptr_->invalidated_.flag_.__a_.__a_value. This is a gdb
+    # implementation of base::WeakReference::IsValid(). This is necessary
+    # because calling gdb.parse_and_eval('(*(%s*)(%s)).ref_.IsValid()' %
+    # (self.val.type, self.val.address))) does not work in all cases.
+    ptr = self.val['ref_']['flag_']['ptr_']
+    if (ptr and
+        not ptr.dereference()['invalidated_']['flag_']['__a_']['__a_value']):
       return self.val['ptr_']
     return gdb.Value(0).cast(self.val['ptr_'].type)
 
@@ -219,6 +226,19 @@ class LockPrinter(Printer):
 
 
 pp_set.add_printer('base::Lock', '^base::Lock$', LockPrinter)
+
+
+class BaseOptionalPrinter(Printer):
+
+  def to_string(self):
+    if self.val['storage_']['is_populated_']:
+      return "%s: %s" % (str(self.val.type.tag), self.val['storage_']['value_'])
+    else:
+      return "%s: is empty" % str(self.val.type.tag)
+
+
+pp_set.add_printer('base::Optional', '^base::Optional<.*>$',
+                   BaseOptionalPrinter)
 
 
 class TimeDeltaPrinter(object):
@@ -436,6 +456,81 @@ pp_set.add_printer('content::RenderProcessHostImpl',
 
 gdb.printing.register_pretty_printer(gdb, pp_set, replace=_DEBUGGING)
 """Implementations of inlined libc++ std container functions."""
+
+
+def gdb_running_under_rr():
+  try:
+    # rr defines the when command to return the current event number.
+    gdb.execute('when')
+
+    # If there was no error executing the command, we are running under rr.
+    return True
+  except gdb.error:
+    return False
+
+
+def find_nearest_frame_matching(frame, predicate):
+  while frame and not predicate(frame):
+    frame = frame.older()
+  return frame
+
+
+class ReverseCallback(gdb.Command):
+  """Find when the currently running callback was created."""
+
+  def __init__(self):
+    super(ReverseCallback, self).__init__("reverse-callback", gdb.COMMAND_USER)
+
+  def invoke(self, arg, from_tty):
+    if not gdb_running_under_rr():
+      raise gdb.error('reverse-callback requires debugging under rr: ' +
+                      'https://rr-project.org/')
+
+    # Find the stack frame which extracts the bind state from the task.
+    bind_state_frame = find_nearest_frame_matching(
+        gdb.selected_frame(),
+        lambda frame : frame.function() and
+            re.match('^base::internal::Invoker<base::internal::BindState<.*>' +
+                     '::RunOnce\(base::internal::BindStateBase\*\)$',
+                     frame.function().name))
+    if bind_state_frame is None:
+      raise Exception(
+          'base::internal::Invoker frame not found; are you in a callback?')
+    bind_state_frame.select()
+
+    # Disable all existing breakpoints.
+    was_enabled = []
+    for breakpoint in gdb.breakpoints():
+      was_enabled.append(breakpoint.enabled)
+      breakpoint.enabled = False
+
+    # Break on the initialization of the BindState.
+    storage_address = gdb.parse_and_eval('storage')
+    watchpoint = gdb.Breakpoint('*' + str(storage_address), gdb.BP_WATCHPOINT)
+
+    # Find the construction.
+    gdb.execute('reverse-continue')
+
+    # Restore breakpoints
+    watchpoint.delete()
+    for breakpoint, enabled in zip(gdb.breakpoints(), was_enabled):
+      breakpoint.enabled = enabled
+
+    # Find the stack frame which created the BindState.
+    def in_bindstate(frame):
+      return frame.function() and frame.function().name.startswith(
+          'base::internal::BindState<')
+
+    creation_frame = find_nearest_frame_matching(
+        find_nearest_frame_matching(gdb.selected_frame(), in_bindstate),
+        lambda frame: not in_bindstate(frame))
+
+    # The callback creates the bindstate, step up once more to get the creator
+    # of the callback.
+    creation_frame.older().select()
+
+
+ReverseCallback()
 
 
 @class_methods.Class('std::__1::vector', template_types=['T'])

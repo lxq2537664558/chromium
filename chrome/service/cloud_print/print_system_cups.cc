@@ -86,7 +86,7 @@ class PrintSystemCUPS : public PrintSystem {
       printing::PrinterList* printer_list) override;
   void GetPrinterCapsAndDefaults(
       const std::string& printer_name,
-      const PrinterCapsAndDefaultsCallback& callback) override;
+      PrinterCapsAndDefaultsCallback callback) override;
   bool IsValidPrinter(const std::string& printer_name) override;
   bool ValidatePrintTicket(const std::string& printer_name,
                            const std::string& print_ticket_data,
@@ -164,7 +164,7 @@ class PrintSystemCUPS : public PrintSystem {
 
   // Helper method to invoke a PrinterCapsAndDefaultsCallback.
   static void RunCapsCallback(
-      const PrinterCapsAndDefaultsCallback& callback,
+      PrinterCapsAndDefaultsCallback callback,
       bool succeeded,
       const std::string& printer_name,
       const printing::PrinterCapsAndDefaults& printer_info);
@@ -259,7 +259,8 @@ class PrinterWatcherCUPS
   // PrintSystem::PrinterWatcher implementation.
   bool StartWatching(PrintSystem::PrinterWatcher::Delegate* delegate) override {
     scoped_refptr<printing::PrintBackend> print_backend(
-        printing::PrintBackend::CreateInstance(nullptr));
+        printing::PrintBackend::CreateInstanceForCloudPrint(
+            /*print_backend_settings=*/nullptr));
     crash_keys::ScopedPrinterInfo crash_key(
         print_backend->GetPrinterDriverInfo(printer_name_));
     if (delegate_)
@@ -463,7 +464,7 @@ void PrintSystemCUPS::AddPrintServer(const std::string& url) {
 
   PrintServerInfoCUPS print_server;
   print_server.backend =
-    printing::PrintBackend::CreateInstance(&backend_settings);
+      printing::PrintBackend::CreateInstanceForCloudPrint(&backend_settings);
   print_server.url = GURL(url.c_str());
 
   print_servers_.push_back(print_server);
@@ -512,12 +513,13 @@ PrintSystem::PrintSystemResult PrintSystemCUPS::EnumeratePrinters(
 
 void PrintSystemCUPS::GetPrinterCapsAndDefaults(
     const std::string& printer_name,
-    const PrinterCapsAndDefaultsCallback& callback) {
+    PrinterCapsAndDefaultsCallback callback) {
   printing::PrinterCapsAndDefaults printer_info;
   bool succeeded = GetPrinterCapsAndDefaults(printer_name, &printer_info);
   base::ThreadTaskRunnerHandle::Get()->PostTask(
-      FROM_HERE, base::BindOnce(&PrintSystemCUPS::RunCapsCallback, callback,
-                                succeeded, printer_name, printer_info));
+      FROM_HERE,
+      base::BindOnce(&PrintSystemCUPS::RunCapsCallback, std::move(callback),
+                     succeeded, printer_name, printer_info));
 }
 
 bool PrintSystemCUPS::IsValidPrinter(const std::string& printer_name) {
@@ -529,10 +531,9 @@ bool PrintSystemCUPS::ValidatePrintTicket(
     const std::string& print_ticket_data,
     const std::string& print_ticket_mime_type) {
   DCHECK(initialized_);
-  std::unique_ptr<base::DictionaryValue> ticket_value(
-      base::DictionaryValue::From(
-          base::JSONReader::ReadDeprecated(print_ticket_data)));
-  return !!ticket_value;
+  base::Optional<base::Value> ticket =
+      base::JSONReader::Read(print_ticket_data);
+  return ticket.has_value() && ticket.value().is_dict();
 }
 
 // Print ticket on linux is a JSON string containing only one dictionary.
@@ -540,19 +541,15 @@ bool PrintSystemCUPS::ParsePrintTicket(
     const std::string& print_ticket,
     std::map<std::string, std::string>* options) {
   DCHECK(options);
-  std::unique_ptr<base::DictionaryValue> ticket_value(
-      base::DictionaryValue::From(
-          base::JSONReader::ReadDeprecated(print_ticket)));
-  if (!ticket_value)
+  base::Optional<base::Value> ticket = base::JSONReader::Read(print_ticket);
+  if (!ticket.has_value() || !ticket.value().is_dict())
     return false;
 
   options->clear();
-  for (const auto& it : *ticket_value) {
-    std::string value;
-    if (it.second->GetAsString(&value))
-      (*options)[it.first] = value;
+  for (const auto& it : ticket.value().DictItems()) {
+    if (it.second.is_string())
+      (*options)[it.first] = it.second.GetString();
   }
-
   return true;
 }
 
@@ -729,8 +726,7 @@ int PrintSystemCUPS::PrintFile(const GURL& url,
   if (url.is_empty())
     return cupsPrintFile(name, filename, title, num_options, options);
 
-  printing::HttpConnectionCUPS http(url, encryption);
-  http.SetBlocking(false);
+  printing::HttpConnectionCUPS http(url, encryption, /*blocking=*/false);
   return cupsPrintFile2(http.http(), name, filename, title, num_options,
                         options);
 }
@@ -746,8 +742,7 @@ int PrintSystemCUPS::GetJobs(cups_job_t** jobs,
   if (url.is_empty())
     return cupsGetJobs(jobs, name, myjobs, whichjobs);
 
-  printing::HttpConnectionCUPS http(url, encryption);
-  http.SetBlocking(false);
+  printing::HttpConnectionCUPS http(url, encryption, /*blocking=*/false);
   return cupsGetJobs2(http.http(), jobs, name, myjobs, whichjobs);
 }
 
@@ -852,11 +847,11 @@ PrintServerInfoCUPS* PrintSystemCUPS::FindServerByFullName(
 }
 
 void PrintSystemCUPS::RunCapsCallback(
-    const PrinterCapsAndDefaultsCallback& callback,
+    PrinterCapsAndDefaultsCallback callback,
     bool succeeded,
     const std::string& printer_name,
     const printing::PrinterCapsAndDefaults& printer_info) {
-  callback.Run(succeeded, printer_name, printer_info);
+  std::move(callback).Run(succeeded, printer_name, printer_info);
 }
 
 }  // namespace cloud_print

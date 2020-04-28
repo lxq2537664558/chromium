@@ -15,6 +15,8 @@
 
 namespace chromeos {
 
+constexpr StaticOobeScreenId ErrorScreenView::kScreenId;
+
 ErrorScreenHandler::ErrorScreenHandler(JSCallsContainer* js_calls_container)
     : BaseScreenHandler(kScreenId, js_calls_container) {
   set_user_acted_method_path("login.ErrorMessageScreen.userActed");
@@ -52,7 +54,7 @@ void ErrorScreenHandler::Unbind() {
   BaseScreenHandler::SetBaseScreen(nullptr);
 }
 
-void ErrorScreenHandler::ShowOobeScreen(OobeScreen screen) {
+void ErrorScreenHandler::ShowOobeScreen(OobeScreenId screen) {
   ShowScreen(screen);
 }
 
@@ -76,6 +78,10 @@ void ErrorScreenHandler::SetOfflineSigninAllowed(bool value) {
 
 void ErrorScreenHandler::SetShowConnectingIndicator(bool value) {
   CallJS("login.ErrorMessageScreen.showConnectingIndicator", value);
+}
+
+void ErrorScreenHandler::SetIsPersistentError(bool is_persistent) {
+  CallJS("login.ErrorMessageScreen.setIsPersistentError", is_persistent);
 }
 
 void ErrorScreenHandler::SetUIState(NetworkError::UIState ui_state) {

@@ -37,7 +37,7 @@ class DevToolsAgentHostImpl;
 class DevToolsVideoConsumer;
 class DevToolsIOContext;
 class FrameTreeNode;
-class NavigationHandleImpl;
+class NavigationRequest;
 class RenderFrameHost;
 class RenderProcessHost;
 
@@ -46,8 +46,7 @@ namespace protocol {
 class TracingHandler : public DevToolsDomainHandler, public Tracing::Backend {
  public:
   CONTENT_EXPORT TracingHandler(FrameTreeNode* frame_tree_node,
-                                DevToolsIOContext* io_context,
-                                bool use_binary_protocol);
+                                DevToolsIOContext* io_context);
   CONTENT_EXPORT ~TracingHandler() override;
 
   static std::vector<TracingHandler*> ForAgentHost(DevToolsAgentHostImpl* host);
@@ -74,11 +73,12 @@ class TracingHandler : public DevToolsDomainHandler, public Tracing::Backend {
   Response End() override;
   void GetCategories(std::unique_ptr<GetCategoriesCallback> callback) override;
   void RequestMemoryDump(
+      Maybe<bool> deterministic,
       std::unique_ptr<RequestMemoryDumpCallback> callback) override;
   Response RecordClockSyncMarker(const std::string& sync_id) override;
 
   bool did_initiate_recording() { return did_initiate_recording_; }
-  void ReadyToCommitNavigation(NavigationHandleImpl* navigation_handle);
+  void ReadyToCommitNavigation(NavigationRequest* navigation_request);
   void FrameDeleted(RenderFrameHostImpl* frame_host);
 
  private:
@@ -130,7 +130,6 @@ class TracingHandler : public DevToolsDomainHandler, public Tracing::Backend {
                        std::unordered_set<base::ProcessId>* process_set);
   void OnProcessReady(RenderProcessHost*);
 
-  const bool use_binary_protocol_;
   std::unique_ptr<base::RepeatingTimer> buffer_usage_poll_timer_;
 
   std::unique_ptr<Tracing::Frontend> frontend_;
@@ -146,7 +145,7 @@ class TracingHandler : public DevToolsDomainHandler, public Tracing::Backend {
   int number_of_screenshots_from_video_consumer_ = 0;
   base::trace_event::TraceConfig trace_config_;
   std::unique_ptr<TracingSession> session_;
-  base::WeakPtrFactory<TracingHandler> weak_factory_;
+  base::WeakPtrFactory<TracingHandler> weak_factory_{this};
 
   FRIEND_TEST_ALL_PREFIXES(TracingHandlerTest,
                            GetTraceConfigFromDevToolsConfig);

@@ -7,7 +7,6 @@
 #include "base/bind.h"
 #include "base/logging.h"
 #include "base/memory/ptr_util.h"
-#include "base/no_destructor.h"
 #include "base/stl_util.h"
 #include "base/threading/sequenced_task_runner_handle.h"
 #include "base/timer/timer.h"
@@ -36,12 +35,21 @@ BleAdvertiserImpl::ActiveAdvertisementRequest::~ActiveAdvertisementRequest() =
 BleAdvertiserImpl::Factory* BleAdvertiserImpl::Factory::test_factory_ = nullptr;
 
 // static
-BleAdvertiserImpl::Factory* BleAdvertiserImpl::Factory::Get() {
-  if (test_factory_)
-    return test_factory_;
+std::unique_ptr<BleAdvertiser> BleAdvertiserImpl::Factory::Create(
+    Delegate* delegate,
+    BleServiceDataHelper* ble_service_data_helper,
+    BleSynchronizerBase* ble_synchronizer_base,
+    TimerFactory* timer_factory,
+    scoped_refptr<base::SequencedTaskRunner> sequenced_task_runner) {
+  if (test_factory_) {
+    return test_factory_->CreateInstance(delegate, ble_service_data_helper,
+                                         ble_synchronizer_base, timer_factory,
+                                         sequenced_task_runner);
+  }
 
-  static base::NoDestructor<Factory> factory;
-  return factory.get();
+  return base::WrapUnique(new BleAdvertiserImpl(
+      delegate, ble_service_data_helper, ble_synchronizer_base, timer_factory,
+      sequenced_task_runner));
 }
 
 // static
@@ -54,17 +62,6 @@ BleAdvertiserImpl::Factory::~Factory() = default;
 // static
 const int64_t BleAdvertiserImpl::kNumSecondsPerAdvertisementTimeslot = 10;
 
-std::unique_ptr<BleAdvertiser> BleAdvertiserImpl::Factory::BuildInstance(
-    Delegate* delegate,
-    BleServiceDataHelper* ble_service_data_helper,
-    BleSynchronizerBase* ble_synchronizer_base,
-    TimerFactory* timer_factory,
-    scoped_refptr<base::SequencedTaskRunner> sequenced_task_runner) {
-  return base::WrapUnique(new BleAdvertiserImpl(
-      delegate, ble_service_data_helper, ble_synchronizer_base, timer_factory,
-      sequenced_task_runner));
-}
-
 BleAdvertiserImpl::BleAdvertiserImpl(
     Delegate* delegate,
     BleServiceDataHelper* ble_service_data_helper,
@@ -76,8 +73,7 @@ BleAdvertiserImpl::BleAdvertiserImpl(
       ble_synchronizer_base_(ble_synchronizer_base),
       timer_factory_(timer_factory),
       sequenced_task_runner_(sequenced_task_runner),
-      shared_resource_scheduler_(std::make_unique<SharedResourceScheduler>()),
-      weak_factory_(this) {}
+      shared_resource_scheduler_(std::make_unique<SharedResourceScheduler>()) {}
 
 BleAdvertiserImpl::~BleAdvertiserImpl() = default;
 
@@ -86,7 +82,7 @@ void BleAdvertiserImpl::AddAdvertisementRequest(
     ConnectionPriority connection_priority) {
   requests_already_removed_due_to_failed_advertisement_.erase(request);
 
-  if (base::ContainsKey(all_requests_, request)) {
+  if (base::Contains(all_requests_, request)) {
     PA_LOG(ERROR) << "BleAdvertiserImpl::AddAdvertisementRequest(): Tried to "
                   << "add advertisement request which was already present. "
                   << "Request: " << request
@@ -110,11 +106,11 @@ void BleAdvertiserImpl::AddAdvertisementRequest(
 void BleAdvertiserImpl::UpdateAdvertisementRequestPriority(
     const DeviceIdPair& request,
     ConnectionPriority connection_priority) {
-  if (base::ContainsKey(requests_already_removed_due_to_failed_advertisement_,
-                        request))
+  if (base::Contains(requests_already_removed_due_to_failed_advertisement_,
+                     request))
     return;
 
-  if (!base::ContainsKey(all_requests_, request)) {
+  if (!base::Contains(all_requests_, request)) {
     PA_LOG(ERROR) << "BleAdvertiserImpl::UpdateAdvertisementRequestPriority(): "
                   << "Tried to update request priority for a request, but that "
                   << "request was not present. Request: " << request
@@ -175,7 +171,7 @@ void BleAdvertiserImpl::RemoveAdvertisementRequest(
     return;
   }
 
-  if (!base::ContainsKey(all_requests_, request)) {
+  if (!base::Contains(all_requests_, request)) {
     PA_LOG(ERROR) << "BleAdvertiserImpl::RemoveAdvertisementRequest(): Tried "
                   << "to remove an advertisement request, but that request was "
                   << "not present. Request: " << request;
@@ -278,7 +274,7 @@ void BleAdvertiserImpl::AddActiveAdvertisementRequest(size_t index_to_add) {
   timer->Start(
       FROM_HERE,
       base::TimeDelta::FromSeconds(kNumSecondsPerAdvertisementTimeslot),
-      base::Bind(
+      base::BindOnce(
           &BleAdvertiserImpl::StopAdvertisementRequestAndUpdateActiveRequests,
           base::Unretained(this), index_to_add,
           false /* replaced_by_higher_priority_advertisement */,
@@ -317,7 +313,7 @@ void BleAdvertiserImpl::AttemptToAddActiveAdvertisement(size_t index_to_add) {
   }
 
   active_advertisements_[index_to_add] =
-      ErrorTolerantBleAdvertisementImpl::Factory::Get()->BuildInstance(
+      ErrorTolerantBleAdvertisementImpl::Factory::Create(
           pair, std::move(service_data), ble_synchronizer_base_);
 }
 
@@ -383,8 +379,8 @@ void BleAdvertiserImpl::AttemptToNotifyFailureToGenerateAdvertisement(
   // If the request is not found, then that request has either been removed
   // again or re-scheduled after it failed to generate an advertisement, but
   // before this task could execute.
-  if (!base::ContainsKey(requests_already_removed_due_to_failed_advertisement_,
-                         device_id_pair)) {
+  if (!base::Contains(requests_already_removed_due_to_failed_advertisement_,
+                      device_id_pair)) {
     return;
   }
 

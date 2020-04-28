@@ -4,24 +4,57 @@
 
 #include "gpu/ipc/service/gpu_memory_buffer_factory_native_pixmap.h"
 
+#include "components/viz/common/gpu/vulkan_context_provider.h"
 #include "gpu/command_buffer/common/gpu_memory_buffer_support.h"
+#include "gpu/vulkan/vulkan_device_queue.h"
 #include "ui/gfx/buffer_format_util.h"
+#include "ui/gfx/buffer_usage_util.h"
 #include "ui/gfx/client_native_pixmap.h"
 #include "ui/gfx/linux/native_pixmap_dmabuf.h"
 #include "ui/gfx/native_pixmap.h"
 #include "ui/gl/gl_bindings.h"
 #include "ui/gl/gl_enums.h"
 #include "ui/gl/gl_image_native_pixmap.h"
+#include "ui/gl/gl_implementation.h"
 
 #if defined(USE_OZONE)
 #include "ui/ozone/public/ozone_platform.h"
 #include "ui/ozone/public/surface_factory_ozone.h"
 #endif
 
+#if defined(USE_X11)
+#include "ui/gfx/linux/gbm_buffer.h"                     // nogncheck
+#include "ui/gfx/linux/gpu_memory_buffer_support_x11.h"  // nogncheck
+#include "ui/gl/gl_image_glx_native_pixmap.h"            // nogncheck
+#endif
+
 namespace gpu {
 
-GpuMemoryBufferFactoryNativePixmap::GpuMemoryBufferFactoryNativePixmap() =
-    default;
+namespace {
+
+// The boilerplate code to initialize each GLImage that we need is the same, but
+// the Initialize() methods are not virtual, so a template is needed.
+template <class Image, class Pixmap>
+scoped_refptr<Image> CreateImageFromPixmap(const gfx::Size& size,
+                                           gfx::BufferFormat format,
+                                           scoped_refptr<Pixmap> pixmap) {
+  auto image = base::MakeRefCounted<Image>(size, format);
+  if (!image->Initialize(std::move(pixmap))) {
+    LOG(ERROR) << "Failed to create GLImage " << size.ToString() << ", "
+               << gfx::BufferFormatToString(format);
+    return nullptr;
+  }
+  return image;
+}
+
+}  // namespace
+
+GpuMemoryBufferFactoryNativePixmap::GpuMemoryBufferFactoryNativePixmap()
+    : GpuMemoryBufferFactoryNativePixmap(nullptr) {}
+
+GpuMemoryBufferFactoryNativePixmap::GpuMemoryBufferFactoryNativePixmap(
+    viz::VulkanContextProvider* vulkan_context_provider)
+    : vulkan_context_provider_(vulkan_context_provider) {}
 
 GpuMemoryBufferFactoryNativePixmap::~GpuMemoryBufferFactoryNativePixmap() =
     default;
@@ -38,31 +71,51 @@ GpuMemoryBufferFactoryNativePixmap::CreateGpuMemoryBuffer(
   scoped_refptr<gfx::NativePixmap> pixmap =
       ui::OzonePlatform::GetInstance()
           ->GetSurfaceFactoryOzone()
-          ->CreateNativePixmap(surface_handle, size, format, usage);
-  if (!pixmap.get()) {
-    DLOG(ERROR) << "Failed to create pixmap " << size.ToString() << ",  "
-                << gfx::BufferFormatToString(format) << ", usage "
-                << static_cast<int>(usage);
+          ->CreateNativePixmap(surface_handle, GetVulkanDevice(), size, format,
+                               usage);
+  return CreateGpuMemoryBufferFromNativePixmap(id, size, format, usage,
+                                               client_id, std::move(pixmap));
+#elif defined(USE_X11)
+  std::unique_ptr<ui::GbmBuffer> buffer =
+      ui::GpuMemoryBufferSupportX11::GetInstance()->CreateBuffer(format, size,
+                                                                 usage);
+  if (!buffer)
     return gfx::GpuMemoryBufferHandle();
-  }
-
-  gfx::GpuMemoryBufferHandle new_handle;
-  new_handle.type = gfx::NATIVE_PIXMAP;
-  new_handle.id = id;
-  new_handle.native_pixmap_handle = pixmap->ExportHandle();
-
-  // TODO(reveman): Remove this once crbug.com/628334 has been fixed.
-  {
-    base::AutoLock lock(native_pixmaps_lock_);
-    NativePixmapMapKey key(id.id, client_id);
-    DCHECK(native_pixmaps_.find(key) == native_pixmaps_.end());
-    native_pixmaps_[key] = pixmap;
-  }
-
-  return new_handle;
+  gfx::NativePixmapHandle handle = buffer->ExportHandle();
+  scoped_refptr<gfx::NativePixmapDmaBuf> pixmap =
+      base::MakeRefCounted<gfx::NativePixmapDmaBuf>(size, format,
+                                                    std::move(handle));
+  return CreateGpuMemoryBufferFromNativePixmap(id, size, format, usage,
+                                               client_id, std::move(pixmap));
 #else
   NOTIMPLEMENTED();
   return gfx::GpuMemoryBufferHandle();
+#endif
+}
+
+void GpuMemoryBufferFactoryNativePixmap::CreateGpuMemoryBufferAsync(
+    gfx::GpuMemoryBufferId id,
+    const gfx::Size& size,
+    gfx::BufferFormat format,
+    gfx::BufferUsage usage,
+    int client_id,
+    SurfaceHandle surface_handle,
+    CreateGpuMemoryBufferAsyncCallback callback) {
+#if defined(USE_OZONE)
+  ui::OzonePlatform::GetInstance()
+      ->GetSurfaceFactoryOzone()
+      ->CreateNativePixmapAsync(
+          surface_handle, GetVulkanDevice(), size, format, usage,
+          base::BindOnce(
+              &GpuMemoryBufferFactoryNativePixmap::OnNativePixmapCreated, id,
+              size, format, usage, client_id, std::move(callback),
+              weak_factory_.GetWeakPtr()));
+#elif defined(USE_X11)
+  std::move(callback).Run(CreateGpuMemoryBuffer(id, size, format, usage,
+                                                client_id, surface_handle));
+#else
+  NOTIMPLEMENTED();
+  std::move(callback).Run(gfx::GpuMemoryBufferHandle());
 #endif
 }
 
@@ -119,13 +172,22 @@ GpuMemoryBufferFactoryNativePixmap::CreateImageForGpuMemoryBuffer(
     }
   }
 
-  auto image = base::MakeRefCounted<gl::GLImageNativePixmap>(size, format);
-  if (!image->Initialize(std::move(pixmap))) {
-    LOG(ERROR) << "Failed to create GLImage " << size.ToString() << ", "
-               << gfx::BufferFormatToString(format);
-    return nullptr;
+  switch (gl::GetGLImplementation()) {
+    case gl::kGLImplementationEGLGLES2:
+    case gl::kGLImplementationEGLANGLE:
+      // EGL
+      return CreateImageFromPixmap<gl::GLImageNativePixmap>(size, format,
+                                                            pixmap);
+#if defined(USE_X11)
+    case gl::kGLImplementationDesktopGL:
+      // GLX
+      return CreateImageFromPixmap<gl::GLImageGLXNativePixmap>(size, format,
+                                                               pixmap);
+#endif
+    default:
+      NOTREACHED();
+      return nullptr;
   }
-  return image;
 }
 
 bool GpuMemoryBufferFactoryNativePixmap::SupportsCreateAnonymousImage() const {
@@ -141,25 +203,28 @@ GpuMemoryBufferFactoryNativePixmap::CreateAnonymousImage(
     const gfx::Size& size,
     gfx::BufferFormat format,
     gfx::BufferUsage usage,
+    SurfaceHandle surface_handle,
     bool* is_cleared) {
   scoped_refptr<gfx::NativePixmap> pixmap;
 #if defined(USE_OZONE)
-  pixmap =
-      ui::OzonePlatform::GetInstance()
-          ->GetSurfaceFactoryOzone()
-          ->CreateNativePixmap(gpu::kNullSurfaceHandle, size, format, usage);
+  pixmap = ui::OzonePlatform::GetInstance()
+               ->GetSurfaceFactoryOzone()
+               ->CreateNativePixmap(surface_handle, GetVulkanDevice(), size,
+                                    format, usage);
 #else
   NOTIMPLEMENTED();
 #endif
   if (!pixmap.get()) {
     LOG(ERROR) << "Failed to create pixmap " << size.ToString() << ", "
-               << gfx::BufferFormatToString(format);
+               << gfx::BufferFormatToString(format) << ", usage "
+               << gfx::BufferUsageToString(usage);
     return nullptr;
   }
   auto image = base::MakeRefCounted<gl::GLImageNativePixmap>(size, format);
   if (!image->Initialize(std::move(pixmap))) {
     LOG(ERROR) << "Failed to create GLImage " << size.ToString() << ", "
-               << gfx::BufferFormatToString(format);
+               << gfx::BufferFormatToString(format) << ", usage "
+               << gfx::BufferUsageToString(usage);
     return nullptr;
   }
   *is_cleared = true;
@@ -168,6 +233,61 @@ GpuMemoryBufferFactoryNativePixmap::CreateAnonymousImage(
 
 unsigned GpuMemoryBufferFactoryNativePixmap::RequiredTextureType() {
   return GL_TEXTURE_2D;
+}
+
+VkDevice GpuMemoryBufferFactoryNativePixmap::GetVulkanDevice() {
+  return vulkan_context_provider_
+             ? vulkan_context_provider_->GetDeviceQueue()->GetVulkanDevice()
+             : VK_NULL_HANDLE;
+}
+
+// static
+void GpuMemoryBufferFactoryNativePixmap::OnNativePixmapCreated(
+    gfx::GpuMemoryBufferId id,
+    const gfx::Size& size,
+    gfx::BufferFormat format,
+    gfx::BufferUsage usage,
+    int client_id,
+    CreateGpuMemoryBufferAsyncCallback callback,
+    base::WeakPtr<GpuMemoryBufferFactoryNativePixmap> weak_ptr,
+    scoped_refptr<gfx::NativePixmap> pixmap) {
+  if (weak_ptr) {
+    std::move(callback).Run(weak_ptr->CreateGpuMemoryBufferFromNativePixmap(
+        id, size, format, usage, client_id, pixmap));
+  } else {
+    std::move(callback).Run(gfx::GpuMemoryBufferHandle());
+  }
+}
+
+gfx::GpuMemoryBufferHandle
+GpuMemoryBufferFactoryNativePixmap::CreateGpuMemoryBufferFromNativePixmap(
+    gfx::GpuMemoryBufferId id,
+    const gfx::Size& size,
+    gfx::BufferFormat format,
+    gfx::BufferUsage usage,
+    int client_id,
+    scoped_refptr<gfx::NativePixmap> pixmap) {
+  if (!pixmap.get()) {
+    DLOG(ERROR) << "Failed to create pixmap " << size.ToString() << ",  "
+                << gfx::BufferFormatToString(format) << ", usage "
+                << gfx::BufferUsageToString(usage);
+    return gfx::GpuMemoryBufferHandle();
+  }
+
+  gfx::GpuMemoryBufferHandle new_handle;
+  new_handle.type = gfx::NATIVE_PIXMAP;
+  new_handle.id = id;
+  new_handle.native_pixmap_handle = pixmap->ExportHandle();
+
+  // TODO(reveman): Remove this once crbug.com/628334 has been fixed.
+  {
+    base::AutoLock lock(native_pixmaps_lock_);
+    NativePixmapMapKey key(id.id, client_id);
+    DCHECK(native_pixmaps_.find(key) == native_pixmaps_.end());
+    native_pixmaps_[key] = pixmap;
+  }
+
+  return new_handle;
 }
 
 }  // namespace gpu

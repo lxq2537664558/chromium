@@ -14,30 +14,28 @@
 
 #include "gpu/command_buffer/service/texture_manager.h"
 #include "media/base/video_frame.h"
+#include "media/base/win/mf_helpers.h"
 #include "media/gpu/h264_decoder.h"
 #include "media/gpu/h264_dpb.h"
+#include "media/gpu/windows/d3d11_com_defs.h"
 #include "media/gpu/windows/d3d11_video_context_wrapper.h"
 #include "media/gpu/windows/d3d11_video_decoder_client.h"
-#include "media/gpu/windows/return_on_failure.h"
 #include "media/video/picture.h"
 #include "third_party/angle/include/EGL/egl.h"
 #include "third_party/angle/include/EGL/eglext.h"
 #include "ui/gl/gl_image.h"
 
 namespace media {
-class CdmProxyContext;
+
 class D3D11H264Accelerator;
 class MediaLog;
 
-
 class D3D11H264Accelerator : public H264Decoder::H264Accelerator {
  public:
-  // |cdm_proxy_context| may be null for clear content.
   D3D11H264Accelerator(D3D11VideoDecoderClient* client,
                        MediaLog* media_log,
-                       CdmProxyContext* cdm_proxy_context,
-                       Microsoft::WRL::ComPtr<ID3D11VideoDecoder> video_decoder,
-                       Microsoft::WRL::ComPtr<ID3D11VideoDevice> video_device,
+                       ComD3D11VideoDecoder video_decoder,
+                       ComD3D11VideoDevice video_device,
                        std::unique_ptr<VideoContextWrapper> video_context);
   ~D3D11H264Accelerator() override;
 
@@ -49,18 +47,18 @@ class D3D11H264Accelerator : public H264Decoder::H264Accelerator {
                              const H264Picture::Vector& ref_pic_listp0,
                              const H264Picture::Vector& ref_pic_listb0,
                              const H264Picture::Vector& ref_pic_listb1,
-                             const scoped_refptr<H264Picture>& pic) override;
+                             scoped_refptr<H264Picture> pic) override;
   Status SubmitSlice(const H264PPS* pps,
                      const H264SliceHeader* slice_hdr,
                      const H264Picture::Vector& ref_pic_list0,
                      const H264Picture::Vector& ref_pic_list1,
-                     const scoped_refptr<H264Picture>& pic,
+                     scoped_refptr<H264Picture> pic,
                      const uint8_t* data,
                      size_t size,
                      const std::vector<SubsampleEntry>& subsamples) override;
-  Status SubmitDecode(const scoped_refptr<H264Picture>& pic) override;
+  Status SubmitDecode(scoped_refptr<H264Picture> pic) override;
   void Reset() override;
-  bool OutputPicture(const scoped_refptr<H264Picture>& pic) override;
+  bool OutputPicture(scoped_refptr<H264Picture> pic) override;
 
   // Gets a pic params struct with the constant fields set.
   void FillPicParamsWithConstants(DXVA_PicParams_H264* pic_param);
@@ -78,7 +76,7 @@ class D3D11H264Accelerator : public H264Decoder::H264Accelerator {
                                 const H264SliceHeader* pps);
 
   void PicParamsFromPic(DXVA_PicParams_H264* pic_param,
-                        const scoped_refptr<H264Picture>& pic);
+                        scoped_refptr<H264Picture> pic);
 
  private:
   bool SubmitSliceData();
@@ -89,10 +87,9 @@ class D3D11H264Accelerator : public H264Decoder::H264Accelerator {
 
   D3D11VideoDecoderClient* client_;
   MediaLog* media_log_ = nullptr;
-  CdmProxyContext* const cdm_proxy_context_;
 
-  Microsoft::WRL::ComPtr<ID3D11VideoDecoder> video_decoder_;
-  Microsoft::WRL::ComPtr<ID3D11VideoDevice> video_device_;
+  ComD3D11VideoDecoder video_decoder_;
+  ComD3D11VideoDevice video_device_;
   std::unique_ptr<VideoContextWrapper> video_context_;
 
   // This information set at the beginning of a frame and saved for processing

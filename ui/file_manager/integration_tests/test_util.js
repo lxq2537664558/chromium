@@ -48,7 +48,7 @@ function wait(time) {
  * Verifies if there are no Javascript errors in the given app window by
  * asserting the count returned by the app.getErrorCount remote call.
  * @param {!RemoteCall} app RemoteCall interface to the app window.
- * @param {function()} callback Completion callback.
+ * @param {function()=} callback Completion callback.
  * @return {Promise} Promise to be fulfilled on completion.
  */
 async function checkIfNoErrorsOccuredOnApp(app, callback) {
@@ -84,14 +84,14 @@ async function testPromiseAndApps(promise, apps) {
  * @type {number}
  * @const
  */
-var REPEAT_UNTIL_INTERVAL = 200;
+const REPEAT_UNTIL_INTERVAL = 200;
 
 /**
  * Interval milliseconds between log output of repeatUntil.
  * @type {number}
  * @const
  */
-var LOG_INTERVAL = 3000;
+const LOG_INTERVAL = 3000;
 
 /**
  * Returns caller's file, function and line/column number from the call stack.
@@ -99,11 +99,11 @@ var LOG_INTERVAL = 3000;
  *     as returned by exception stack trace. Example "at /a_file.js:1:1".
  */
 function getCaller() {
-  let error = new Error('For extracting error.stack');
-  let ignoreStackLines = 3;
-  let lines = error.stack.split('\n');
+  const error = new Error('For extracting error.stack');
+  const ignoreStackLines = 3;
+  const lines = error.stack.split('\n');
   if (ignoreStackLines < lines.length) {
-    let caller = lines[ignoreStackLines];
+    const caller = lines[ignoreStackLines];
     // Strip 'chrome-extension://oobinhbdbiehknkpbpejbbpdbkdjmoco' prefix.
     return caller.replace(/(chrome-extension:\/\/\w*)/gi, '').trim();
   }
@@ -113,22 +113,22 @@ function getCaller() {
 
 /**
  * Returns a pending marker. See also the repeatUntil function.
- * @param {string} name of test function that originated the operation,
+ * @param {string} caller name of test function that originated the operation,
  *     it's the return of getCaller() function.
  * @param {string} message Pending reason including %s, %d, or %j markers. %j
  *     format an object as JSON.
- * @param {Array<*>} var_args Values to be assigined to %x markers.
+ * @param {...*} var_args Values to be assigined to %x markers.
  * @return {Object} Object which returns true for the expression: obj instanceof
  *     pending.
  */
 function pending(caller, message, var_args) {
   // |index| is used to ignore caller and message arguments subsisting markers
   // (%s, %d and %j) within message with the remaining |arguments|.
-  var index = 2;
-  var args = arguments;
+  let index = 2;
+  const args = arguments;
   message = String(message);
-  var formattedMessage = message.replace(/%[sdj]/g, function(pattern) {
-    var arg = args[index++];
+  const formattedMessage = message.replace(/%[sdj]/g, function(pattern) {
+    const arg = args[index++];
     switch (pattern) {
       case '%s':
         return String(arg);
@@ -140,7 +140,7 @@ function pending(caller, message, var_args) {
         return pattern;
     }
   });
-  var pendingMarker = Object.create(pending.prototype);
+  const pendingMarker = Object.create(pending.prototype);
   pendingMarker.message = caller + ': ' + formattedMessage;
   return pendingMarker;
 }
@@ -149,12 +149,12 @@ function pending(caller, message, var_args) {
  * Waits until the checkFunction returns a value but a pending marker.
  * @param {function():*} checkFunction Function to check a condition. It can
  *     return a pending marker created by a pending function.
- * @return {Promise} Promise to be fulfilled with the return value of
+ * @return {!Promise} Promise to be fulfilled with the return value of
  *     checkFunction when the checkFunction reutrns a value but a pending
  *     marker.
  */
 async function repeatUntil(checkFunction) {
-  var logTime = Date.now() + LOG_INTERVAL;
+  let logTime = Date.now() + LOG_INTERVAL;
   while (true) {
     const result = await checkFunction();
     if (!(result instanceof pending)) {
@@ -230,7 +230,8 @@ function waitForAppWindowCount(appId, expectedCount) {
   const command = {'name': 'countAppWindows', 'appId': appId};
   return repeatUntil(async () => {
     if (await sendTestMessage(command) != expectedCount) {
-      return pending(caller, 'waitForAppWindowCount ' + appId + ' ' + result);
+      return pending(
+          caller, 'waitForAppWindowCount ' + appId + ' ' + expectedCount);
     }
     return true;
   });
@@ -263,10 +264,10 @@ async function getBrowserWindows() {
  */
 async function addEntries(volumeNames, entries, opt_callback) {
   if (volumeNames.length == 0) {
-    callback(true);
+    opt_callback && opt_callback(true);
     return;
   }
-  var volumeResultPromises = volumeNames.map(function(volume) {
+  const volumeResultPromises = volumeNames.map(function(volume) {
     return sendTestMessage({
       name: 'addEntries',
       volume: volume,
@@ -289,33 +290,52 @@ async function addEntries(volumeNames, entries, opt_callback) {
  * @enum {string}
  * @const
  */
-var EntryType = Object.freeze({
+const EntryType = {
   FILE: 'file',
   DIRECTORY: 'directory',
+  LINK: 'link',
   SHARED_DRIVE: 'team_drive',
   COMPUTER: 'Computer'
-});
+};
+Object.freeze(EntryType);
 
 /**
  * @enum {string}
  * @const
  */
-var SharedOption = Object.freeze({
+
+const SharedOption = {
   NONE: 'none',
   SHARED: 'shared',
   SHARED_WITH_ME: 'sharedWithMe',
   NESTED_SHARED_WITH_ME: 'nestedSharedWithMe',
-});
+};
+Object.freeze(SharedOption);
+
 
 /**
- * @enum {string}
+ * @typedef {{
+ *   downloads: string,
+ *   drive: string,
+ *   android_files: string,
+ * }}
+ *
  */
-var RootPath = Object.seal({
+let getRootPathsResult;
+
+/**
+ * @typedef {{
+ *   DOWNLOADS: string,
+ *   DRIVE: string,
+ *   ANDROID_FILES: string,
+ * }}
+ */
+const RootPath = {
   DOWNLOADS: '/must-be-filled-in-test-setup',
-  DOWNLOADS_PATH: '/must-be-filled-in-test-setup',
   DRIVE: '/must-be-filled-in-test-setup',
   ANDROID_FILES: '/must-be-filled-in-test-setup',
-});
+};
+Object.seal(RootPath);
 
 
 /**
@@ -323,169 +343,122 @@ var RootPath = Object.seal({
  * TestEntryCapabilities in file_manager_browsertest_base.cc. All capabilities
  * default to true if not specified.
  *
- * @record
- * @struct
+ * @typedef {{
+ *    canCopy: (boolean|undefined),
+ *    canDelete: (boolean|undefined),
+ *    canRename: (boolean|undefined),
+ *    canAddChildren: (boolean|undefined),
+ *    canShare: (boolean|undefined),
+ * }}
  */
-function TestEntryCapabilities() {}
-
-/**
- * @type {boolean|undefined}
- */
-TestEntryCapabilities.prototype.canCopy = true;
-
-/**
- * @type {boolean|undefined}
- */
-TestEntryCapabilities.prototype.canDelete = true;
-
-/**
- * @type {boolean|undefined}
- */
-TestEntryCapabilities.prototype.canRename = true;
-
-/**
- * @type {boolean|undefined}
- */
-TestEntryCapabilities.prototype.canAddChildren = true;
-
-/**
- * @type {boolean|undefined}
- */
-TestEntryCapabilities.prototype.canShare = true;
+let TestEntryCapabilities;
 
 /**
  * The folder features for the test entry. Structure should match
  * TestEntryFolderFeature in file_manager_browsertest_base.cc. All features
  * default to false is not specified.
  *
- * @record
- * @struct
+ * @typedef {{
+ *    isMachineRoot: (boolean|undefined),
+ *    isArbitrarySyncFolder: (boolean|undefined),
+ *    isExternalMedia: (boolean|undefined),
+ * }}
  */
-function TestEntryFolderFeature() {}
-
-/**
- * @type {boolean|undefined}
- */
-TestEntryFolderFeature.prototype.isMachineRoot = false;
-
-/**
- * @type {boolean|undefined}
- */
-TestEntryFolderFeature.prototype.isArbitrarySyncFolder = false;
-
-/**
- * @type {boolean|undefined}
- */
-TestEntryFolderFeature.prototype.isExternalMedia = false;
+let TestEntryFolderFeature;
 
 /**
  * Parameters to creat a Test Entry in the file manager. Structure should match
  * TestEntryInfo in file_manager_browsertest_base.cc.
  *
- * @record
- * @struct
+ * Field details:
+ *
+ * sourceFileName: Source file name that provides file contents (file location
+ * relative to /chrome/test/data/chromeos/file_manager/).
+ *
+ * targetPath: Name of entry on the test file system. Used to determine the
+ * actual name of the file.
+ *
+ * teamDriveName: Name of the team drive this entry is in. Defaults to a blank
+ * string (no team drive). Team Drive names must be unique.
+ *
+ * computerName: Name of the computer this entry is in. Defaults to a blank
+ * string (no computer). Computer names must be unique.
+ *
+ * lastModifiedTime: Last modified time as a text to be shown in the last
+ * modified column.
+ *
+ * nameText: File name to be shown in the name column.
+ *
+ * sizeText: Size text to be shown in the size column.
+ *
+ * typeText: Type name to be shown in the type column.
+ *
+ * capabilities:  Capabilities of this file. Defaults to all capabilities
+ * available (read-write access).
+ *
+ * folderFeature: Folder features of this file. Defaults to all features
+ * disabled.
+ *
+ * @typedef {{
+ *    type: EntryType,
+ *    sourceFileName: (string|undefined),
+ *    targetPath: (string|undefined),
+ *    teamDriveName: (string|undefined),
+ *    computerName: (string|undefined),
+ *    mimeType: (string|undefined),
+ *    sharedOption: (SharedOption|undefined),
+ *    lastModifiedTime: (string|undefined),
+ *    nameText: (string|undefined),
+ *    sizeText: (string|undefined),
+ *    typeText: (string|undefined),
+ *    capabilities: (TestEntryCapabilities|undefined),
+ *    folderFeature: (TestEntryFolderFeature|undefined),
+ * }}
  */
-function TestEntryInfoOptions() {}
-
-/**
- * @type {EntryType} Entry type.
- */
-TestEntryInfoOptions.prototype.type;
-/**
- * @type {string|undefined} Source file name that provides file contents
- *     (file location relative to /chrome/test/data/chromeos/file_manager/).
- */
-TestEntryInfoOptions.prototype.sourceFileName;
-/**
- * @type {string} Name of entry on the test file system. Used to determine the
- *     actual name of the file.
- */
-TestEntryInfoOptions.prototype.targetPath;
-/**
- * @type {string} Name of the team drive this entry is in. Defaults to a blank
- *     string (no team drive). Team Drive names must be unique.
- */
-TestEntryInfoOptions.prototype.teamDriveName;
-/**
- * @type {string} Name of the computer this entry is in. Defaults to a blank
- *     string (no computer). Computer names must be unique.
- */
-TestEntryInfoOptions.prototype.computerName;
-/**
- * @type {string|undefined} Mime type.
- */
-TestEntryInfoOptions.prototype.mimeType;
-/**
- * @type {SharedOption|undefined} Shared option. Defaults to NONE (not shared).
- */
-TestEntryInfoOptions.prototype.sharedOption;
-/**
- * @type {string} Last modified time as a text to be shown in the last modified
- *     column.
- */
-TestEntryInfoOptions.prototype.lastModifiedTime;
-/**
- * @type {string} File name to be shown in the name column.
- */
-TestEntryInfoOptions.prototype.nameText;
-/**
- * @type {string} Size text to be shown in the size column.
- */
-TestEntryInfoOptions.prototype.sizeText;
-/**
- * @type {string} Type name to be shown in the type column.
- */
-TestEntryInfoOptions.prototype.typeText;
-/**
- * @type {TestEntryCapabilities|undefined} Capabilities of this file. Defaults
- *     to all capabilities available (read-write access).
- */
-TestEntryInfoOptions.prototype.capabilities;
-
-/**
- * @type {TestEntryFolderFeature|undefined} Foder features of this file.
- *     Defaults to all features disabled.
- */
-TestEntryInfoOptions.prototype.folderFeature;
+let TestEntryInfoOptions;
 
 /**
  * File system entry information for tests. Structure should match TestEntryInfo
  * in file_manager_browsertest_base.cc
  * TODO(sashab): Remove this, rename TestEntryInfoOptions to TestEntryInfo and
  * set the defaults in the record definition above.
- *
- * @param {TestEntryInfoOptions} options Parameters to create the TestEntryInfo.
  */
-function TestEntryInfo(options) {
-  this.type = options.type;
-  this.sourceFileName = options.sourceFileName || '';
-  this.targetPath = options.targetPath;
-  this.teamDriveName = options.teamDriveName || '';
-  this.computerName = options.computerName || '';
-  this.mimeType = options.mimeType || '';
-  this.sharedOption = options.sharedOption || SharedOption.NONE;
-  this.lastModifiedTime = options.lastModifiedTime;
-  this.nameText = options.nameText;
-  this.sizeText = options.sizeText;
-  this.typeText = options.typeText;
-  this.capabilities = options.capabilities;
-  this.folderFeature = options.folderFeature;
-  this.pinned = !!options.pinned;
-  Object.freeze(this);
+class TestEntryInfo {
+  /**
+   * @param {TestEntryInfoOptions} options Parameters to create the
+   *     TestEntryInfo.
+   */
+  constructor(options) {
+    this.type = options.type;
+    this.sourceFileName = options.sourceFileName || '';
+    this.targetPath = options.targetPath;
+    this.teamDriveName = options.teamDriveName || '';
+    this.computerName = options.computerName || '';
+    this.mimeType = options.mimeType || '';
+    this.sharedOption = options.sharedOption || SharedOption.NONE;
+    this.lastModifiedTime = options.lastModifiedTime;
+    this.nameText = options.nameText;
+    this.sizeText = options.sizeText;
+    this.typeText = options.typeText;
+    this.capabilities = options.capabilities;
+    this.folderFeature = options.folderFeature;
+    this.pinned = !!options.pinned;
+    Object.freeze(this);
+  }
+
+  static getExpectedRows(entries) {
+    return entries.map(function(entry) {
+      return entry.getExpectedRow();
+    });
+  }
+
+  /**
+   * Obtains a expected row contents of the file in the file list.
+   */
+  getExpectedRow() {
+    return [this.nameText, this.sizeText, this.typeText, this.lastModifiedTime];
+  }
 }
-
-TestEntryInfo.getExpectedRows = function(entries) {
-  return entries.map(function(entry) {
-    return entry.getExpectedRow();
-  });
-};
-
-/**
- * Obtains a expected row contents of the file in the file list.
- */
-TestEntryInfo.prototype.getExpectedRow = function() {
-  return [this.nameText, this.sizeText, this.typeText, this.lastModifiedTime];
-};
 
 /**
  * Filesystem entries used by the test cases.
@@ -496,7 +469,7 @@ TestEntryInfo.prototype.getExpectedRow = function() {
  * @type {Object<TestEntryInfo>}
  * @const
  */
-var ENTRIES = {
+const ENTRIES = {
   hello: new TestEntryInfo({
     type: EntryType.FILE,
     sourceFileName: 'text.txt',
@@ -574,11 +547,10 @@ var ENTRIES = {
     typeText: 'PNG image'
   }),
 
-  // An image file without an extension, to confirm that file type detection
-  // using mime types works fine.
   image2: new TestEntryInfo({
     type: EntryType.FILE,
     sourceFileName: 'image2.png',
+    // No file extension.
     targetPath: 'image2',
     mimeType: 'image/png',
     lastModifiedTime: 'Jan 18, 2038, 1:02 AM',
@@ -609,11 +581,66 @@ var ENTRIES = {
     typeText: 'JPEG image'
   }),
 
-  // An ogg file without a mime type, to confirm that file type detection using
-  // file extensions works fine.
+  // Used to differentiate between .jpg and .jpeg handling.
+  sampleJpeg: new TestEntryInfo({
+    type: EntryType.FILE,
+    sourceFileName: 'small.jpg',
+    targetPath: 'sample.jpeg',
+    mimeType: 'image/jpeg',
+    lastModifiedTime: 'Jan 18, 2038, 1:02 AM',
+    nameText: 'sample.jpeg',
+    sizeText: '1 KB',
+    typeText: 'JPEG image'
+  }),
+
+  brokenJpeg: new TestEntryInfo({
+    type: EntryType.FILE,
+    sourceFileName: 'broken.jpg',
+    targetPath: 'broken.jpg',
+    mimeType: 'image/jpeg',
+    lastModifiedTime: 'Jan 18, 2038, 1:02 AM',
+    nameText: 'broken.jpg',
+    sizeText: '1 byte',
+    typeText: 'JPEG image'
+  }),
+
+  exifImage: new TestEntryInfo({
+    type: EntryType.FILE,
+    sourceFileName: 'exif.jpg',
+    // No mime type.
+    targetPath: 'exif.jpg',
+    lastModifiedTime: 'Jan 18, 2038, 1:02 AM',
+    nameText: 'exif.jpg',
+    sizeText: '31 KB',
+    typeText: 'JPEG image'
+  }),
+
+  rawImage: new TestEntryInfo({
+    type: EntryType.FILE,
+    sourceFileName: 'raw.orf',
+    // No mime type.
+    targetPath: 'raw.orf',
+    lastModifiedTime: 'May 20, 2019, 10:10 AM',
+    nameText: 'raw.orf',
+    sizeText: '214 KB',
+    typeText: 'ORF image'
+  }),
+
+  nefImage: new TestEntryInfo({
+    type: EntryType.FILE,
+    sourceFileName: 'raw.nef',
+    // No mime type.
+    targetPath: 'raw.nef',
+    lastModifiedTime: 'May 9, 2015, 11:16 PM',
+    nameText: 'raw.nef',
+    sizeText: '92 KB',
+    typeText: 'NEF image'
+  }),
+
   beautiful: new TestEntryInfo({
     type: EntryType.FILE,
     sourceFileName: 'music.ogg',
+    // No mime type.
     targetPath: 'Beautiful Song.ogg',
     lastModifiedTime: 'Nov 12, 2086, 12:00 PM',
     nameText: 'Beautiful Song.ogg',
@@ -651,6 +678,19 @@ var ENTRIES = {
     typeText: 'Google document'
   }),
 
+  testSharedFile: new TestEntryInfo({
+    type: EntryType.FILE,
+    sourceFileName: 'text.txt',
+    targetPath: 'test.txt',
+    mimeType: 'text/plain',
+    sharedOption: SharedOption.SHARED,
+    lastModifiedTime: 'Mar 20, 2012, 11:40 PM',
+    nameText: 'test.txt',
+    sizeText: '51 bytes',
+    typeText: 'Plain text',
+    pinned: true
+  }),
+
   newlyAdded: new TestEntryInfo({
     type: EntryType.FILE,
     sourceFileName: 'music.ogg',
@@ -676,11 +716,23 @@ var ENTRIES = {
   plainText: new TestEntryInfo({
     type: EntryType.FILE,
     sourceFileName: 'plaintext',
+    // No mime type, no file extension.
     targetPath: 'plaintext',
     lastModifiedTime: 'Sep 4, 1998, 12:34 PM',
     nameText: 'plaintext',
     sizeText: '32 bytes',
     typeText: 'Plain text',
+  }),
+
+  mHtml: new TestEntryInfo({
+    type: EntryType.FILE,
+    sourceFileName: 'page.mhtml',
+    targetPath: 'page.mhtml',
+    mimeType: 'multipart/related',
+    lastModifiedTime: 'Sep 4, 1998, 12:34 PM',
+    nameText: 'page.mhtml',
+    sizeText: '421 bytes',
+    typeText: 'HTML document',
   }),
 
   tallHtml: new TestEntryInfo({
@@ -782,6 +834,48 @@ var ENTRIES = {
     typeText: 'Folder'
   }),
 
+  deeplyBurriedSmallJpeg: new TestEntryInfo({
+    type: EntryType.FILE,
+    targetPath: 'A/B/C/deep.jpg',
+    sourceFileName: 'small.jpg',
+    mimeType: 'image/jpeg',
+    lastModifiedTime: 'Jan 18, 2038, 1:02 AM',
+    nameText: 'deep.jpg',
+    sizeText: '886 bytes',
+    typeText: 'JPEG image'
+  }),
+
+  linkGtoB: new TestEntryInfo({
+    type: EntryType.LINK,
+    targetPath: 'G',
+    sourceFileName: 'A/B',
+    lastModifiedTime: 'Jan 1, 2000, 1:00 AM',
+    nameText: 'G',
+    sizeText: '--',
+    typeText: 'Folder'
+  }),
+
+  linkHtoFile: new TestEntryInfo({
+    type: EntryType.LINK,
+    targetPath: 'H.jpg',
+    sourceFileName: 'A/B/C/deep.jpg',
+    mimeType: 'image/jpeg',
+    lastModifiedTime: 'Jan 18, 2038, 1:02 AM',
+    nameText: 'H.jpg',
+    sizeText: '886 bytes',
+    typeText: 'JPEG image'
+  }),
+
+  linkTtoTransitiveDirectory: new TestEntryInfo({
+    type: EntryType.LINK,
+    targetPath: 'T',
+    sourceFileName: 'G/C',
+    lastModifiedTime: 'Jan 1, 2000, 1:00 AM',
+    nameText: 'T',
+    sizeText: '--',
+    typeText: 'Folder'
+  }),
+
   zipArchive: new TestEntryInfo({
     type: EntryType.FILE,
     sourceFileName: 'archive.zip',
@@ -846,6 +940,17 @@ var ENTRIES = {
     nameText: 'package.deb',
     sizeText: '724 bytes',
     typeText: 'DEB file'
+  }),
+
+  tiniFile: new TestEntryInfo({
+    type: EntryType.FILE,
+    sourceFileName: 'archive.tar.gz',
+    targetPath: 'test.tini',
+    mimeType: 'application/gzip',
+    lastModifiedTime: 'Jan 1, 2014, 1:00 AM',
+    nameText: 'test.tini',
+    sizeText: '439 bytes',
+    typeText: 'Crostini image file'
   }),
 
   hiddenFile: new TestEntryInfo({
@@ -1084,6 +1189,42 @@ var ENTRIES = {
     },
   }),
 
+  // A regular file that can't be renamed, but can be deleted.
+  deletableFile: new TestEntryInfo({
+    type: EntryType.FILE,
+    sourceFileName: 'text.txt',
+    targetPath: 'Deletable File.txt',
+    mimeType: 'text/plain',
+    lastModifiedTime: 'Sep 4, 1998, 12:34 PM',
+    nameText: 'Deletable File.txt',
+    sizeText: '51 bytes',
+    typeText: 'Plain text',
+    capabilities: {
+      canCopy: true,
+      canAddChildren: false,
+      canRename: false,
+      canDelete: true
+    },
+  }),
+
+  // A regular file that can't be deleted, but can be renamed.
+  renamableFile: new TestEntryInfo({
+    type: EntryType.FILE,
+    sourceFileName: 'text.txt',
+    targetPath: 'Renamable File.txt',
+    mimeType: 'text/plain',
+    lastModifiedTime: 'Sep 4, 1998, 12:34 PM',
+    nameText: 'Renamable File.txt',
+    sizeText: '51 bytes',
+    typeText: 'Plain text',
+    capabilities: {
+      canCopy: true,
+      canAddChildren: false,
+      canRename: true,
+      canDelete: false
+    },
+  }),
+
   // Default Android directories.
   directoryDocuments: new TestEntryInfo({
     type: EntryType.DIRECTORY,
@@ -1204,3 +1345,31 @@ var ENTRIES = {
     typeText: 'CRDOWNLOAD file'
   }),
 };
+
+/**
+ * Returns the count for |value| for the histogram |name|.
+ * @param {string} name The histogram to be queried.
+ * @param {number} value The value within that histogram to query.
+ * @return {!Promise<number>} A promise fulfilled with the count.
+ */
+async function getHistogramCount(name, value) {
+  const result = await sendTestMessage({
+    'name': 'getHistogramCount',
+    'histogramName': name,
+    'value': value,
+  });
+  return /** @type {number} */ (JSON.parse(result));
+}
+
+/**
+ * Returns the count for the user action |name|.
+ * @param {string} name The user action to be queried.
+ * @return {!Promise<number>} A promise fulfilled with the count.
+ */
+async function getUserActionCount(name) {
+  const result = await sendTestMessage({
+    'name': 'getUserActionCount',
+    'userActionName': name,
+  });
+  return /** @type {number} */ (JSON.parse(result));
+}

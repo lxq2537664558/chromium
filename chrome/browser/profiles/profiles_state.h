@@ -19,11 +19,8 @@
 class Browser;
 class PrefRegistrySimple;
 class Profile;
-class SigninErrorController;
 
 namespace base { class FilePath; }
-
-struct AccountInfo;
 
 namespace profiles {
 
@@ -66,15 +63,12 @@ base::string16 GetProfileSwitcherTextForItem(const AvatarMenu::Item& item);
 void UpdateProfileName(Profile* profile,
                        const base::string16& new_profile_name);
 
-// Returns the list of secondary accounts for a specific
-// |profile|. Note that the profile must be signed in.
-std::vector<AccountInfo> GetSecondaryAccountsForSignedInProfile(
-    Profile* profile);
 #endif  // !defined(OS_CHROMEOS)
 
-// Returns whether the |browser|'s profile is a non-incognito or guest profile.
-// The distinction is needed because guest profiles are implemented as
-// incognito profiles.
+// Returns whether the |browser|'s profile is not incognito (a regular profile
+// or a guest session).
+// The distinction is needed because guest profiles and incognito profiles are
+// implemented as off-the-record profiles.
 bool IsRegularOrGuestSession(Browser* browser);
 
 // Returns true if sign in is required to browse as this profile.  Call with
@@ -91,11 +85,6 @@ void UpdateIsProfileLockEnabledIfNeeded(Profile* profile);
 // Starts an update for a new version of the Gaia profile picture and other
 // profile info.
 void UpdateGaiaProfileInfoIfNeeded(Profile* profile);
-
-// Returns the sign-in error controller for the given profile.  Some profiles,
-// like guest profiles, may not have a controller so this function may return
-// NULL.
-SigninErrorController* GetSigninErrorController(Profile* profile);
 
 // If the current active profile (given by prefs::kProfileLastUsed) is locked,
 // changes the active profile to the Guest profile. Returns true if the active

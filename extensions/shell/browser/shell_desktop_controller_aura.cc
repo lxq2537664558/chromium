@@ -7,7 +7,7 @@
 #include <algorithm>
 #include <string>
 
-#include "base/logging.h"
+#include "base/check_op.h"
 #include "base/run_loop.h"
 #include "components/keep_alive_registry/keep_alive_registry.h"
 #include "extensions/browser/app_window/app_window.h"
@@ -20,6 +20,7 @@
 #include "ui/base/cursor/image_cursors.h"
 #include "ui/base/ime/init/input_method_factory.h"
 #include "ui/base/ime/input_method.h"
+#include "ui/base/mojom/cursor_type.mojom-shared.h"
 #include "ui/display/screen.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/geometry/size.h"
@@ -70,7 +71,7 @@ class ShellNativeCursorManager : public wm::NativeCursorManager {
   void SetCursor(gfx::NativeCursor cursor,
                  wm::NativeCursorManagerDelegate* delegate) override {
     image_cursors_->SetPlatformCursor(&cursor);
-    cursor.set_device_scale_factor(image_cursors_->GetScale());
+    cursor.set_image_scale_factor(image_cursors_->GetScale());
     delegate->CommitCursor(cursor);
 
     if (delegate->IsCursorVisible())
@@ -84,7 +85,7 @@ class ShellNativeCursorManager : public wm::NativeCursorManager {
     if (visible) {
       SetCursor(delegate->GetCursor(), delegate);
     } else {
-      gfx::NativeCursor invisible_cursor(ui::CursorType::kNone);
+      gfx::NativeCursor invisible_cursor(ui::mojom::CursorType::kNone);
       image_cursors_->SetPlatformCursor(&invisible_cursor);
       SetCursorOnAllRootWindows(invisible_cursor);
     }
@@ -229,13 +230,12 @@ void ShellDesktopControllerAura::OnDisplayModeChanged(
 #endif
 
 ui::EventDispatchDetails ShellDesktopControllerAura::DispatchKeyEventPostIME(
-    ui::KeyEvent* key_event,
-    DispatchKeyEventPostIMECallback callback) {
+    ui::KeyEvent* key_event) {
   if (key_event->target()) {
     aura::WindowTreeHost* host = static_cast<aura::Window*>(key_event->target())
                                      ->GetRootWindow()
                                      ->GetHost();
-    return host->DispatchKeyEventPostIME(key_event, std::move(callback));
+    return host->DispatchKeyEventPostIME(key_event);
   }
 
   // Send the key event to the focused window.
@@ -243,11 +243,10 @@ ui::EventDispatchDetails ShellDesktopControllerAura::DispatchKeyEventPostIME(
       const_cast<aura::Window*>(focus_controller_->GetActiveWindow());
   if (active_window) {
     return active_window->GetRootWindow()->GetHost()->DispatchKeyEventPostIME(
-        key_event, std::move(callback));
+        key_event);
   }
 
-  return GetPrimaryHost()->DispatchKeyEventPostIME(key_event,
-                                                   std::move(callback));
+  return GetPrimaryHost()->DispatchKeyEventPostIME(key_event);
 }
 
 void ShellDesktopControllerAura::OnKeepAliveStateChanged(
@@ -329,13 +328,13 @@ void ShellDesktopControllerAura::InitWindowManager() {
       std::make_unique<ShellNativeCursorManager>(this));
   cursor_manager_->SetDisplay(
       display::Screen::GetScreen()->GetPrimaryDisplay());
-  cursor_manager_->SetCursor(ui::CursorType::kPointer);
+  cursor_manager_->SetCursor(ui::mojom::CursorType::kPointer);
 
 #if defined(OS_CHROMEOS)
   user_activity_detector_ = std::make_unique<ui::UserActivityDetector>();
   user_activity_notifier_ =
       std::make_unique<ui::UserActivityPowerManagerNotifier>(
-          user_activity_detector_.get(), nullptr /*connector*/);
+          user_activity_detector_.get(), /*fingerprint=*/mojo::NullRemote());
 #endif
 }
 
@@ -364,7 +363,7 @@ ShellDesktopControllerAura::CreateRootWindowControllerForDisplay(
   gfx::Rect bounds(gfx::ScaleToFlooredPoint(display.bounds().origin(),
                                             display.device_scale_factor()),
                    display.GetSizeInPixel());
-  std::unique_ptr<RootWindowController> root_window_controller =
+  auto root_window_controller =
       std::make_unique<RootWindowController>(this, bounds, browser_context_);
 
   // Initialize the root window with our clients.
@@ -393,13 +392,9 @@ void ShellDesktopControllerAura::TearDownRootWindowController(
 }
 
 void ShellDesktopControllerAura::MaybeQuit() {
-  // run_loop_ may be null in tests.
-  if (!run_loop_)
-    return;
-
   // Quit if there are no app windows open and no keep-alives waiting for apps
-  // to relaunch.
-  if (root_window_controllers_.empty() &&
+  // to relaunch.  |run_loop_| may be null in tests.
+  if (run_loop_ && root_window_controllers_.empty() &&
       !KeepAliveRegistry::GetInstance()->IsKeepingAlive()) {
     run_loop_->QuitWhenIdle();
   }
@@ -407,7 +402,7 @@ void ShellDesktopControllerAura::MaybeQuit() {
 
 #if defined(OS_CHROMEOS)
 gfx::Size ShellDesktopControllerAura::GetStartingWindowSize() {
-  gfx::Size size;
+  gfx::Size size = GetPrimaryDisplaySize();
   base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
   if (command_line->HasSwitch(switches::kAppShellHostWindowSize)) {
     const std::string size_str =
@@ -415,22 +410,16 @@ gfx::Size ShellDesktopControllerAura::GetStartingWindowSize() {
     int width, height;
     CHECK_EQ(2, sscanf(size_str.c_str(), "%dx%d", &width, &height));
     size = gfx::Size(width, height);
-  } else {
-    size = GetPrimaryDisplaySize();
   }
-  if (size.IsEmpty())
-    size = gfx::Size(1920, 1080);
-  return size;
+  return size.IsEmpty() ? gfx::Size(1920, 1080) : size;
 }
 
 gfx::Size ShellDesktopControllerAura::GetPrimaryDisplaySize() {
   const display::DisplayConfigurator::DisplayStateList& displays =
       display_configurator_->cached_displays();
-  if (displays.empty())
-    return gfx::Size();
-  const display::DisplayMode* mode = displays[0]->current_mode();
+  const display::DisplayMode* mode =
+      displays.empty() ? nullptr : displays[0]->current_mode();
   return mode ? mode->size() : gfx::Size();
-  return gfx::Size();
 }
 #endif
 

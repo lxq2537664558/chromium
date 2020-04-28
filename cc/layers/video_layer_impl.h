@@ -10,7 +10,7 @@
 #include "cc/cc_export.h"
 #include "cc/layers/layer_impl.h"
 #include "components/viz/common/resources/release_callback.h"
-#include "media/base/video_rotation.h"
+#include "media/base/video_transformation.h"
 
 namespace media {
 class VideoFrame;
@@ -45,6 +45,7 @@ class CC_EXPORT VideoLayerImpl : public LayerImpl {
   SimpleEnclosedRegion VisibleOpaqueRegion() const override;
   void DidBecomeActive() override;
   void ReleaseResources() override;
+  gfx::ContentColorUsage GetContentColorUsage() const override;
 
   void SetNeedsRedraw();
   media::VideoRotation video_rotation() const { return video_rotation_; }

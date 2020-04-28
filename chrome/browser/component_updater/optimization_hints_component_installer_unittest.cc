@@ -4,6 +4,8 @@
 
 #include "chrome/browser/component_updater/optimization_hints_component_installer.h"
 
+#include <utility>
+
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
@@ -11,7 +13,7 @@
 #include "base/run_loop.h"
 #include "base/single_thread_task_runner.h"
 #include "base/test/scoped_feature_list.h"
-#include "base/test/scoped_task_environment.h"
+#include "base/test/task_environment.h"
 #include "base/threading/thread_task_runner_handle.h"
 #include "base/version.h"
 #include "chrome/common/pref_names.h"
@@ -20,10 +22,10 @@
 #include "components/data_reduction_proxy/core/browser/data_reduction_proxy_test_utils.h"
 #include "components/data_reduction_proxy/core/common/data_reduction_proxy_pref_names.h"
 #include "components/optimization_guide/optimization_guide_constants.h"
+#include "components/optimization_guide/optimization_guide_features.h"
 #include "components/optimization_guide/optimization_guide_service.h"
 #include "components/prefs/pref_registry_simple.h"
 #include "components/prefs/testing_pref_service.h"
-#include "components/previews/core/previews_features.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "testing/platform_test.h"
 
@@ -37,7 +39,7 @@ class TestOptimizationGuideService
   explicit TestOptimizationGuideService(
       scoped_refptr<base::SingleThreadTaskRunner> io_thread_task_runner)
       : optimization_guide::OptimizationGuideService(io_thread_task_runner) {}
-  ~TestOptimizationGuideService() override {}
+  ~TestOptimizationGuideService() override = default;
 
   void MaybeUpdateHintsComponent(
       const optimization_guide::HintsComponentInfo& info) override {
@@ -58,8 +60,8 @@ class TestOptimizationGuideService
 class OptimizationHintsMockComponentUpdateService
     : public component_updater::MockComponentUpdateService {
  public:
-  OptimizationHintsMockComponentUpdateService() {}
-  ~OptimizationHintsMockComponentUpdateService() override {}
+  OptimizationHintsMockComponentUpdateService() = default;
+  ~OptimizationHintsMockComponentUpdateService() override = default;
 
  private:
   DISALLOW_COPY_AND_ASSIGN(OptimizationHintsMockComponentUpdateService);
@@ -71,7 +73,7 @@ namespace component_updater {
 
 class OptimizationHintsComponentInstallerTest : public PlatformTest {
  public:
-  OptimizationHintsComponentInstallerTest() {}
+  OptimizationHintsComponentInstallerTest() = default;
 
   void SetUp() override {
     PlatformTest::SetUp();
@@ -144,12 +146,12 @@ class OptimizationHintsComponentInstallerTest : public PlatformTest {
 
  protected:
   void RunUntilIdle() {
-    scoped_task_environment_.RunUntilIdle();
+    task_environment_.RunUntilIdle();
     base::RunLoop().RunUntilIdle();
   }
 
  private:
-  base::test::ScopedTaskEnvironment scoped_task_environment_;
+  base::test::TaskEnvironment task_environment_;
 
   base::ScopedTempDir component_install_dir_;
   std::unique_ptr<TestingPrefServiceSimple> pref_service_;
@@ -167,48 +169,52 @@ class OptimizationHintsComponentInstallerTest : public PlatformTest {
 TEST_F(OptimizationHintsComponentInstallerTest,
        ComponentRegistrationWhenFeatureDisabled) {
   base::test::ScopedFeatureList scoped_list;
-  scoped_list.InitAndDisableFeature(previews::features::kOptimizationHints);
+  scoped_list.InitAndDisableFeature(
+      optimization_guide::features::kOptimizationHints);
   std::unique_ptr<OptimizationHintsMockComponentUpdateService> cus(
       new OptimizationHintsMockComponentUpdateService());
   EXPECT_CALL(*cus, RegisterComponent(testing::_)).Times(0);
-  RegisterOptimizationHintsComponent(cus.get(), profile_prefs());
+  RegisterOptimizationHintsComponent(cus.get(), false, profile_prefs());
   RunUntilIdle();
 }
 
 TEST_F(OptimizationHintsComponentInstallerTest,
        ComponentRegistrationWhenFeatureEnabledButDataSaverDisabled) {
   base::test::ScopedFeatureList scoped_list;
-  scoped_list.InitAndEnableFeature(previews::features::kOptimizationHints);
+  scoped_list.InitAndEnableFeature(
+      optimization_guide::features::kOptimizationHints);
   SetDataSaverEnabled(false);
   std::unique_ptr<OptimizationHintsMockComponentUpdateService> cus(
       new OptimizationHintsMockComponentUpdateService());
   EXPECT_CALL(*cus, RegisterComponent(testing::_)).Times(0);
-  RegisterOptimizationHintsComponent(cus.get(), profile_prefs());
+  RegisterOptimizationHintsComponent(cus.get(), false, profile_prefs());
   RunUntilIdle();
 }
 
 TEST_F(OptimizationHintsComponentInstallerTest,
        ComponentRegistrationWhenFeatureEnabledButNoProfilePrefs) {
   base::test::ScopedFeatureList scoped_list;
-  scoped_list.InitAndEnableFeature(previews::features::kOptimizationHints);
+  scoped_list.InitAndEnableFeature(
+      optimization_guide::features::kOptimizationHints);
   std::unique_ptr<OptimizationHintsMockComponentUpdateService> cus(
       new OptimizationHintsMockComponentUpdateService());
   EXPECT_CALL(*cus, RegisterComponent(testing::_)).Times(0);
-  RegisterOptimizationHintsComponent(cus.get(), nullptr);
+  RegisterOptimizationHintsComponent(cus.get(), false, nullptr);
   RunUntilIdle();
 }
 
 TEST_F(OptimizationHintsComponentInstallerTest,
        ComponentRegistrationWhenFeatureEnabledAndDataSaverEnabled) {
   base::test::ScopedFeatureList scoped_list;
-  scoped_list.InitAndEnableFeature(previews::features::kOptimizationHints);
+  scoped_list.InitAndEnableFeature(
+      optimization_guide::features::kOptimizationHints);
   SetDataSaverEnabled(true);
   std::unique_ptr<OptimizationHintsMockComponentUpdateService> cus(
       new OptimizationHintsMockComponentUpdateService());
   EXPECT_CALL(*cus, RegisterComponent(testing::_))
       .Times(1)
       .WillOnce(testing::Return(true));
-  RegisterOptimizationHintsComponent(cus.get(), profile_prefs());
+  RegisterOptimizationHintsComponent(cus.get(), false, profile_prefs());
   RunUntilIdle();
 }
 

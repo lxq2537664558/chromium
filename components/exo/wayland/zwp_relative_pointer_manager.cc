@@ -26,12 +26,12 @@ class WaylandRelativePointerDelegate : public RelativePointerDelegate {
  public:
   WaylandRelativePointerDelegate(wl_resource* resource, Pointer* pointer)
       : resource_(resource), pointer_(pointer) {
-    pointer_->EnablePointerCapture(this);
+    pointer->RegisterRelativePointerDelegate(this);
   }
 
   ~WaylandRelativePointerDelegate() override {
     if (pointer_)
-      pointer_->DisablePointerCapture();
+      pointer_->UnregisterRelativePointerDelegate(this);
   }
   void OnPointerDestroying(Pointer* pointer) override { pointer_ = nullptr; }
   void OnPointerRelativeMotion(base::TimeTicks time_stamp,

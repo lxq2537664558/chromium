@@ -56,8 +56,6 @@ class SVGTextPathElement final : public SVGTextContentElement,
     kTextpathSpacingtypeExact = kSVGTextPathSpacingExact
   };
 
-  DECLARE_NODE_FACTORY(SVGTextPathElement);
-
   explicit SVGTextPathElement(Document&);
 
   SVGAnimatedLength* startOffset() const { return start_offset_.Get(); }
@@ -68,7 +66,7 @@ class SVGTextPathElement final : public SVGTextContentElement,
     return spacing_.Get();
   }
 
-  void Trace(blink::Visitor*) override;
+  void Trace(Visitor*) override;
 
  private:
   ~SVGTextPathElement() override;

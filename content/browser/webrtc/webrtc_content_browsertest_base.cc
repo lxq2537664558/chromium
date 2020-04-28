@@ -11,16 +11,14 @@
 #include "base/strings/utf_string_conversions.h"
 #include "build/build_config.h"
 #include "content/browser/web_contents/web_contents_impl.h"
+#include "content/public/browser/audio_service.h"
 #include "content/public/common/content_switches.h"
-#include "content/public/common/service_manager_connection.h"
 #include "content/public/test/browser_test_utils.h"
 #include "content/public/test/content_browser_test_utils.h"
 #include "content/shell/browser/shell.h"
 #include "media/audio/audio_system.h"
 #include "media/base/media_switches.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
-#include "services/audio/public/cpp/audio_system_factory.h"
-#include "services/service_manager/public/cpp/connector.h"
 
 #if defined(OS_CHROMEOS)
 #include "chromeos/audio/cras_audio_handler.h"
@@ -31,11 +29,14 @@ namespace content {
 
 void WebRtcContentBrowserTestBase::SetUpCommandLine(
     base::CommandLine* command_line) {
-  ASSERT_TRUE(base::CommandLine::ForCurrentProcess()->HasSwitch(
-      switches::kUseFakeDeviceForMediaStream));
-
   base::CommandLine::ForCurrentProcess()->AppendSwitch(
       switches::kEnforceWebRtcIPPermissionCheck);
+#if defined(OS_LINUX)
+  // Due to problems with PulseAudio failing to start, use a fake audio
+  // stream. crbug.com/1047655#c70
+  base::CommandLine::ForCurrentProcess()->AppendSwitch(
+      switches::kDisableAudioOutput);
+#endif
 
   // Loopback interface is the non-default local address. They should only be in
   // the candidate list if the ip handling policy is "default" AND the media
@@ -47,13 +48,13 @@ void WebRtcContentBrowserTestBase::SetUpCommandLine(
 void WebRtcContentBrowserTestBase::SetUp() {
   // We need pixel output when we dig pixels out of video tags for verification.
   EnablePixelOutput();
-  // Some tests capture the audio played out.
-  EnableAudioOutput();
 #if defined(OS_CHROMEOS)
   chromeos::CrasAudioClient::InitializeFake();
   chromeos::CrasAudioHandler::InitializeForTesting();
 #endif
   ContentBrowserTest::SetUp();
+  ASSERT_TRUE(base::CommandLine::ForCurrentProcess()->HasSwitch(
+      switches::kUseFakeDeviceForMediaStream));
 }
 
 void WebRtcContentBrowserTestBase::TearDown() {
@@ -86,7 +87,7 @@ void WebRtcContentBrowserTestBase::MakeTypicalCall(
     ASSERT_TRUE(embedded_test_server()->Start());
 
   GURL url(embedded_test_server()->GetURL(html_file));
-  NavigateToURL(shell(), url);
+  EXPECT_TRUE(NavigateToURL(shell(), url));
 
   ExecuteJavascriptAndWaitForOk(javascript);
 }
@@ -123,12 +124,9 @@ void WebRtcContentBrowserTestBase::ExecuteJavascriptAndWaitForOk(
 bool WebRtcContentBrowserTestBase::HasAudioOutputDevices() {
   bool has_devices = false;
   base::RunLoop run_loop;
-  auto audio_system = audio::CreateAudioSystem(
-      content::ServiceManagerConnection::GetForProcess()
-          ->GetConnector()
-          ->Clone());
+  auto audio_system = CreateAudioSystemForAudioService();
   audio_system->HasOutputDevices(base::BindOnce(
-      [](base::Closure finished_callback, bool* result, bool received) {
+      [](base::OnceClosure finished_callback, bool* result, bool received) {
         *result = received;
         std::move(finished_callback).Run();
       },

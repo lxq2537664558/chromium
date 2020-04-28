@@ -34,7 +34,7 @@
 #include "base/auto_reset.h"
 #include "base/macros.h"
 #include "third_party/blink/renderer/core/core_export.h"
-#include "third_party/blink/renderer/platform/wtf/allocator.h"
+#include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
 #include "third_party/blink/renderer/platform/wtf/assertions.h"
 
 #if DCHECK_IS_ON()
@@ -66,6 +66,11 @@ class CORE_EXPORT DocumentLifecycle {
     kAfterPerformLayout,
     kLayoutClean,
 
+    // In InAccessibility step, fire deferred accessibility events which
+    // require layout to be in a clean state.
+    kInAccessibility,
+    kAccessibilityClean,
+
     kInCompositingUpdate,
     kCompositingInputsClean,
     kCompositingClean,
@@ -86,9 +91,6 @@ class CORE_EXPORT DocumentLifecycle {
     kStopping,
     kStopped,
   };
-
-  // This must be kept coordinated with WebWidget::LifecycleUpdateReason
-  enum LifecycleUpdateReason { kBeginMainFrame, kTest, kOther };
 
   class Scope {
     STACK_ALLOCATED();
@@ -213,7 +215,6 @@ class CORE_EXPORT DocumentLifecycle {
   };
 
   DocumentLifecycle();
-  ~DocumentLifecycle();
 
   bool IsActive() const { return state_ > kInactive && state_ < kStopping; }
   LifecycleState GetState() const { return state_; }

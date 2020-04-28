@@ -64,8 +64,7 @@ class AndroidDeviceManager::AndroidWebSocket::WebSocketImpl {
         weak_socket_(weak_socket),
         socket_(std::move(socket)),
         encoder_(net::WebSocketEncoder::CreateClient(extensions)),
-        response_buffer_(body_head),
-        weak_factory_(this) {
+        response_buffer_(body_head) {
     thread_checker_.DetachFromThread();
   }
 
@@ -100,8 +99,8 @@ class AndroidDeviceManager::AndroidWebSocket::WebSocketImpl {
   void Read(scoped_refptr<net::IOBuffer> io_buffer) {
     int result =
         socket_->Read(io_buffer.get(), kBufferSize,
-                      base::Bind(&WebSocketImpl::OnBytesRead,
-                                 weak_factory_.GetWeakPtr(), io_buffer));
+                      base::BindOnce(&WebSocketImpl::OnBytesRead,
+                                     weak_factory_.GetWeakPtr(), io_buffer));
     if (result != net::ERR_IO_PENDING)
       OnBytesRead(io_buffer, result);
   }
@@ -160,8 +159,8 @@ class AndroidDeviceManager::AndroidWebSocket::WebSocketImpl {
     scoped_refptr<net::StringIOBuffer> buffer =
         base::MakeRefCounted<net::StringIOBuffer>(request_buffer_);
     result = socket_->Write(buffer.get(), buffer->size(),
-                            base::Bind(&WebSocketImpl::SendPendingRequests,
-                                       weak_factory_.GetWeakPtr()),
+                            base::BindOnce(&WebSocketImpl::SendPendingRequests,
+                                           weak_factory_.GetWeakPtr()),
                             kAndroidWebSocketTrafficAnnotation);
     if (result != net::ERR_IO_PENDING)
       SendPendingRequests(result);
@@ -184,7 +183,7 @@ class AndroidDeviceManager::AndroidWebSocket::WebSocketImpl {
   base::ThreadChecker thread_checker_;
   DISALLOW_COPY_AND_ASSIGN(WebSocketImpl);
 
-  base::WeakPtrFactory<WebSocketImpl> weak_factory_;
+  base::WeakPtrFactory<WebSocketImpl> weak_factory_{this};
 };
 
 AndroidDeviceManager::AndroidWebSocket::AndroidWebSocket(
@@ -194,8 +193,7 @@ AndroidDeviceManager::AndroidWebSocket::AndroidWebSocket(
     Delegate* delegate)
     : device_(device),
       socket_impl_(nullptr, base::OnTaskRunnerDeleter(device->task_runner_)),
-      delegate_(delegate),
-      weak_factory_(this) {
+      delegate_(delegate) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
   DCHECK(delegate_);
   DCHECK(device_);

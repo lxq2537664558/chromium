@@ -11,6 +11,7 @@
 #include "base/macros.h"
 #include "base/time/time.h"
 #include "base/values.h"
+#include "components/sync/base/client_tag_hash.h"
 #include "components/sync/protocol/sync.pb.h"
 
 namespace syncer {
@@ -27,8 +28,6 @@ struct EntityData {
 
   EntityData& operator=(EntityData&&);
 
-  std::unique_ptr<EntityData> Clone() const;
-
   // Typically this is a server assigned sync ID, although for a local change
   // that represents a new entity this field might be either empty or contain
   // a temporary client sync ID.
@@ -38,7 +37,7 @@ struct EntityData {
   // Used for various map lookups. Should always be available for all data types
   // except bookmarks. Sent to the server as
   // SyncEntity::client_defined_unique_tag.
-  std::string client_tag_hash;
+  ClientTagHash client_tag_hash;
 
   // A GUID that identifies the the sync client who initially committed this
   // entity. It's relevant only for bookmarks. See the definition in sync.proto
@@ -57,7 +56,7 @@ struct EntityData {
   std::string server_defined_unique_tag;
 
   // Entity name, used mostly for Debug purposes.
-  std::string non_unique_name;
+  std::string name;
 
   // Model type specific sync data.
   sync_pb::EntitySpecifics specifics;
@@ -89,9 +88,6 @@ struct EntityData {
   size_t EstimateMemoryUsage() const;
 
  private:
-  // Copy constructor is private to be used only in Clone().
-  EntityData(const EntityData& src);
-
   DISALLOW_ASSIGN(EntityData);
 };
 

@@ -5,6 +5,7 @@
 #ifndef CHROME_TEST_BASE_PERF_PERFORMANCE_TEST_H_
 #define CHROME_TEST_BASE_PERF_PERFORMANCE_TEST_H_
 
+#include "base/time/time.h"
 #include "chrome/test/base/in_process_browser_test.h"
 
 // PerformanceTest is an interactive-ui-test that can be used to collect traces.
@@ -21,6 +22,11 @@ class PerformanceTest : public InProcessBrowserTest {
 
   virtual std::vector<std::string> GetUMAHistogramNames() const;
   virtual const std::string GetTracingCategories() const;
+  // Returns the names of timeline based metrics (TBM) to be extracted from
+  // the generated trace. The metrics must be defined in telemetry
+  //   third_party/catapult/tracing/tracing/metrics/
+  // so that third_party/catapult/tracing/bin/run_metric could handle them.
+  virtual std::vector<std::string> GetTimelineBasedMetrics() const;
 
   // InProcessBrowserTest:
   void SetUpOnMainThread() override;
@@ -34,6 +40,10 @@ class PerformanceTest : public InProcessBrowserTest {
 
   const bool should_start_trace_;
 
+  // Tracks whether SetUpOnMainThread was called. Ensures subclasses remember to
+  // call the base classes SetupOnMainThread.
+  bool setup_called_ = false;
+
   DISALLOW_COPY_AND_ASSIGN(PerformanceTest);
 };
 
@@ -44,7 +54,12 @@ class UIPerformanceTest : public PerformanceTest {
   UIPerformanceTest() = default;
   ~UIPerformanceTest() override = default;
 
+  // PerformanceTest:
+  void SetUpOnMainThread() override;
+
   const std::string GetTracingCategories() const override;
+  // Default is "renderingMetric", "umaMetric".
+  std::vector<std::string> GetTimelineBasedMetrics() const override;
 
  private:
   DISALLOW_COPY_AND_ASSIGN(UIPerformanceTest);

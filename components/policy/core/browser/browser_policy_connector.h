@@ -7,6 +7,7 @@
 
 #include <stdint.h>
 
+#include <memory>
 #include <string>
 
 #include "base/macros.h"
@@ -69,6 +70,9 @@ class POLICY_EXPORT BrowserPolicyConnector : public BrowserPolicyConnectorBase {
   // Returns the URL for the device management service endpoint.
   static std::string GetDeviceManagementUrl();
 
+  // Returns the URL for the realtime reporting service endpoint.
+  static std::string GetRealtimeReportingUrl();
+
   // Registers refresh rate prefs.
   static void RegisterPrefs(PrefRegistrySimple* registry);
 
@@ -82,6 +86,9 @@ class POLICY_EXPORT BrowserPolicyConnector : public BrowserPolicyConnectorBase {
   void InitInternal(
       PrefService* local_state,
       std::unique_ptr<DeviceManagementService> device_management_service);
+
+  // Returns true if the given |provider| has any registered policies.
+  bool ProviderHasPolicies(const ConfigurationPolicyProvider* provider) const;
 
  private:
   std::unique_ptr<PolicyStatisticsCollector> policy_statistics_collector_;

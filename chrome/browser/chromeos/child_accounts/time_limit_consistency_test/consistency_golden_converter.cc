@@ -18,18 +18,18 @@ namespace {
 // The default resets_at value is 6AM.
 constexpr base::TimeDelta kDefaultResetsAt = base::TimeDelta::FromHours(6);
 
-// Converts a ActivePolicies object from the time limit processor to a
+// Converts a PolicyType object from the time limit processor to a
 // ConsistencyGoldenPolicy used by the goldens.
 ConsistencyGoldenPolicy ConvertProcessorPolicyToGoldenPolicy(
-    usage_time_limit::ActivePolicies processor_policy) {
+    usage_time_limit::PolicyType processor_policy) {
   switch (processor_policy) {
-    case usage_time_limit::ActivePolicies::kOverride:
+    case usage_time_limit::PolicyType::kOverride:
       return OVERRIDE;
-    case usage_time_limit::ActivePolicies::kFixedLimit:
+    case usage_time_limit::PolicyType::kFixedLimit:
       return FIXED_LIMIT;
-    case usage_time_limit::ActivePolicies::kUsageLimit:
+    case usage_time_limit::PolicyType::kUsageLimit:
       return USAGE_LIMIT;
-    case usage_time_limit::ActivePolicies::kNoActivePolicy:
+    case usage_time_limit::PolicyType::kNoPolicy:
       return NO_ACTIVE_POLICY;
   }
 
@@ -63,7 +63,7 @@ const char* ConvertGoldenDayToProcessorDay(ConsistencyGoldenEffectiveDay day) {
 
 }  // namespace
 
-std::unique_ptr<base::DictionaryValue> ConvertGoldenInputToProcessorInput(
+base::Value ConvertGoldenInputToProcessorInput(
     const ConsistencyGoldenInput& input) {
   // Random date representing the last time the policies were updated,
   // used whenever the last_updated field is not specified in the input proto.
@@ -75,16 +75,14 @@ std::unique_ptr<base::DictionaryValue> ConvertGoldenInputToProcessorInput(
                               input.usage_limit_resets_at().minute())
           : kDefaultResetsAt;
 
-  std::unique_ptr<base::DictionaryValue> policy =
-      utils::CreateTimeLimitPolicy(resets_at);
+  base::Value policy = utils::CreateTimeLimitPolicy(resets_at);
 
   /* Begin Window Limits data */
 
   for (const ConsistencyGoldenWindowLimitEntry& window_limit :
        input.window_limits()) {
     utils::AddTimeWindowLimit(
-        policy.get(),
-        ConvertGoldenDayToProcessorDay(window_limit.effective_day()),
+        &policy, ConvertGoldenDayToProcessorDay(window_limit.effective_day()),
         utils::CreateTime(window_limit.starts_at().hour(),
                           window_limit.starts_at().minute()),
         utils::CreateTime(window_limit.ends_at().hour(),
@@ -100,8 +98,7 @@ std::unique_ptr<base::DictionaryValue> ConvertGoldenInputToProcessorInput(
   for (const ConsistencyGoldenUsageLimitEntry& usage_limit :
        input.usage_limits()) {
     utils::AddTimeUsageLimit(
-        policy.get(),
-        ConvertGoldenDayToProcessorDay(usage_limit.effective_day()),
+        &policy, ConvertGoldenDayToProcessorDay(usage_limit.effective_day()),
         base::TimeDelta::FromMinutes(usage_limit.usage_quota_mins()),
         usage_limit.has_last_updated_millis()
             ? base::Time::FromJavaTime(usage_limit.last_updated_millis())
@@ -114,12 +111,12 @@ std::unique_ptr<base::DictionaryValue> ConvertGoldenInputToProcessorInput(
   for (const ConsistencyGoldenOverride& override_entry : input.overrides()) {
     if (override_entry.action() == UNLOCK_UNTIL_LOCK_DEADLINE) {
       utils::AddOverrideWithDuration(
-          policy.get(), usage_time_limit::TimeLimitOverride::Action::kUnlock,
+          &policy, usage_time_limit::TimeLimitOverride::Action::kUnlock,
           base::Time::FromJavaTime(override_entry.created_at_millis()),
           base::TimeDelta::FromMilliseconds(override_entry.duration_millis()));
     } else {
       utils::AddOverride(
-          policy.get(),
+          &policy,
           override_entry.action() == LOCK
               ? usage_time_limit::TimeLimitOverride::Action::kLock
               : usage_time_limit::TimeLimitOverride::Action::kUnlock,
@@ -174,7 +171,7 @@ GenerateUnlockUsageLimitOverrideStateFromInput(
 
   usage_time_limit::State previous_state;
   previous_state.is_locked = true;
-  previous_state.active_policy = usage_time_limit::ActivePolicies::kUsageLimit;
+  previous_state.active_policy = usage_time_limit::PolicyType::kUsageLimit;
   previous_state.is_time_usage_limit_enabled = true;
   previous_state.remaining_usage = base::TimeDelta::FromMinutes(0);
 

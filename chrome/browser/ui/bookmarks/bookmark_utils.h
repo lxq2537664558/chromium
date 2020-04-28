@@ -64,14 +64,6 @@ bool IsAppsShortcutEnabled(Profile* profile);
 // Returns true if the Apps shortcut should be displayed in the bookmark bar.
 bool ShouldShowAppsShortcutInBookmarkBar(Profile* profile);
 
-// Whether the menu item and shortcut to bookmark a page should be removed from
-// the user interface.
-bool ShouldRemoveBookmarkThisPageUI(Profile* profile);
-
-// Whether the menu item and shortcut to bookmark open pages should be removed
-// from the user interface.
-bool ShouldRemoveBookmarkOpenPagesUI(Profile* profile);
-
 // Returns the drag operations for the specified node.
 int GetBookmarkDragOperation(content::BrowserContext* browser_context,
                              const bookmarks::BookmarkNode* node);
@@ -88,7 +80,7 @@ int GetBookmarkDropOperation(Profile* profile,
                              const ui::DropTargetEvent& event,
                              const bookmarks::BookmarkNodeData& data,
                              const bookmarks::BookmarkNode* parent,
-                             int index);
+                             size_t index);
 
 // Returns true if the bookmark data can be dropped on |drop_parent| at
 // |index|. A drop from a separate profile is always allowed, where as
@@ -98,7 +90,7 @@ int GetBookmarkDropOperation(Profile* profile,
 bool IsValidBookmarkDropLocation(Profile* profile,
                                  const bookmarks::BookmarkNodeData& data,
                                  const bookmarks::BookmarkNode* drop_parent,
-                                 int index);
+                                 size_t index);
 
 #if defined(TOOLKIT_VIEWS)
 // |text_color| is the color of associated text and is used to derive the icon's

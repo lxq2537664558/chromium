@@ -15,6 +15,10 @@
 #include "base/macros.h"
 #include "base/path_service.h"
 #include "base/run_loop.h"
+#include "base/strings/string16.h"
+#include "base/strings/string_piece.h"
+#include "base/strings/utf_string_conversions.h"
+#include "base/test/bind_test_util.h"
 #include "chromecast/base/chromecast_switches.h"
 #include "chromecast/base/metrics/cast_metrics_helper.h"
 #include "chromecast/browser/cast_browser_context.h"
@@ -29,6 +33,7 @@
 #include "content/public/test/browser_test_base.h"
 #include "content/public/test/browser_test_utils.h"
 #include "content/public/test/url_loader_interceptor.h"
+#include "mojo/public/cpp/bindings/connector.h"
 #include "net/http/http_status_code.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
 #include "net/test/embedded_test_server/http_request.h"
@@ -46,6 +51,7 @@ using ::testing::InSequence;
 using ::testing::Invoke;
 using ::testing::InvokeWithoutArgs;
 using ::testing::Mock;
+using ::testing::NiceMock;
 using ::testing::Property;
 
 namespace content {
@@ -80,14 +86,13 @@ std::unique_ptr<net::test_server::HttpResponse> DefaultHandler(
 // =============================================================================
 // Mocks
 // =============================================================================
-class MockCastWebContentsDelegate : public CastWebContents::Delegate {
+class MockCastWebContentsDelegate
+    : public base::SupportsWeakPtr<MockCastWebContentsDelegate>,
+      public CastWebContents::Delegate {
  public:
   MockCastWebContentsDelegate() {}
   ~MockCastWebContentsDelegate() override = default;
 
-  MOCK_METHOD1(OnPageStateChanged, void(CastWebContents* cast_web_contents));
-  MOCK_METHOD2(OnPageStopped,
-               void(CastWebContents* cast_web_contents, int error_code));
   MOCK_METHOD2(InnerContentsCreated,
                void(CastWebContents* inner_contents,
                     CastWebContents* outer_contents));
@@ -101,9 +106,17 @@ class MockCastWebContentsObserver : public CastWebContents::Observer {
   MockCastWebContentsObserver() {}
   ~MockCastWebContentsObserver() override = default;
 
-  MOCK_METHOD2(RenderFrameCreated,
-               void(int render_process_id, int render_frame_id));
+  MOCK_METHOD1(OnPageStateChanged, void(CastWebContents* cast_web_contents));
+  MOCK_METHOD2(OnPageStopped,
+               void(CastWebContents* cast_web_contents, int error_code));
+  MOCK_METHOD4(
+      RenderFrameCreated,
+      void(int render_process_id,
+           int render_frame_id,
+           service_manager::InterfaceProvider* frame_interfaces,
+           blink::AssociatedInterfaceProvider* frame_associated_interfaces));
   MOCK_METHOD1(ResourceLoadFailed, void(CastWebContents* cast_web_contents));
+  MOCK_METHOD1(UpdateTitle, void(const base::string16& title));
 
  private:
   DISALLOW_COPY_AND_ASSIGN(MockCastWebContentsObserver);
@@ -115,6 +128,100 @@ class MockWebContentsDelegate : public content::WebContentsDelegate {
   ~MockWebContentsDelegate() override = default;
 
   MOCK_METHOD1(CloseContents, void(content::WebContents* source));
+};
+
+class TitleChangeObserver : public CastWebContents::Observer {
+ public:
+  TitleChangeObserver() = default;
+  ~TitleChangeObserver() override = default;
+
+  // Spins a Runloop until the title of the page matches the |expected_title|
+  // that have been set.
+  void RunUntilTitleEquals(base::StringPiece expected_title) {
+    expected_title_ = expected_title.as_string();
+    // Spin the runloop until the expected conditions are met.
+    if (current_title_ != expected_title_) {
+      expected_title_ = expected_title.as_string();
+      base::RunLoop run_loop;
+      quit_closure_ = run_loop.QuitClosure();
+      run_loop.Run();
+    }
+  }
+
+  // CastWebContents::Observer implementation:
+  void UpdateTitle(const base::string16& title) override {
+    // Resumes execution of RunUntilTitleEquals() if |title| matches
+    // expectations.
+    std::string title_utf8 = base::UTF16ToUTF8(title);
+    current_title_ = title_utf8;
+    if (!quit_closure_.is_null() && current_title_ == expected_title_) {
+      DCHECK_EQ(current_title_, expected_title_);
+      std::move(quit_closure_).Run();
+    }
+  }
+
+ private:
+  std::string current_title_;
+  std::string expected_title_;
+
+  base::OnceClosure quit_closure_;
+
+  DISALLOW_COPY_AND_ASSIGN(TitleChangeObserver);
+};
+
+class TestMessageReceiver : public blink::WebMessagePort::MessageReceiver {
+ public:
+  TestMessageReceiver() = default;
+  ~TestMessageReceiver() override = default;
+
+  void WaitForNextIncomingMessage(
+      base::OnceCallback<
+          void(std::string, base::Optional<blink::WebMessagePort>)> callback) {
+    DCHECK(message_received_callback_.is_null())
+        << "Only one waiting event is allowed.";
+    message_received_callback_ = std::move(callback);
+  }
+
+  void SetOnPipeErrorCallback(base::OnceCallback<void()> callback) {
+    on_pipe_error_callback_ = std::move(callback);
+  }
+
+ private:
+  bool OnMessage(blink::WebMessagePort::Message message) override {
+    std::string message_text;
+    if (!base::UTF16ToUTF8(message.data.data(), message.data.size(),
+                           &message_text)) {
+      return false;
+    }
+
+    base::Optional<blink::WebMessagePort> incoming_port = base::nullopt;
+    // Only one MessagePort should be sent to here.
+    if (!message.ports.empty()) {
+      DCHECK(message.ports.size() == 1)
+          << "Only one control port can be provided";
+      incoming_port = base::make_optional<blink::WebMessagePort>(
+          std::move(message.ports[0]));
+    }
+
+    if (message_received_callback_) {
+      std::move(message_received_callback_)
+          .Run(message_text, std::move(incoming_port));
+    }
+    return true;
+  }
+
+  void OnPipeError() override {
+    if (on_pipe_error_callback_)
+      std::move(on_pipe_error_callback_).Run();
+  }
+
+  base::OnceCallback<void(std::string,
+                          base::Optional<blink::WebMessagePort> incoming_port)>
+      message_received_callback_;
+
+  base::OnceCallback<void()> on_pipe_error_callback_;
+
+  DISALLOW_COPY_AND_ASSIGN(TestMessageReceiver);
 };
 
 }  // namespace
@@ -147,12 +254,14 @@ class CastWebContentsBrowserTest : public content::BrowserTestBase,
     web_contents_ = content::WebContents::Create(create_params);
     web_contents_->SetDelegate(&mock_wc_delegate_);
 
-    CastWebContents::InitParams init_params = {
-        &mock_cast_wc_delegate_, false /* enabled_for_dev */,
-        false /* use_cma_renderer */, true /* is_root_window */};
+    CastWebContents::InitParams init_params;
+    init_params.delegate = mock_cast_wc_delegate_.AsWeakPtr();
+    init_params.is_root_window = true;
+
     cast_web_contents_ =
         std::make_unique<CastWebContentsImpl>(web_contents_.get(), init_params);
     mock_cast_wc_observer_.Observe(cast_web_contents_.get());
+    title_change_observer_.Observe(cast_web_contents_.get());
 
     render_frames_.clear();
     content::WebContentsObserver::Observe(web_contents_.get());
@@ -174,7 +283,8 @@ class CastWebContentsBrowserTest : public content::BrowserTestBase,
 
   MockWebContentsDelegate mock_wc_delegate_;
   MockCastWebContentsDelegate mock_cast_wc_delegate_;
-  MockCastWebContentsObserver mock_cast_wc_observer_;
+  NiceMock<MockCastWebContentsObserver> mock_cast_wc_observer_;
+  TitleChangeObserver title_change_observer_;
   std::unique_ptr<content::WebContents> web_contents_;
   std::unique_ptr<CastWebContentsImpl> cast_web_contents_;
 
@@ -207,11 +317,11 @@ IN_PROC_BROWSER_TEST_F(CastWebContentsBrowserTest, Lifecycle) {
   {
     InSequence seq;
     EXPECT_CALL(
-        mock_cast_wc_delegate_,
+        mock_cast_wc_observer_,
         OnPageStateChanged(CheckPageState(
             cast_web_contents_.get(), CastWebContents::PageState::LOADING)));
     EXPECT_CALL(
-        mock_cast_wc_delegate_,
+        mock_cast_wc_observer_,
         OnPageStateChanged(CheckPageState(cast_web_contents_.get(),
                                           CastWebContents::PageState::LOADED)))
         .WillOnce(InvokeWithoutArgs(quit_closure));
@@ -226,11 +336,11 @@ IN_PROC_BROWSER_TEST_F(CastWebContentsBrowserTest, Lifecycle) {
   {
     InSequence seq;
     EXPECT_CALL(
-        mock_cast_wc_delegate_,
+        mock_cast_wc_observer_,
         OnPageStateChanged(CheckPageState(
             cast_web_contents_.get(), CastWebContents::PageState::LOADING)));
     EXPECT_CALL(
-        mock_cast_wc_delegate_,
+        mock_cast_wc_observer_,
         OnPageStateChanged(CheckPageState(cast_web_contents_.get(),
                                           CastWebContents::PageState::LOADED)))
         .WillOnce(InvokeWithoutArgs(quit_closure));
@@ -245,8 +355,8 @@ IN_PROC_BROWSER_TEST_F(CastWebContentsBrowserTest, Lifecycle) {
   // ===========================================================================
   // Test: Inject an iframe, verify no events are received for the frame.
   // ===========================================================================
-  EXPECT_CALL(mock_cast_wc_delegate_, OnPageStateChanged(_)).Times(0);
-  EXPECT_CALL(mock_cast_wc_delegate_, OnPageStopped(_, _)).Times(0);
+  EXPECT_CALL(mock_cast_wc_observer_, OnPageStateChanged(_)).Times(0);
+  EXPECT_CALL(mock_cast_wc_observer_, OnPageStopped(_, _)).Times(0);
   std::string script =
       "var iframe = document.createElement('iframe');"
       "document.body.appendChild(iframe);"
@@ -256,8 +366,8 @@ IN_PROC_BROWSER_TEST_F(CastWebContentsBrowserTest, Lifecycle) {
   // ===========================================================================
   // Test: Inject an iframe and navigate it to an error page. Verify no events.
   // ===========================================================================
-  EXPECT_CALL(mock_cast_wc_delegate_, OnPageStateChanged(_)).Times(0);
-  EXPECT_CALL(mock_cast_wc_delegate_, OnPageStopped(_, _)).Times(0);
+  EXPECT_CALL(mock_cast_wc_observer_, OnPageStateChanged(_)).Times(0);
+  EXPECT_CALL(mock_cast_wc_observer_, OnPageStopped(_, _)).Times(0);
   script = "iframe.src = 'https://www.fake-non-existent-cast-page.com';";
   ASSERT_TRUE(ExecJs(web_contents_.get(), script));
 
@@ -268,7 +378,7 @@ IN_PROC_BROWSER_TEST_F(CastWebContentsBrowserTest, Lifecycle) {
   // ===========================================================================
   EXPECT_CALL(mock_wc_delegate_, CloseContents(web_contents_.get()))
       .Times(AtLeast(1));
-  EXPECT_CALL(mock_cast_wc_delegate_,
+  EXPECT_CALL(mock_cast_wc_observer_,
               OnPageStopped(CheckPageState(cast_web_contents_.get(),
                                            CastWebContents::PageState::CLOSED),
                             net::OK))
@@ -281,7 +391,7 @@ IN_PROC_BROWSER_TEST_F(CastWebContentsBrowserTest, Lifecycle) {
   // Test: Destroy the underlying WebContents. Verify DESTROYED state.
   // ===========================================================================
   EXPECT_CALL(
-      mock_cast_wc_delegate_,
+      mock_cast_wc_observer_,
       OnPageStateChanged(CheckPageState(
           cast_web_contents_.get(), CastWebContents::PageState::DESTROYED)));
   web_contents_.reset();
@@ -299,11 +409,11 @@ IN_PROC_BROWSER_TEST_F(CastWebContentsBrowserTest, WebContentsDestroyed) {
   {
     InSequence seq;
     EXPECT_CALL(
-        mock_cast_wc_delegate_,
+        mock_cast_wc_observer_,
         OnPageStateChanged(CheckPageState(
             cast_web_contents_.get(), CastWebContents::PageState::LOADING)));
     EXPECT_CALL(
-        mock_cast_wc_delegate_,
+        mock_cast_wc_observer_,
         OnPageStateChanged(CheckPageState(cast_web_contents_.get(),
                                           CastWebContents::PageState::LOADED)))
         .WillOnce(InvokeWithoutArgs(quit_closure));
@@ -316,7 +426,7 @@ IN_PROC_BROWSER_TEST_F(CastWebContentsBrowserTest, WebContentsDestroyed) {
   // Test: Destroy the WebContents. Verify OnPageStopped(DESTROYED, net::OK).
   // ===========================================================================
   EXPECT_CALL(
-      mock_cast_wc_delegate_,
+      mock_cast_wc_observer_,
       OnPageStopped(CheckPageState(cast_web_contents_.get(),
                                    CastWebContents::PageState::DESTROYED),
                     net::OK));
@@ -337,11 +447,11 @@ IN_PROC_BROWSER_TEST_F(CastWebContentsBrowserTest, ErrorPageCrash) {
   {
     InSequence seq;
     EXPECT_CALL(
-        mock_cast_wc_delegate_,
+        mock_cast_wc_observer_,
         OnPageStateChanged(CheckPageState(
             cast_web_contents_.get(), CastWebContents::PageState::LOADING)));
     EXPECT_CALL(
-        mock_cast_wc_delegate_,
+        mock_cast_wc_observer_,
         OnPageStateChanged(CheckPageState(cast_web_contents_.get(),
                                           CastWebContents::PageState::LOADED)))
         .WillOnce(InvokeWithoutArgs(quit_closure));
@@ -350,7 +460,7 @@ IN_PROC_BROWSER_TEST_F(CastWebContentsBrowserTest, ErrorPageCrash) {
   cast_web_contents_->LoadUrl(GURL(url::kAboutBlankURL));
   run_loop->Run();
 
-  EXPECT_CALL(mock_cast_wc_delegate_,
+  EXPECT_CALL(mock_cast_wc_observer_,
               OnPageStopped(CheckPageState(cast_web_contents_.get(),
                                            CastWebContents::PageState::ERROR),
                             net::ERR_UNEXPECTED));
@@ -371,10 +481,10 @@ IN_PROC_BROWSER_TEST_F(CastWebContentsBrowserTest, ErrorLocalFileMissing) {
   {
     InSequence seq;
     EXPECT_CALL(
-        mock_cast_wc_delegate_,
+        mock_cast_wc_observer_,
         OnPageStateChanged(CheckPageState(
             cast_web_contents_.get(), CastWebContents::PageState::LOADING)));
-    EXPECT_CALL(mock_cast_wc_delegate_,
+    EXPECT_CALL(mock_cast_wc_observer_,
                 OnPageStopped(CheckPageState(cast_web_contents_.get(),
                                              CastWebContents::PageState::ERROR),
                               _))
@@ -400,11 +510,11 @@ IN_PROC_BROWSER_TEST_F(CastWebContentsBrowserTest, ErrorLoadFailSubFrames) {
   {
     InSequence seq;
     EXPECT_CALL(
-        mock_cast_wc_delegate_,
+        mock_cast_wc_observer_,
         OnPageStateChanged(CheckPageState(
             cast_web_contents_.get(), CastWebContents::PageState::LOADING)));
     EXPECT_CALL(
-        mock_cast_wc_delegate_,
+        mock_cast_wc_observer_,
         OnPageStateChanged(CheckPageState(cast_web_contents_.get(),
                                           CastWebContents::PageState::LOADED)))
         .WillOnce(InvokeWithoutArgs(quit_closure));
@@ -414,8 +524,8 @@ IN_PROC_BROWSER_TEST_F(CastWebContentsBrowserTest, ErrorLoadFailSubFrames) {
   run_loop->Run();
 
   // Create a sub-frame.
-  EXPECT_CALL(mock_cast_wc_delegate_, OnPageStateChanged(_)).Times(0);
-  EXPECT_CALL(mock_cast_wc_delegate_, OnPageStopped(_, _)).Times(0);
+  EXPECT_CALL(mock_cast_wc_observer_, OnPageStateChanged(_)).Times(0);
+  EXPECT_CALL(mock_cast_wc_observer_, OnPageStopped(_, _)).Times(0);
   std::string script =
       "var iframe = document.createElement('iframe');"
       "document.body.appendChild(iframe);"
@@ -432,29 +542,27 @@ IN_PROC_BROWSER_TEST_F(CastWebContentsBrowserTest, ErrorLoadFailSubFrames) {
   content::RenderFrameHost* sub_frame = *it;
   ASSERT_NE(nullptr, sub_frame);
   cast_web_contents_->DidFailLoad(sub_frame, sub_frame->GetLastCommittedURL(),
-                                  net::ERR_FAILED, base::string16());
+                                  net::ERR_FAILED);
 
   // ===========================================================================
   // Test: Ignore main frame load failures with net::ERR_ABORTED.
   // ===========================================================================
-  EXPECT_CALL(mock_cast_wc_delegate_, OnPageStateChanged(_)).Times(0);
-  EXPECT_CALL(mock_cast_wc_delegate_, OnPageStopped(_, _)).Times(0);
+  EXPECT_CALL(mock_cast_wc_observer_, OnPageStateChanged(_)).Times(0);
+  EXPECT_CALL(mock_cast_wc_observer_, OnPageStopped(_, _)).Times(0);
   cast_web_contents_->DidFailLoad(
       web_contents_->GetMainFrame(),
-      web_contents_->GetMainFrame()->GetLastCommittedURL(), net::ERR_ABORTED,
-      base::string16());
+      web_contents_->GetMainFrame()->GetLastCommittedURL(), net::ERR_ABORTED);
 
   // ===========================================================================
   // Test: If main frame fails to load, page should enter ERROR state.
   // ===========================================================================
-  EXPECT_CALL(mock_cast_wc_delegate_,
+  EXPECT_CALL(mock_cast_wc_observer_,
               OnPageStopped(CheckPageState(cast_web_contents_.get(),
                                            CastWebContents::PageState::ERROR),
                             net::ERR_FAILED));
   cast_web_contents_->DidFailLoad(
       web_contents_->GetMainFrame(),
-      web_contents_->GetMainFrame()->GetLastCommittedURL(), net::ERR_FAILED,
-      base::string16());
+      web_contents_->GetMainFrame()->GetLastCommittedURL(), net::ERR_FAILED);
 }
 
 IN_PROC_BROWSER_TEST_F(CastWebContentsBrowserTest, ErrorHttp4XX) {
@@ -476,13 +584,13 @@ IN_PROC_BROWSER_TEST_F(CastWebContentsBrowserTest, ErrorHttp4XX) {
   {
     InSequence seq;
     EXPECT_CALL(
-        mock_cast_wc_delegate_,
+        mock_cast_wc_observer_,
         OnPageStateChanged(CheckPageState(
             cast_web_contents_.get(), CastWebContents::PageState::LOADING)));
-    EXPECT_CALL(mock_cast_wc_delegate_,
+    EXPECT_CALL(mock_cast_wc_observer_,
                 OnPageStopped(CheckPageState(cast_web_contents_.get(),
                                              CastWebContents::PageState::ERROR),
-                              net::ERR_FAILED))
+                              net::ERR_HTTP_RESPONSE_CODE_FAILURE))
         .WillOnce(InvokeWithoutArgs(quit_closure));
   }
 
@@ -520,10 +628,10 @@ IN_PROC_BROWSER_TEST_F(CastWebContentsBrowserTest, ErrorLoadFailed) {
   {
     InSequence seq;
     EXPECT_CALL(
-        mock_cast_wc_delegate_,
+        mock_cast_wc_observer_,
         OnPageStateChanged(CheckPageState(
             cast_web_contents_.get(), CastWebContents::PageState::LOADING)));
-    EXPECT_CALL(mock_cast_wc_delegate_,
+    EXPECT_CALL(mock_cast_wc_observer_,
                 OnPageStopped(CheckPageState(cast_web_contents_.get(),
                                              CastWebContents::PageState::ERROR),
                               net::ERR_ADDRESS_UNREACHABLE))
@@ -553,11 +661,11 @@ IN_PROC_BROWSER_TEST_F(CastWebContentsBrowserTest, LoadCanceledByApp) {
   {
     InSequence seq;
     EXPECT_CALL(
-        mock_cast_wc_delegate_,
+        mock_cast_wc_observer_,
         OnPageStateChanged(CheckPageState(
             cast_web_contents_.get(), CastWebContents::PageState::LOADING)));
     EXPECT_CALL(
-        mock_cast_wc_delegate_,
+        mock_cast_wc_observer_,
         OnPageStateChanged(CheckPageState(cast_web_contents_.get(),
                                           CastWebContents::PageState::LOADED)))
         .WillOnce(InvokeWithoutArgs(quit_closure));
@@ -565,6 +673,48 @@ IN_PROC_BROWSER_TEST_F(CastWebContentsBrowserTest, LoadCanceledByApp) {
 
   cast_web_contents_->LoadUrl(
       embedded_test_server()->GetURL("/load_cancel.html"));
+  run_loop->Run();
+}
+
+IN_PROC_BROWSER_TEST_F(CastWebContentsBrowserTest, LocationRedirectLifecycle) {
+  auto run_loop = std::make_unique<base::RunLoop>();
+  auto quit_closure = [&run_loop]() {
+    if (run_loop->running()) {
+      run_loop->QuitWhenIdle();
+    }
+  };
+
+  // ===========================================================================
+  // Test: When the app redirects to another url via window.location. Another
+  // navigation will be committed. LOADING -> LOADED -> LOADING -> LOADED state
+  // trasition is expected.
+  // ===========================================================================
+  embedded_test_server()->ServeFilesFromSourceDirectory(GetTestDataPath());
+  StartTestServer();
+
+  {
+    InSequence seq;
+    EXPECT_CALL(
+        mock_cast_wc_observer_,
+        OnPageStateChanged(CheckPageState(
+            cast_web_contents_.get(), CastWebContents::PageState::LOADING)));
+    EXPECT_CALL(
+        mock_cast_wc_observer_,
+        OnPageStateChanged(CheckPageState(cast_web_contents_.get(),
+                                          CastWebContents::PageState::LOADED)));
+    EXPECT_CALL(
+        mock_cast_wc_observer_,
+        OnPageStateChanged(CheckPageState(
+            cast_web_contents_.get(), CastWebContents::PageState::LOADING)));
+    EXPECT_CALL(
+        mock_cast_wc_observer_,
+        OnPageStateChanged(CheckPageState(cast_web_contents_.get(),
+                                          CastWebContents::PageState::LOADED)))
+        .WillOnce(InvokeWithoutArgs(quit_closure));
+  }
+
+  cast_web_contents_->LoadUrl(
+      embedded_test_server()->GetURL("/location_redirect.html"));
   run_loop->Run();
 }
 
@@ -582,11 +732,11 @@ IN_PROC_BROWSER_TEST_F(CastWebContentsBrowserTest, NotifyMissingResource) {
   {
     InSequence seq;
     EXPECT_CALL(
-        mock_cast_wc_delegate_,
+        mock_cast_wc_observer_,
         OnPageStateChanged(CheckPageState(
             cast_web_contents_.get(), CastWebContents::PageState::LOADING)));
     EXPECT_CALL(
-        mock_cast_wc_delegate_,
+        mock_cast_wc_observer_,
         OnPageStateChanged(CheckPageState(cast_web_contents_.get(),
                                           CastWebContents::PageState::LOADED)))
         .WillOnce(InvokeWithoutArgs(quit_closure));
@@ -597,6 +747,453 @@ IN_PROC_BROWSER_TEST_F(CastWebContentsBrowserTest, NotifyMissingResource) {
   base::FilePath path = GetTestDataFilePath("missing_resource.html");
   cast_web_contents_->LoadUrl(content::GetFileUrlWithQuery(path, ""));
   run_loop->Run();
+}
+
+IN_PROC_BROWSER_TEST_F(CastWebContentsBrowserTest, ExecuteJavaScriptOnLoad) {
+  // ===========================================================================
+  // Test: Injecting script to change title should work.
+  // ===========================================================================
+  constexpr char kExpectedTitle[] = "hello";
+  constexpr char kOriginalTitle[] =
+      "Welcome to Stan the Offline Dino's Homepage";
+
+  // The script should be able to run before HTML <script> tag starts running.
+  // The original title will be loaded first and then the injected script. Other
+  // scripts must run after the injected script.
+  EXPECT_CALL(mock_cast_wc_observer_,
+              UpdateTitle(base::ASCIIToUTF16(kExpectedTitle)));
+  EXPECT_CALL(mock_cast_wc_observer_,
+              UpdateTitle(base::ASCIIToUTF16(kOriginalTitle)));
+  constexpr char kBindingsId[] = "1234";
+
+  GURL gurl = content::GetFileUrlWithQuery(
+      GetTestDataFilePath("dynamic_title.html"), "");
+
+  cast_web_contents_->AddBeforeLoadJavaScript(
+      kBindingsId, {gurl.GetOrigin().spec()}, "stashed_title = 'hello';");
+
+  cast_web_contents_->LoadUrl(gurl);
+  title_change_observer_.RunUntilTitleEquals(kExpectedTitle);
+}
+
+IN_PROC_BROWSER_TEST_F(CastWebContentsBrowserTest,
+                       ExecuteJavaScriptUpdatedOnLoad) {
+  // ===========================================================================
+  // Test: Verify that this script replaces the previous script with same
+  // binding id, as opposed to being injected alongside it. (The latter would
+  // result in the title being "helloclobber").
+  // ===========================================================================
+  constexpr char kReplaceTitle[] = "clobber";
+  constexpr char kOriginalTitle[] =
+      "Welcome to Stan the Offline Dino's Homepage";
+
+  // The script should be able to run before HTML <script> tag starts running.
+  EXPECT_CALL(mock_cast_wc_observer_,
+              UpdateTitle(base::ASCIIToUTF16(kReplaceTitle)));
+  EXPECT_CALL(mock_cast_wc_observer_,
+              UpdateTitle(base::ASCIIToUTF16(kOriginalTitle)));
+
+  constexpr char kBindingsId[] = "1234";
+
+  GURL gurl = content::GetFileUrlWithQuery(
+      GetTestDataFilePath("dynamic_title.html"), "");
+
+  cast_web_contents_->AddBeforeLoadJavaScript(
+      kBindingsId, {gurl.GetOrigin().spec()}, "stashed_title = 'hello';");
+
+  cast_web_contents_->AddBeforeLoadJavaScript(
+      kBindingsId, {gurl.GetOrigin().spec()},
+      "stashed_title = document.title + 'clobber';");
+
+  cast_web_contents_->LoadUrl(gurl);
+  title_change_observer_.RunUntilTitleEquals(kReplaceTitle);
+}
+
+IN_PROC_BROWSER_TEST_F(CastWebContentsBrowserTest,
+                       ExecuteJavaScriptOnLoadOrdered) {
+  // ===========================================================================
+  // Test: Verifies that bindings are injected in order by producing a
+  // cumulative, non-commutative result.
+  // ===========================================================================
+  constexpr char kExpectedTitle[] = "hello there";
+  constexpr char kOriginalTitle[] =
+      "Welcome to Stan the Offline Dino's Homepage";
+  constexpr char kBindingsId1[] = "1234";
+  constexpr char kBindingsId2[] = "5678";
+
+  // The script should be able to run before HTML <script> tag starts running.
+  // The original title will be loaded first and then the injected script. Other
+  // scripts must run after the injected script.
+  EXPECT_CALL(mock_cast_wc_observer_,
+              UpdateTitle(base::ASCIIToUTF16(kExpectedTitle)));
+  EXPECT_CALL(mock_cast_wc_observer_,
+              UpdateTitle(base::ASCIIToUTF16(kOriginalTitle)));
+
+  GURL gurl = content::GetFileUrlWithQuery(
+      GetTestDataFilePath("dynamic_title.html"), "");
+
+  cast_web_contents_->AddBeforeLoadJavaScript(
+      kBindingsId1, {gurl.GetOrigin().spec()}, "stashed_title = 'hello';");
+
+  cast_web_contents_->AddBeforeLoadJavaScript(
+      kBindingsId2, {gurl.GetOrigin().spec()}, "stashed_title += ' there';");
+
+  cast_web_contents_->LoadUrl(gurl);
+  title_change_observer_.RunUntilTitleEquals(kExpectedTitle);
+}
+
+IN_PROC_BROWSER_TEST_F(CastWebContentsBrowserTest,
+                       ExecuteJavaScriptOnLoadRemoved) {
+  // ===========================================================================
+  // Test: Verifies that bindings could be removed successfully before page
+  // starts loading.
+  // ===========================================================================
+  constexpr char kExpectedTitle[] = "foo";
+  constexpr char kOriginalTitle[] =
+      "Welcome to Stan the Offline Dino's Homepage";
+  constexpr char kBindingsId1[] = "1234";
+  constexpr char kBindingsId2[] = "5678";
+
+  // The script should be able to run before HTML <script> tag starts running.
+  // The original title will be loaded first and then the injected script. Other
+  // scripts must run after the injected script.
+  EXPECT_CALL(mock_cast_wc_observer_,
+              UpdateTitle(base::ASCIIToUTF16(kExpectedTitle)));
+  EXPECT_CALL(mock_cast_wc_observer_,
+              UpdateTitle(base::ASCIIToUTF16(kOriginalTitle)));
+
+  GURL gurl = content::GetFileUrlWithQuery(
+      GetTestDataFilePath("dynamic_title.html"), "");
+
+  cast_web_contents_->AddBeforeLoadJavaScript(
+      kBindingsId1, {gurl.GetOrigin().spec()}, "stashed_title = 'foo';");
+  // Add a script which clobbers "foo".
+  cast_web_contents_->AddBeforeLoadJavaScript(
+      kBindingsId2, {gurl.GetOrigin().spec()}, "stashed_title = 'bar';");
+  // Deletes the clobbering script.
+  cast_web_contents_->RemoveBeforeLoadJavaScript(kBindingsId2);
+
+  cast_web_contents_->LoadUrl(gurl);
+  title_change_observer_.RunUntilTitleEquals(kExpectedTitle);
+}
+
+IN_PROC_BROWSER_TEST_F(CastWebContentsBrowserTest,
+                       ExecuteJavaScriptOnLoadWrongOrigin) {
+  // ===========================================================================
+  // Test: Injecting script should not happen if the to-be-loaded page's origin
+  // is not whitelisted for the injection script.
+  // ===========================================================================
+  constexpr char kOriginalTitle[] =
+      "Welcome to Stan the Offline Dino's Homepage";
+  constexpr char kBindingsId[] = "1234";
+
+  EXPECT_CALL(mock_cast_wc_observer_,
+              UpdateTitle(base::ASCIIToUTF16(kOriginalTitle)));
+
+  GURL gurl = content::GetFileUrlWithQuery(
+      GetTestDataFilePath("dynamic_title.html"), "");
+
+  cast_web_contents_->AddBeforeLoadJavaScript(
+      kBindingsId, {"http://example.com"}, "stashed_title = 'hello';");
+
+  cast_web_contents_->LoadUrl(gurl);
+  title_change_observer_.RunUntilTitleEquals(kOriginalTitle);
+}
+
+IN_PROC_BROWSER_TEST_F(CastWebContentsBrowserTest,
+                       ExecuteJavaScriptOnLoadWildcardOrigin) {
+  // Start test server for hosting test HTML pages.
+  embedded_test_server()->ServeFilesFromSourceDirectory(GetTestDataPath());
+  StartTestServer();
+  // ===========================================================================
+  // Test: Injecting script should be able to load on arbitrary origins with
+  // wildcard origin restriction set.
+  // ===========================================================================
+  constexpr char kInjectedTitle1[] = "hello";
+  constexpr char kInjectedTitle2[] = "world";
+  constexpr char kOriginalTitle[] =
+      "Welcome to Stan the Offline Dino's Homepage";
+  constexpr char kBindingsId1[] = "1234";
+  constexpr char kBindingsId2[] = "5678";
+
+  // The script should be able to run before HTML <script> tag starts running.
+  EXPECT_CALL(mock_cast_wc_observer_,
+              UpdateTitle(base::ASCIIToUTF16(kOriginalTitle)))
+      .Times(2);
+  EXPECT_CALL(mock_cast_wc_observer_,
+              UpdateTitle(base::ASCIIToUTF16(kInjectedTitle1)));
+  EXPECT_CALL(mock_cast_wc_observer_,
+              UpdateTitle(base::ASCIIToUTF16(kInjectedTitle2)));
+
+  GURL gurl{embedded_test_server()->GetURL("/dynamic_title.html")};
+
+  cast_web_contents_->AddBeforeLoadJavaScript(kBindingsId1, {"*"},
+                                              "stashed_title = 'hello';");
+  // Test script injection for the origin 127.0.0.1.
+  // Load title "hello":
+  cast_web_contents_->LoadUrl(gurl);
+  title_change_observer_.RunUntilTitleEquals(kInjectedTitle1);
+
+  // Load AboutBlank page:
+  cast_web_contents_->LoadUrl(GURL(url::kAboutBlankURL));
+
+  cast_web_contents_->AddBeforeLoadJavaScript(kBindingsId2, {"*"},
+                                              "stashed_title = 'world';");
+  // Test script injection using a different origin ("localhost"), which should
+  // still be picked up by the wildcard. And the title should be initialized as
+  // origianl title first, then as 'world'.
+  GURL alt_url =
+      embedded_test_server()->GetURL("localhost", "/dynamic_title.html");
+  cast_web_contents_->LoadUrl(alt_url);
+  title_change_observer_.RunUntilTitleEquals(kInjectedTitle2);
+}
+
+IN_PROC_BROWSER_TEST_F(CastWebContentsBrowserTest,
+                       ExecuteJavaScriptOnLoadEarlyAndLateRegistrations) {
+  // ===========================================================================
+  // Test: Tests that we can inject scripts before and after RenderFrame
+  // creation.
+  // ===========================================================================
+  constexpr char kExpectedTitle1[] = "foo";
+  constexpr char kExpectedTitle2[] = "foo bar";
+  constexpr char kOriginalTitle[] =
+      "Welcome to Stan the Offline Dino's Homepage";
+  constexpr char kBindingsId1[] = "1234";
+  constexpr char kBindingsId2[] = "5678";
+
+  // The script should be able to run before HTML <script> tag starts running.
+  // The original title will be loaded first and then the injected script. Other
+  // scripts must run after the injected script.
+  EXPECT_CALL(mock_cast_wc_observer_,
+              UpdateTitle(base::ASCIIToUTF16(kExpectedTitle2)));
+  EXPECT_CALL(mock_cast_wc_observer_,
+              UpdateTitle(base::ASCIIToUTF16(kExpectedTitle1)));
+  EXPECT_CALL(mock_cast_wc_observer_,
+              UpdateTitle(base::ASCIIToUTF16(kOriginalTitle)))
+      .Times(2);
+
+  GURL gurl = content::GetFileUrlWithQuery(
+      GetTestDataFilePath("dynamic_title.html"), "");
+
+  cast_web_contents_->AddBeforeLoadJavaScript(
+      kBindingsId1, {gurl.GetOrigin().spec()}, "stashed_title = 'foo';");
+  cast_web_contents_->LoadUrl(gurl);
+  title_change_observer_.RunUntilTitleEquals(kExpectedTitle1);
+
+  // Inject bindings after RenderFrameCreation
+  cast_web_contents_->AddBeforeLoadJavaScript(
+      kBindingsId2, {gurl.GetOrigin().spec()}, "stashed_title += ' bar';");
+
+  // Navigate away to clean the state.
+  cast_web_contents_->LoadUrl(GURL(url::kAboutBlankURL));
+
+  // Navigate back and see if both scripts are working.
+  cast_web_contents_->LoadUrl(gurl);
+  title_change_observer_.RunUntilTitleEquals(kExpectedTitle2);
+}
+
+IN_PROC_BROWSER_TEST_F(CastWebContentsBrowserTest, PostMessageToMainFrame) {
+  // ===========================================================================
+  // Test: Tests that we can trigger onmessage event on a web page. This test
+  // would post a message to the test page to redirect it to |title1.html|.
+  // ===========================================================================
+  constexpr char kOriginalTitle[] = "postmessage";
+  constexpr char kPage1Path[] = "title1.html";
+  constexpr char kPage1Title[] = "title 1";
+
+  EXPECT_CALL(mock_cast_wc_observer_,
+              UpdateTitle(base::ASCIIToUTF16(kPage1Title)));
+  EXPECT_CALL(mock_cast_wc_observer_,
+              UpdateTitle(base::ASCIIToUTF16(kOriginalTitle)));
+
+  GURL gurl = content::GetFileUrlWithQuery(
+      GetTestDataFilePath("window_post_message.html"), "");
+
+  cast_web_contents_->LoadUrl(gurl);
+  title_change_observer_.RunUntilTitleEquals(kOriginalTitle);
+
+  cast_web_contents_->PostMessageToMainFrame(
+      gurl.GetOrigin().spec(), std::string(kPage1Path),
+      std::vector<blink::WebMessagePort>());
+  title_change_observer_.RunUntilTitleEquals(kPage1Title);
+}
+
+IN_PROC_BROWSER_TEST_F(CastWebContentsBrowserTest, PostMessagePassMessagePort) {
+  // ===========================================================================
+  // Test: Send a MessagePort to the page, then perform bidirectional messaging
+  // through the port.
+  // ===========================================================================
+  constexpr char kOriginalTitle[] = "messageport";
+  constexpr char kHelloMsg[] = "hi";
+  constexpr char kPingMsg[] = "ping";
+
+  EXPECT_CALL(mock_cast_wc_observer_,
+              UpdateTitle(base::ASCIIToUTF16(kOriginalTitle)));
+
+  // Load test page.
+  GURL gurl = content::GetFileUrlWithQuery(
+      GetTestDataFilePath("message_port.html"), "");
+  cast_web_contents_->LoadUrl(gurl);
+  title_change_observer_.RunUntilTitleEquals(kOriginalTitle);
+
+  auto message_pipe = blink::WebMessagePort::CreatePair();
+  auto platform_port = std::move(message_pipe.first);
+  auto page_port = std::move(message_pipe.second);
+
+  TestMessageReceiver message_receiver;
+  platform_port.SetReceiver(&message_receiver,
+                            base::ThreadTaskRunnerHandle::Get());
+
+  // Make sure we could send a MessagePort (ScopedMessagePipeHandle) to the
+  // page.
+  {
+    base::RunLoop run_loop;
+    auto quit_closure = run_loop.QuitClosure();
+    auto received_message_callback = base::BindOnce(
+        [](base::OnceClosure loop_quit_closure, std::string port_msg,
+           base::Optional<blink::WebMessagePort> incoming_port) {
+          EXPECT_EQ("got_port", port_msg);
+          std::move(loop_quit_closure).Run();
+        },
+        std::move(quit_closure));
+    message_receiver.WaitForNextIncomingMessage(
+        std::move(received_message_callback));
+    std::vector<blink::WebMessagePort> message_ports;
+    message_ports.push_back(std::move(page_port));
+    cast_web_contents_->PostMessageToMainFrame(
+        gurl.GetOrigin().spec(), kHelloMsg, std::move(message_ports));
+    run_loop.Run();
+  }
+  // Test whether we could receive the right response from the page after we
+  // send messages through |platform_port|.
+  {
+    base::RunLoop run_loop;
+    auto quit_closure = run_loop.QuitClosure();
+    auto received_message_callback = base::BindOnce(
+        [](base::OnceClosure loop_quit_closure, std::string port_msg,
+           base::Optional<blink::WebMessagePort> incoming_port) {
+          EXPECT_EQ("ack ping", port_msg);
+          std::move(loop_quit_closure).Run();
+        },
+        std::move(quit_closure));
+    message_receiver.WaitForNextIncomingMessage(
+        std::move(received_message_callback));
+    platform_port.PostMessage(
+        blink::WebMessagePort::Message(base::UTF8ToUTF16(kPingMsg)));
+    run_loop.Run();
+  }
+}
+
+IN_PROC_BROWSER_TEST_F(CastWebContentsBrowserTest,
+                       PostMessageMessagePortDisconnected) {
+  // ===========================================================================
+  // Test: Send a MessagePort to the page, then perform bidirectional messaging
+  // through the port. Make sure mojo counterpart pipe handle could receive the
+  // MessagePort disconnection event.
+  // ===========================================================================
+  constexpr char kOriginalTitle[] = "messageport";
+  constexpr char kHelloMsg[] = "hi";
+
+  EXPECT_CALL(mock_cast_wc_observer_,
+              UpdateTitle(base::ASCIIToUTF16(kOriginalTitle)));
+  // Load test page.
+  GURL gurl = content::GetFileUrlWithQuery(
+      GetTestDataFilePath("message_port.html"), "");
+  cast_web_contents_->LoadUrl(gurl);
+  title_change_observer_.RunUntilTitleEquals(kOriginalTitle);
+
+  auto message_pipe = blink::WebMessagePort::CreatePair();
+  auto platform_port = std::move(message_pipe.first);
+  auto page_port = std::move(message_pipe.second);
+
+  // Bind platform side port
+  TestMessageReceiver message_receiver;
+  platform_port.SetReceiver(&message_receiver,
+                            base::ThreadTaskRunnerHandle::Get());
+
+  // Make sure we could post a MessagePort (ScopedMessagePipeHandle) to
+  // the page.
+  {
+    base::RunLoop run_loop;
+    auto quit_closure = run_loop.QuitClosure();
+    auto received_message_callback = base::BindOnce(
+        [](base::OnceClosure loop_quit_closure, std::string port_msg,
+           base::Optional<blink::WebMessagePort> incoming_port) {
+          EXPECT_EQ("got_port", port_msg);
+          std::move(loop_quit_closure).Run();
+        },
+        std::move(quit_closure));
+    message_receiver.WaitForNextIncomingMessage(
+        std::move(received_message_callback));
+    std::vector<blink::WebMessagePort> message_ports;
+    message_ports.push_back(std::move(page_port));
+    cast_web_contents_->PostMessageToMainFrame(
+        gurl.GetOrigin().spec(), kHelloMsg, std::move(message_ports));
+    run_loop.Run();
+  }
+  // Navigating off-page should tear down the MessageChannel, native side
+  // should be able to receive disconnected event.
+  {
+    base::RunLoop run_loop;
+    message_receiver.SetOnPipeErrorCallback(base::BindOnce(
+        [](base::OnceClosure quit_closure) { std::move(quit_closure).Run(); },
+        run_loop.QuitClosure()));
+    cast_web_contents_->LoadUrl(GURL(url::kAboutBlankURL));
+    run_loop.Run();
+  }
+}
+
+IN_PROC_BROWSER_TEST_F(CastWebContentsBrowserTest, ExecuteJavaScript) {
+  // Start test server for hosting test HTML pages.
+  embedded_test_server()->ServeFilesFromSourceDirectory(GetTestDataPath());
+  StartTestServer();
+  auto run_loop = std::make_unique<base::RunLoop>();
+  auto quit_closure = [&run_loop]() {
+    if (run_loop->running()) {
+      run_loop->QuitWhenIdle();
+    }
+  };
+
+  // ===========================================================================
+  // Test: Set a value using ExecuteJavaScript with empty callback, and then use
+  // ExecuteJavaScript with callback to retrieve that value.
+  // ===========================================================================
+  constexpr char kSoyMilkJsonStringLiteral[] = "\"SoyMilk\"";
+
+  // Load page with title "hello":
+  GURL gurl{embedded_test_server()->GetURL("/title1.html")};
+  {
+    InSequence seq;
+    EXPECT_CALL(
+        mock_cast_wc_observer_,
+        OnPageStateChanged(CheckPageState(
+            cast_web_contents_.get(), CastWebContents::PageState::LOADING)));
+    EXPECT_CALL(
+        mock_cast_wc_observer_,
+        OnPageStateChanged(CheckPageState(cast_web_contents_.get(),
+                                          CastWebContents::PageState::LOADED)))
+        .WillOnce(InvokeWithoutArgs(quit_closure));
+  }
+  cast_web_contents_->LoadUrl(gurl);
+  run_loop->Run();
+
+  // Execute with empty callback.
+  cast_web_contents_->ExecuteJavaScript(
+      base::UTF8ToUTF16(
+          base::StringPrintf("const the_var = %s;", kSoyMilkJsonStringLiteral)),
+      base::DoNothing());
+
+  // Execute a script snippet to return the variable's value.
+  base::RunLoop run_loop2;
+  cast_web_contents_->ExecuteJavaScript(
+      base::UTF8ToUTF16("the_var;"),
+      base::BindLambdaForTesting([&](base::Value result_value) {
+        std::string result_json;
+        ASSERT_TRUE(base::JSONWriter::Write(result_value, &result_json));
+        EXPECT_EQ(result_json, kSoyMilkJsonStringLiteral);
+        run_loop2.Quit();
+      }));
+  run_loop2.Run();
 }
 
 }  // namespace chromecast

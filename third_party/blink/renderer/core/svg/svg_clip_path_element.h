@@ -34,8 +34,6 @@ class SVGClipPathElement final : public SVGGraphicsElement {
   DEFINE_WRAPPERTYPEINFO();
 
  public:
-  DECLARE_NODE_FACTORY(SVGClipPathElement);
-
   explicit SVGClipPathElement(Document&);
 
   SVGAnimatedEnumeration<SVGUnitTypes::SVGUnitType>* clipPathUnits() {
@@ -44,7 +42,7 @@ class SVGClipPathElement final : public SVGGraphicsElement {
 
   bool SupportsFocus() const override { return false; }
 
-  void Trace(blink::Visitor*) override;
+  void Trace(Visitor*) override;
 
  private:
   void SvgAttributeChanged(const QualifiedName&) override;

@@ -24,7 +24,9 @@ class Bus;
 namespace chromeos {
 
 // Style Note: Clients are sorted by names.
+class AnomalyDetectorClient;
 class ArcAppfuseProviderClient;
+class ArcKeymasterClient;
 class ArcMidisClient;
 class ArcObbMounterClient;
 class ArcOemCryptoClient;
@@ -35,9 +37,8 @@ class CrosDisksClient;
 class DBusClientsBrowser;
 class DBusThreadManagerSetter;
 class DebugDaemonClient;
-class DiagnosticsdClient;
 class EasyUnlockClient;
-class GsmSMSClient;
+class GnubbyClient;
 class ImageBurnerClient;
 class ImageLoaderClient;
 class LorgnetteManagerClient;
@@ -55,6 +56,7 @@ class SmbProviderClient;
 class SMSClient;
 class UpdateEngineClient;
 class VirtualFileProviderClient;
+class VmPluginDispatcherClient;
 
 // THIS CLASS IS BEING DEPRECATED. See README.md for guidelines and
 // https://crbug.com/647367 for details.
@@ -114,7 +116,9 @@ class COMPONENT_EXPORT(CHROMEOS_DBUS) DBusThreadManager {
   // pointers after DBusThreadManager has been shut down.
   // TODO(jamescook): Replace this with calls to FooClient::Get().
   // http://crbug.com/647367
+  AnomalyDetectorClient* GetAnomalyDetectorClient();
   ArcAppfuseProviderClient* GetArcAppfuseProviderClient();
+  ArcKeymasterClient* GetArcKeymasterClient();
   ArcMidisClient* GetArcMidisClient();
   ArcObbMounterClient* GetArcObbMounterClient();
   ArcOemCryptoClient* GetArcOemCryptoClient();
@@ -123,8 +127,8 @@ class COMPONENT_EXPORT(CHROMEOS_DBUS) DBusThreadManager {
   ConciergeClient* GetConciergeClient();
   CrosDisksClient* GetCrosDisksClient();
   DebugDaemonClient* GetDebugDaemonClient();
-  DiagnosticsdClient* GetDiagnosticsdClient();
   EasyUnlockClient* GetEasyUnlockClient();
+  GnubbyClient* GetGnubbyClient();
   ImageBurnerClient* GetImageBurnerClient();
   ImageLoaderClient* GetImageLoaderClient();
   LorgnetteManagerClient* GetLorgnetteManagerClient();
@@ -134,10 +138,10 @@ class COMPONENT_EXPORT(CHROMEOS_DBUS) DBusThreadManager {
   SmbProviderClient* GetSmbProviderClient();
   UpdateEngineClient* GetUpdateEngineClient();
   VirtualFileProviderClient* GetVirtualFileProviderClient();
+  VmPluginDispatcherClient* GetVmPluginDispatcherClient();
 
   // DEPRECATED, DO NOT USE. The static getter for each of these classes should
   // be used instead. TODO(stevenjb): Remove. https://crbug.com/948390.
-  GsmSMSClient* GetGsmSMSClient();
   ModemMessagingClient* GetModemMessagingClient();
   SMSClient* GetSMSClient();
   ShillDeviceClient* GetShillDeviceClient();
@@ -180,6 +184,7 @@ class COMPONENT_EXPORT(CHROMEOS_DBUS) DBusThreadManagerSetter {
   void SetConciergeClient(std::unique_ptr<ConciergeClient> client);
   void SetCrosDisksClient(std::unique_ptr<CrosDisksClient> client);
   void SetDebugDaemonClient(std::unique_ptr<DebugDaemonClient> client);
+  void SetGnubbyClient(std::unique_ptr<GnubbyClient> client);
   void SetImageBurnerClient(std::unique_ptr<ImageBurnerClient> client);
   void SetImageLoaderClient(std::unique_ptr<ImageLoaderClient> client);
   void SetSeneschalClient(std::unique_ptr<SeneschalClient> client);

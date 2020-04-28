@@ -49,7 +49,7 @@ struct StagingBuffer {
   void DestroyGLResources(gpu::raster::RasterInterface* gl,
                           gpu::SharedImageInterface* sii);
   void OnMemoryDump(base::trace_event::ProcessMemoryDump* pmd,
-                    viz::ResourceFormat format,
+                    viz::ResourceFormat dump_format,
                     bool is_free) const;
 
   const gfx::Size size;
@@ -142,7 +142,7 @@ class CC_EXPORT StagingBufferPool
 
   std::unique_ptr<base::MemoryPressureListener> memory_pressure_listener_;
 
-  base::WeakPtrFactory<StagingBufferPool> weak_ptr_factory_;
+  base::WeakPtrFactory<StagingBufferPool> weak_ptr_factory_{this};
 };
 
 }  // namespace cc

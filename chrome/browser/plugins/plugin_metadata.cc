@@ -6,7 +6,7 @@
 
 #include <stddef.h>
 
-#include "base/logging.h"
+#include "base/check.h"
 #include "base/memory/ptr_util.h"
 #include "base/stl_util.h"
 #include "base/strings/pattern.h"
@@ -61,7 +61,7 @@ void PluginMetadata::AddMatchingMimeType(const std::string& mime_type) {
 }
 
 bool PluginMetadata::HasMimeType(const std::string& mime_type) const {
-  return base::ContainsValue(all_mime_types_, mime_type);
+  return base::Contains(all_mime_types_, mime_type);
 }
 
 bool PluginMetadata::MatchesPlugin(const content::WebPluginInfo& plugin) {

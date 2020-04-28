@@ -12,9 +12,9 @@
 #include "chrome/browser/chromeos/crostini/crostini_mime_types_service.h"
 #include "chrome/browser/chromeos/crostini/crostini_mime_types_service_factory.h"
 #include "chrome/browser/chromeos/crostini/crostini_pref_names.h"
-#include "chrome/browser/chromeos/crostini/crostini_registry_service.h"
-#include "chrome/browser/chromeos/crostini/crostini_registry_service_factory.h"
 #include "chrome/browser/chromeos/crostini/crostini_util.h"
+#include "chrome/browser/chromeos/guest_os/guest_os_registry_service.h"
+#include "chrome/browser/chromeos/guest_os/guest_os_registry_service_factory.h"
 #include "chrome/browser/component_updater/cros_component_installer_chromeos.h"
 #include "chrome/browser/profiles/profile.h"
 #include "components/prefs/pref_service.h"
@@ -69,20 +69,19 @@ void CrostiniRemover::StopVmFinished(CrostiniResult result) {
     return;
   }
 
-  CrostiniRegistryServiceFactory::GetForProfile(profile_)->ClearApplicationList(
-      vm_name_, "");
+  guest_os::GuestOsRegistryServiceFactory::GetForProfile(profile_)
+      ->ClearApplicationList(vm_name_, "");
   CrostiniMimeTypesServiceFactory::GetForProfile(profile_)->ClearMimeTypes(
       vm_name_, "");
   CrostiniManager::GetForProfile(profile_)->DestroyDiskImage(
       base::FilePath(vm_name_),
-      vm_tools::concierge::StorageLocation::STORAGE_CRYPTOHOME_ROOT,
       base::BindOnce(&CrostiniRemover::DestroyDiskImageFinished, this));
 }
 
-void CrostiniRemover::DestroyDiskImageFinished(CrostiniResult result) {
+void CrostiniRemover::DestroyDiskImageFinished(bool success) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  if (result != CrostiniResult::SUCCESS) {
-    std::move(callback_).Run(result);
+  if (!success) {
+    std::move(callback_).Run(CrostiniResult::DESTROY_DISK_IMAGE_FAILED);
     return;
   }
   // Only set kCrostiniEnabled to false once cleanup is completely finished.
@@ -103,6 +102,7 @@ void CrostiniRemover::StopConciergeFinished(bool is_successful) {
     profile_->GetPrefs()->ClearPref(prefs::kCrostiniLastDiskSize);
     profile_->GetPrefs()->Set(prefs::kCrostiniContainers,
                               base::Value(base::Value::Type::LIST));
+    profile_->GetPrefs()->ClearPref(prefs::kCrostiniDefaultContainerConfigured);
   }
   std::move(callback_).Run(CrostiniResult::SUCCESS);
 }

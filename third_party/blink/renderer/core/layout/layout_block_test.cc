@@ -25,13 +25,14 @@ TEST_F(LayoutBlockTest, LayoutNameCalledWithNullStyle) {
   obj->SetModifiedStyleOutsideStyleRecalc(nullptr,
                                           LayoutObject::ApplyStyleChanges::kNo);
   EXPECT_FALSE(obj->Style());
-  EXPECT_THAT(obj->DecoratedName().Ascii().data(),
+  EXPECT_THAT(obj->DecoratedName().Ascii(),
               MatchesRegex("LayoutN?G?BlockFlow \\(anonymous\\)"));
   obj->Destroy();
 }
 
 TEST_F(LayoutBlockTest, WidthAvailableToChildrenChanged) {
-  ScopedOverlayScrollbarsForTest overlay_scrollbars(false);
+  USE_NON_OVERLAY_SCROLLBARS();
+
   SetBodyInnerHTML(R"HTML(
     <!DOCTYPE html>
     <div id='list' style='overflow-y:auto; width:150px; height:100px'>
@@ -53,7 +54,8 @@ TEST_F(LayoutBlockTest, WidthAvailableToChildrenChanged) {
             150 - list_box->VerticalScrollbarWidth());
 
   DummyExceptionStateForTesting exception_state;
-  list_element->style()->setCSSText(&GetDocument(), "width:150px;height:100px;",
+  list_element->style()->setCSSText(GetDocument().GetExecutionContext(),
+                                    "width:150px;height:100px;",
                                     exception_state);
   ASSERT_FALSE(exception_state.HadException());
   UpdateAllLifecyclePhasesForTest();
@@ -75,26 +77,62 @@ TEST_F(LayoutBlockTest, OverflowWithTransformAndPerspective) {
 }
 
 TEST_F(LayoutBlockTest, NestedInlineVisualOverflow) {
-  // Only exercises legacy code.
-  if (RuntimeEnabledFeatures::LayoutNGEnabled())
-    return;
   SetBodyInnerHTML(R"HTML(
-    <label style="font-size: 0px">
-      <input type="radio" style="margin-left: -15px">
-    </label>
+    <div id="target" style="width: 0; height: 0">
+      <span style="font-size: 10px/10px">
+        <img style="margin-left: -15px; width: 40px; height: 40px">
+      </span>
+    </div>
   )HTML");
-  auto* body = To<LayoutBlockFlow>(GetDocument().body()->GetLayoutObject());
-  RootInlineBox* box = body->FirstRootBox();
-#if defined(OS_MACOSX)
-  EXPECT_EQ(LayoutRect(-17, 0, 16, 19),
-            box->VisualOverflowRect(box->LineTop(), box->LineBottom()));
-#elif defined(OS_ANDROID)
-  EXPECT_EQ(LayoutRect(-15, 3, 19, 16),
-            box->VisualOverflowRect(box->LineTop(), box->LineBottom()));
-#else
-  EXPECT_EQ(LayoutRect(-15, 3, 16, 13),
-            box->VisualOverflowRect(box->LineTop(), box->LineBottom()));
-#endif
+
+  auto* target = ToLayoutBox(GetLayoutObjectByElementId("target"));
+  EXPECT_EQ(LayoutRect(-15, 0, 40, 40), target->VisualOverflowRect());
+  EXPECT_EQ(PhysicalRect(-15, 0, 40, 40), target->PhysicalVisualOverflowRect());
+}
+
+TEST_F(LayoutBlockTest, NestedInlineVisualOverflowVerticalRL) {
+  SetBodyInnerHTML(R"HTML(
+    <div style="width: 100px; writing-mode: vertical-rl">
+      <div id="target" style="width: 0; height: 0">
+        <span style="font-size: 10px/10px">
+          <img style="margin-right: -15px; width: 40px; height: 40px">
+        </span>
+      </div>
+    </div>
+  )HTML");
+
+  auto* target = ToLayoutBox(GetLayoutObjectByElementId("target"));
+  EXPECT_EQ(LayoutRect(-15, 0, 40, 40), target->VisualOverflowRect());
+  EXPECT_EQ(PhysicalRect(-25, 0, 40, 40), target->PhysicalVisualOverflowRect());
+}
+
+TEST_F(LayoutBlockTest, ContainmentStyleChange) {
+  SetBodyInnerHTML(R"HTML(
+    <style>
+      * { display: block }
+    </style>
+    <div id=target style="contain:strict">
+      <div>
+        <div>
+          <div id=contained style="position: fixed"></div>
+          <div></div>
+        <div>
+      </div>
+    </div>
+  )HTML");
+
+  Element* target_element = GetDocument().getElementById("target");
+  auto* target = To<LayoutBlockFlow>(target_element->GetLayoutObject());
+  LayoutBox* contained = ToLayoutBox(GetLayoutObjectByElementId("contained"));
+  EXPECT_TRUE(target->PositionedObjects()->Contains(contained));
+
+  // Remove layout containment. This should cause |contained| to now be
+  // in the positioned objects set for the LayoutView, not |target|.
+  target_element->setAttribute(html_names::kStyleAttr, "contain:style");
+  UpdateAllLifecyclePhasesForTest();
+  EXPECT_FALSE(target->PositionedObjects());
+  EXPECT_TRUE(
+      GetDocument().GetLayoutView()->PositionedObjects()->Contains(contained));
 }
 
 }  // namespace blink

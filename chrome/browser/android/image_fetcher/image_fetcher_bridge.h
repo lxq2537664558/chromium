@@ -34,6 +34,7 @@ class ImageFetcherBridge {
 
   void FetchImageData(JNIEnv* j_env,
                       const base::android::JavaRef<jobject>& j_this,
+                      const jint j_image_fetcher_config,
                       const base::android::JavaRef<jstring>& j_url,
                       const base::android::JavaRef<jstring>& j_client_name,
                       const base::android::JavaRef<jobject>& j_callback);
@@ -74,7 +75,7 @@ class ImageFetcherBridge {
   ImageFetcherService* image_fetcher_service_;
   base::FilePath base_file_path_;
 
-  base::WeakPtrFactory<ImageFetcherBridge> weak_ptr_factory_;
+  base::WeakPtrFactory<ImageFetcherBridge> weak_ptr_factory_{this};
 
   DISALLOW_COPY_AND_ASSIGN(ImageFetcherBridge);
 };

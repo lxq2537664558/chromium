@@ -6,7 +6,7 @@
 
 #include <string>
 
-#include "base/logging.h"
+#include "base/notreached.h"
 #include "base/values.h"
 #include "components/feedback/feedback_uploader.h"
 #include "components/feedback/feedback_uploader_factory.h"
@@ -51,6 +51,12 @@ void ShellFeedbackPrivateDelegate::FetchExtraLogs(
 void ShellFeedbackPrivateDelegate::UnloadFeedbackExtension(
     content::BrowserContext* context) const {
   NOTIMPLEMENTED();
+}
+
+api::feedback_private::LandingPageType
+ShellFeedbackPrivateDelegate::GetLandingPageType(
+    const feedback::FeedbackData& feedback_data) const {
+  return api::feedback_private::LANDING_PAGE_TYPE_NOLANDINGPAGE;
 }
 #endif
 

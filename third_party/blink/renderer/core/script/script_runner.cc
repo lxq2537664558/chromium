@@ -35,24 +35,25 @@
 #include "third_party/blink/renderer/platform/scheduler/public/cooperative_scheduling_manager.h"
 #include "third_party/blink/renderer/platform/scheduler/public/thread.h"
 #include "third_party/blink/renderer/platform/scheduler/public/thread_scheduler.h"
+#include "third_party/blink/renderer/platform/wtf/casting.h"
 
 namespace blink {
 
 ScriptRunner::ScriptRunner(Document* document)
-    : document_(document),
+    : ExecutionContextLifecycleStateObserver(document->GetExecutionContext()),
+      document_(document),
       task_runner_(document->GetTaskRunner(TaskType::kNetworking)) {
   DCHECK(document);
+  UpdateStateIfNeeded();
 }
 
 void ScriptRunner::QueueScriptForExecution(PendingScript* pending_script) {
   DCHECK(pending_script);
   document_->IncrementLoadEventDelayCount();
+  pending_script->StartStreamingIfPossible();
   switch (pending_script->GetSchedulingType()) {
     case ScriptSchedulingType::kAsync:
       pending_async_scripts_.insert(pending_script);
-      if (!is_suspended_) {
-        pending_script->StartStreamingIfPossible();
-      }
       break;
 
     case ScriptSchedulingType::kInOrder:
@@ -72,26 +73,34 @@ void ScriptRunner::PostTask(const base::Location& web_trace_location) {
       WTF::Bind(&ScriptRunner::ExecuteTask, WrapWeakPersistent(this)));
 }
 
-void ScriptRunner::Suspend() {
-#ifndef NDEBUG
-  // Resume will re-post tasks for all available scripts.
-  number_of_extra_tasks_ += async_scripts_to_execute_soon_.size() +
-                            in_order_scripts_to_execute_soon_.size();
-#endif
-
-  is_suspended_ = true;
+void ScriptRunner::ContextLifecycleStateChanged(
+    mojom::FrameLifecycleState state) {
+  if (!IsExecutionSuspended())
+    PostTasksForReadyScripts(FROM_HERE);
 }
 
-void ScriptRunner::Resume() {
-  DCHECK(is_suspended_);
+bool ScriptRunner::IsExecutionSuspended() {
+  return !GetExecutionContext() || GetExecutionContext()->IsContextPaused() ||
+         is_force_deferred_;
+}
 
-  is_suspended_ = false;
+void ScriptRunner::SetForceDeferredExecution(bool force_deferred) {
+  DCHECK(force_deferred != is_force_deferred_);
+
+  is_force_deferred_ = force_deferred;
+  if (!IsExecutionSuspended())
+    PostTasksForReadyScripts(FROM_HERE);
+}
+
+void ScriptRunner::PostTasksForReadyScripts(
+    const base::Location& web_trace_location) {
+  DCHECK(!IsExecutionSuspended());
 
   for (size_t i = 0; i < async_scripts_to_execute_soon_.size(); ++i) {
-    PostTask(FROM_HERE);
+    PostTask(web_trace_location);
   }
   for (size_t i = 0; i < in_order_scripts_to_execute_soon_.size(); ++i) {
-    PostTask(FROM_HERE);
+    PostTask(web_trace_location);
   }
 }
 
@@ -242,7 +251,7 @@ void ScriptRunner::ExecuteTask() {
       whitelisted_stack_scope(
           scheduler::CooperativeSchedulingManager::Instance());
 
-  if (is_suspended_)
+  if (IsExecutionSuspended())
     return;
 
   if (ExecuteAsyncTask())
@@ -250,15 +259,10 @@ void ScriptRunner::ExecuteTask() {
 
   if (ExecuteInOrderTask())
     return;
-
-#ifndef NDEBUG
-  // Extra tasks should be posted only when we resume after suspending. These
-  // should all be accounted for in number_of_extra_tasks_.
-  DCHECK_GT(number_of_extra_tasks_--, 0);
-#endif
 }
 
-void ScriptRunner::Trace(blink::Visitor* visitor) {
+void ScriptRunner::Trace(Visitor* visitor) {
+  ExecutionContextLifecycleStateObserver::Trace(visitor);
   visitor->Trace(document_);
   visitor->Trace(pending_in_order_scripts_);
   visitor->Trace(pending_async_scripts_);

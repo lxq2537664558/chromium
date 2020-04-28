@@ -7,7 +7,7 @@
 
 #include <algorithm>
 
-#include "base/logging.h"
+#include "base/check_op.h"
 #include "build/build_config.h"
 
 // NaCl does not allow intrinsics.
@@ -61,13 +61,6 @@ void FMUL(const float src[], float scale, int len, float dest[]) {
 void FMUL_C(const float src[], float scale, int len, float dest[]) {
   for (int i = 0; i < len; ++i)
     dest[i] = src[i] * scale;
-}
-
-void Crossfade(const float src[], int len, float dest[]) {
-  float cf_ratio = 0;
-  const float cf_increment = 1.0f / len;
-  for (int i = 0; i < len; ++i, cf_ratio += cf_increment)
-    dest[i] = (1.0f - cf_ratio) * src[i] + cf_ratio * dest[i];
 }
 
 std::pair<float, float> EWMAAndMaxPower(

@@ -12,7 +12,6 @@
 
 #include "base/bind.h"
 #include "base/bind_helpers.h"
-#include "base/callback_helpers.h"
 #include "base/logging.h"
 #include "base/macros.h"
 #include "base/memory/ref_counted.h"
@@ -171,9 +170,9 @@ class CastVideoSink : public base::SupportsWeakPtr<CastVideoSink>,
   // |track| provides data for this sink.
   // |error_callback| is called if video formats don't match.
   CastVideoSink(const blink::WebMediaStreamTrack& track,
-                const CastRtpStream::ErrorCallback& error_callback)
+                CastRtpStream::ErrorCallback error_callback)
       : track_(track),
-        deliverer_(new Deliverer(error_callback)),
+        deliverer_(base::MakeRefCounted<Deliverer>(std::move(error_callback))),
         consecutive_refresh_count_(0),
         expecting_a_refresh_frame_(false),
         is_connected_to_track_(false) {}
@@ -204,9 +203,9 @@ class CastVideoSink : public base::SupportsWeakPtr<CastVideoSink>,
  private:
   class Deliverer : public base::RefCountedThreadSafe<Deliverer> {
    public:
-    explicit Deliverer(const CastRtpStream::ErrorCallback& error_callback)
+    explicit Deliverer(CastRtpStream::ErrorCallback error_callback)
         : main_task_runner_(base::ThreadTaskRunnerHandle::Get()),
-          error_callback_(error_callback) {}
+          error_callback_(std::move(error_callback)) {}
 
     void WillConnectToTrack(
         base::WeakPtr<CastVideoSink> sink,
@@ -216,7 +215,7 @@ class CastVideoSink : public base::SupportsWeakPtr<CastVideoSink>,
       frame_input_ = std::move(frame_input);
     }
 
-    void OnVideoFrame(const scoped_refptr<media::VideoFrame>& video_frame,
+    void OnVideoFrame(scoped_refptr<media::VideoFrame> video_frame,
                       base::TimeTicks estimated_capture_time) {
       main_task_runner_->PostTask(
           FROM_HERE, base::BindOnce(&CastVideoSink::DidReceiveFrame, sink_));
@@ -234,14 +233,14 @@ class CastVideoSink : public base::SupportsWeakPtr<CastVideoSink>,
       scoped_refptr<media::VideoFrame> frame = video_frame;
       // Drop alpha channel since we do not support it yet.
       if (frame->format() == media::PIXEL_FORMAT_I420A)
-        frame = media::WrapAsI420VideoFrame(video_frame);
+        frame = media::WrapAsI420VideoFrame(std::move(video_frame));
 
       // Used by chrome/browser/extension/api/cast_streaming/performance_test.cc
       TRACE_EVENT_INSTANT2("cast_perf_test", "ConsumeVideoFrame",
                            TRACE_EVENT_SCOPE_THREAD, "timestamp",
                            (timestamp - base::TimeTicks()).InMicroseconds(),
                            "time_delta", frame->timestamp().InMicroseconds());
-      frame_input_->InsertRawVideoFrame(frame, timestamp);
+      frame_input_->InsertRawVideoFrame(std::move(frame), timestamp);
     }
 
    private:
@@ -475,12 +474,11 @@ CastRtpStream::CastRtpStream(const blink::WebMediaStreamTrack& track,
     : track_(track),
       cast_session_(session),
       is_audio_(track_.Source().GetType() ==
-                blink::WebMediaStreamSource::kTypeAudio),
-      weak_factory_(this) {}
+                blink::WebMediaStreamSource::kTypeAudio) {}
 
 CastRtpStream::CastRtpStream(bool is_audio,
                              const scoped_refptr<CastSession>& session)
-    : cast_session_(session), is_audio_(is_audio), weak_factory_(this) {}
+    : cast_session_(session), is_audio_(is_audio) {}
 
 CastRtpStream::~CastRtpStream() {
   Stop();
@@ -495,21 +493,22 @@ std::vector<FrameSenderConfig> CastRtpStream::GetSupportedConfigs() {
 
 void CastRtpStream::Start(int32_t stream_id,
                           const FrameSenderConfig& config,
-                          const base::Closure& start_callback,
-                          const base::Closure& stop_callback,
-                          const ErrorCallback& error_callback) {
+                          base::OnceClosure start_callback,
+                          base::OnceClosure stop_callback,
+                          ErrorCallback error_callback) {
   DCHECK(!start_callback.is_null());
   DCHECK(!stop_callback.is_null());
   DCHECK(!error_callback.is_null());
 
   DVLOG(1) << "CastRtpStream::Start = " << (is_audio_ ? "audio" : "video");
-  stop_callback_ = stop_callback;
-  error_callback_ = error_callback;
+  stop_callback_ = std::move(stop_callback);
+  error_callback_ = std::move(error_callback);
 
   if (track_.IsNull()) {
     cast_session_->StartRemotingStream(
-        stream_id, config, base::Bind(&CastRtpStream::DidEncounterError,
-                                      weak_factory_.GetWeakPtr()));
+        stream_id, config,
+        base::BindOnce(&CastRtpStream::DidEncounterError,
+                       weak_factory_.GetWeakPtr()));
   } else if (is_audio_) {
     // In case of error we have to go through DidEncounterError() to stop
     // the streaming after reporting the error.
@@ -532,7 +531,7 @@ void CastRtpStream::Start(int32_t stream_id,
         base::Bind(&CastRtpStream::DidEncounterError,
                    weak_factory_.GetWeakPtr()));
   }
-  start_callback.Run();
+  std::move(start_callback).Run();
 }
 
 void CastRtpStream::Stop() {
@@ -543,7 +542,7 @@ void CastRtpStream::Stop() {
   error_callback_.Reset();
   audio_sink_.reset();
   video_sink_.reset();
-  base::ResetAndReturn(&stop_callback_).Run();
+  std::move(stop_callback_).Run();
 }
 
 void CastRtpStream::ToggleLogging(bool enable) {

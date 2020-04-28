@@ -14,7 +14,9 @@ namespace {
 class LayoutTableSectionTest : public RenderingTest {
  protected:
   LayoutTableSection* GetSectionByElementId(const char* id) {
-    return ToLayoutTableSection(GetLayoutObjectByElementId(id));
+    // TODO(958381) Needs to TableNG compatible with
+    // LayoutNGTableSectionInterface.
+    return To<LayoutTableSection>(GetLayoutObjectByElementId(id));
   }
 
   LayoutTableSection* CreateSection(unsigned rows, unsigned columns) {
@@ -29,7 +31,9 @@ class LayoutTableSectionTest : public RenderingTest {
         row->appendChild(GetDocument().CreateRawElement(html_names::kTdTag));
     }
     UpdateAllLifecyclePhasesForTest();
-    return ToLayoutTableSection(section->GetLayoutObject());
+    // TODO(958381) Needs to TableNG compatible with
+    // LayoutNGTableSectionInterface.
+    return To<LayoutTableSection>(section->GetLayoutObject());
   }
 };
 
@@ -47,7 +51,7 @@ TEST_F(LayoutTableSectionTest,
   auto* section = GetSectionByElementId("section");
   EXPECT_TRUE(section);
   EXPECT_FALSE(
-      section->BackgroundIsKnownToBeOpaqueInRect(LayoutRect(0, 0, 1, 1)));
+      section->BackgroundIsKnownToBeOpaqueInRect(PhysicalRect(0, 0, 1, 1)));
 }
 
 TEST_F(LayoutTableSectionTest, BackgroundIsKnownToBeOpaqueWithBorderSpacing) {
@@ -62,7 +66,7 @@ TEST_F(LayoutTableSectionTest, BackgroundIsKnownToBeOpaqueWithBorderSpacing) {
   auto* section = GetSectionByElementId("section");
   EXPECT_TRUE(section);
   EXPECT_FALSE(
-      section->BackgroundIsKnownToBeOpaqueInRect(LayoutRect(0, 0, 1, 1)));
+      section->BackgroundIsKnownToBeOpaqueInRect(PhysicalRect(0, 0, 1, 1)));
 }
 
 TEST_F(LayoutTableSectionTest, BackgroundIsKnownToBeOpaqueWithEmptyCell) {
@@ -78,7 +82,7 @@ TEST_F(LayoutTableSectionTest, BackgroundIsKnownToBeOpaqueWithEmptyCell) {
   auto* section = GetSectionByElementId("section");
   EXPECT_TRUE(section);
   EXPECT_FALSE(
-      section->BackgroundIsKnownToBeOpaqueInRect(LayoutRect(0, 0, 1, 1)));
+      section->BackgroundIsKnownToBeOpaqueInRect(PhysicalRect(0, 0, 1, 1)));
 }
 
 TEST_F(LayoutTableSectionTest, EmptySectionDirtiedRowsAndEffeciveColumns) {
@@ -314,7 +318,7 @@ TEST_F(LayoutTableSectionTest, VisualOverflowWithCollapsedBorders) {
 
 static void SetCellsOverflowInRow(LayoutTableRow* row) {
   for (auto* cell = row->FirstCell(); cell; cell = cell->NextCell()) {
-    ToElement(cell->GetNode())
+    To<Element>(cell->GetNode())
         ->setAttribute(html_names::kClassAttr, "overflow");
   }
 }

@@ -10,7 +10,6 @@
 #include "ui/events/scoped_target_handler.h"
 #include "ui/views/animation/ink_drop.h"
 #include "ui/views/animation/ink_drop_state.h"
-#include "ui/views/view.h"
 #include "ui/views/widget/widget.h"
 
 namespace views {
@@ -19,12 +18,10 @@ InkDropEventHandler::InkDropEventHandler(View* host_view, Delegate* delegate)
           std::make_unique<ui::ScopedTargetHandler>(host_view, this)),
       host_view_(host_view),
       delegate_(delegate) {
-  host_view_->AddObserver(this);
+  observer_.Add(host_view_);
 }
 
-InkDropEventHandler::~InkDropEventHandler() {
-  host_view_->RemoveObserver(this);
-}
+InkDropEventHandler::~InkDropEventHandler() = default;
 
 void InkDropEventHandler::AnimateInkDrop(InkDropState state,
                                          const ui::LocatedEvent* event) {
@@ -51,7 +48,7 @@ ui::LocatedEvent* InkDropEventHandler::GetLastRippleTriggeringEvent() const {
 }
 
 void InkDropEventHandler::OnGestureEvent(ui::GestureEvent* event) {
-  if (!host_view_->enabled() || !delegate_->SupportsGestureEvents())
+  if (!host_view_->GetEnabled() || !delegate_->SupportsGestureEvents())
     return;
 
   InkDropState current_ink_drop_state =

@@ -11,9 +11,7 @@
 #include "build/build_config.h"
 #include "google_apis/google_api_keys.h"
 #include "remoting/base/service_urls.h"
-#include "third_party/grpc/src/include/grpcpp/channel.h"
 #include "third_party/grpc/src/include/grpcpp/client_context.h"
-#include "third_party/grpc/src/include/grpcpp/grpcpp.h"
 
 namespace remoting {
 
@@ -84,10 +82,16 @@ GrpcChannelSharedPtr FtlGrpcContext::CreateChannel() {
 }
 
 // static
-std::unique_ptr<grpc::ClientContext> FtlGrpcContext::CreateClientContext() {
-  auto context = std::make_unique<grpc::ClientContext>();
-  context->AddMetadata("x-goog-api-key", google_apis::GetRemotingFtlAPIKey());
-  return context;
+void FtlGrpcContext::FillClientContext(grpc_impl::ClientContext* context) {
+#if defined(OS_CHROMEOS)
+  // Use the default Chrome API key for ChromeOS as the only host instance
+  // which runs there is used for the ChromeOS Enterprise Kiosk mode
+  // scenario.  If we decide to implement a remote access host for ChromeOS,
+  // then we will need a way for the caller to provide an API key.
+  context->AddMetadata("x-goog-api-key", google_apis::GetAPIKey());
+#else
+  context->AddMetadata("x-goog-api-key", google_apis::GetRemotingAPIKey());
+#endif
 }
 
 // static

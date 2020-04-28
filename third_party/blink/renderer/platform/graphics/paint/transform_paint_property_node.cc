@@ -12,7 +12,12 @@ const TransformPaintPropertyNode& TransformPaintPropertyNode::Root() {
   DEFINE_STATIC_REF(
       TransformPaintPropertyNode, root,
       base::AdoptRef(new TransformPaintPropertyNode(
-          nullptr, State{FloatSize(), &ScrollPaintPropertyNode::Root()},
+          nullptr,
+          State{
+              FloatSize(), &ScrollPaintPropertyNode::Root(),
+              State::Flags{false /* flattens_inherited_transform */,
+                           false /* affected_by_outer_viewport_bounds_delta */,
+                           false /* in_subtree_of_page_scale */}},
           true /* is_parent_alias */)));
   return *root;
 }
@@ -57,8 +62,10 @@ std::unique_ptr<JSONObject> TransformPaintPropertyNode::ToJSON() const {
     json->SetString("matrix", Matrix().ToString());
     json->SetString("origin", Origin().ToString());
   }
-  if (!state_.flattens_inherited_transform)
+  if (!state_.flags.flattens_inherited_transform)
     json->SetBoolean("flattensInheritedTransform", false);
+  if (!state_.flags.in_subtree_of_page_scale)
+    json->SetBoolean("in_subtree_of_page_scale", false);
   if (state_.backface_visibility != BackfaceVisibility::kInherited) {
     json->SetString("backface",
                     state_.backface_visibility == BackfaceVisibility::kVisible

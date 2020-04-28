@@ -129,7 +129,7 @@ class ZeroCopyRasterBufferImpl : public RasterBuffer {
         return;
     }
 
-    DCHECK_EQ(1u, gfx::NumberOfPlanesForBufferFormat(
+    DCHECK_EQ(1u, gfx::NumberOfPlanesForLinearBufferFormat(
                       gpu_memory_buffer_->GetFormat()));
     bool rv = gpu_memory_buffer_->Map();
     DCHECK(rv);
@@ -174,7 +174,10 @@ std::unique_ptr<RasterBuffer>
 ZeroCopyRasterBufferProvider::AcquireBufferForRaster(
     const ResourcePool::InUsePoolResource& resource,
     uint64_t resource_content_id,
-    uint64_t previous_content_id) {
+    uint64_t previous_content_id,
+    bool depends_on_at_raster_decodes,
+    bool depends_on_hardware_accelerated_jpeg_candidates,
+    bool depends_on_hardware_accelerated_webp_candidates) {
   if (!resource.gpu_backing()) {
     auto backing = std::make_unique<ZeroCopyGpuBacking>();
     const gpu::Capabilities& caps =
@@ -202,10 +205,6 @@ void ZeroCopyRasterBufferProvider::Flush() {}
 
 viz::ResourceFormat ZeroCopyRasterBufferProvider::GetResourceFormat() const {
   return tile_format_;
-}
-
-bool ZeroCopyRasterBufferProvider::IsResourceSwizzleRequired() const {
-  return !viz::PlatformColor::SameComponentOrder(GetResourceFormat());
 }
 
 bool ZeroCopyRasterBufferProvider::IsResourcePremultiplied() const {

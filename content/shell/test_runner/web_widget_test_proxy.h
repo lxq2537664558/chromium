@@ -13,7 +13,6 @@
 #include "base/memory/weak_ptr.h"
 #include "content/renderer/render_widget.h"
 #include "content/shell/test_runner/event_sender.h"
-#include "content/shell/test_runner/test_runner_export.h"
 #include "third_party/blink/public/web/web_widget_client.h"
 
 namespace blink {
@@ -25,7 +24,7 @@ namespace content {
 class RenderViewImpl;
 }
 
-namespace test_runner {
+namespace content {
 
 class TestRunner;
 class TestRunnerForSpecificView;
@@ -51,29 +50,34 @@ class WebViewTestProxy;
 // Historically, the overridden functionality has been small enough to not
 // cause too much trouble. If that changes, then this entire testing
 // architecture should be revisited.
-class TEST_RUNNER_EXPORT WebWidgetTestProxy : public content::RenderWidget {
+class WebWidgetTestProxy : public content::RenderWidget {
  public:
   template <typename... Args>
   explicit WebWidgetTestProxy(Args&&... args)
       : RenderWidget(std::forward<Args>(args)...) {}
+  ~WebWidgetTestProxy() override;
 
   // RenderWidget overrides.
+  void WillBeginMainFrame() override;
   void RequestDecode(const cc::PaintImage& image,
                      base::OnceCallback<void(bool)> callback) override;
   void RequestPresentation(PresentationTimeCallback callback) override;
 
   // WebWidgetClient implementation.
   void ScheduleAnimation() override;
-  bool RequestPointerLock() override;
+  bool RequestPointerLock(blink::WebLocalFrame* requester_frame,
+                          blink::WebWidgetClient::PointerLockCallback callback,
+                          bool request_unajusted_movement) override;
   void RequestPointerUnlock() override;
   bool IsPointerLocked() override;
   void SetToolTipText(const blink::WebString& text,
-                      blink::WebTextDirection hint) override;
+                      base::i18n::TextDirection hint) override;
   void StartDragging(network::mojom::ReferrerPolicy policy,
                      const blink::WebDragData& data,
                      blink::WebDragOperationsMask mask,
                      const SkBitmap& drag_image,
                      const gfx::Point& image_offset) override;
+  blink::WebScreenInfo GetScreenInfo() override;
 
   // In the test runner code, it can be expected that the RenderViewImpl will
   // actually be a WebViewTestProxy as the creation of RenderView/Frame/Widget
@@ -83,22 +87,18 @@ class TEST_RUNNER_EXPORT WebWidgetTestProxy : public content::RenderWidget {
 
   EventSender* event_sender() { return &event_sender_; }
   void Reset();
-  void BindTo(blink::WebLocalFrame* frame);
+  void Install(blink::WebLocalFrame* frame);
 
   void EndSyntheticGestures();
 
-  // Triggers a full composite, and always submits a new frame to the display
-  // compositor. The |callback| will be run when the display compositor has
-  // presented that frame as part of its global scene.
-  void RequestPresentationForPixelDump(PresentationTimeCallback callback);
   // When |do_raster| is false, only a main frame animation step is performed,
   // but when true, a full composite is performed and a frame submitted to the
   // display compositor if there is any damage.
+  // Note that compositing has the potential to detach the current frame and
+  // thus destroy |this| before returning.
   void SynchronouslyComposite(bool do_raster);
 
  private:
-  // RenderWidget does not have a public destructor.
-  ~WebWidgetTestProxy() override;
 
   TestRunnerForSpecificView* GetViewTestRunner();
   TestRunner* GetTestRunner();
@@ -106,22 +106,29 @@ class TEST_RUNNER_EXPORT WebWidgetTestProxy : public content::RenderWidget {
   void ScheduleAnimationInternal(bool do_raster);
   void AnimateNow();
 
+  // Perform the synchronous composite step for a given RenderWidget.
+  static void DoComposite(content::RenderWidget* widget, bool do_raster);
+
   EventSender event_sender_{this};
 
   // For collapsing multiple simulated ScheduleAnimation() calls.
   bool animation_scheduled_ = false;
-  // When true, the scheduled AnimateNow() will perform a full composite.
-  // Otherwise, it will only perform the animation step, which calls out to
-  // blink, for performance reasons. See setAnimationRequiresRaster() in
+  // When true, an AnimateNow() is scheduled that will perform a full composite.
+  // Otherwise, any scheduled AnimateNow() calls will only perform the animation
+  // step, which calls out to blink but doesn't composite for performance
+  // reasons. See setAnimationRequiresRaster() in
   // https://chromium.googlesource.com/chromium/src/+/master/docs/testing/writing_web_tests.md
   // for details on the optimization.
   bool composite_requested_ = false;
+  // Synchronous composites should not be nested inside another
+  // composite, and this bool is used to guard against that.
+  bool in_synchronous_composite_ = false;
 
   base::WeakPtrFactory<WebWidgetTestProxy> weak_factory_{this};
 
   DISALLOW_COPY_AND_ASSIGN(WebWidgetTestProxy);
 };
 
-}  // namespace test_runner
+}  // namespace content
 
 #endif  // CONTENT_SHELL_TEST_RUNNER_WEB_WIDGET_TEST_PROXY_H_

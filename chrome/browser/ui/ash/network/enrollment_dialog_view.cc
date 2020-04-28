@@ -54,7 +54,6 @@ class EnrollmentDialogView : public views::DialogDelegateView {
 
   // views::DialogDelegateView overrides
   bool Accept() override;
-  base::string16 GetDialogButtonLabel(ui::DialogButton button) const override;
 
   // views::WidgetDelegate overrides
   ui::ModalType GetModalType() const override;
@@ -92,6 +91,9 @@ EnrollmentDialogView::EnrollmentDialogView(const std::string& network_name,
       target_uri_(target_uri),
       connect_(connect),
       added_cert_(false) {
+  DialogDelegate::SetButtonLabel(
+      ui::DIALOG_BUTTON_OK,
+      l10n_util::GetStringUTF16(IDS_NETWORK_ENROLLMENT_HANDLER_BUTTON));
   set_margins(ChromeLayoutProvider::Get()->GetDialogInsetsForContentType(
       views::TEXT, views::TEXT));
   chrome::RecordDialogCreation(chrome::DialogIdentifier::ENROLLMENT);
@@ -114,7 +116,7 @@ void EnrollmentDialogView::ShowDialog(const std::string& network_name,
   ash_util::SetupWidgetInitParamsForContainer(
       &params, ash_util::GetSystemModalDialogContainerId());
   views::Widget* widget = new views::Widget;  // Owned by native widget.
-  widget->Init(params);
+  widget->Init(std::move(params));
   dialog_view->InitDialog();
   widget->Show();
 }
@@ -122,13 +124,6 @@ void EnrollmentDialogView::ShowDialog(const std::string& network_name,
 bool EnrollmentDialogView::Accept() {
   accepted_ = true;
   return true;
-}
-
-base::string16 EnrollmentDialogView::GetDialogButtonLabel(
-    ui::DialogButton button) const {
-  if (button == ui::DIALOG_BUTTON_OK)
-    return l10n_util::GetStringUTF16(IDS_NETWORK_ENROLLMENT_HANDLER_BUTTON);
-  return views::DialogDelegateView::GetDialogButtonLabel(button);
 }
 
 ui::ModalType EnrollmentDialogView::GetModalType() const {
@@ -155,7 +150,7 @@ gfx::Size EnrollmentDialogView::CalculatePreferredSize() const {
 void EnrollmentDialogView::InitDialog() {
   added_cert_ = false;
   // Create the views and layout manager and set them up.
-  views::Label* label = new views::Label(
+  auto label = std::make_unique<views::Label>(
       l10n_util::GetStringFUTF16(IDS_NETWORK_ENROLLMENT_HANDLER_INSTRUCTIONS,
                                  base::UTF8ToUTF16(network_name_)));
   label->SetHorizontalAlignment(gfx::ALIGN_LEFT);
@@ -163,7 +158,7 @@ void EnrollmentDialogView::InitDialog() {
   label->SetAllowCharacterBreak(true);
 
   views::GridLayout* grid_layout =
-      SetLayoutManager(std::make_unique<views::GridLayout>(this));
+      SetLayoutManager(std::make_unique<views::GridLayout>());
 
   views::ColumnSet* columns = grid_layout->AddColumnSet(0);
   columns->AddColumn(views::GridLayout::FILL,      // Horizontal resize.
@@ -187,7 +182,7 @@ void EnrollmentDialogView::InitDialog() {
                      0);                           // Minimum size.
 
   grid_layout->StartRow(views::GridLayout::kFixedSize, 0);
-  grid_layout->AddView(label);
+  grid_layout->AddView(std::move(label));
   grid_layout->AddPaddingRow(
       views::GridLayout::kFixedSize,
       provider->GetDistanceMetric(views::DISTANCE_UNRELATED_CONTROL_VERTICAL));
@@ -200,7 +195,9 @@ void EnrollmentDialogView::InitDialog() {
 class DialogEnrollmentDelegate {
  public:
   // |owning_window| is the window that will own the dialog.
-  DialogEnrollmentDelegate(const std::string& network_name, Profile* profile);
+  DialogEnrollmentDelegate(const std::string& network_guid,
+                           const std::string& network_name,
+                           Profile* profile);
   ~DialogEnrollmentDelegate();
 
   // EnrollmentDelegate overrides
@@ -208,6 +205,7 @@ class DialogEnrollmentDelegate {
               const base::Closure& connect);
 
  private:
+  std::string network_guid_;
   std::string network_name_;
   Profile* profile_;
 
@@ -215,9 +213,12 @@ class DialogEnrollmentDelegate {
 };
 
 DialogEnrollmentDelegate::DialogEnrollmentDelegate(
+    const std::string& network_guid,
     const std::string& network_name,
     Profile* profile)
-    : network_name_(network_name), profile_(profile) {}
+    : network_guid_(network_guid),
+      network_name_(network_name),
+      profile_(profile) {}
 
 DialogEnrollmentDelegate::~DialogEnrollmentDelegate() {}
 
@@ -235,21 +236,24 @@ bool DialogEnrollmentDelegate::Enroll(const std::vector<std::string>& uri_list,
     if (uri.IsStandard() || uri.scheme() == extensions::kExtensionScheme) {
       // If this is a "standard" scheme, like http, ftp, etc., then open that in
       // the enrollment dialog.
-      NET_LOG_EVENT("Showing enrollment dialog", network_name_);
+      NET_LOG(EVENT) << "Showing enrollment dialog for: "
+                     << NetworkGuidId(network_guid_);
       EnrollmentDialogView::ShowDialog(network_name_, profile_, uri,
                                        post_action);
       return true;
     }
-    NET_LOG_DEBUG("Nonstandard URI: " + uri.spec(), network_name_);
+    NET_LOG(DEBUG) << "Nonstandard URI: " + uri.spec()
+                   << " For: " << NetworkGuidId(network_guid_);
   }
 
   // No appropriate scheme was found.
-  NET_LOG_ERROR("No usable enrollment URI", network_name_);
+  NET_LOG(ERROR) << "No usable enrollment URI for: "
+                 << NetworkGuidId(network_guid_);
   return false;
 }
 
 void EnrollmentComplete(const std::string& network_id) {
-  NET_LOG_USER("Enrollment Complete", network_id);
+  NET_LOG(USER) << "Enrollment Complete for: " << NetworkGuidId(network_id);
 }
 
 // Decides if the enrollment dialog is allowed in the current login state.
@@ -277,8 +281,6 @@ bool EnrollmentDialogAllowed(Profile* profile) {
       return true;
     case LoginState::LOGGED_IN_USER_KIOSK_APP:
       return false;
-    case LoginState::LOGGED_IN_USER_ARC_KIOSK_APP:
-      return false;
     case LoginState::LOGGED_IN_USER_CHILD:
       return true;
   }
@@ -298,7 +300,8 @@ bool CreateEnrollmentDialog(const std::string& network_id) {
       NetworkHandler::Get()->network_state_handler()->GetNetworkStateFromGuid(
           network_id);
   if (!network) {
-    NET_LOG_ERROR("Enrolling Unknown network", network_id);
+    NET_LOG(ERROR) << "Enrolling Unknown network: "
+                   << NetworkGuidId(network_id);
     return false;
   }
   Profile* profile = ProfileManager::GetPrimaryUserProfile();
@@ -322,17 +325,18 @@ bool CreateEnrollmentDialog(const std::string& network_id) {
     return false;
 
   if (cert_config.pattern.Empty())
-    NET_LOG_ERROR("Certificate pattern is empty", network_id);
+    NET_LOG(ERROR) << "Certificate pattern is empty for: "
+                   << NetworkGuidId(network_id);
 
   if (cert_config.pattern.enrollment_uri_list().empty()) {
-    NET_LOG_EVENT("No enrollment URIs", network_id);
+    NET_LOG(EVENT) << "No enrollment URIs for: " << NetworkGuidId(network_id);
     return false;
   }
 
-  NET_LOG_USER("Enrolling", network_id);
+  NET_LOG(USER) << "Enrolling: " << NetworkGuidId(network_id);
 
   DialogEnrollmentDelegate* enrollment =
-      new DialogEnrollmentDelegate(network->name(), profile);
+      new DialogEnrollmentDelegate(network_id, network->name(), profile);
   return enrollment->Enroll(cert_config.pattern.enrollment_uri_list(),
                             base::Bind(&EnrollmentComplete, network_id));
 }

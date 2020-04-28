@@ -1,5 +1,5 @@
-region
-++document
-++++form
-++++++group Name='Browser Engines:'
-++++++++description
+Document
+++Group IsControlElement=false
+++++Group Name='Browser Engines:'
+++++++Text IsControlElement=false
+++++++++Text Name='Browser Engines:' IsControlElement=false

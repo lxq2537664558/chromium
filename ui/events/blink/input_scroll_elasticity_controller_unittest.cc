@@ -6,8 +6,8 @@
 
 #include "cc/input/input_handler.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/blink/public/platform/web_input_event.h"
-#include "third_party/blink/public/platform/web_mouse_wheel_event.h"
+#include "third_party/blink/public/common/input/web_input_event.h"
+#include "third_party/blink/public/common/input/web_mouse_wheel_event.h"
 
 namespace ui {
 namespace {
@@ -23,11 +23,12 @@ enum Phase {
 };
 
 enum InertialPhaseState {
-  UnknownMomentumPhase =
-      blink::WebGestureEvent::InertialPhaseState::kUnknownMomentumPhase,
-  NonMomentumPhase =
-      blink::WebGestureEvent::InertialPhaseState::kNonMomentumPhase,
-  MomentumPhase = blink::WebGestureEvent::InertialPhaseState::kMomentumPhase,
+  UnknownMomentumPhase = static_cast<int>(
+      blink::WebGestureEvent::InertialPhaseState::kUnknownMomentum),
+  NonMomentumPhase = static_cast<int>(
+      blink::WebGestureEvent::InertialPhaseState::kNonMomentum),
+  MomentumPhase =
+      static_cast<int>(blink::WebGestureEvent::InertialPhaseState::kMomentum),
 };
 
 class MockScrollElasticityHelper : public cc::ScrollElasticityHelper {
@@ -90,10 +91,10 @@ class ScrollElasticityControllerTest : public testing::Test {
 
   void SendGestureScrollBegin(InertialPhaseState inertialPhase) {
     TickCurrentTime();
-    blink::WebGestureEvent event(blink::WebInputEvent::kGestureScrollBegin,
-                                 blink::WebInputEvent::kNoModifiers,
-                                 current_time_,
-                                 blink::kWebGestureDeviceTouchpad);
+    blink::WebGestureEvent event(
+        blink::WebInputEvent::Type::kGestureScrollBegin,
+        blink::WebInputEvent::kNoModifiers, current_time_,
+        blink::WebGestureDevice::kTouchpad);
     event.data.scroll_begin.inertial_phase =
         static_cast<blink::WebGestureEvent::InertialPhaseState>(inertialPhase);
 
@@ -109,10 +110,10 @@ class ScrollElasticityControllerTest : public testing::Test {
       const cc::OverscrollBehavior& overscroll_behavior =
           cc::OverscrollBehavior()) {
     TickCurrentTime();
-    blink::WebGestureEvent event(blink::WebInputEvent::kGestureScrollUpdate,
-                                 blink::WebInputEvent::kNoModifiers,
-                                 current_time_,
-                                 blink::kWebGestureDeviceTouchpad);
+    blink::WebGestureEvent event(
+        blink::WebInputEvent::Type::kGestureScrollUpdate,
+        blink::WebInputEvent::kNoModifiers, current_time_,
+        blink::WebGestureDevice::kTouchpad);
     event.data.scroll_update.inertial_phase =
         static_cast<blink::WebGestureEvent::InertialPhaseState>(inertialPhase);
     event.data.scroll_update.delta_x = -event_delta.x();
@@ -129,10 +130,10 @@ class ScrollElasticityControllerTest : public testing::Test {
 
   void SendGestureScrollEnd() {
     TickCurrentTime();
-    blink::WebGestureEvent event(blink::WebInputEvent::kGestureScrollEnd,
+    blink::WebGestureEvent event(blink::WebInputEvent::Type::kGestureScrollEnd,
                                  blink::WebInputEvent::kNoModifiers,
                                  current_time_,
-                                 blink::kWebGestureDeviceTouchpad);
+                                 blink::WebGestureDevice::kTouchpad);
 
     controller_.ObserveGestureEventAndResult(event,
                                              cc::InputHandlerScrollResult());

@@ -18,7 +18,7 @@
 #include "base/memory/ref_counted.h"
 #include "base/sequenced_task_runner.h"
 #include "base/strings/stringprintf.h"
-#include "base/task/lazy_task_runner.h"
+#include "base/task/lazy_thread_pool_task_runner.h"
 #include "base/threading/sequenced_task_runner_handle.h"
 #include "base/trace_event/memory_dump_manager.h"
 #include "base/trace_event/memory_dump_provider.h"
@@ -94,7 +94,7 @@ bool DevToolsFileWatcher::SharedFileWatcher::OnMemoryDump(
                          sizeof(base::FilePath::StringType::value_type);
     }
     auto* dump = process_memory_dump->CreateAllocatorDump(
-        base::StringPrintf("devtools/file_watcher_%d", index++));
+        base::StringPrintf("devtools/file_watcher_0x%x", index++));
     dump->AddScalar(base::trace_event::MemoryAllocatorDump::kNameObjectCount,
                     base::trace_event::MemoryAllocatorDump::kUnitsObjects,
                     file_path.second.size());
@@ -226,8 +226,8 @@ namespace {
 base::SequencedTaskRunner* impl_task_runner() {
   constexpr base::TaskTraits kImplTaskTraits = {
       base::MayBlock(), base::TaskPriority::BEST_EFFORT};
-  static base::LazySequencedTaskRunner s_file_task_runner =
-      LAZY_SEQUENCED_TASK_RUNNER_INITIALIZER(kImplTaskTraits);
+  static base::LazyThreadPoolSequencedTaskRunner s_file_task_runner =
+      LAZY_THREAD_POOL_SEQUENCED_TASK_RUNNER_INITIALIZER(kImplTaskTraits);
   return s_file_task_runner.Get().get();
 }
 }  // namespace

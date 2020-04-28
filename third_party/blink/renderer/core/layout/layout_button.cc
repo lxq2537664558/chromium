@@ -20,6 +20,8 @@
 
 #include "third_party/blink/renderer/core/layout/layout_button.h"
 
+#include "third_party/blink/renderer/core/frame/web_feature.h"
+
 namespace blink {
 
 LayoutButton::LayoutButton(Element* element)
@@ -73,14 +75,6 @@ void LayoutButton::UpdateAnonymousChildStyle(const LayoutObject* child,
   child_style.SetAlignContent(StyleRef().AlignContent());
 }
 
-LayoutRect LayoutButton::ControlClipRect(
-    const LayoutPoint& additional_offset) const {
-  // Clip to the padding box to at least give content the extra padding space.
-  LayoutRect rect(additional_offset, Size());
-  rect.Expand(BorderInsets());
-  return rect;
-}
-
 LayoutUnit LayoutButton::BaselinePosition(
     FontBaseline baseline,
     bool first_line,
@@ -90,7 +84,8 @@ LayoutUnit LayoutButton::BaselinePosition(
   // We want to call the LayoutBlock version of firstLineBoxBaseline to
   // avoid LayoutFlexibleBox synthesizing a baseline that we don't want.
   // We use this check as a proxy for "are there any line boxes in this button"
-  if (!HasLineIfEmpty() && LayoutBlock::FirstLineBoxBaseline() == -1) {
+  if (!HasLineIfEmpty() && !ShouldApplyLayoutContainment() &&
+      LayoutBlock::FirstLineBoxBaseline() == -1) {
     // To ensure that we have a consistent baseline when we have no children,
     // even when we have the anonymous LayoutBlock child, we calculate the
     // baseline for the empty case manually here.
@@ -101,12 +96,12 @@ LayoutUnit LayoutButton::BaselinePosition(
     return MarginRight() + Size().Width() - BorderLeft() - PaddingLeft() -
            VerticalScrollbarWidth();
   }
-  return LayoutFlexibleBox::BaselinePosition(baseline, first_line, direction,
-                                             line_position_mode);
+  LayoutUnit result_baseline = LayoutFlexibleBox::BaselinePosition(
+      baseline, first_line, direction, line_position_mode);
+  LayoutUnit correct_baseline = LayoutBlock::InlineBlockBaseline(direction);
+  if (correct_baseline != result_baseline)
+    UseCounter::Count(GetDocument(), WebFeature::kWrongBaselineOfButtonElement);
+  return result_baseline;
 }
 
-// For compatibility with IE/FF we only clip overflow on input elements.
-bool LayoutButton::HasControlClip() const {
-  return !IsHTMLButtonElement(GetNode());
-}
 }  // namespace blink

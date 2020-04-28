@@ -34,8 +34,7 @@ namespace internal {
 //
 // TrackedRefFactory only makes sense to use on types that are always leaked in
 // production but need to be torn down in tests (blocking destruction is
-// impractical in production -- ref. ScopedAllowBaseSyncPrimitivesForTesting
-// below).
+// impractical in production).
 //
 // Why would we ever need such a thing? In thread_pool there is a clear
 // ownership hierarchy with mostly single owners and little refcounting. In
@@ -43,7 +42,7 @@ namespace internal {
 // however we must JoinForTesting(). At that point, all the raw back T* refs
 // used by the worker threads are problematic because they can result in use-
 // after-frees if a worker outlives the deletion of its corresponding
-// ThreadPool/TaskTracker/SchedulerWorkerPool/etc.
+// ThreadPool/TaskTracker/ThreadGroup/etc.
 //
 // JoinForTesting() isn't so hard when all workers are managed. But with cleanup
 // semantics (reclaiming a worker who's been idle for too long) it becomes

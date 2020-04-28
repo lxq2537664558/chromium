@@ -81,7 +81,7 @@ public class ScreenOrientationListenerTest {
     }
 
     @After
-    public void tearDown() throws Exception {
+    public void tearDown() {
         TestThreadUtils.runOnUiThreadBlocking(() -> {
             mDisplayAndroid.removeObserver(mCallbackHelper);
             mDisplayAndroid = null;
@@ -231,7 +231,7 @@ public class ScreenOrientationListenerTest {
 
         int callCount = mCallbackHelper.getCallCount();
         TestThreadUtils.runOnUiThreadBlocking(() -> {
-            ScreenOrientationProvider.lockOrientation(
+            ScreenOrientationProvider.getInstance().lockOrientation(
                     mActivityTestRule.getWebContents().getTopLevelNativeWindow(),
                     (byte) orientationValue);
         });

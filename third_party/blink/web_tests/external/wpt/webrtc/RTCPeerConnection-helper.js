@@ -140,6 +140,15 @@ async function generateAnswer(offer) {
   return answer;
 }
 
+// Helper function to generate offer using a freshly
+// created RTCPeerConnection object
+async function generateOffer() {
+  const pc = new RTCPeerConnection();
+  const offer = await pc.createOffer();
+  pc.close();
+  return offer;
+}
+
 // Run a test function that return a promise that should
 // never be resolved. For lack of better options,
 // we wait for a time out and pass the test if the
@@ -181,8 +190,52 @@ function exchangeIceCandidates(pc1, pc2) {
   doExchange(pc2, pc1);
 }
 
+// Helper class to exchange ice candidates between
+// two local peer connections
+class CandidateChannel {
+  constructor(source, dest, name) {
+    source.addEventListener('icecandidate', event => {
+      const { candidate } = event;
+      if (candidate && this.activated
+          && this.destination.signalingState !== 'closed') {
+        this.destination.addIceCandidate(candidate);
+      } else if (candidate) {
+        this.queue.push(candidate);
+      }
+    });
+    dest.addEventListener('signalingstatechange', event => {
+      if (this.destination.signalingState == 'stable' && !this.activated) {
+        this.activate();
+      }
+    });
+    this.name = name;
+    this.destination = dest;
+    this.activated = false;
+    this.queue = [];
+  }
+  activate() {
+    this.activated = true;
+    for (const candidate of this.queue) {
+      this.destination.addIceCandidate(candidate);
+    }
+  }
+}
+
+// Alternate function to exchange ICE candidates between two
+// PeerConnections. Unlike exchangeIceCandidates, it will function
+// correctly if candidates are added before descriptions are set.
+function coupleIceCandidates(pc1, pc2) {
+  const ch1 = new CandidateChannel(pc1, pc2, 'forward');
+  const ch2 = new CandidateChannel(pc2, pc1, 'back');
+  return [ch1, ch2];
+}
+
 // Helper function for doing one round of offer/answer exchange
-// between two local peer connections
+// between two local peer connections.
+// Calls setRemoteDescription(offer/answer) before
+// setLocalDescription(offer/answer) to ensure the remote description
+// is set and candidates can be added before the local peer connection
+// starts generating candidates and ICE checks.
 async function doSignalingHandshake(localPc, remotePc, options={}) {
   let offer = await localPc.createOffer();
   // Modify offer if callback has been provided
@@ -190,9 +243,9 @@ async function doSignalingHandshake(localPc, remotePc, options={}) {
     offer = await options.modifyOffer(offer);
   }
 
-  // Apply offer
-  await localPc.setLocalDescription(offer);
+  // Apply offer.
   await remotePc.setRemoteDescription(offer);
+  await localPc.setLocalDescription(offer);
 
   let answer = await remotePc.createAnswer();
   // Modify answer if callback has been provided
@@ -200,10 +253,29 @@ async function doSignalingHandshake(localPc, remotePc, options={}) {
     answer = await options.modifyAnswer(answer);
   }
 
-  // Apply answer
-  await remotePc.setLocalDescription(answer);
+  // Apply answer.
   await localPc.setRemoteDescription(answer);
+  await remotePc.setLocalDescription(answer);
 }
+
+// Returns a promise that resolves when the |transport| gets a
+// 'statechange' event with the value |state|.
+// This should work for RTCSctpTransport, RTCDtlsTransport and RTCIceTransport.
+function waitForState(transport, state) {
+  return new Promise((resolve, reject) => {
+    if (transport.state == state) {
+      resolve();
+    }
+    const eventHandler = () => {
+      if (transport.state == state) {
+        transport.removeEventListener('statechange', eventHandler, false);
+        resolve();
+      }
+    };
+    transport.addEventListener('statechange', eventHandler, false);
+  });
+}
+
 
 // Returns a promise that resolves when |pc.iceConnectionState| is 'connected'
 // or 'completed'.
@@ -250,6 +322,36 @@ function listenToConnected(pc) {
       if (pc.connectionState == 'connected')
         resolve();
     };
+  });
+}
+
+// Returns a promise that resolves when |pc.connectionState| is in one of the
+// wanted states.
+function waitForConnectionStateChange(pc, wantedStates) {
+  return new Promise((resolve) => {
+    if (wantedStates.includes(pc.connectionState)) {
+      resolve();
+      return;
+    }
+    pc.addEventListener('connectionstatechange', () => {
+      if (wantedStates.includes(pc.connectionState))
+        resolve();
+    });
+  });
+}
+
+// Returns a promise that resolves when |pc.connectionState| is in one of the
+// wanted states.
+function waitForConnectionStateChange(pc, wantedStates) {
+  return new Promise((resolve) => {
+    if (wantedStates.includes(pc.connectionState)) {
+      resolve();
+      return;
+    }
+    pc.addEventListener('connectionstatechange', () => {
+      if (wantedStates.includes(pc.connectionState))
+        resolve();
+    });
   });
 }
 
@@ -480,7 +582,7 @@ const trackFactories = {
     return dst.stream.getAudioTracks()[0];
   },
 
-  video({width = 640, height = 480} = {}) {
+  video({width = 640, height = 480, signal = null} = {}) {
     const canvas = Object.assign(
       document.createElement("canvas"), {width, height}
     );
@@ -491,8 +593,13 @@ const trackFactories = {
     setInterval(() => {
       ctx.fillStyle = `rgb(${count%255}, ${count*count%255}, ${count%255})`;
       count += 1;
-
       ctx.fillRect(0, 0, width, height);
+      // If signal is set, add a constant-color box to the video frame.
+      if (signal !== null) {
+        ctx.fillStyle = `rgb(${signal}, ${signal}, ${signal})`;
+        ctx.fillRect(10, 10, 20, 20);
+        let pixel = ctx.getImageData(15, 15, 1, 1);
+      }
     }, 100);
 
     if (document.body) {
@@ -507,13 +614,40 @@ const trackFactories = {
   }
 };
 
+// Get the signal from a video element inserted by createNoiseStream
+function getVideoSignal(v) {
+  if (v.videoWidth < 21 || v.videoHeight < 21) {
+    return null;
+  }
+  const canvas = new OffscreenCanvas(v.videoWidth, v.videoHeight);
+  let context = canvas.getContext('2d');
+  context.drawImage(v, 0, 0, v.videoWidth, v.videoHeight);
+  // Extract pixel value at position 20, 20
+  let pixel = context.getImageData(20, 20, 1, 1);
+  return (pixel.data[0] + pixel.data[1] + pixel.data[2]) / 3;
+}
+
+function detectSignal(t, v, value) {
+  return new Promise((resolve) => {
+    let check = () => {
+      const signal = getVideoSignal(v);
+      if (signal !== null && signal < value + 1 && signal > value - 1) {
+        resolve();
+      } else {
+        t.step_timeout(check, 100);
+      }
+    }
+    check();
+  });
+}
+
 // Generate a MediaStream bearing the specified tracks.
 //
 // @param {object} [caps]
 // @param {boolean} [caps.audio] - flag indicating whether the generated stream
 //                                 should include an audio track
 // @param {boolean} [caps.video] - flag indicating whether the generated stream
-//                                 should include a video track
+//                                 should include a video track, or parameters for video
 async function getNoiseStream(caps = {}) {
   if (!trackFactories.canCreate(caps)) {
     return navigator.mediaDevices.getUserMedia(caps);
@@ -525,7 +659,7 @@ async function getNoiseStream(caps = {}) {
   }
 
   if (caps.video) {
-    tracks.push(trackFactories.video());
+    tracks.push(trackFactories.video(caps.video));
   }
 
   return new MediaStream(tracks);

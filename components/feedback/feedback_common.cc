@@ -7,13 +7,13 @@
 #include <utility>
 
 #include "base/memory/ptr_util.h"
-#include "base/strings/string_util.h"
 #include "components/feedback/feedback_report.h"
 #include "components/feedback/feedback_util.h"
 #include "components/feedback/proto/common.pb.h"
 #include "components/feedback/proto/dom.pb.h"
 #include "components/feedback/proto/extension.pb.h"
 #include "components/feedback/proto/math.pb.h"
+#include "google_apis/gaia/gaia_auth_util.h"
 
 namespace {
 
@@ -22,10 +22,6 @@ constexpr int kChromeOSProductId = 208;
 #else
 constexpr int kChromeBrowserProductId = 237;
 #endif
-
-constexpr char kMultilineIndicatorString[] = "<multiline>\n";
-constexpr char kMultilineStartString[] = "---------- START ----------\n";
-constexpr char kMultilineEndString[] = "---------- END ----------\n\n";
 
 // The below thresholds were chosen arbitrarily to conveniently show small data
 // as part of the report itself without having to look into the system_logs.zip
@@ -42,8 +38,6 @@ constexpr char kZipExt[] = ".zip";
 constexpr char kPngMimeType[] = "image/png";
 constexpr char kArbitraryMimeType[] = "application/octet-stream";
 
-constexpr char kGoogleDotCom[] = "@google.com";
-
 // Determine if the given feedback value is small enough to not need to
 // be compressed.
 bool BelowCompressionThreshold(const std::string& content) {
@@ -53,34 +47,6 @@ bool BelowCompressionThreshold(const std::string& content) {
   if (line_count > kFeedbackMaxLineCount)
     return false;
   return true;
-}
-
-// Converts the system logs into a string that we can compress and send
-// with the report.
-std::string LogsToString(const FeedbackCommon::SystemLogsMap& sys_info) {
-  std::string syslogs_string;
-  for (const auto& iter : sys_info) {
-    std::string key = iter.first;
-    std::string value = iter.second;
-
-    base::TrimString(key, "\n ", &key);
-    base::TrimString(value, "\n ", &value);
-
-    // We must avoid adding the crash IDs to the system_logs.txt file for
-    // privacy reasons. They should just be part of the product specific data.
-    if (key == feedback::FeedbackReport::kCrashReportIdsKey ||
-        key == feedback::FeedbackReport::kAllCrashReportIdsKey)
-      continue;
-
-    if (value.find("\n") != std::string::npos) {
-      syslogs_string.append(key + "=" + kMultilineIndicatorString +
-                            kMultilineStartString + value + "\n" +
-                            kMultilineEndString);
-    } else {
-      syslogs_string.append(key + "=" + value + "\n");
-    }
-  }
-  return syslogs_string;
 }
 
 void AddFeedbackData(userfeedback::ExtensionSubmit* feedback_data,
@@ -229,7 +195,9 @@ void FeedbackCommon::CompressFile(const base::FilePath& filename,
 }
 
 void FeedbackCommon::CompressLogs() {
-  std::string logs = LogsToString(logs_);
+  // Convert the system logs into a string that we can compress and send with
+  // the report.
+  std::string logs = feedback_util::LogsToString(logs_);
   if (!logs.empty()) {
     CompressFile(base::FilePath(kLogsFilename), kLogsAttachmentName,
                  std::move(logs));
@@ -249,8 +217,7 @@ void FeedbackCommon::AddFilesAndLogsToReport(
       // @google.com email. We do this also in feedback_private_api, but not all
       // code paths go through that so we need to check again here.
       if (iter.first == feedback::FeedbackReport::kAllCrashReportIdsKey &&
-          !base::EndsWith(user_email(), kGoogleDotCom,
-                          base::CompareCase::INSENSITIVE_ASCII)) {
+          !gaia::IsGoogleInternalAccountEmail(user_email())) {
         continue;
       }
 

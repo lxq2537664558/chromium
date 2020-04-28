@@ -16,6 +16,7 @@
 #import "ios/chrome/browser/ui/content_suggestions/content_suggestions_collection_updater.h"
 #import "ios/chrome/browser/ui/content_suggestions/content_suggestions_collection_utils.h"
 #import "ios/chrome/browser/ui/content_suggestions/content_suggestions_commands.h"
+#import "ios/chrome/browser/ui/content_suggestions/content_suggestions_constants.h"
 #import "ios/chrome/browser/ui/content_suggestions/content_suggestions_header_synchronizing.h"
 #import "ios/chrome/browser/ui/content_suggestions/content_suggestions_layout.h"
 #import "ios/chrome/browser/ui/content_suggestions/content_suggestions_metrics_recording.h"
@@ -25,10 +26,11 @@
 #import "ios/chrome/browser/ui/ntp_tile_views/ntp_tile_layout_util.h"
 #import "ios/chrome/browser/ui/overscroll_actions/overscroll_actions_controller.h"
 #import "ios/chrome/browser/ui/toolbar/public/toolbar_utils.h"
-#include "ios/chrome/browser/ui/ui_feature_flags.h"
+#import "ios/chrome/browser/ui/ui_feature_flags.h"
 #import "ios/chrome/browser/ui/util/uikit_ui_util.h"
-#import "ios/chrome/common/ui_util/constraints_ui_util.h"
-#include "ios/web/common/features.h"
+#import "ios/chrome/common/ui/colors/UIColor+cr_semantic_colors.h"
+#import "ios/chrome/common/ui/colors/semantic_color_names.h"
+#import "ios/chrome/common/ui/util/constraints_ui_util.h"
 
 #if !defined(__has_feature) || !__has_feature(objc_arc)
 #error "This file requires ARC support."
@@ -66,7 +68,6 @@ NSString* const kContentSuggestionsMostVisitedAccessibilityIdentifierPrefix =
 @synthesize overscrollDelegate = _overscrollDelegate;
 @synthesize scrolledToTop = _scrolledToTop;
 @synthesize metricsRecorder = _metricsRecorder;
-@synthesize containsToolbar = _containsToolbar;
 @dynamic collectionViewModel;
 
 #pragma mark - Lifecycle
@@ -200,10 +201,6 @@ NSString* const kContentSuggestionsMostVisitedAccessibilityIdentifierPrefix =
   }
 }
 
-+ (NSString*)collectionAccessibilityIdentifier {
-  return @"ContentSuggestionsCollectionIdentifier";
-}
-
 #pragma mark - UIViewController
 
 - (void)viewDidLoad {
@@ -215,13 +212,14 @@ NSString* const kContentSuggestionsMostVisitedAccessibilityIdentifierPrefix =
   self.collectionView.contentInsetAdjustmentBehavior =
       UIScrollViewContentInsetAdjustmentNever;
   self.collectionView.accessibilityIdentifier =
-      [[self class] collectionAccessibilityIdentifier];
+      kContentSuggestionsCollectionIdentifier;
   _collectionUpdater.collectionViewController = self;
 
   self.collectionView.delegate = self;
   self.collectionView.backgroundColor = ntp_home::kNTPBackgroundColor();
   self.styler.cellStyle = MDCCollectionViewCellStyleCard;
   self.styler.cardBorderRadius = kCardBorderRadius;
+  self.styler.separatorColor = [UIColor colorNamed:kSeparatorColor];
   self.collectionView.translatesAutoresizingMaskIntoConstraints = NO;
 
   ApplyVisualConstraints(@[ @"V:|[collection]|", @"H:|[collection]|" ],
@@ -272,14 +270,6 @@ NSString* const kContentSuggestionsMostVisitedAccessibilityIdentifierPrefix =
 
 - (void)viewDidLayoutSubviews {
   [super viewDidLayoutSubviews];
-  if (!base::FeatureList::IsEnabled(kBrowserContainerContainsNTP) &&
-      CGSizeEqualToSize(self.collectionView.bounds.size, CGSizeZero) &&
-      !CGSizeEqualToSize(self.view.bounds.size, CGSizeZero)) {
-    // When started after a cold start, the frame of the collection view isn't
-    // set to the bounds of the view. In that case, the constraints for the
-    // cells are broken.
-    self.collectionView.frame = self.view.bounds;
-  }
   [self applyContentOffset];
 }
 
@@ -318,13 +308,19 @@ NSString* const kContentSuggestionsMostVisitedAccessibilityIdentifierPrefix =
       self.traitCollection.preferredContentSizeCategory) {
     [self.collectionViewLayout invalidateLayout];
     [self.headerSynchronizer updateFakeOmniboxOnCollectionScroll];
-    [self.headerSynchronizer updateConstraints];
   }
+  [self.headerSynchronizer updateConstraints];
   [self updateOverscrollActionsState];
 }
 
 - (void)viewSafeAreaInsetsDidChange {
   [super viewSafeAreaInsetsDidChange];
+
+  // Only get the bottom safe area inset.
+  UIEdgeInsets insets = UIEdgeInsetsZero;
+  insets.bottom = self.view.safeAreaInsets.bottom;
+  self.collectionView.contentInset = insets;
+
   [self.headerSynchronizer
       updateFakeOmniboxOnNewWidth:self.collectionView.bounds.size.width];
   [self.headerSynchronizer updateConstraints];
@@ -408,12 +404,6 @@ NSString* const kContentSuggestionsMostVisitedAccessibilityIdentifierPrefix =
   CGSize size = [super collectionView:collectionView
                                layout:collectionViewLayout
                sizeForItemAtIndexPath:indexPath];
-  // Special case for last item to add extra spacing before the footer.
-  if ([self.collectionUpdater isContentSuggestionsSection:indexPath.section] &&
-      indexPath.row ==
-          [self.collectionView numberOfItemsInSection:indexPath.section] - 1)
-    size.height += [ContentSuggestionsCell standardSpacing];
-
   return size;
 }
 
@@ -471,7 +461,14 @@ NSString* const kContentSuggestionsMostVisitedAccessibilityIdentifierPrefix =
     cellBackgroundColorAtIndexPath:(nonnull NSIndexPath*)indexPath {
   if ([self.collectionUpdater
           shouldUseCustomStyleForSection:indexPath.section]) {
-    return [UIColor clearColor];
+    return UIColor.clearColor;
+  }
+  // MDCCollectionView doesn't support dynamic colors, so they have to be
+  // resolved now.
+  // TODO(crbug.com/984928): Clean up once dynamic color support is added.
+  if (@available(iOS 13, *)) {
+    return [ntp_home::kNTPBackgroundColor()
+        resolvedColorWithTraitCollection:self.traitCollection];
   }
   return ntp_home::kNTPBackgroundColor();
 }
@@ -521,15 +518,9 @@ NSString* const kContentSuggestionsMostVisitedAccessibilityIdentifierPrefix =
 
 - (BOOL)collectionView:(UICollectionView*)collectionView
     shouldHideItemSeparatorAtIndexPath:(NSIndexPath*)indexPath {
-  // Special case, show a seperator between the last regular item and the
-  // footer.
-  if (![self.collectionUpdater
-          shouldUseCustomStyleForSection:indexPath.section] &&
-      indexPath.row ==
-          [self.collectionView numberOfItemsInSection:indexPath.section] - 1) {
-    return NO;
-  }
-  return YES;
+  // Show separators for all cells in content suggestion sections.
+  return !
+      [self.collectionUpdater isContentSuggestionsSection:indexPath.section];
 }
 
 - (BOOL)collectionView:(UICollectionView*)collectionView

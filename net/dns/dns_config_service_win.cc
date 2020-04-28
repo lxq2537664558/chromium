@@ -18,14 +18,14 @@
 #include "base/macros.h"
 #include "base/memory/free_deleter.h"
 #include "base/metrics/histogram_macros.h"
+#include "base/sequence_checker.h"
 #include "base/single_thread_task_runner.h"
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/synchronization/lock.h"
 #include "base/threading/scoped_blocking_call.h"
-#include "base/threading/thread_checker.h"
-#include "base/threading/thread_task_runner_handle.h"
+#include "base/threading/sequenced_task_runner_handle.h"
 #include "base/time/time.h"
 #include "base/win/registry.h"
 #include "base/win/scoped_handle.h"
@@ -56,8 +56,17 @@ const base::char16 kPolicyPath[] =
     STRING16_LITERAL("SOFTWARE\\Policies\\Microsoft\\Windows NT\\DNSClient");
 const base::char16 kPrimaryDnsSuffixPath[] =
     STRING16_LITERAL("SOFTWARE\\Policies\\Microsoft\\System\\DNSClient");
-const base::char16 kNRPTPath[] = STRING16_LITERAL(
+const base::char16 kNrptPath[] = STRING16_LITERAL(
     "SOFTWARE\\Policies\\Microsoft\\Windows NT\\DNSClient\\DnsPolicyConfig");
+const base::char16 kControlSetNrptPath[] = STRING16_LITERAL(
+    "SYSTEM\\CurrentControlSet\\Services\\Dnscache\\Parameters"
+    "\\DnsPolicyConfig");
+const base::char16 kDnsConnectionsPath[] = STRING16_LITERAL(
+    "SYSTEM\\CurrentControlSet\\Services\\Dnscache\\Parameters"
+    "\\DnsConnections");
+const base::char16 kDnsConnectionsProxies[] = STRING16_LITERAL(
+    "SYSTEM\\CurrentControlSet\\Services\\Dnscache\\Parameters"
+    "\\DnsConnectionsProxies");
 
 enum HostsParseWinResult {
   HOSTS_PARSE_WIN_OK = 0,
@@ -76,11 +85,11 @@ class RegistryReader {
     key_.Open(HKEY_LOCAL_MACHINE, key, KEY_QUERY_VALUE);
   }
 
-  ~RegistryReader() { DCHECK_CALLED_ON_VALID_THREAD(thread_checker_); }
+  ~RegistryReader() { DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_); }
 
   bool ReadString(const base::char16* name,
                   DnsSystemSettings::RegString* out) const {
-    DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
+    DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
     out->set = false;
     if (!key_.Valid()) {
       // Assume that if the |key_| is invalid then the key is missing.
@@ -96,7 +105,7 @@ class RegistryReader {
 
   bool ReadDword(const base::char16* name,
                  DnsSystemSettings::RegDword* out) const {
-    DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
+    DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
     out->set = false;
     if (!key_.Valid()) {
       // Assume that if the |key_| is invalid then the key is missing.
@@ -113,7 +122,7 @@ class RegistryReader {
  private:
   base::win::RegKey key_;
 
-  THREAD_CHECKER(thread_checker_);
+  SEQUENCE_CHECKER(sequence_checker_);
 
   DISALLOW_COPY_AND_ASSIGN(RegistryReader);
 };
@@ -197,8 +206,18 @@ ConfigParseWinResult ReadSystemSettings(DnsSystemSettings* settings) {
     return CONFIG_PARSE_WIN_READ_PRIMARY_SUFFIX;
   }
 
-  base::win::RegistryKeyIterator nrpt_rules(HKEY_LOCAL_MACHINE, kNRPTPath);
-  settings->have_name_resolution_policy = (nrpt_rules.SubkeyCount() > 0);
+  base::win::RegistryKeyIterator nrpt_rules(HKEY_LOCAL_MACHINE, kNrptPath);
+  base::win::RegistryKeyIterator cs_nrpt_rules(HKEY_LOCAL_MACHINE,
+                                               kControlSetNrptPath);
+  settings->have_name_resolution_policy =
+      (nrpt_rules.SubkeyCount() > 0 || cs_nrpt_rules.SubkeyCount() > 0);
+
+  base::win::RegistryKeyIterator dns_connections(HKEY_LOCAL_MACHINE,
+                                                 kDnsConnectionsPath);
+  base::win::RegistryKeyIterator dns_connections_proxies(
+      HKEY_LOCAL_MACHINE, kDnsConnectionsProxies);
+  settings->have_proxy = (dns_connections.SubkeyCount() > 0 ||
+                          dns_connections_proxies.SubkeyCount() > 0);
 
   return CONFIG_PARSE_WIN_OK;
 }
@@ -272,28 +291,28 @@ HostsParseWinResult AddLocalhostEntries(DnsHosts* hosts) {
 // Watches a single registry key for changes.
 class RegistryWatcher {
  public:
-  typedef base::Callback<void(bool succeeded)> CallbackType;
+  typedef base::RepeatingCallback<void(bool succeeded)> CallbackType;
   RegistryWatcher() {}
 
-  ~RegistryWatcher() { DCHECK_CALLED_ON_VALID_THREAD(thread_checker_); }
+  ~RegistryWatcher() { DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_); }
 
   bool Watch(const base::char16* key, const CallbackType& callback) {
-    DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
+    DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
     DCHECK(!callback.is_null());
     DCHECK(callback_.is_null());
     callback_ = callback;
     if (key_.Open(HKEY_LOCAL_MACHINE, key, KEY_NOTIFY) != ERROR_SUCCESS)
       return false;
 
-    return key_.StartWatching(base::Bind(&RegistryWatcher::OnObjectSignaled,
-                                         base::Unretained(this)));
+    return key_.StartWatching(base::BindOnce(&RegistryWatcher::OnObjectSignaled,
+                                             base::Unretained(this)));
   }
 
   void OnObjectSignaled() {
-    DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
+    DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
     DCHECK(!callback_.is_null());
-    if (key_.StartWatching(base::Bind(&RegistryWatcher::OnObjectSignaled,
-                                      base::Unretained(this)))) {
+    if (key_.StartWatching(base::BindOnce(&RegistryWatcher::OnObjectSignaled,
+                                          base::Unretained(this)))) {
       callback_.Run(true);
     } else {
       key_.Close();
@@ -305,7 +324,7 @@ class RegistryWatcher {
   CallbackType callback_;
   base::win::RegKey key_;
 
-  THREAD_CHECKER(thread_checker_);
+  SEQUENCE_CHECKER(sequence_checker_);
 
   DISALLOW_COPY_AND_ASSIGN(RegistryWatcher);
 };
@@ -424,8 +443,7 @@ DnsSystemSettings::DnsSystemSettings()
       policy_devolution(),
       dnscache_devolution(),
       tcpip_devolution(),
-      append_to_multi_label_name(),
-      have_name_resolution_policy(false) {
+      append_to_multi_label_name() {
   policy_search_list.set = false;
   tcpip_search_list.set = false;
   tcpip_domain.set = false;
@@ -498,6 +516,7 @@ bool ParseSearchList(const base::string16& value,
 ConfigParseWinResult ConvertSettingsToDnsConfig(
     const DnsSystemSettings& settings,
     DnsConfig* config) {
+  bool uses_vpn = false;
   *config = DnsConfig();
 
   // Use GetAdapterAddresses to get effective DNS server order and
@@ -505,11 +524,18 @@ ConfigParseWinResult ConvertSettingsToDnsConfig(
   // The order of adapters is the network binding order, so stick to the
   // first good adapter.
   for (const IP_ADAPTER_ADDRESSES* adapter = settings.addresses.get();
-       adapter != nullptr && config->nameservers.empty();
-       adapter = adapter->Next) {
-    if (adapter->OperStatus != IfOperStatusUp)
-      continue;
-    if (adapter->IfType == IF_TYPE_SOFTWARE_LOOPBACK)
+       adapter != nullptr; adapter = adapter->Next) {
+    // Check each adapter for a VPN interface. Even if a single such interface
+    // is present, treat this as an unhandled configuration.
+    if (adapter->IfType == IF_TYPE_PPP) {
+      uses_vpn = true;
+    }
+
+    // Skip disconnected and loopback adapters. If a good configuration was
+    // previously found, skip processing another adapter.
+    if (adapter->OperStatus != IfOperStatusUp ||
+        adapter->IfType == IF_TYPE_SOFTWARE_LOOPBACK ||
+        !config->nameservers.empty())
       continue;
 
     for (const IP_ADAPTER_DNS_SERVER_ADDRESS* address =
@@ -552,11 +578,14 @@ ConfigParseWinResult ConvertSettingsToDnsConfig(
         (settings.append_to_multi_label_name.value != 0);
   }
 
-  ConfigParseWinResult result = CONFIG_PARSE_WIN_OK;
   if (settings.have_name_resolution_policy) {
-    config->unhandled_options = true;
     // TODO(szym): only set this to true if NRPT has DirectAccess rules.
     config->use_local_ipv6 = true;
+  }
+
+  ConfigParseWinResult result = CONFIG_PARSE_WIN_OK;
+  if (settings.have_name_resolution_policy || settings.have_proxy || uses_vpn) {
+    config->unhandled_options = true;
     result = CONFIG_PARSE_WIN_UNHANDLED_OPTIONS;
   }
 
@@ -564,7 +593,7 @@ ConfigParseWinResult ConvertSettingsToDnsConfig(
   return result;
 }
 
-// Watches registry and HOSTS file for changes. Must live on a thread which
+// Watches registry and HOSTS file for changes. Must live on a sequence which
 // allows IO.
 class DnsConfigServiceWin::Watcher
     : public NetworkChangeNotifier::IPAddressObserver {
@@ -573,9 +602,8 @@ class DnsConfigServiceWin::Watcher
   ~Watcher() override { NetworkChangeNotifier::RemoveIPAddressObserver(this); }
 
   bool Watch() {
-    RegistryWatcher::CallbackType callback =
-        base::Bind(&DnsConfigServiceWin::OnConfigChanged,
-                   base::Unretained(service_));
+    RegistryWatcher::CallbackType callback = base::BindRepeating(
+        &DnsConfigServiceWin::OnConfigChanged, base::Unretained(service_));
 
     bool success = true;
 
@@ -601,8 +629,8 @@ class DnsConfigServiceWin::Watcher
     policy_watcher_.Watch(kPolicyPath, callback);
 
     if (!hosts_watcher_.Watch(GetHostsPath(), false,
-                              base::Bind(&Watcher::OnHostsChanged,
-                                         base::Unretained(this)))) {
+                              base::BindRepeating(&Watcher::OnHostsChanged,
+                                                  base::Unretained(this)))) {
       UMA_HISTOGRAM_ENUMERATION("AsyncDNS.WatchStatus",
                                 DNS_CONFIG_WATCH_FAILED_TO_START_HOSTS,
                                 DNS_CONFIG_WATCH_MAX);
@@ -671,7 +699,7 @@ class DnsConfigServiceWin::ConfigReader : public SerialWorker {
     } else {
       LOG(WARNING) << "Failed to read DnsConfig.";
       // Try again in a while in case DnsConfigWatcher missed the signal.
-      base::ThreadTaskRunnerHandle::Get()->PostDelayedTask(
+      base::SequencedTaskRunnerHandle::Get()->PostDelayedTask(
           FROM_HERE, base::BindOnce(&ConfigReader::WorkNow, this),
           base::TimeDelta::FromSeconds(kRetryIntervalSeconds));
     }
@@ -729,13 +757,16 @@ class DnsConfigServiceWin::HostsReader : public SerialWorker {
   DISALLOW_COPY_AND_ASSIGN(HostsReader);
 };
 
-DnsConfigServiceWin::DnsConfigServiceWin()
-    : config_reader_(new ConfigReader(this)),
-      hosts_reader_(new HostsReader(this)) {}
+DnsConfigServiceWin::DnsConfigServiceWin() {
+  // Allow constructing on one sequence and living on another.
+  DETACH_FROM_SEQUENCE(sequence_checker_);
+}
 
 DnsConfigServiceWin::~DnsConfigServiceWin() {
-  config_reader_->Cancel();
-  hosts_reader_->Cancel();
+  if (config_reader_)
+    config_reader_->Cancel();
+  if (hosts_reader_)
+    hosts_reader_->Cancel();
 }
 
 void DnsConfigServiceWin::ReadNow() {
@@ -744,6 +775,10 @@ void DnsConfigServiceWin::ReadNow() {
 }
 
 bool DnsConfigServiceWin::StartWatching() {
+  if (!config_reader_)
+    config_reader_ = base::MakeRefCounted<ConfigReader>(this);
+  if (!hosts_reader_)
+    hosts_reader_ = base::MakeRefCounted<HostsReader>(this);
   // TODO(szym): re-start watcher if that makes sense. http://crbug.com/116139
   watcher_.reset(new Watcher(this));
   UMA_HISTOGRAM_ENUMERATION("AsyncDNS.WatchStatus", DNS_CONFIG_WATCH_STARTED,

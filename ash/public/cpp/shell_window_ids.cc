@@ -4,14 +4,14 @@
 
 #include "ash/public/cpp/shell_window_ids.h"
 
+#include "ash/public/cpp/ash_features.h"
 #include "base/stl_util.h"
 
 namespace ash {
 
-// NOTE: this list is ordered by activation order. That is, windows in
-// containers appearing earlier in the list are activated before windows in
-// containers appearing later in the list.
-const int32_t kActivatableShellWindowIds[] = {
+namespace {
+
+constexpr std::array<int, 18> kActivatableContainersIds = {
     kShellWindowId_OverlayContainer,
     kShellWindowId_LockSystemModalContainer,
     kShellWindowId_AccessibilityPanelContainer,
@@ -23,6 +23,9 @@ const int32_t kActivatableShellWindowIds[] = {
     kShellWindowId_AlwaysOnTopContainer,
     kShellWindowId_AppListContainer,
     kShellWindowId_DefaultContainerDeprecated,
+    kShellWindowId_DeskContainerB,
+    kShellWindowId_DeskContainerC,
+    kShellWindowId_DeskContainerD,
     kShellWindowId_HomeScreenContainer,
 
     // Launcher and status are intentionally checked after other containers
@@ -31,18 +34,18 @@ const int32_t kActivatableShellWindowIds[] = {
     kShellWindowId_PipContainer,
     kShellWindowId_ShelfContainer,
     kShellWindowId_ShelfBubbleContainer,
-    kShellWindowId_StatusContainer,
 };
 
-const size_t kNumActivatableShellWindowIds =
-    base::size(kActivatableShellWindowIds);
+}  // namespace
 
-bool IsActivatableShellWindowId(int32_t id) {
-  for (size_t i = 0; i < kNumActivatableShellWindowIds; i++) {
-    if (id == kActivatableShellWindowIds[i])
-      return true;
-  }
-  return false;
+// Note: this function avoids having a copy of |kActivatableContainersIds| in
+// each translation unit that references it.
+const std::array<int, 18>& GetActivatableShellWindowIds() {
+  return kActivatableContainersIds;
+}
+
+bool IsActivatableShellWindowId(int id) {
+  return base::Contains(kActivatableContainersIds, id);
 }
 
 }  // namespace ash

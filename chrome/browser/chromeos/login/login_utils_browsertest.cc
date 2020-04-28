@@ -10,15 +10,16 @@
 #include "base/macros.h"
 #include "base/run_loop.h"
 #include "base/scoped_observer.h"
+#include "base/task/thread_pool.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/test_timeouts.h"
 #include "chrome/browser/browser_process.h"
-#include "chrome/browser/chrome_notification_types.h"
-#include "chrome/browser/chromeos/login/screens/gaia_view.h"
 #include "chrome/browser/chromeos/login/test/fake_gaia_mixin.h"
 #include "chrome/browser/chromeos/login/test/oobe_base_test.h"
+#include "chrome/browser/chromeos/login/test/session_manager_state_waiter.h"
 #include "chrome/browser/chromeos/login/ui/login_display_host.h"
 #include "chrome/browser/chromeos/login/wizard_controller.h"
+#include "chrome/browser/ui/webui/chromeos/login/gaia_screen_handler.h"
 #include "chrome/browser/ui/webui/chromeos/login/signin_screen_handler.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/pref_names.h"
@@ -26,15 +27,12 @@
 #include "chromeos/constants/chromeos_switches.h"
 #include "components/prefs/pref_service.h"
 #include "content/public/browser/browser_thread.h"
-#include "content/public/browser/notification_service.h"
-#include "content/public/test/test_utils.h"
 #include "google_apis/gaia/fake_gaia.h"
 #include "google_apis/gaia/gaia_switches.h"
 #include "google_apis/gaia/gaia_urls.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
 #include "net/test/embedded_test_server/http_response.h"
 #include "rlz/buildflags/buildflags.h"
-#include "ui/base/ui_base_features.h"
 
 #if BUILDFLAG(ENABLE_RLZ)
 #include "base/task/post_task.h"
@@ -63,18 +61,14 @@ class LoginUtilsTest : public OobeBaseTest {
   PrefService* local_state() { return g_browser_process->local_state(); }
 
   void Login(const std::string& username) {
-    content::WindowedNotificationObserver session_started_observer(
-        chrome::NOTIFICATION_SESSION_STARTED,
-        content::NotificationService::AllSources());
-
     LoginDisplayHost::default_host()
         ->GetOobeUI()
-        ->GetGaiaScreenView()
+        ->GetView<GaiaScreenHandler>()
         ->ShowSigninScreenForTest(username, "password", "[]");
 
     // Wait for the session to start after submitting the credentials. This
     // will wait until all the background requests are done.
-    session_started_observer.Wait();
+    test::WaitForPrimaryUserSessionStart();
   }
 
  private:
@@ -82,18 +76,6 @@ class LoginUtilsTest : public OobeBaseTest {
 
   DISALLOW_COPY_AND_ASSIGN(LoginUtilsTest);
 };
-
-// Exercises login, like the desktopui_MashLogin Chrome OS autotest.
-IN_PROC_BROWSER_TEST_F(LoginUtilsTest, MashLogin) {
-  // Test is relevant for both SingleProcessMash and MultiProcessMash, but
-  // not classic ash.
-  if (!features::IsUsingWindowService())
-    return;
-
-  WaitForSigninScreen();
-  Login("username");
-  // Login did not time out and did not crash.
-}
 
 #if BUILDFLAG(ENABLE_RLZ)
 IN_PROC_BROWSER_TEST_F(LoginUtilsTest, RlzInitialized) {
@@ -121,7 +103,7 @@ IN_PROC_BROWSER_TEST_F(LoginUtilsTest, RlzInitialized) {
   {
     base::RunLoop loop;
     base::string16 rlz_string;
-    base::PostTaskWithTraitsAndReply(
+    base::ThreadPool::PostTaskAndReply(
         FROM_HERE, {base::MayBlock(), base::TaskPriority::BEST_EFFORT},
         base::Bind(&GetAccessPointRlzInBackgroundThread,
                    rlz::RLZTracker::ChromeHomePage(), &rlz_string),

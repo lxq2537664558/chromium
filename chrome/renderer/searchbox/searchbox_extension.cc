@@ -9,66 +9,57 @@
 #include <string>
 #include <vector>
 
+#include "base/containers/flat_map.h"
 #include "base/i18n/rtl.h"
+#include "base/json/json_writer.h"
 #include "base/json/string_escape.h"
 #include "base/macros.h"
+#include "base/metrics/histogram_macros.h"
+#include "base/metrics/user_metrics.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/time/time.h"
+#include "chrome/common/search/generated_colors_info.h"
 #include "chrome/common/search/instant_types.h"
 #include "chrome/common/search/ntp_logging_events.h"
+#include "chrome/common/search/selected_colors_info.h"
 #include "chrome/common/url_constants.h"
 #include "chrome/grit/renderer_resources.h"
 #include "chrome/renderer/searchbox/searchbox.h"
 #include "components/crx_file/id_util.h"
-#include "components/ntp_tiles/constants.h"
+#include "components/ntp_tiles/features.h"
 #include "components/ntp_tiles/ntp_tile_impression.h"
 #include "components/ntp_tiles/tile_source.h"
 #include "components/ntp_tiles/tile_visual_type.h"
-#include "content/public/common/page_zoom.h"
+#include "content/public/common/url_constants.h"
 #include "content/public/renderer/chrome_object_extensions_utils.h"
 #include "content/public/renderer/render_frame.h"
+#include "content/public/renderer/render_thread.h"
 #include "content/public/renderer/render_view.h"
 #include "gin/data_object_builder.h"
 #include "gin/handle.h"
 #include "gin/object_template_builder.h"
 #include "gin/wrappable.h"
+#include "third_party/blink/public/common/page/page_zoom.h"
+#include "third_party/blink/public/platform/web_string.h"
 #include "third_party/blink/public/platform/web_url_request.h"
 #include "third_party/blink/public/web/blink.h"
 #include "third_party/blink/public/web/web_document.h"
 #include "third_party/blink/public/web/web_local_frame.h"
 #include "third_party/blink/public/web/web_script_source.h"
 #include "third_party/blink/public/web/web_view.h"
+#include "ui/base/l10n/l10n_util.h"
 #include "ui/base/resource/resource_bundle.h"
 #include "ui/base/window_open_disposition.h"
 #include "ui/events/keycodes/keyboard_codes.h"
+#include "ui/gfx/color_utils.h"
 #include "ui/gfx/text_constants.h"
 #include "ui/gfx/text_elider.h"
 #include "url/gurl.h"
 #include "url/url_constants.h"
 #include "v8/include/v8.h"
-
-namespace internal {  // for testing.
-
-// Returns an array with the RGBA color components.
-v8::Local<v8::Value> RGBAColorToArray(v8::Isolate* isolate,
-                                      const RGBAColor& color) {
-  v8::Local<v8::Context> context = isolate->GetCurrentContext();
-  v8::Local<v8::Array> color_array = v8::Array::New(isolate, 4);
-  color_array->CreateDataProperty(context, 0, v8::Int32::New(isolate, color.r))
-      .Check();
-  color_array->CreateDataProperty(context, 1, v8::Int32::New(isolate, color.g))
-      .Check();
-  color_array->CreateDataProperty(context, 2, v8::Int32::New(isolate, color.b))
-      .Check();
-  color_array->CreateDataProperty(context, 3, v8::Int32::New(isolate, color.a))
-      .Check();
-  return color_array;
-}
-
-}  // namespace internal
 
 namespace {
 
@@ -192,74 +183,110 @@ base::Optional<int> CoerceToInt(v8::Isolate* isolate, v8::Value* value) {
   return maybe_int.ToLocalChecked()->Value();
 }
 
-v8::Local<v8::Object> GenerateThemeBackgroundInfo(
-    v8::Isolate* isolate,
-    const ThemeBackgroundInfo& theme_info) {
+// Returns an array with the RGBA color components.
+v8::Local<v8::Value> SkColorToArray(v8::Isolate* isolate,
+                                    const SkColor& color) {
+  v8::Local<v8::Context> context = isolate->GetCurrentContext();
+  v8::Local<v8::Array> color_array = v8::Array::New(isolate, 4);
+  color_array
+      ->CreateDataProperty(context, 0,
+                           v8::Int32::New(isolate, SkColorGetR(color)))
+      .Check();
+  color_array
+      ->CreateDataProperty(context, 1,
+                           v8::Int32::New(isolate, SkColorGetG(color)))
+      .Check();
+  color_array
+      ->CreateDataProperty(context, 2,
+                           v8::Int32::New(isolate, SkColorGetB(color)))
+      .Check();
+  color_array
+      ->CreateDataProperty(context, 3,
+                           v8::Int32::New(isolate, SkColorGetA(color)))
+      .Check();
+  return color_array;
+}
+
+// Converts given array to SkColor and returns whether the conversion is
+// successful.
+bool ArrayToSkColor(v8::Isolate* isolate,
+                    v8::Local<v8::Array> color,
+                    SkColor* color_result) {
+  if (color->Length() != 4)
+    return false;
+
+  v8::Local<v8::Context> context = isolate->GetCurrentContext();
+  v8::Local<v8::Value> r_value;
+  v8::Local<v8::Value> g_value;
+  v8::Local<v8::Value> b_value;
+  v8::Local<v8::Value> a_value;
+
+  if (!color->Get(context, 0).ToLocal(&r_value) ||
+      !color->Get(context, 1).ToLocal(&g_value) ||
+      !color->Get(context, 2).ToLocal(&b_value) ||
+      !color->Get(context, 3).ToLocal(&a_value))
+    return false;
+
+  base::Optional<int> r = CoerceToInt(isolate, *r_value);
+  base::Optional<int> g = CoerceToInt(isolate, *g_value);
+  base::Optional<int> b = CoerceToInt(isolate, *b_value);
+  base::Optional<int> a = CoerceToInt(isolate, *a_value);
+
+  if (!r.has_value() || !g.has_value() || !b.has_value() || !a.has_value())
+    return false;
+
+  if (*a > 255 || *r > 255 || *g > 255 || *b > 255)
+    return false;
+
+  *color_result = SkColorSetARGB(*a, *r, *g, *b);
+  return true;
+}
+
+v8::Local<v8::Object> GenerateNtpTheme(v8::Isolate* isolate,
+                                       const NtpTheme& theme) {
   gin::DataObjectBuilder builder(isolate);
 
   // True if the theme is the system default and no custom theme has been
   // applied.
   // Value is always valid.
-  builder.Set("usingDefaultTheme", theme_info.using_default_theme);
-
-  // True if dark mode should be applied to the NTP.
-  // Value is always valid.
-  builder.Set("usingDarkMode", theme_info.using_dark_mode);
+  builder.Set("usingDefaultTheme", theme.using_default_theme);
 
   // Theme color for background as an array with the RGBA components in order.
   // Value is always valid.
   builder.Set("backgroundColorRgba",
-              internal::RGBAColorToArray(isolate, theme_info.background_color));
+              SkColorToArray(isolate, theme.background_color));
 
   // Theme color for text as an array with the RGBA components in order.
   // Value is always valid.
-  builder.Set("textColorRgba",
-              internal::RGBAColorToArray(isolate, theme_info.text_color));
-
-  // Theme color for links as an array with the RGBA components in order.
-  // Value is always valid.
-  builder.Set("linkColorRgba",
-              internal::RGBAColorToArray(isolate, theme_info.link_color));
+  builder.Set("textColorRgba", SkColorToArray(isolate, theme.text_color));
 
   // Theme color for light text as an array with the RGBA components in order.
   // Value is always valid.
   builder.Set("textColorLightRgba",
-              internal::RGBAColorToArray(isolate, theme_info.text_color_light));
+              SkColorToArray(isolate, theme.text_color_light));
 
-  // Theme color for header as an array with the RGBA components in order.
-  // Value is always valid.
-  builder.Set("headerColorRgba",
-              internal::RGBAColorToArray(isolate, theme_info.header_color));
-
-  // Theme color for section border as an array with the RGBA components in
-  // order. Value is always valid.
-  builder.Set(
-      "sectionBorderColorRgba",
-      internal::RGBAColorToArray(isolate, theme_info.section_border_color));
-
-  // The theme alternate logo value indicates a white logo when TRUE and a
+  // The theme alternate logo value indicates same color when TRUE and a
   // colorful one when FALSE.
-  builder.Set("alternateLogo", theme_info.logo_alternate);
+  builder.Set("alternateLogo", theme.logo_alternate);
 
   // The theme background image url is of format kCSSBackgroundImageFormat
   // where both instances of "%s" are replaced with the id that identifies the
   // theme.
   // This is the CSS "background-image" format.
   // Value is only valid if there's a custom theme background image.
-  if (crx_file::id_util::IdIsValid(theme_info.theme_id)) {
+  if (theme.has_theme_image) {
     builder.Set("imageUrl", base::StringPrintf(kCSSBackgroundImageFormat,
-                                               theme_info.theme_id.c_str(),
-                                               theme_info.theme_id.c_str()));
+                                               theme.theme_id.c_str(),
+                                               theme.theme_id.c_str()));
 
     // The theme background image horizontal alignment is one of "left",
     // "right", "center".
     // This is the horizontal component of the CSS "background-position" format.
     // Value is only valid if |imageUrl| is not empty.
     std::string alignment = kCSSBackgroundPositionCenter;
-    if (theme_info.image_horizontal_alignment ==
-        THEME_BKGRND_IMAGE_ALIGN_LEFT) {
+    if (theme.image_horizontal_alignment == THEME_BKGRND_IMAGE_ALIGN_LEFT) {
       alignment = kCSSBackgroundPositionLeft;
-    } else if (theme_info.image_horizontal_alignment ==
+    } else if (theme.image_horizontal_alignment ==
                THEME_BKGRND_IMAGE_ALIGN_RIGHT) {
       alignment = kCSSBackgroundPositionRight;
     }
@@ -269,9 +296,9 @@ v8::Local<v8::Object> GenerateThemeBackgroundInfo(
     // "center".
     // This is the vertical component of the CSS "background-position" format.
     // Value is only valid if |image_url| is not empty.
-    if (theme_info.image_vertical_alignment == THEME_BKGRND_IMAGE_ALIGN_TOP) {
+    if (theme.image_vertical_alignment == THEME_BKGRND_IMAGE_ALIGN_TOP) {
       alignment = kCSSBackgroundPositionTop;
-    } else if (theme_info.image_vertical_alignment ==
+    } else if (theme.image_vertical_alignment ==
                THEME_BKGRND_IMAGE_ALIGN_BOTTOM) {
       alignment = kCSSBackgroundPositionBottom;
     } else {
@@ -284,7 +311,7 @@ v8::Local<v8::Object> GenerateThemeBackgroundInfo(
     // This is the CSS "background-repeat" format.
     // Value is only valid if |image_url| is not empty.
     std::string tiling = kCSSBackgroundRepeatNo;
-    switch (theme_info.image_tiling) {
+    switch (theme.image_tiling) {
       case THEME_BKGRND_IMAGE_NO_REPEAT:
         tiling = kCSSBackgroundRepeatNo;
         break;
@@ -301,37 +328,83 @@ v8::Local<v8::Object> GenerateThemeBackgroundInfo(
     builder.Set("imageTiling", tiling);
 
     // The attribution URL is only valid if the theme has attribution logo.
-    if (theme_info.has_attribution) {
-      builder.Set("attributionUrl",
-                  base::StringPrintf(kThemeAttributionFormat,
-                                     theme_info.theme_id.c_str(),
-                                     theme_info.theme_id.c_str()));
+    if (theme.has_attribution) {
+      builder.Set("attributionUrl", base::StringPrintf(kThemeAttributionFormat,
+                                                       theme.theme_id.c_str(),
+                                                       theme.theme_id.c_str()));
     }
   }
 
-  // Assume that a custom background has not been configured and then
-  // override based on the condition below.
-  builder.Set("customBackgroundConfigured", false);
+  builder.Set("themeId", theme.theme_id);
+  builder.Set("themeName", theme.theme_name);
+
+  builder.Set("customBackgroundDisabledByPolicy",
+              theme.custom_background_disabled_by_policy);
+  builder.Set("customBackgroundConfigured",
+              !theme.custom_background_url.is_empty());
 
   // If a custom background has been set provide the relevant information to the
   // page.
-  if (!theme_info.custom_background_url.is_empty()) {
-    builder.Set("alternateLogo", true);
-    RGBAColor whiteTextRgba = RGBAColor{255, 255, 255, 255};
-    builder.Set("textColorRgba",
-                internal::RGBAColorToArray(isolate, whiteTextRgba));
-    builder.Set("customBackgroundConfigured", true);
-    builder.Set("imageUrl", theme_info.custom_background_url.spec());
+  if (!theme.custom_background_url.is_empty()) {
+    builder.Set("imageUrl", theme.custom_background_url.spec());
     builder.Set("attributionActionUrl",
-                theme_info.custom_background_attribution_action_url.spec());
-    builder.Set("attribution1",
-                theme_info.custom_background_attribution_line_1);
-    builder.Set("attribution2",
-                theme_info.custom_background_attribution_line_2);
+                theme.custom_background_attribution_action_url.spec());
+    builder.Set("attribution1", theme.custom_background_attribution_line_1);
+    builder.Set("attribution2", theme.custom_background_attribution_line_2);
+    builder.Set("collectionId", theme.collection_id);
     // Clear the theme attribution url, as it shouldn't be shown when
     // a custom background is set.
     builder.Set("attributionUrl", std::string());
   }
+
+  // Set fields for themeing NTP elements.
+  builder.Set("isNtpBackgroundDark", !color_utils::IsDark(theme.text_color));
+  builder.Set("useTitleContainer", theme.has_theme_image);
+
+  // TODO(gayane): Rename icon color to shortcut color in JS for consitancy.
+  builder.Set("iconBackgroundColor",
+              SkColorToArray(isolate, theme.shortcut_color));
+  builder.Set("useWhiteAddIcon", color_utils::IsDark(theme.shortcut_color));
+
+  builder.Set("logoColor", SkColorToArray(isolate, theme.logo_color));
+
+  builder.Set("colorId", theme.color_id);
+  if (theme.color_id != -1) {
+    builder.Set("colorDark", SkColorToArray(isolate, theme.color_dark));
+    builder.Set("colorLight", SkColorToArray(isolate, theme.color_light));
+    builder.Set("colorPicked", SkColorToArray(isolate, theme.color_picked));
+  }
+
+  gin::DataObjectBuilder search_box(isolate);
+  search_box.Set("bg", SkColorToArray(isolate, theme.search_box.bg));
+  search_box.Set("icon", SkColorToArray(isolate, theme.search_box.icon));
+  search_box.Set("iconSelected",
+                 SkColorToArray(isolate, theme.search_box.icon_selected));
+  search_box.Set("placeholder",
+                 SkColorToArray(isolate, theme.search_box.placeholder));
+  search_box.Set("resultsBg",
+                 SkColorToArray(isolate, theme.search_box.results_bg));
+  search_box.Set("resultsBgHovered",
+                 SkColorToArray(isolate, theme.search_box.results_bg_hovered));
+  search_box.Set("resultsBgSelected",
+                 SkColorToArray(isolate, theme.search_box.results_bg_selected));
+  search_box.Set("resultsDim",
+                 SkColorToArray(isolate, theme.search_box.results_dim));
+  search_box.Set(
+      "resultsDimSelected",
+      SkColorToArray(isolate, theme.search_box.results_dim_selected));
+  search_box.Set("resultsText",
+                 SkColorToArray(isolate, theme.search_box.results_text));
+  search_box.Set(
+      "resultsTextSelected",
+      SkColorToArray(isolate, theme.search_box.results_text_selected));
+  search_box.Set("resultsUrl",
+                 SkColorToArray(isolate, theme.search_box.results_url));
+  search_box.Set(
+      "resultsUrlSelected",
+      SkColorToArray(isolate, theme.search_box.results_url_selected));
+  search_box.Set("text", SkColorToArray(isolate, theme.search_box.text));
+  builder.Set("searchBox", search_box.Build());
 
   return builder.Build();
 }
@@ -354,16 +427,61 @@ SearchBox* GetSearchBoxForCurrentContext() {
   return SearchBox::Get(main_frame);
 }
 
-static const char kDispatchChromeIdentityCheckResult[] =
-    "if (window.chrome &&"
-    "    window.chrome.embeddedSearch &&"
-    "    window.chrome.embeddedSearch.newTabPage &&"
-    "    window.chrome.embeddedSearch.newTabPage.onsignedincheckdone &&"
-    "    typeof window.chrome.embeddedSearch.newTabPage"
-    "        .onsignedincheckdone === 'function') {"
-    "  window.chrome.embeddedSearch.newTabPage.onsignedincheckdone(%s, %s);"
-    "  true;"
-    "}";
+base::Value CreateAutocompleteMatches(
+    const std::vector<chrome::mojom::AutocompleteMatchPtr>& matches) {
+  base::Value list(base::Value::Type::LIST);
+  for (const chrome::mojom::AutocompleteMatchPtr& match : matches) {
+    base::Value dict(base::Value::Type::DICTIONARY);
+    dict.SetBoolKey("allowedToBeDefaultMatch",
+                    match->allowed_to_be_default_match);
+    dict.SetStringKey("contents", match->contents);
+    base::Value contents_class(base::Value::Type::LIST);
+    for (const auto& classification : match->contents_class) {
+      base::Value entry(base::Value::Type::DICTIONARY);
+      entry.SetIntKey("offset", classification->offset);
+      entry.SetIntKey("style", classification->style);
+      contents_class.Append(std::move(entry));
+    }
+    dict.SetKey("contentsClass", std::move(contents_class));
+    dict.SetStringKey("description", match->description);
+    base::Value description_class(base::Value::Type::LIST);
+    for (const auto& classification : match->description_class) {
+      base::Value entry(base::Value::Type::DICTIONARY);
+      entry.SetIntKey("offset", classification->offset);
+      entry.SetIntKey("style", classification->style);
+      description_class.Append(std::move(entry));
+    }
+    dict.SetKey("descriptionClass", std::move(description_class));
+    dict.SetStringKey("destinationUrl", match->destination_url);
+    dict.SetIntKey("suggestionGroupId", match->suggestion_group_id);
+    dict.SetStringKey("inlineAutocompletion", match->inline_autocompletion);
+    dict.SetBoolKey("isSearchType", match->is_search_type);
+    dict.SetStringKey("fillIntoEdit", match->fill_into_edit);
+    dict.SetStringKey("iconUrl", match->icon_url);
+    dict.SetStringKey("imageDominantColor", match->image_dominant_color);
+    dict.SetStringKey("imageUrl", match->image_url);
+    dict.SetBoolKey("swapContentsAndDescription",
+                    match->swap_contents_and_description);
+    dict.SetStringKey("type", match->type);
+    dict.SetBoolKey("supportsDeletion", match->supports_deletion);
+    list.Append(std::move(dict));
+  }
+  return list;
+}
+
+base::Value CreateSuggestionGroupsMap(
+    const base::flat_map<int32_t, chrome::mojom::SuggestionGroupPtr>&
+        suggestion_groups_map) {
+  base::Value result_map(base::Value::Type::DICTIONARY);
+  for (const auto& pair : suggestion_groups_map) {
+    base::Value suggestion_group(base::Value::Type::DICTIONARY);
+    suggestion_group.SetStringKey("header", pair.second->header);
+    suggestion_group.SetBoolKey("hidden", pair.second->hidden);
+    result_map.SetPath(base::NumberToString(pair.first),
+                       std::move(suggestion_group));
+  }
+  return result_map;
+}
 
 static const char kDispatchFocusChangedScript[] =
     "if (window.chrome &&"
@@ -373,17 +491,6 @@ static const char kDispatchFocusChangedScript[] =
     "    typeof window.chrome.embeddedSearch.searchBox.onfocuschange =="
     "         'function') {"
     "  window.chrome.embeddedSearch.searchBox.onfocuschange();"
-    "  true;"
-    "}";
-
-static const char kDispatchHistorySyncCheckResult[] =
-    "if (window.chrome &&"
-    "    window.chrome.embeddedSearch &&"
-    "    window.chrome.embeddedSearch.newTabPage &&"
-    "    window.chrome.embeddedSearch.newTabPage.onhistorysynccheckdone &&"
-    "    typeof window.chrome.embeddedSearch.newTabPage"
-    "        .onhistorysynccheckdone === 'function') {"
-    "  window.chrome.embeddedSearch.newTabPage.onhistorysynccheckdone(%s);"
     "  true;"
     "}";
 
@@ -406,6 +513,30 @@ static const char kDispatchUpdateCustomLinkResult[] =
     "    typeof window.chrome.embeddedSearch.newTabPage"
     "        .onupdatecustomlinkdone === 'function') {"
     "  window.chrome.embeddedSearch.newTabPage.onupdatecustomlinkdone(%s);"
+    "  true;"
+    "}";
+
+static const char kDispatchAutocompleteResultChanged[] =
+    "if (window.chrome &&"
+    "    window.chrome.embeddedSearch &&"
+    "    window.chrome.embeddedSearch.searchBox &&"
+    "    window.chrome.embeddedSearch.searchBox.autocompleteresultchanged &&"
+    "    typeof window.chrome.embeddedSearch.searchBox"
+    "        .autocompleteresultchanged === 'function') {"
+    "  window.chrome.embeddedSearch.searchBox.autocompleteresultchanged(%s);"
+    "  true;"
+    "}";
+
+static const char kDispatchAutocompleteMatchImageAvailable[] =
+    "if (window.chrome &&"
+    "    window.chrome.embeddedSearch &&"
+    "    window.chrome.embeddedSearch.searchBox &&"
+    "    "
+    "window.chrome.embeddedSearch.searchBox.autocompletematchimageavailable &&"
+    "    typeof window.chrome.embeddedSearch.searchBox"
+    "        .autocompletematchimageavailable === 'function') {"
+    "  window.chrome.embeddedSearch.searchBox"
+    "      .autocompletematchimageavailable(%d, '%s', '%s');"
     "  true;"
     "}";
 
@@ -475,6 +606,20 @@ static const char kDispatchThemeChangeEventScript[] =
     "  true;"
     "}";
 
+static const char kDispatchLocalBackgroundSelectedScript[] =
+    "if (window.chrome &&"
+    "    window.chrome.embeddedSearch &&"
+    "    window.chrome.embeddedSearch.newTabPage &&"
+    "    window.chrome.embeddedSearch.newTabPage.onlocalbackgroundselected &&"
+    "    typeof "
+    "window.chrome.embeddedSearch.newTabPage.onlocalbackgroundselected =="
+    "        'function') {"
+    "  "
+    "window.chrome.embeddedSearch.newTabPage."
+    "onlocalbackgroundselected();"
+    "  true;"
+    "}";
+
 // ----------------------------------------------------------------------------
 
 class SearchBoxBindings : public gin::Wrappable<SearchBoxBindings> {
@@ -490,14 +635,28 @@ class SearchBoxBindings : public gin::Wrappable<SearchBoxBindings> {
       v8::Isolate* isolate) final;
 
   // Handlers for JS properties.
-  static bool GetRightToLeft();
   static bool IsFocused();
   static bool IsKeyCaptureEnabled();
 
   // Handlers for JS functions.
+  static void DeleteAutocompleteMatch(int line);
   static void Paste(const std::string& text);
+  static void QueryAutocomplete(const base::string16& input,
+                                bool prevent_inline_autocomplete);
+  static void StopAutocomplete(bool clear_result);
+  static void LogCharTypedToRepaintLatency(uint32_t latency_ms);
   static void StartCapturingKeyStrokes();
   static void StopCapturingKeyStrokes();
+  static void OpenAutocompleteMatch(int line,
+                                    const std::string& url,
+                                    bool are_matches_showing,
+                                    double time_elapsed_since_last_focus,
+                                    double button,
+                                    bool alt_key,
+                                    bool ctrl_key,
+                                    bool meta_key,
+                                    bool shift_key);
+  static void ToggleSuggestionGroupIdVisibility(int32_t suggestion_group_id);
 
   DISALLOW_COPY_AND_ASSIGN(SearchBoxBindings);
 };
@@ -511,19 +670,25 @@ SearchBoxBindings::~SearchBoxBindings() = default;
 gin::ObjectTemplateBuilder SearchBoxBindings::GetObjectTemplateBuilder(
     v8::Isolate* isolate) {
   return gin::Wrappable<SearchBoxBindings>::GetObjectTemplateBuilder(isolate)
-      .SetProperty("rtl", &SearchBoxBindings::GetRightToLeft)
+      .SetProperty("rtl", &base::i18n::IsRTL)
       .SetProperty("isFocused", &SearchBoxBindings::IsFocused)
       .SetProperty("isKeyCaptureEnabled",
                    &SearchBoxBindings::IsKeyCaptureEnabled)
+      .SetMethod("deleteAutocompleteMatch",
+                 &SearchBoxBindings::DeleteAutocompleteMatch)
+      .SetMethod("logCharTypedToRepaintLatency",
+                 &SearchBoxBindings::LogCharTypedToRepaintLatency)
+      .SetMethod("openAutocompleteMatch",
+                 &SearchBoxBindings::OpenAutocompleteMatch)
       .SetMethod("paste", &SearchBoxBindings::Paste)
+      .SetMethod("queryAutocomplete", &SearchBoxBindings::QueryAutocomplete)
+      .SetMethod("stopAutocomplete", &SearchBoxBindings::StopAutocomplete)
       .SetMethod("startCapturingKeyStrokes",
                  &SearchBoxBindings::StartCapturingKeyStrokes)
       .SetMethod("stopCapturingKeyStrokes",
-                 &SearchBoxBindings::StopCapturingKeyStrokes);
-}
-
-bool SearchBoxBindings::GetRightToLeft() {
-  return base::i18n::IsRTL();
+                 &SearchBoxBindings::StopCapturingKeyStrokes)
+      .SetMethod("toggleSuggestionGroupIdVisibility",
+                 &SearchBoxBindings::ToggleSuggestionGroupIdVisibility);
 }
 
 // static
@@ -543,11 +708,77 @@ bool SearchBoxBindings::IsKeyCaptureEnabled() {
 }
 
 // static
+void SearchBoxBindings::DeleteAutocompleteMatch(int line) {
+  DCHECK_GE(line, 0);
+  DCHECK_LE(line, 255);
+  SearchBox* search_box = GetSearchBoxForCurrentContext();
+  if (!search_box)
+    return;
+  search_box->DeleteAutocompleteMatch(line);
+}
+
+// static
+void SearchBoxBindings::ToggleSuggestionGroupIdVisibility(
+    int32_t suggestion_group_id) {
+  SearchBox* search_box = GetSearchBoxForCurrentContext();
+  if (!search_box)
+    return;
+  search_box->ToggleSuggestionGroupIdVisibility(suggestion_group_id);
+}
+
+// static
+void SearchBoxBindings::OpenAutocompleteMatch(
+    int line,
+    const std::string& url,
+    bool are_matches_showing,
+    double time_elapsed_since_last_focus,
+    double button,
+    bool alt_key,
+    bool ctrl_key,
+    bool meta_key,
+    bool shift_key) {
+  DCHECK_GE(line, 0);
+  DCHECK_LE(line, 255);
+  SearchBox* search_box = GetSearchBoxForCurrentContext();
+  if (!search_box)
+    return;
+
+  search_box->OpenAutocompleteMatch(line, GURL(url), are_matches_showing,
+                                    time_elapsed_since_last_focus, button,
+                                    alt_key, ctrl_key, meta_key, shift_key);
+}
+
+// static
 void SearchBoxBindings::Paste(const std::string& text) {
   SearchBox* search_box = GetSearchBoxForCurrentContext();
   if (!search_box)
     return;
   search_box->Paste(base::UTF8ToUTF16(text));
+}
+
+// static
+void SearchBoxBindings::QueryAutocomplete(const base::string16& input,
+                                          bool prevent_inline_autocomplete) {
+  SearchBox* search_box = GetSearchBoxForCurrentContext();
+  if (!search_box)
+    return;
+  search_box->QueryAutocomplete(input, prevent_inline_autocomplete);
+}
+
+// static
+void SearchBoxBindings::StopAutocomplete(bool clear_result) {
+  SearchBox* search_box = GetSearchBoxForCurrentContext();
+  if (!search_box)
+    return;
+  search_box->StopAutocomplete(clear_result);
+}
+
+// static
+void SearchBoxBindings::LogCharTypedToRepaintLatency(uint32_t latency_ms) {
+  SearchBox* search_box = GetSearchBoxForCurrentContext();
+  if (!search_box)
+    return;
+  search_box->LogCharTypedToRepaintLatency(latency_ms);
 }
 
 // static
@@ -584,12 +815,12 @@ class NewTabPageBindings : public gin::Wrappable<NewTabPageBindings> {
   static bool IsInputInProgress();
   static v8::Local<v8::Value> GetMostVisited(v8::Isolate* isolate);
   static bool GetMostVisitedAvailable(v8::Isolate* isolate);
-  static v8::Local<v8::Value> GetThemeBackgroundInfo(v8::Isolate* isolate);
+  static v8::Local<v8::Value> GetNtpTheme(v8::Isolate* isolate);
   static bool GetIsCustomLinks();
+  static bool GetIsUsingMostVisited();
+  static bool GetAreShortcutsVisible();
 
   // Handlers for JS functions visible to all NTPs.
-  static void CheckIsUserSignedInToChromeAs(const std::string& identity);
-  static void CheckIsUserSyncingHistory();
   static void DeleteMostVisitedItem(v8::Isolate* isolate,
                                     v8::Local<v8::Value> rid);
   static void UndoAllMostVisitedDeletions();
@@ -606,8 +837,11 @@ class NewTabPageBindings : public gin::Wrappable<NewTabPageBindings> {
   static void ReorderCustomLink(int rid, int new_pos);
   static void UndoCustomLinkAction();
   static void ResetCustomLinks();
+  static void ToggleMostVisitedOrCustomLinks();
+  static void ToggleShortcutsVisibility(bool do_notify);
   static std::string FixupAndValidateUrl(const std::string& url);
   static void LogEvent(int event);
+  static void LogSuggestionEventWithValue(int event, int data);
   static void LogMostVisitedImpression(
       int position,
       int tile_title_source,
@@ -620,12 +854,12 @@ class NewTabPageBindings : public gin::Wrappable<NewTabPageBindings> {
       int tile_source,
       int tile_type,
       v8::Local<v8::Value> data_generation_time);
-  static void SetCustomBackgroundURL(const std::string& background_url);
-  static void SetCustomBackgroundURLWithAttributions(
-      const std::string& background_url,
-      const std::string& attribution_line_1,
-      const std::string& attribution_line_2,
-      const std::string& attributionActionUrl);
+  static void ResetCustomBackgroundInfo();
+  static void SetCustomBackgroundInfo(const std::string& background_url,
+                                      const std::string& attribution_line_1,
+                                      const std::string& attribution_line_2,
+                                      const std::string& attributionActionUrl,
+                                      const std::string& collection_id);
   static void SelectLocalBackgroundImage();
   static void BlocklistSearchSuggestion(int task_version, int task_id);
   static void BlocklistSearchSuggestionWithHash(int task_version,
@@ -635,6 +869,20 @@ class NewTabPageBindings : public gin::Wrappable<NewTabPageBindings> {
                                        int task_id,
                                        const std::string& hash);
   static void OptOutOfSearchSuggestions();
+  static void UseDefaultTheme();
+  static void ApplyDefaultTheme();
+  static void ApplyAutogeneratedTheme(v8::Isolate* isolate,
+                                      int id,
+                                      v8::Local<v8::Value> color);
+  static void RevertThemeChanges();
+  static void ConfirmThemeChanges();
+  static void BlocklistPromo(const std::string& promo_id);
+  static void OpenExtensionsPage(double button,
+                                 bool alt_key,
+                                 bool ctrl_key,
+                                 bool meta_key,
+                                 bool shift_key);
+  static v8::Local<v8::Value> GetColorsInfo(v8::Isolate* isolate);
 
   DISALLOW_COPY_AND_ASSIGN(NewTabPageBindings);
 };
@@ -652,13 +900,15 @@ gin::ObjectTemplateBuilder NewTabPageBindings::GetObjectTemplateBuilder(
       .SetProperty("mostVisited", &NewTabPageBindings::GetMostVisited)
       .SetProperty("mostVisitedAvailable",
                    &NewTabPageBindings::GetMostVisitedAvailable)
-      .SetProperty("themeBackgroundInfo",
-                   &NewTabPageBindings::GetThemeBackgroundInfo)
+      .SetProperty("ntpTheme", &NewTabPageBindings::GetNtpTheme)
+      // TODO(https://crbug.com/1020450): remove "themeBackgroundInfo" legacy
+      // name when we're sure no third-party NTP needs it.
+      .SetProperty("themeBackgroundInfo", &NewTabPageBindings::GetNtpTheme)
       .SetProperty("isCustomLinks", &NewTabPageBindings::GetIsCustomLinks)
-      .SetMethod("checkIsUserSignedIntoChromeAs",
-                 &NewTabPageBindings::CheckIsUserSignedInToChromeAs)
-      .SetMethod("checkIsUserSyncingHistory",
-                 &NewTabPageBindings::CheckIsUserSyncingHistory)
+      .SetProperty("isUsingMostVisited",
+                   &NewTabPageBindings::GetIsUsingMostVisited)
+      .SetProperty("areShortcutsVisible",
+                   &NewTabPageBindings::GetAreShortcutsVisible)
       .SetMethod("deleteMostVisitedItem",
                  &NewTabPageBindings::DeleteMostVisitedItem)
       .SetMethod("undoAllMostVisitedDeletions",
@@ -672,17 +922,23 @@ gin::ObjectTemplateBuilder NewTabPageBindings::GetObjectTemplateBuilder(
       .SetMethod("undoCustomLinkAction",
                  &NewTabPageBindings::UndoCustomLinkAction)
       .SetMethod("resetCustomLinks", &NewTabPageBindings::ResetCustomLinks)
+      .SetMethod("toggleMostVisitedOrCustomLinks",
+                 &NewTabPageBindings::ToggleMostVisitedOrCustomLinks)
+      .SetMethod("toggleShortcutsVisibility",
+                 &NewTabPageBindings::ToggleShortcutsVisibility)
       .SetMethod("fixupAndValidateUrl",
                  &NewTabPageBindings::FixupAndValidateUrl)
       .SetMethod("logEvent", &NewTabPageBindings::LogEvent)
+      .SetMethod("logSuggestionEventWithValue",
+                 &NewTabPageBindings::LogSuggestionEventWithValue)
       .SetMethod("logMostVisitedImpression",
                  &NewTabPageBindings::LogMostVisitedImpression)
       .SetMethod("logMostVisitedNavigation",
                  &NewTabPageBindings::LogMostVisitedNavigation)
-      .SetMethod("setBackgroundURL",
-                 &NewTabPageBindings::SetCustomBackgroundURL)
-      .SetMethod("setBackgroundURLWithAttributions",
-                 &NewTabPageBindings::SetCustomBackgroundURLWithAttributions)
+      .SetMethod("resetBackgroundInfo",
+                 &NewTabPageBindings::ResetCustomBackgroundInfo)
+      .SetMethod("setBackgroundInfo",
+                 &NewTabPageBindings::SetCustomBackgroundInfo)
       .SetMethod("selectLocalBackgroundImage",
                  &NewTabPageBindings::SelectLocalBackgroundImage)
       .SetMethod("blacklistSearchSuggestion",
@@ -692,7 +948,17 @@ gin::ObjectTemplateBuilder NewTabPageBindings::GetObjectTemplateBuilder(
       .SetMethod("searchSuggestionSelected",
                  &NewTabPageBindings::SearchSuggestionSelected)
       .SetMethod("optOutOfSearchSuggestions",
-                 &NewTabPageBindings::OptOutOfSearchSuggestions);
+                 &NewTabPageBindings::OptOutOfSearchSuggestions)
+      .SetMethod("useDefaultTheme", &NewTabPageBindings::UseDefaultTheme)
+      .SetMethod("applyDefaultTheme", &NewTabPageBindings::ApplyDefaultTheme)
+      .SetMethod("applyAutogeneratedTheme",
+                 &NewTabPageBindings::ApplyAutogeneratedTheme)
+      .SetMethod("revertThemeChanges", &NewTabPageBindings::RevertThemeChanges)
+      .SetMethod("confirmThemeChanges",
+                 &NewTabPageBindings::ConfirmThemeChanges)
+      .SetMethod("getColorsInfo", &NewTabPageBindings::GetColorsInfo)
+      .SetMethod("blocklistPromo", &NewTabPageBindings::BlocklistPromo)
+      .SetMethod("openExtensionsPage", &NewTabPageBindings::OpenExtensionsPage);
 }
 
 // static
@@ -718,13 +984,13 @@ v8::Local<v8::Value> NewTabPageBindings::GetMostVisited(v8::Isolate* isolate) {
   if (!search_box)
     return v8::Null(isolate);
 
-  content::RenderView* render_view =
-      GetMainRenderFrameForCurrentContext()->GetRenderView();
+  content::RenderFrame* render_frame = GetMainRenderFrameForCurrentContext();
+  content::RenderView* render_view = render_frame->GetRenderView();
 
   // This corresponds to "window.devicePixelRatio" in JavaScript.
   float zoom_factor =
-      content::ZoomLevelToZoomFactor(render_view->GetZoomLevel());
-  float device_pixel_ratio = render_view->GetDeviceScaleFactor() * zoom_factor;
+      blink::PageZoomLevelToZoomFactor(render_view->GetZoomLevel());
+  float device_pixel_ratio = render_frame->GetDeviceScaleFactor() * zoom_factor;
 
   int render_view_id = render_view->GetRoutingID();
 
@@ -755,13 +1021,14 @@ bool NewTabPageBindings::GetMostVisitedAvailable(v8::Isolate* isolate) {
 }
 
 // static
-v8::Local<v8::Value> NewTabPageBindings::GetThemeBackgroundInfo(
-    v8::Isolate* isolate) {
+v8::Local<v8::Value> NewTabPageBindings::GetNtpTheme(v8::Isolate* isolate) {
   const SearchBox* search_box = GetSearchBoxForCurrentContext();
   if (!search_box)
     return v8::Null(isolate);
-  const ThemeBackgroundInfo& theme_info = search_box->GetThemeBackgroundInfo();
-  return GenerateThemeBackgroundInfo(isolate, theme_info);
+  const NtpTheme* theme = search_box->GetNtpTheme();
+  if (!theme)
+    return v8::Null(isolate);
+  return GenerateNtpTheme(isolate, *theme);
 }
 
 // static
@@ -774,20 +1041,25 @@ bool NewTabPageBindings::GetIsCustomLinks() {
 }
 
 // static
-void NewTabPageBindings::CheckIsUserSignedInToChromeAs(
-    const std::string& identity) {
-  SearchBox* search_box = GetSearchBoxForCurrentContext();
-  if (!search_box)
-    return;
-  search_box->CheckIsUserSignedInToChromeAs(base::UTF8ToUTF16(identity));
+bool NewTabPageBindings::GetIsUsingMostVisited() {
+  const SearchBox* search_box = GetSearchBoxForCurrentContext();
+  if (!search_box || !(HasOrigin(GURL(chrome::kChromeSearchMostVisitedUrl)) ||
+                       HasOrigin(GURL(chrome::kChromeSearchLocalNtpUrl)))) {
+    return false;
+  }
+
+  return search_box->IsUsingMostVisited();
 }
 
 // static
-void NewTabPageBindings::CheckIsUserSyncingHistory() {
-  SearchBox* search_box = GetSearchBoxForCurrentContext();
-  if (!search_box)
-    return;
-  search_box->CheckIsUserSyncingHistory();
+bool NewTabPageBindings::GetAreShortcutsVisible() {
+  const SearchBox* search_box = GetSearchBoxForCurrentContext();
+  if (!search_box || !(HasOrigin(GURL(chrome::kChromeSearchMostVisitedUrl)) ||
+                       HasOrigin(GURL(chrome::kChromeSearchLocalNtpUrl)))) {
+    return true;
+  }
+
+  return search_box->AreShortcutsVisible();
 }
 
 // static
@@ -911,6 +1183,25 @@ void NewTabPageBindings::ResetCustomLinks() {
 }
 
 // static
+void NewTabPageBindings::ToggleMostVisitedOrCustomLinks() {
+  SearchBox* search_box = GetSearchBoxForCurrentContext();
+  if (!search_box)
+    return;
+  search_box->ToggleMostVisitedOrCustomLinks();
+  search_box->LogEvent(NTPLoggingEventType::NTP_CUSTOMIZE_SHORTCUT_TOGGLE_TYPE);
+}
+
+// static
+void NewTabPageBindings::ToggleShortcutsVisibility(bool do_notify) {
+  SearchBox* search_box = GetSearchBoxForCurrentContext();
+  if (!search_box)
+    return;
+  search_box->ToggleShortcutsVisibility(do_notify);
+  search_box->LogEvent(
+      NTPLoggingEventType::NTP_CUSTOMIZE_SHORTCUT_TOGGLE_VISIBILITY);
+}
+
+// static
 std::string NewTabPageBindings::FixupAndValidateUrl(const std::string& url) {
   SearchBox* search_box = GetSearchBoxForCurrentContext();
   if (!search_box || !HasOrigin(GURL(chrome::kChromeSearchMostVisitedUrl)))
@@ -926,6 +1217,18 @@ void NewTabPageBindings::LogEvent(int event) {
   }
   if (event <= NTP_EVENT_TYPE_LAST)
     search_box->LogEvent(static_cast<NTPLoggingEventType>(event));
+}
+
+// static
+void NewTabPageBindings::LogSuggestionEventWithValue(int event, int data) {
+  SearchBox* search_box = GetSearchBoxForCurrentContext();
+  if (!search_box) {
+    return;
+  }
+  if (event <= static_cast<int>(NTPSuggestionsLoggingEventType::kMaxValue)) {
+    search_box->LogSuggestionEventWithValue(
+        static_cast<NTPSuggestionsLoggingEventType>(event), data);
+  }
 }
 
 // static
@@ -979,26 +1282,36 @@ void NewTabPageBindings::LogMostVisitedNavigation(
 }
 
 // static
-void NewTabPageBindings::SetCustomBackgroundURL(
-    const std::string& background_url) {
-  SearchBox* search_box = GetSearchBoxForCurrentContext();
-  GURL url(background_url);
-  search_box->SetCustomBackgroundURL(url);
+void NewTabPageBindings::ResetCustomBackgroundInfo() {
+  SetCustomBackgroundInfo(std::string(), std::string(), std::string(),
+                          std::string(), std::string());
 }
 
 // static
-void NewTabPageBindings::SetCustomBackgroundURLWithAttributions(
+void NewTabPageBindings::SetCustomBackgroundInfo(
     const std::string& background_url,
     const std::string& attribution_line_1,
     const std::string& attribution_line_2,
-    const std::string& attribution_action_url) {
+    const std::string& attribution_action_url,
+    const std::string& collection_id) {
   SearchBox* search_box = GetSearchBoxForCurrentContext();
-  search_box->SetCustomBackgroundURLWithAttributions(
+  search_box->SetCustomBackgroundInfo(
       GURL(background_url), attribution_line_1, attribution_line_2,
-      GURL(attribution_action_url));
-  // Captures saving the background by double-clicking, or clicking 'Done'.
-  search_box->LogEvent(
-      NTPLoggingEventType::NTP_CUSTOMIZE_CHROME_BACKGROUND_DONE);
+      GURL(attribution_action_url), collection_id);
+  // Captures different events that occur when a background selection is made
+  // and 'Done' is clicked on the dialog.
+  if (!collection_id.empty()) {
+    search_box->LogEvent(
+        NTPLoggingEventType::NTP_BACKGROUND_DAILY_REFRESH_ENABLED);
+  } else if (background_url.empty()) {
+    search_box->LogEvent(
+        NTPLoggingEventType::NTP_CUSTOMIZE_RESTORE_BACKGROUND_CLICKED);
+    search_box->LogEvent(NTPLoggingEventType::NTP_BACKGROUND_IMAGE_RESET);
+  } else {
+    search_box->LogEvent(
+        NTPLoggingEventType::NTP_CUSTOMIZE_CHROME_BACKGROUND_DONE);
+    search_box->LogEvent(NTPLoggingEventType::NTP_BACKGROUND_IMAGE_SET);
+  }
 }
 
 // static
@@ -1021,7 +1334,7 @@ void NewTabPageBindings::BlocklistSearchSuggestionWithHash(
     int task_version,
     int task_id,
     const std::string& hash) {
-  if (hash.length() > 4) {
+  if (hash.length() != 4) {
     return;
   }
 
@@ -1053,6 +1366,90 @@ void NewTabPageBindings::OptOutOfSearchSuggestions() {
   if (!search_box)
     return;
   search_box->OptOutOfSearchSuggestions();
+}
+
+// static
+void NewTabPageBindings::ApplyDefaultTheme() {
+  SearchBox* search_box = GetSearchBoxForCurrentContext();
+  if (!search_box)
+    return;
+  search_box->ApplyDefaultTheme();
+}
+
+// static
+void NewTabPageBindings::UseDefaultTheme() {
+  SearchBox* search_box = GetSearchBoxForCurrentContext();
+  if (!search_box)
+    return;
+  search_box->ApplyDefaultTheme();
+  search_box->ConfirmThemeChanges();
+}
+
+// static
+void NewTabPageBindings::ApplyAutogeneratedTheme(v8::Isolate* isolate,
+                                                 int id,
+                                                 v8::Local<v8::Value> value) {
+  SearchBox* search_box = GetSearchBoxForCurrentContext();
+  if (!search_box || !value->IsArray())
+    return;
+  SkColor color;
+  if (!ArrayToSkColor(isolate, value.As<v8::Array>(), &color))
+    return;
+  search_box->ApplyAutogeneratedTheme(color);
+}
+
+// static
+void NewTabPageBindings::RevertThemeChanges() {
+  SearchBox* search_box = GetSearchBoxForCurrentContext();
+  if (!search_box)
+    return;
+  search_box->RevertThemeChanges();
+}
+
+// static
+void NewTabPageBindings::ConfirmThemeChanges() {
+  SearchBox* search_box = GetSearchBoxForCurrentContext();
+  if (!search_box)
+    return;
+  search_box->ConfirmThemeChanges();
+}
+
+v8::Local<v8::Value> NewTabPageBindings::GetColorsInfo(v8::Isolate* isolate) {
+  v8::Local<v8::Context> context = isolate->GetCurrentContext();
+  v8::Local<v8::Object> v8_colors =
+      v8::Array::New(isolate, chrome_colors::kNumColorsInfo);
+  int i = 0;
+  for (chrome_colors::ColorInfo color_info :
+       chrome_colors::kGeneratedColorsInfo) {
+    v8::Local<v8::Object> v8_color_info =
+        gin::DataObjectBuilder(isolate)
+            .Set("id", color_info.id)
+            .Set("color", SkColorToArray(isolate, color_info.color))
+            .Set("label", l10n_util::GetStringUTF16(color_info.label_id))
+            .Set("icon", std::string(color_info.icon_data))
+            .Build();
+    v8_colors->CreateDataProperty(context, i++, v8_color_info).Check();
+  }
+  return v8_colors;
+}
+
+void NewTabPageBindings::BlocklistPromo(const std::string& promo_id) {
+  SearchBox* search_box = GetSearchBoxForCurrentContext();
+  if (!search_box)
+    return;
+  search_box->BlocklistPromo(promo_id);
+}
+
+void NewTabPageBindings::OpenExtensionsPage(double button,
+                                            bool alt_key,
+                                            bool ctrl_key,
+                                            bool meta_key,
+                                            bool shift_key) {
+  SearchBox* search_box = GetSearchBoxForCurrentContext();
+  if (!search_box)
+    return;
+  search_box->OpenExtensionsPage(button, alt_key, ctrl_key, meta_key,
+                                 shift_key);
 }
 
 }  // namespace
@@ -1095,29 +1492,8 @@ void SearchBoxExtension::Install(blink::WebLocalFrame* frame) {
 }
 
 // static
-void SearchBoxExtension::DispatchChromeIdentityCheckResult(
-    blink::WebLocalFrame* frame,
-    const base::string16& identity,
-    bool identity_match) {
-  std::string escaped_identity = base::GetQuotedJSONString(identity);
-  blink::WebString script(blink::WebString::FromUTF8(base::StringPrintf(
-      kDispatchChromeIdentityCheckResult, escaped_identity.c_str(),
-      identity_match ? "true" : "false")));
-  Dispatch(frame, script);
-}
-
-// static
 void SearchBoxExtension::DispatchFocusChange(blink::WebLocalFrame* frame) {
   Dispatch(frame, kDispatchFocusChangedScript);
-}
-
-// static
-void SearchBoxExtension::DispatchHistorySyncCheckResult(
-    blink::WebLocalFrame* frame,
-    bool sync_history) {
-  blink::WebString script(blink::WebString::FromUTF8(base::StringPrintf(
-      kDispatchHistorySyncCheckResult, sync_history ? "true" : "false")));
-  Dispatch(frame, script);
 }
 
 // static
@@ -1148,6 +1524,34 @@ void SearchBoxExtension::DispatchDeleteCustomLinkResult(
 }
 
 // static
+void SearchBoxExtension::DispatchAutocompleteResultChanged(
+    blink::WebLocalFrame* frame,
+    chrome::mojom::AutocompleteResultPtr result) {
+  base::Value dict(base::Value::Type::DICTIONARY);
+  dict.SetStringKey("input", result->input);
+  dict.SetKey("matches", CreateAutocompleteMatches(result->matches));
+  dict.SetKey("suggestionGroupsMap",
+              CreateSuggestionGroupsMap(result->suggestion_groups_map));
+
+  std::string json;
+  base::JSONWriter::Write(dict, &json);
+  Dispatch(frame, blink::WebString::FromUTF8(base::StringPrintf(
+                      kDispatchAutocompleteResultChanged, json.c_str())));
+}
+
+// static
+void SearchBoxExtension::DispatchAutocompleteMatchImageAvailable(
+    blink::WebLocalFrame* frame,
+    uint32_t match_index,
+    const std::string& image_url,
+    const std::string& data_url) {
+  blink::WebString script(blink::WebString::FromUTF8(
+      base::StringPrintf(kDispatchAutocompleteMatchImageAvailable, match_index,
+                         image_url.c_str(), data_url.c_str())));
+  Dispatch(frame, script);
+}
+
+// static
 void SearchBoxExtension::DispatchInputCancel(blink::WebLocalFrame* frame) {
   Dispatch(frame, kDispatchInputCancelScript);
 }
@@ -1171,4 +1575,10 @@ void SearchBoxExtension::DispatchMostVisitedChanged(
 // static
 void SearchBoxExtension::DispatchThemeChange(blink::WebLocalFrame* frame) {
   Dispatch(frame, kDispatchThemeChangeEventScript);
+}
+
+// static
+void SearchBoxExtension::DispatchLocalBackgroundSelected(
+    blink::WebLocalFrame* frame) {
+  Dispatch(frame, kDispatchLocalBackgroundSelectedScript);
 }

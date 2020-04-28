@@ -7,7 +7,8 @@ package org.chromium.chrome.browser.webshare;
 import android.app.Activity;
 import android.content.ComponentName;
 import android.net.Uri;
-import android.support.annotation.Nullable;
+
+import androidx.annotation.Nullable;
 
 import org.chromium.base.CollectionUtil;
 import org.chromium.base.ContentUriUtils;
@@ -18,7 +19,9 @@ import org.chromium.base.task.AsyncTask;
 import org.chromium.base.task.PostTask;
 import org.chromium.base.task.TaskRunner;
 import org.chromium.base.task.TaskTraits;
+import org.chromium.chrome.browser.ChromeActivity;
 import org.chromium.chrome.browser.share.ShareHelper;
+import org.chromium.chrome.browser.share.ShareImageFileUtils;
 import org.chromium.chrome.browser.share.ShareParams;
 import org.chromium.content_public.browser.WebContents;
 import org.chromium.mojo.system.MojoException;
@@ -40,7 +43,7 @@ import java.util.Set;
  * third_party/blink/public/mojom/webshare/webshare.mojom.
  */
 public class ShareServiceImpl implements ShareService {
-    private final Activity mActivity;
+    private final WindowAndroid mWindow;
 
     private static final String TAG = "share";
 
@@ -65,9 +68,9 @@ public class ShareServiceImpl implements ShareService {
     // clang-format off
     private static final Set<String> PERMITTED_EXTENSIONS =
             Collections.unmodifiableSet(CollectionUtil.newHashSet(
-                    "bmp", // image/bmp
+                    "bmp", // image/bmp / image/x-ms-bmp
                     "css", // text/css
-                    "csv", // text/csv
+                    "csv", // text/csv / text/comma-separated-values
                     "ehtml", // text/html
                     "flac", // audio/flac
                     "gif", // image/gif
@@ -122,7 +125,9 @@ public class ShareServiceImpl implements ShareService {
                      "image/tiff",
                      "image/webp",
                      "image/x-icon",
+                     "image/x-ms-bmp",
                      "image/x-xbitmap",
+                     "text/comma-separated-values",
                      "text/css",
                      "text/csv",
                      "text/html",
@@ -137,12 +142,8 @@ public class ShareServiceImpl implements ShareService {
     private static final TaskRunner TASK_RUNNER =
             PostTask.createSequencedTaskRunner(TaskTraits.USER_BLOCKING);
 
-    static {
-        TASK_RUNNER.disableLifetimeCheck();
-    }
-
     public ShareServiceImpl(@Nullable WebContents webContents) {
-        mActivity = activityFromWebContents(webContents);
+        mWindow = webContents.getTopLevelNativeWindow();
     }
 
     @Override
@@ -157,7 +158,7 @@ public class ShareServiceImpl implements ShareService {
         RecordHistogram.recordEnumeratedHistogram("WebShare.ApiCount", WEBSHARE_METHOD_SHARE,
                 WEBSHARE_METHOD_COUNT);
 
-        if (mActivity == null) {
+        if (mWindow.getActivity().get() == null) {
             RecordHistogram.recordEnumeratedHistogram("WebShare.ShareOutcome",
                     WEBSHARE_OUTCOME_UNKNOWN_FAILURE, WEBSHARE_OUTCOME_COUNT);
             callback.call(ShareError.INTERNAL_ERROR);
@@ -180,12 +181,13 @@ public class ShareServiceImpl implements ShareService {
             }
         };
 
-        final ShareParams.Builder paramsBuilder = new ShareParams.Builder(mActivity, title, url.url)
+        final ShareParams.Builder paramsBuilder = new ShareParams.Builder(mWindow, title, url.url)
                                                           .setText(text)
                                                           .setCallback(innerCallback);
 
         if (files == null || files.length == 0) {
-            ShareHelper.share(paramsBuilder.build());
+            ChromeActivity<?> activity = (ChromeActivity<?>) mWindow.getActivity().get();
+            activity.getShareDelegateSupplier().get().share(paramsBuilder.build());
             return;
         }
 
@@ -196,6 +198,9 @@ public class ShareServiceImpl implements ShareService {
 
         for (SharedFile file : files) {
             if (isDangerousFilename(file.name) || isDangerousMimeType(file.blob.contentType)) {
+                Log.i(TAG,
+                        "Cannot share potentially dangerous \"" + file.blob.contentType
+                                + "\" file \"" + file.name + "\".");
                 callback.call(ShareError.PERMISSION_DENIED);
                 return;
             }
@@ -214,7 +219,7 @@ public class ShareServiceImpl implements ShareService {
                 ArrayList<Uri> fileUris = new ArrayList<>(files.length);
                 ArrayList<BlobReceiver> blobReceivers = new ArrayList<>(files.length);
                 try {
-                    File sharePath = ShareHelper.getSharedFilesDirectory();
+                    File sharePath = ShareImageFileUtils.getSharedFilesDirectory();
 
                     if (!sharePath.exists() && !sharePath.mkdir()) {
                         throw new IOException("Failed to create directory for shared file.");
@@ -247,7 +252,8 @@ public class ShareServiceImpl implements ShareService {
     }
 
     static boolean isDangerousFilename(String name) {
-        return name.indexOf('/') != -1 || name.indexOf('\\') != -1 || name.indexOf('.') <= 0
+        // Reject filenames without a permitted extension.
+        return name.indexOf('.') <= 0
                 || !PERMITTED_EXTENSIONS.contains(FileUtils.getExtension(name));
     }
 

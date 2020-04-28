@@ -13,10 +13,11 @@
 #include "base/macros.h"
 #include "base/memory/ptr_util.h"
 #include "base/memory/ref_counted.h"
-#include "base/message_loop/message_loop.h"
 #include "base/message_loop/message_loop_current.h"
+#include "base/test/task_environment.h"
 #include "base/test/test_mock_time_task_runner.h"
 #include "base/test/test_pending_task.h"
+#include "base/threading/thread_task_runner_handle.h"
 #include "base/time/time.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -24,7 +25,7 @@ namespace base {
 namespace {
 
 TaskRunner* GetCurrentTaskRunner() {
-  return MessageLoopCurrent::Get()->task_runner().get();
+  return ThreadTaskRunnerHandle::Get().get();
 }
 
 void AssignTrue(bool* out) {
@@ -53,7 +54,7 @@ class ScopedMockTimeMessageLoopTaskRunnerTest : public testing::Test {
  private:
   scoped_refptr<TestMockTimeTaskRunner> original_task_runner_;
 
-  MessageLoop message_loop_;
+  test::SingleThreadTaskEnvironment task_environment_;
 
   DISALLOW_COPY_AND_ASSIGN(ScopedMockTimeMessageLoopTaskRunnerTest);
 };

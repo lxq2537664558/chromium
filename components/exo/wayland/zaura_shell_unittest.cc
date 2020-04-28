@@ -6,13 +6,14 @@
 
 #include <memory>
 
-#include "ash/session/session_controller.h"
+#include "ash/session/session_controller_impl.h"
 #include "ash/shell.h"
 #include "ash/wm/desks/desks_util.h"
 #include "ash/wm/window_util.h"
 #include "base/time/time.h"
 #include "components/exo/test/exo_test_base.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "ui/aura/window_occlusion_tracker.h"
 #include "ui/compositor/layer_animation_observer.h"
 #include "ui/compositor/layer_animation_sequence.h"
 #include "ui/compositor/layer_animator.h"
@@ -201,9 +202,9 @@ TEST_F(ZAuraSurfaceTest,
   views::Widget::InitParams params(views::Widget::InitParams::TYPE_WINDOW);
   auto lock_widget = std::make_unique<views::Widget>();
   params.ownership = views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET;
-  params.context = CurrentContext();
+  params.context = GetContext();
   params.bounds = gfx::Rect(0, 0, 100, 100);
-  lock_widget->Init(params);
+  lock_widget->Init(std::move(params));
   ash::Shell::GetContainer(ash::Shell::GetPrimaryRootWindow(),
                            ash::kShellWindowId_LockScreenContainer)
       ->AddChild(lock_widget->GetNativeView());
@@ -211,15 +212,33 @@ TEST_F(ZAuraSurfaceTest,
   // Simulate real screen locker to change session state to LOCKED
   // when it is shown.
   auto* controller = ash::Shell::Get()->session_controller();
-  controller->LockScreenAndFlushForTest();
+  GetSessionControllerClient()->LockScreen();
   lock_widget->Show();
   EXPECT_TRUE(controller->IsScreenLocked());
   EXPECT_TRUE(lock_widget->GetNativeView()->HasFocus());
 
   // We should have lost focus, but not reported that the window has been
   // fully occluded.
-  EXPECT_NE(parent_widget().GetNativeWindow(), ash::wm::GetActiveWindow());
+  EXPECT_NE(parent_widget().GetNativeWindow(),
+            ash::window_util::GetActiveWindow());
   EXPECT_EQ(0.0f, occlusion_fraction_on_activation_loss());
+  EXPECT_EQ(0.0f, aura_surface().last_sent_occlusion_fraction());
+}
+
+TEST_F(ZAuraSurfaceTest, OcclusionIncludesOffScreenArea) {
+  UpdateDisplay("150x150");
+  // This is scaled by 1.5 - set the bounds to (-60, 75, 120, 150) in screen
+  // coordinates so 75% of it is outside of the 100x100 screen.
+  surface().window()->SetBounds(gfx::Rect(-40, 50, 80, 100));
+  surface().OnWindowOcclusionChanged();
+
+  EXPECT_EQ(0.75f, aura_surface().last_sent_occlusion_fraction());
+}
+
+TEST_F(ZAuraSurfaceTest, ZeroSizeWindowSendsZeroOcclusionFraction) {
+  // Zero sized window should not be occluded.
+  surface().window()->SetBounds(gfx::Rect(0, 0, 0, 0));
+  surface().OnWindowOcclusionChanged();
   EXPECT_EQ(0.0f, aura_surface().last_sent_occlusion_fraction());
 }
 

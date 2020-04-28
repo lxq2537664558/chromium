@@ -22,16 +22,14 @@ namespace content {
 class CONTENT_EXPORT BrowserAccessibilityManagerMac
     : public BrowserAccessibilityManager {
  public:
-  BrowserAccessibilityManagerMac(
-      const ui::AXTreeUpdate& initial_tree,
-      BrowserAccessibilityDelegate* delegate,
-      BrowserAccessibilityFactory* factory = new BrowserAccessibilityFactory());
+  BrowserAccessibilityManagerMac(const ui::AXTreeUpdate& initial_tree,
+                                 BrowserAccessibilityDelegate* delegate);
 
   ~BrowserAccessibilityManagerMac() override;
 
   static ui::AXTreeUpdate GetEmptyDocument();
 
-  BrowserAccessibility* GetFocus() override;
+  BrowserAccessibility* GetFocus() const override;
 
   // Implementation of BrowserAccessibilityManager.
   void FireFocusEvent(BrowserAccessibility* node) override;
@@ -40,7 +38,7 @@ class CONTENT_EXPORT BrowserAccessibilityManagerMac
   void FireGeneratedEvent(ui::AXEventGenerator::Event event_type,
                           BrowserAccessibility* node) override;
 
-  void OnAccessibilityEvents(
+  bool OnAccessibilityEvents(
       const AXEventNotificationDetails& details) override;
 
   id GetParentView();
@@ -63,6 +61,10 @@ class CONTENT_EXPORT BrowserAccessibilityManagerMac
       const BrowserAccessibilityCocoa* native_node,
       const base::string16& deleted_text,
       const base::string16& inserted_text) const;
+
+  void AnnounceActiveDescendant(BrowserAccessibility* node) const;
+
+  bool IsInGeneratedEventBatch(ui::AXEventGenerator::Event event_type) const;
 
   // Keeps track of any edits that have been made by the user during a tree
   // update. Used by NSAccessibilityValueChangedNotification.

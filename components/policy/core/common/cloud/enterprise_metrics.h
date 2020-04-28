@@ -100,10 +100,8 @@ enum MetricEnrollment {
   kMetricEnrollmentRegisterPolicyResponseInvalid = 40,
   // OAuth token fetch failed: account not signed up.
   kMetricEnrollmentAccountNotSignedUp = 41,
-  // OAuth token fetch failed: account deleted.
-  kMetricEnrollmentAccountDeleted = 42,
-  // OAuth token fetch failed: account disabled.
-  kMetricEnrollmentAccountDisabled = 43,
+  /* kMetricEnrollmentAccountDeleted = 42 REMOVED */
+  /* kMetricEnrollmentAccountDisabled = 43 REMOVED */
   // Re-enrollment pre-check failed: domain does not match install attributes.
   kMetricEnrollmentPrecheckDomainMismatch = 44,
   // Lockbox backend failed to initialize.
@@ -185,6 +183,17 @@ enum PolicyInvalidationType {
   POLICY_INVALIDATION_TYPE_SIZE  // Must be the last.
 };
 
+// Result of the Device ID field validation in policy protobufs.
+// These values are persisted to logs. Entries should not be renumbered and
+// numeric values should never be reused.
+enum class PolicyDeviceIdValidity {
+  kValid = 0,
+  kActualIdUnknown = 1,
+  kMissing = 2,
+  kInvalid = 3,
+  kMaxValue = kInvalid,  // Must be the last.
+};
+
 #if defined(OS_CHROMEOS)
 // Events related to Chrome OS user policy which cause session abort.
 // This enum is used to define the buckets for an enumerated UMA histogram.
@@ -213,11 +222,46 @@ enum class MetricUserPolicyChromeOSSessionAbortType {
 // Names for the UMA counters. They are shared from here since the events
 // from the same enum above can be triggered in different files, and must use
 // the same UMA histogram name.
+// Metrics name from UMA dashboard cloud be used in codesearch as is, so please
+// keep the names without format specifiers (e.g. %s) or add a comment how the
+// name could be expanded.
 POLICY_EXPORT extern const char kMetricUserPolicyRefresh[];
+POLICY_EXPORT extern const char kMetricUserPolicyRefreshFcm[];
 POLICY_EXPORT extern const char kMetricUserPolicyInvalidations[];
+POLICY_EXPORT extern const char kMetricUserPolicyInvalidationsFcm[];
 POLICY_EXPORT extern const char kMetricUserPolicyChromeOSSessionAbort[];
+
 POLICY_EXPORT extern const char kMetricDevicePolicyRefresh[];
+POLICY_EXPORT extern const char kMetricDevicePolicyRefreshFcm[];
 POLICY_EXPORT extern const char kMetricDevicePolicyInvalidations[];
+POLICY_EXPORT extern const char kMetricDevicePolicyInvalidationsFcm[];
+
+POLICY_EXPORT extern const char kMetricDeviceLocalAccountPolicyRefresh[];
+POLICY_EXPORT extern const char kMetricDeviceLocalAccountPolicyRefreshFcm[];
+POLICY_EXPORT extern const char kMetricDeviceLocalAccountPolicyInvalidations[];
+POLICY_EXPORT extern const char
+    kMetricDeviceLocalAccountPolicyInvalidationsFcm[];
+
+POLICY_EXPORT extern const char kMetricPolicyInvalidationRegistration[];
+POLICY_EXPORT extern const char kMetricPolicyInvalidationRegistrationFcm[];
+
+POLICY_EXPORT extern const char kMetricUserRemoteCommandInvalidations[];
+POLICY_EXPORT extern const char kMetricDeviceRemoteCommandInvalidations[];
+
+POLICY_EXPORT extern const char
+    kMetricRemoteCommandInvalidationsRegistrationResult[];
+
+POLICY_EXPORT extern const char kMetricUserRemoteCommandReceived[];
+POLICY_EXPORT extern const char kMetricUserUnsignedRemoteCommandReceived[];
+POLICY_EXPORT extern const char kMetricUserRemoteCommandExecutedTemplate[];
+POLICY_EXPORT extern const char
+    kMetricUserUnsignedRemoteCommandExecutedTemplate[];
+
+POLICY_EXPORT extern const char kMetricDeviceRemoteCommandReceived[];
+POLICY_EXPORT extern const char kMetricDeviceUnsignedRemoteCommandReceived[];
+POLICY_EXPORT extern const char kMetricDeviceRemoteCommandExecutedTemplate[];
+POLICY_EXPORT extern const char
+    kMetricDeviceUnsignedRemoteCommandExecutedTemplate[];
 
 }  // namespace policy
 

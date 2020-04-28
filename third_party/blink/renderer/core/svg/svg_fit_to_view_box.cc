@@ -32,10 +32,6 @@ namespace blink {
 
 class SVGAnimatedViewBoxRect : public SVGAnimatedRect {
  public:
-  static SVGAnimatedRect* Create(SVGElement* context_element) {
-    return MakeGarbageCollected<SVGAnimatedViewBoxRect>(context_element);
-  }
-
   SVGAnimatedViewBoxRect(SVGElement* context_element)
       : SVGAnimatedRect(context_element, svg_names::kViewBoxAttr) {}
 
@@ -64,7 +60,7 @@ SVGFitToViewBox::SVGFitToViewBox(SVGElement* element)
   element->AddToPropertyMap(preserve_aspect_ratio_);
 }
 
-void SVGFitToViewBox::Trace(blink::Visitor* visitor) {
+void SVGFitToViewBox::Trace(Visitor* visitor) {
   visitor->Trace(view_box_);
   visitor->Trace(preserve_aspect_ratio_);
 }

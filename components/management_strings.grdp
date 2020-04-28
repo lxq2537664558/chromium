@@ -19,18 +19,20 @@
     Settings
   </message>
 
-  <!-- Subtitle of the page -->
+  <!-- Subtitles of the Chrome OS version of the management page -->
  <if expr="chromeos">
     <message name="IDS_MANAGEMENT_SUBTITLE_MANAGED" desc="Title of chrome://management page, shows when device is managed by unknown organization">
       Your <ph name="DEVICE_NAME">$1<ex>Chromebook</ex></ph> is managed
     </message>
     <message name="IDS_MANAGEMENT_SUBTITLE_MANAGED_BY" desc="Title of chrome://management page, shows when device managed by known organization">
-      <ph name="DEVICE_TYPE">$1<ex>Chromebook</ex></ph> managed by <ph name="ENROLLMENT_DOMAIN">$2<ex>example.com</ex></ph>
+      Your <ph name="DEVICE_TYPE">$1<ex>Chromebook</ex></ph> is managed by <ph name="ENROLLMENT_DOMAIN">$2<ex>example.com</ex></ph>
     </message>
     <message name="IDS_MANAGEMENT_NOT_MANAGED_SUBTITLE" desc="Message indicating that the device is not managed">
       Your <ph name="DEVICE_TYPE">$1<ex>Chromebook</ex></ph> is not managed
     </message>
   </if>
+
+  <!-- Subtitles of the browser version of the management page -->
   <if expr="not chromeos">
       <message name="IDS_MANAGEMENT_SUBTITLE" desc="Title of chrome://management page, which shows the administrator's capabilities in a managed environment">
       Your browser is managed
@@ -45,14 +47,11 @@
 
   <!-- Browser managed status section -->
   <if expr="not chromeos">
-    <message name="IDS_MANAGEMENT_BROWSER_NOTICE" desc="Message indicating that the browser is managed by an unknown organization">
-      This browser is managed by a company, school or other organization. Your administrator can change your browser setup remotely. Activity on this device may also be managed outside of Chrome. <ph name="BEGIN_LINK">&lt;a target="_blank" href="$1"&gt;</ph>Learn More<ph name="END_LINK">&lt;/a&gt;</ph>
+    <message name="IDS_MANAGEMENT_BROWSER_NOTICE" desc="Message shown when the browser is managed, it indicates what the administrator can do on the browser.">
+      Your administrator can change your browser setup remotely. Activity on this device may also be managed outside of Chrome. <ph name="BEGIN_LINK">&lt;a target="_blank" href="$1"&gt;</ph>Learn More<ph name="END_LINK">&lt;/a&gt;</ph>
     </message>
     <message name="IDS_MANAGEMENT_NOT_MANAGED_NOTICE" desc="Message indicating that the browser is not managed">
       This browser is not managed by a company or other organization. Activity on this device may be managed outside of Chrome. <ph name="BEGIN_LINK">&lt;a target="_blank" href="$1"&gt;</ph>Learn More<ph name="END_LINK">&lt;/a&gt;</ph>
-    </message>
-    <message name="IDS_MANAGEMENT_MANAGEMENT_BY_NOTICE" desc="Message indicating that the browser is managed by a known organization">
-      This browser is managed by <ph name="ENROLLMENT_DOMAIN">$1<ex>example.com</ex></ph>. Your administrator can change your browser setup remotely. Activity on this device may also be managed outside of Chrome. <ph name="BEGIN_LINK">&lt;a target="_blank" href="$2"&gt;</ph>Learn More<ph name="END_LINK">&lt;/a&gt;</ph>
     </message>
   </if>
 
@@ -60,9 +59,6 @@
   <if expr="chromeos">
     <message name="IDS_MANAGEMENT_DEVICE_NOT_MANAGED" desc="Message indicating that the device and account are not managed">
       This device and account are not managed by a company or other organization.
-    </message>
-    <message name="IDS_MANAGEMENT_DEVICE_MANAGED_BY" desc="Message indicating that the device is enterprise enrolled to be managed by an administrator, from a specific domain">
-      Your device is managed by <ph name="ENROLLMENT_DOMAIN">$1<ex>example.com</ex></ph>.
     </message>
     <message name="IDS_MANAGEMENT_DEVICE_MANAGED_BY_ACCOUNT_MANAGED_BY" desc="Message indicating that the device is enterprise enrolled to be managed by an administrator, from a specific domain. And account is managed by an administrator, from another specific domain.">
       Your device is managed by <ph name="ENROLLMENT_DOMAIN">$1<ex>example.com</ex></ph> and your account is managed by <ph name="ACCOUNT_DOMAIN">$2<ex>example.com</ex></ph>.
@@ -73,40 +69,7 @@
     <message name="IDS_MANAGEMENT_ACCOUNT_MANAGED_BY" desc="Message indicating that the account is enterprise enrolled to be managed by an administrator">
       Your account is managed by <ph name="ENROLLMENT_DOMAIN">$1<ex>example.com</ex></ph>.
     </message>
-    <!-- Device managed clarification -->
-    <message name="IDS_MANAGEMENT_DEVICE_MANAGED_CLARIFICATION" desc="First part of the sentence of the managed device clarification.">
-      As the manager of this device, <ph name="ENROLLMENT_DOMAIN">$1<ex>example.com</ex></ph>:
-    </message>
-    <message name="IDS_MANAGEMENT_DEVICE_MANAGED_SETUP" desc="Continuation of the managed device clarification sentence explaining device setup management.">
-      Can remotely change your device setup.
-    </message>
-    <message name="IDS_MANAGEMENT_DEVICE_MANAGED_DATA" desc="Continuation of the managed device clarification sentence explaining device user data management.">
-      Controls how your device data is handled. Google processes your device data exclusively under the direction of your device manager and solely for the purposes specified by your device manager.
-    </message>
-    <!-- Device and account managed clarification -->
-    <message name="IDS_MANAGEMENT_DEVICE_AND_ACCOUNT_MANAGED_CLARIFICATION" desc="First part of the sentence of the managed device and account clarification, when enrollment domain equals account domain.">
-      As the manager of your device and account, <ph name="ENROLLMENT_DOMAIN">$1<ex>example.com</ex></ph>:
-    </message>
-    <message name="IDS_MANAGEMENT_DEVICE_AND_ACCOUNT_MANAGED_SETUP" desc="Continuation of the managed device and account clarification sentence explaining device and account setup management.">
-      Can remotely change your device and account setup.
-    </message>
-    <message name="IDS_MANAGEMENT_DEVICE_AND_ACCOUNT_MANAGED_DATA" desc="Continuation of the managed device and account clarification sentence explaining device and account user data management.">
-      Controls how your device and account data is handled. Google processes your device and account data exclusively under the direction of your device and account manager and solely for the purposes specified by your device and account manager.
-    </message>
   </if>
-  <!-- Account managed clarification -->
-  <message name="IDS_MANAGEMENT_ACCOUNT_MANAGED_CLARIFICATION_UNKNOWN_DOMAIN" desc="First part of the sentence for managed account clarification. This is a header over a bullet point list.">
-    The company, school, or organization that manages this account:
-  </message>
-  <message name="IDS_MANAGEMENT_ACCOUNT_MANAGED_CLARIFICATION" desc="First part of the sentence for managed account clarification. This is a header over a bullet point list.">
-    As the manager of your account, <ph name="ACCOUNT_DOMAIN">$1<ex>example.com</ex></ph>:
-  </message>
-  <message name="IDS_MANAGEMENT_ACCOUNT_MANAGED_SETUP" desc="Continuation of the managed account clarification sentence explaining account setup management.">
-    Can remotely change your account setup.
-  </message>
-  <message name="IDS_MANAGEMENT_ACCOUNT_MANAGED_DATA" desc="Continuation of the managed account clarification sentence explaining account user data management.">
-    Controls how your account data is handled. Google processes your account data exclusively under the direction of your account manager and solely for the purposes specified by your account manager.
-  </message>
 
   <if expr="chromeos">
     <!-- Strings related to Local trust roots section -->
@@ -138,11 +101,27 @@
     <message name="IDS_MANAGEMENT_REPORT_DEVICE_NETWORK_INTERFACES" desc="Message stating that administrators see device network interfaces.">
       Network addresses
     </message>
+    <message name="IDS_MANAGEMENT_REPORT_DEVICE_CRASH_REPORTS" desc="Message stating that administrators see the numbers and causes of the crashes that occurred on the device recently.">
+      Numbers and causes of the crashes that occurred recently
+    </message>
     <message name="IDS_MANAGEMENT_REPORT_PRINTING" desc="Message stating that administrators can see names of printed files.">
       Names of files that you print
     </message>
+    <message name="IDS_MANAGEMENT_CROSTINI" desc="Message stating that administrators can see Crostini usage">
+      Linux apps installed and when they were last used
+    </message>
+    <message name="IDS_MANAGEMENT_CROSTINI_CONTAINER_CONFIGURATION" desc="Message stating that administrators can see Crostini usage">
+      Linux activity within the container, and can install and run Linux apps within the container
+    </message>
+    <message name="IDS_MANAGEMENT_REPORT_EXTENSIONS" desc="Message stating that administrators can see user's extensions.">
+      Which extensions you have installed
+    </message>
+    <message name="IDS_MANAGEMENT_REPORT_ANDROID_APPLICATIONS" desc="Message stating that administrators can see user's installed Android applications.">
+      Which Google Play apps you have installed
+    </message>
   </if>
 
+  <!-- Strings related to extension reporting section of the management page -->
   <message name="IDS_MANAGEMENT_EXTENSION_REPORTING" desc="Title of the force installed extensions section of the page">
     Extensions
   </message>
@@ -159,6 +138,7 @@
     Permissions
   </message>
 
+  <!-- Strings related to browser reporting section of the management page -->
   <message name="IDS_MANAGEMENT_BROWSER_REPORTING" desc="Title of the types of browser reporting section of the page">
     Browser
   </message>
@@ -172,13 +152,13 @@
     Your device name and network address
   </message>
   <message name="IDS_MANAGEMENT_EXTENSION_REPORT_USERNAME" desc="Message explaining that an extension currently reports the user's username">
-    Usernames for your device and browser
+    Your device username and Chrome username
   </message>
   <message name="IDS_MANAGEMENT_EXTENSION_REPORT_VERSION" desc="Message explaining that an extension currently reports the user's browser and machine version">
     Version information about your device and browser
   </message>
   <message name="IDS_MANAGEMENT_EXTENSION_REPORT_EXTENSIONS_PLUGINS" desc="Message explaining that an extension currently reports the user's exensions and plugins">
-    Information about installed extensions and plugins
+    Which extensions and plugins you have installed
   </message>
   <message name="IDS_MANAGEMENT_EXTENSION_REPORT_SAFE_BROWSING_WARNINGS" desc="Message explaining that an extension currently reports the user's Safe Browsing warnings and ignored warnings">
     <ph name="BEGIN_LINK">&lt;a target="_blank" href="$1"&gt;<ex>&lt;a target="_blank" href="https://example.com"&gt;</ex></ph>Safe Browsing<ph name="END_LINK">&lt;/a&gt;<ex>&lt;/a&gt;</ex></ph> warnings
@@ -188,5 +168,34 @@
   </message>
   <message name="IDS_MANAGEMENT_EXTENSION_REPORT_PERF_CRASH" desc="Message explaining that an extension currently reports the user's  performance data and crash report">
     Performance data and crash reports
+  </message>
+
+  <!-- Strings related to Chrome Enterprise Connectors -->
+  <message name="IDS_MANAGEMENT_THREAT_PROTECTION" desc="Title of the Chrome Enterprise Connectors section of the page">
+    Chrome Enterprise Connectors
+  </message>
+  <message name="IDS_MANAGEMENT_THREAT_PROTECTION_DESCRIPTION" desc="Description of the Chrome Enterprise Connectors section of the page">
+    Your administrator has enabled Chrome Enterprise Connectors on your browser. These connectors have access to some of your data.
+  </message>
+  <message name="IDS_MANAGEMENT_THREAT_PROTECTION_DESCRIPTION_BY" desc="Description of the Chrome Enterprise Connectors section of the page">
+    <ph name="ENROLLMENT_DOMAIN">$1<ex>example.com</ex></ph> has enabled Chrome Enterprise Connectors on your browser. These connectors have access to some of your data.
+  </message>
+  <message name="IDS_MANAGEMENT_DATA_LOSS_PREVENTION_NAME" desc="Name for the data loss prevention feature">
+    Data Loss Prevention
+  </message>
+  <message name="IDS_MANAGEMENT_DATA_LOSS_PREVENTION_PERMISSIONS" desc="Permissions description for the data loss prevention feature.  The part that says 'that you download or upload in Chrome' applies only to files, not the clipboard">
+    Scan the contents of the clipboard, as well as files that you download or upload in Chrome.
+  </message>
+  <message name="IDS_MANAGEMENT_MALWARE_SCANNING_NAME" desc="Name for the malware scanning feature">
+    Malware Scanning
+  </message>
+  <message name="IDS_MANAGEMENT_MALWARE_SCANNING_PERMISSIONS" desc="Permissions description for the malware scanning feature">
+    Scan files that you download or upload in Chrome.
+  </message>
+  <message name="IDS_MANAGEMENT_ENTERPRISE_REPORTING_NAME" desc="Name for the enterprise reporting feature">
+    Enterprise Reporting
+  </message>
+  <message name="IDS_MANAGEMENT_ENTERPRISE_REPORTING_PERMISSIONS" desc="Permissions description for the enterprise reporting feature">
+    Share data about security events that have been flagged by Chrome Enterprise Connectors with your administrator. This may include URLs of pages you visit, file names or metadata, and the username you use to sign in to your device and Chrome.
   </message>
 </grit-part>

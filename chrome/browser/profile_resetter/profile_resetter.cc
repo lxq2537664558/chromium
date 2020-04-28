@@ -11,12 +11,12 @@
 
 #include "base/bind.h"
 #include "base/stl_util.h"
-#include "base/synchronization/cancellation_flag.h"
+#include "base/synchronization/atomic_flag.h"
 #include "base/task/post_task.h"
 #include "base/task/task_traits.h"
+#include "base/task/thread_pool.h"
 #include "base/threading/scoped_blocking_call.h"
 #include "build/build_config.h"
-#include "chrome/browser/browsing_data/browsing_data_helper.h"
 #include "chrome/browser/browsing_data/chrome_browsing_data_remover_delegate.h"
 #include "chrome/browser/content_settings/host_content_settings_map_factory.h"
 #include "chrome/browser/extensions/extension_service.h"
@@ -24,15 +24,18 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/search/instant_service_factory.h"
 #include "chrome/browser/search_engines/template_url_service_factory.h"
+#include "chrome/browser/translate/chrome_translate_client.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_list.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/pref_names.h"
+#include "components/browsing_data/content/browsing_data_helper.h"
 #include "components/content_settings/core/browser/content_settings_info.h"
 #include "components/content_settings/core/browser/content_settings_registry.h"
 #include "components/content_settings/core/browser/host_content_settings_map.h"
 #include "components/content_settings/core/browser/website_settings_info.h"
 #include "components/content_settings/core/browser/website_settings_registry.h"
+#include "components/language/core/browser/language_prefs.h"
 #include "components/prefs/pref_service.h"
 #include "components/prefs/scoped_user_pref_update.h"
 #include "components/search_engines/search_engines_pref_names.h"
@@ -66,11 +69,7 @@ void ResetShortcutsOnBlockingThread() {
        location < ShellUtil::NUM_SHORTCUT_LOCATIONS; ++location) {
     ShellUtil::ShortcutListMaybeRemoveUnknownArgs(
         static_cast<ShellUtil::ShortcutLocation>(location),
-        ShellUtil::CURRENT_USER,
-        chrome_exe,
-        true,
-        NULL,
-        NULL);
+        ShellUtil::CURRENT_USER, chrome_exe, true, nullptr, nullptr);
   }
 }
 
@@ -82,8 +81,7 @@ ProfileResetter::ProfileResetter(Profile* profile)
       template_url_service_(TemplateURLServiceFactory::GetForProfile(profile_)),
       pending_reset_flags_(0),
       cookies_remover_(nullptr),
-      ntp_service_(InstantServiceFactory::GetForProfile(profile)),
-      weak_ptr_factory_(this) {
+      ntp_service_(InstantServiceFactory::GetForProfile(profile)) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   DCHECK(profile_);
 }
@@ -108,7 +106,7 @@ void ProfileResetter::Reset(
   CHECK_EQ(static_cast<ResettableFlags>(0), pending_reset_flags_);
 
   if (!resettable_flags) {
-    base::PostTaskWithTraits(FROM_HERE, {content::BrowserThread::UI}, callback);
+    base::PostTask(FROM_HERE, {content::BrowserThread::UI}, callback);
     return;
   }
 
@@ -131,6 +129,7 @@ void ProfileResetter::Reset(
       {PINNED_TABS, &ProfileResetter::ResetPinnedTabs},
       {SHORTCUTS, &ProfileResetter::ResetShortcuts},
       {NTP_CUSTOMIZATIONS, &ProfileResetter::ResetNtpCustomizations},
+      {LANGUAGES, &ProfileResetter::ResetLanguages},
   };
 
   ResettableFlags reset_triggered_for_flags = 0;
@@ -158,8 +157,7 @@ void ProfileResetter::MarkAsDone(Resettable resettable) {
   pending_reset_flags_ &= ~resettable;
 
   if (!pending_reset_flags_) {
-    base::PostTaskWithTraits(FROM_HERE, {content::BrowserThread::UI},
-                             callback_);
+    base::PostTask(FROM_HERE, {content::BrowserThread::UI}, callback_);
     callback_.Reset();
     master_settings_.reset();
     template_url_service_sub_.reset();
@@ -311,7 +309,7 @@ void ProfileResetter::ResetStartupPages() {
 void ProfileResetter::ResetPinnedTabs() {
   // Unpin all the tabs.
   for (auto* browser : *BrowserList::GetInstance()) {
-    if (browser->is_type_tabbed() && browser->profile() == profile_) {
+    if (browser->is_type_normal() && browser->profile() == profile_) {
       TabStripModel* tab_model = browser->tab_strip_model();
       // Here we assume that indexof(any mini tab) < indexof(any normal tab).
       // If we unpin the tab, it can be moved to the right. Thus traversing in
@@ -327,11 +325,12 @@ void ProfileResetter::ResetPinnedTabs() {
 
 void ProfileResetter::ResetShortcuts() {
 #if defined(OS_WIN)
-  base::CreateCOMSTATaskRunnerWithTraits(
+  base::ThreadPool::CreateCOMSTATaskRunner(
       {base::MayBlock(), base::TaskPriority::USER_VISIBLE})
-      ->PostTaskAndReply(FROM_HERE, base::Bind(&ResetShortcutsOnBlockingThread),
-                         base::Bind(&ProfileResetter::MarkAsDone,
-                                    weak_ptr_factory_.GetWeakPtr(), SHORTCUTS));
+      ->PostTaskAndReply(
+          FROM_HERE, base::BindOnce(&ResetShortcutsOnBlockingThread),
+          base::BindOnce(&ProfileResetter::MarkAsDone,
+                         weak_ptr_factory_.GetWeakPtr(), SHORTCUTS));
 #else
   MarkAsDone(SHORTCUTS);
 #endif
@@ -340,6 +339,19 @@ void ProfileResetter::ResetShortcuts() {
 void ProfileResetter::ResetNtpCustomizations() {
   ntp_service_->ResetToDefault();
   MarkAsDone(NTP_CUSTOMIZATIONS);
+}
+
+void ProfileResetter::ResetLanguages() {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  PrefService* prefs = profile_->GetPrefs();
+  DCHECK(prefs);
+
+  auto translate_prefs = ChromeTranslateClient::CreateTranslatePrefs(prefs);
+  translate_prefs->ResetToDefaults();
+
+  language::ResetLanguagePrefs(prefs);
+
+  MarkAsDone(LANGUAGES);
 }
 
 void ProfileResetter::OnTemplateURLServiceLoaded() {

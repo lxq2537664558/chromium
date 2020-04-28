@@ -11,6 +11,7 @@
 #include "base/component_export.h"
 #include "base/macros.h"
 #include "base/single_thread_task_runner.h"
+#include "chromeos/login/auth/auth_status_consumer.h"
 #include "chromeos/login/auth/authenticator.h"
 #include "chromeos/login/auth/user_context.h"
 
@@ -52,6 +53,7 @@ class COMPONENT_EXPORT(CHROMEOS_LOGIN_AUTH) StubAuthenticator
   void LoginAsKioskAccount(const AccountId& app_account_id,
                            bool use_guest_mount) override;
   void LoginAsArcKioskAccount(const AccountId& app_account_id) override;
+  void LoginAsWebKioskAccount(const AccountId& app_account_id) override;
   void OnAuthSuccess() override;
   void OnAuthFailure(const AuthFailure& failure) override;
   void RecoverEncryptedData(const std::string& old_password) override;
@@ -65,9 +67,18 @@ class COMPONENT_EXPORT(CHROMEOS_LOGIN_AUTH) StubAuthenticator
  private:
   friend class StubAuthenticatorBuilder;
 
-  enum class AuthAction { kAuthSuccess, kPasswordChange };
+  enum class AuthAction {
+    kAuthSuccess,
+    kAuthFailure,
+    kPasswordChange,
+    kOldEncryption
+  };
+
+  // Returns a copy of expected_user_context_ with a transformed key.
+  UserContext ExpectedUserContextWithTransformedKey() const;
 
   void OnPasswordChangeDetected();
+  void OnOldEncryptionDetected();
 
   UserContext expected_user_context_;
   scoped_refptr<base::SingleThreadTaskRunner> task_runner_;
@@ -81,6 +92,13 @@ class COMPONENT_EXPORT(CHROMEOS_LOGIN_AUTH) StubAuthenticator
   // If set, the callback that will be called as authenticator handles user
   // encrypted data recovery during password change flow.
   DataRecoveryNotifier data_recovery_notifier_;
+
+  // For requests that detect old encryption -  whether there is an incomplete
+  // encryption migration attempt.
+  bool has_incomplete_encryption_migration_ = false;
+
+  // For requests that report auth failure, the reason for the failure.
+  AuthFailure::FailureReason failure_reason_ = AuthFailure::NONE;
 
   DISALLOW_COPY_AND_ASSIGN(StubAuthenticator);
 };

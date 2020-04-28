@@ -5,7 +5,7 @@
 #include "extensions/renderer/api/display_source/wifi_display/wifi_display_video_encoder.h"
 
 #include "base/bind.h"
-#include "base/logging.h"
+#include "base/check.h"
 #include "content/public/renderer/video_encode_accelerator.h"
 #include "extensions/renderer/api/display_source/wifi_display/wifi_display_elementary_stream_descriptor.h"
 
@@ -81,14 +81,14 @@ WiFiDisplayVideoEncoder::CreateElementaryStreamInfo() const {
 }
 
 void WiFiDisplayVideoEncoder::InsertRawVideoFrame(
-    const scoped_refptr<media::VideoFrame>& video_frame,
+    scoped_refptr<media::VideoFrame> video_frame,
     base::TimeTicks reference_time) {
   DCHECK(client_thread_checker_.CalledOnValidThread());
   DCHECK(!encoded_callback_.is_null());
   media_task_runner_->PostTask(
       FROM_HERE,
       base::BindOnce(&WiFiDisplayVideoEncoder::InsertFrameOnMediaThread, this,
-                     video_frame, reference_time, send_idr_));
+                     std::move(video_frame), reference_time, send_idr_));
   send_idr_ = false;
 }
 

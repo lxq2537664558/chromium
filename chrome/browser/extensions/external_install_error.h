@@ -87,10 +87,12 @@ class ExternalInstallError : public WebstoreDataFetcherDelegate {
 
  private:
   // WebstoreDataFetcherDelegate implementation.
-  void OnWebstoreRequestFailure() override;
+  void OnWebstoreRequestFailure(const std::string& extension_id) override;
   void OnWebstoreResponseParseSuccess(
+      const std::string& extension_id,
       std::unique_ptr<base::DictionaryValue> webstore_data) override;
-  void OnWebstoreResponseParseFailure(const std::string& error) override;
+  void OnWebstoreResponseParseFailure(const std::string& extension_id,
+                                      const std::string& error) override;
 
   // Called when data fetching has completed (either successfully or not).
   void OnFetchComplete();
@@ -135,7 +137,7 @@ class ExternalInstallError : public WebstoreDataFetcherDelegate {
   // information of the extension.
   std::unique_ptr<WebstoreDataFetcher> webstore_data_fetcher_;
 
-  base::WeakPtrFactory<ExternalInstallError> weak_factory_;
+  base::WeakPtrFactory<ExternalInstallError> weak_factory_{this};
 
   DISALLOW_COPY_AND_ASSIGN(ExternalInstallError);
 };

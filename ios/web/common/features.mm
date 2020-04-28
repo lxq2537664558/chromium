@@ -11,39 +11,48 @@
 namespace web {
 namespace features {
 
-bool StorePendingItemInContext() {
-  return base::FeatureList::IsEnabled(kStorePendingItemInContext);
-}
-
 const base::Feature kIgnoresViewportScaleLimits{
     "IgnoresViewportScaleLimits", base::FEATURE_ENABLED_BY_DEFAULT};
-
-const base::Feature kSlimNavigationManager{"SlimNavigationManager",
-                                           base::FEATURE_DISABLED_BY_DEFAULT};
-
-const base::Feature kStorePendingItemInContext{
-    "StorePendingItemInContext", base::FEATURE_ENABLED_BY_DEFAULT};
-
-const base::Feature kWKHTTPSystemCookieStore{"WKHTTPSystemCookieStore",
-                                             base::FEATURE_DISABLED_BY_DEFAULT};
 
 const base::Feature kCrashOnUnexpectedURLChange{
     "CrashOnUnexpectedURLChange", base::FEATURE_ENABLED_BY_DEFAULT};
 
 const base::Feature kHistoryClobberWorkaround{
-    "WKWebViewHistoryClobberWorkaround", base::FEATURE_ENABLED_BY_DEFAULT};
+    "WKWebViewHistoryClobberWorkaround", base::FEATURE_DISABLED_BY_DEFAULT};
 
 const base::Feature kBlockUniversalLinksInOffTheRecordMode{
     "BlockUniversalLinksInOffTheRecord", base::FEATURE_ENABLED_BY_DEFAULT};
 
-const base::Feature kWebUISchemeHandling{"WebUISchemeHandling",
-                                         base::FEATURE_ENABLED_BY_DEFAULT};
-
 const base::Feature kKeepsRenderProcessAlive{"KeepsRenderProcessAlive",
                                              base::FEATURE_ENABLED_BY_DEFAULT};
 
-bool WebUISchemeHandlingEnabled() {
-  return base::FeatureList::IsEnabled(web::features::kWebUISchemeHandling);
+const base::Feature kClearOldNavigationRecordsWorkaround{
+    "ClearOldNavigationRecordsWorkaround", base::FEATURE_ENABLED_BY_DEFAULT};
+
+const base::Feature kSSLCommittedInterstitials{
+    "SSLCommittedInterstitials", base::FEATURE_DISABLED_BY_DEFAULT};
+
+const base::Feature kEnablePersistentDownloads{
+    "EnablePersistentDownloads", base::FEATURE_DISABLED_BY_DEFAULT};
+
+const base::Feature kUseJSForErrorPage{"UseJSForErrorPage",
+                                       base::FEATURE_DISABLED_BY_DEFAULT};
+
+const base::Feature kUseDefaultUserAgentInWebClient{
+    "UseDefaultUserAgentInWebClient", base::FEATURE_DISABLED_BY_DEFAULT};
+
+const base::Feature kPreserveScrollViewProperties{
+    "PreserveScrollViewProperties", base::FEATURE_ENABLED_BY_DEFAULT};
+
+const base::Feature kIOSLookalikeUrlNavigationSuggestionsUI{
+    "IOSLookalikeUrlNavigationSuggestionsUI",
+    base::FEATURE_DISABLED_BY_DEFAULT};
+
+bool UseWebClientDefaultUserAgent() {
+  if (@available(iOS 13, *)) {
+    return base::FeatureList::IsEnabled(kUseDefaultUserAgentInWebClient);
+  }
+  return false;
 }
 
 }  // namespace features

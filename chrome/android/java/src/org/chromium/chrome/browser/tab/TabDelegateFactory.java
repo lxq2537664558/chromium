@@ -4,24 +4,25 @@
 
 package org.chromium.chrome.browser.tab;
 
-import org.chromium.chrome.browser.contextmenu.ChromeContextMenuPopulator;
+import androidx.annotation.Nullable;
+
 import org.chromium.chrome.browser.contextmenu.ContextMenuPopulator;
-import org.chromium.chrome.browser.externalnav.ExternalNavigationHandler;
+import org.chromium.chrome.browser.ui.native_page.NativePage;
+import org.chromium.components.browser_ui.util.BrowserControlsVisibilityDelegate;
 import org.chromium.components.embedder_support.delegate.WebContentsDelegateAndroid;
+import org.chromium.components.external_intents.ExternalNavigationHandler;
 import org.chromium.components.navigation_interception.InterceptNavigationDelegate;
 
 /**
- * A factory class to create {@link Tab} related delegates.
+ * An interface for factory to create {@link Tab} related delegates.
  */
-public class TabDelegateFactory {
+public interface TabDelegateFactory {
     /**
      * Creates the {@link WebContentsDelegateAndroid} the tab will be initialized with.
      * @param tab The associated {@link Tab}.
      * @return The {@link WebContentsDelegateAndroid} to be used for this tab.
      */
-    public TabWebContentsDelegateAndroid createWebContentsDelegate(Tab tab) {
-        return new TabWebContentsDelegateAndroid(tab);
-    }
+    TabWebContentsDelegateAndroid createWebContentsDelegate(Tab tab);
 
     /**
      * Creates the {@link ExternalNavigationHandler} the tab will use for its
@@ -29,38 +30,31 @@ public class TabDelegateFactory {
      * @param tab The associated {@link Tab}.
      * @return The {@link ExternalNavigationHandler} to be used for this tab.
      */
-
-    public ExternalNavigationHandler createExternalNavigationHandler(Tab tab) {
-        return new ExternalNavigationHandler(tab);
-    }
+    ExternalNavigationHandler createExternalNavigationHandler(Tab tab);
 
     /**
      * Creates the {@link ContextMenuPopulator} the tab will be initialized with.
      * @param tab The associated {@link Tab}.
      * @return The {@link ContextMenuPopulator} to be used for this tab.
      */
-    public ContextMenuPopulator createContextMenuPopulator(Tab tab) {
-        return new ChromeContextMenuPopulator(new TabContextMenuItemDelegate(tab),
-                ChromeContextMenuPopulator.ContextMenuMode.NORMAL);
-    }
-
-    /**
-     * Return true if app banners are to be permitted in this tab. May need to be overridden.
-     * @return true if app banners are permitted, and false otherwise.
-     */
-    public boolean canShowAppBanners() {
-        return true;
-    }
+    ContextMenuPopulator createContextMenuPopulator(Tab tab);
 
     /**
      * Creates the {@link BrowserControlsVisibilityDelegate} the tab will be initialized with.
      * @param tab The associated {@link Tab}.
      */
-    public void createBrowserControlsState(Tab tab) {
-        TabBrowserControlsState.create(tab, new TabStateBrowserControlsVisibilityDelegate(tab));
-    }
+    BrowserControlsVisibilityDelegate createBrowserControlsVisibilityDelegate(Tab tab);
 
-    public TabDelegateFactory createNewTabDelegateFactory() {
-        return new TabDelegateFactory();
-    }
+    /**
+     * Returns a NativePage for displaying the given URL if the URL is a valid chrome-native URL,
+     * or null otherwise. If candidatePage is non-null and corresponds to the URL, it will be
+     * returned. Otherwise, a new NativePage will be constructed.
+     *
+     * @param url The URL to be handled.
+     * @param candidatePage A NativePage to be reused if it matches the url, or null.
+     * @param tab The Tab that will show the page.
+     * @return A NativePage showing the specified url or null.
+     */
+    @Nullable
+    NativePage createNativePage(String url, NativePage candidatePage, Tab tab);
 }

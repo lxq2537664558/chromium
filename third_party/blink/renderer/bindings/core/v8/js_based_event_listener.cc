@@ -11,10 +11,13 @@
 #include "third_party/blink/renderer/core/dom/document_parser.h"
 #include "third_party/blink/renderer/core/dom/events/event.h"
 #include "third_party/blink/renderer/core/dom/events/event_target.h"
-#include "third_party/blink/renderer/platform/bindings/v8_private_property.h"
-#include "third_party/blink/renderer/platform/instance_counters.h"
+#include "third_party/blink/renderer/core/frame/local_dom_window.h"
+#include "third_party/blink/renderer/platform/instrumentation/instance_counters.h"
 
 namespace blink {
+
+// extern
+const V8PrivateProperty::SymbolKey kPrivatePropertyGlobalEvent;
 
 JSBasedEventListener::JSBasedEventListener() {
   if (IsMainThread()) {
@@ -39,8 +42,8 @@ bool JSBasedEventListener::BelongsToTheCurrentWorld(
   // If currently parsing, the parser could be accessing this listener
   // outside of any v8 context; check if it belongs to the main world.
   if (!isolate->InContext() && execution_context &&
-      execution_context->IsDocument()) {
-    Document* document = To<Document>(execution_context);
+      IsA<LocalDOMWindow>(execution_context)) {
+    Document* document = To<LocalDOMWindow>(execution_context)->document();
     if (document->Parser() && document->Parser()->IsParsing())
       return GetWorld().IsMainWorld();
   }
@@ -128,7 +131,7 @@ void JSBasedEventListener::Invoke(
   // If tuple’s item-in-shadow-tree is false, then set global’s current event to
   // event.
   V8PrivateProperty::Symbol event_symbol =
-      V8PrivateProperty::GetGlobalEvent(isolate);
+      V8PrivateProperty::GetSymbol(isolate, kPrivatePropertyGlobalEvent);
   ExecutionContext* execution_context_of_listener =
       ExecutionContext::From(script_state_of_listener);
   v8::Local<v8::Value> current_event;

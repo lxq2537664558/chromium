@@ -11,6 +11,7 @@
 
 #include "components/viz/common/quads/draw_quad.h"
 #include "components/viz/common/viz_common_export.h"
+#include "gpu/ipc/common/vulkan_ycbcr_info.h"
 #include "ui/gfx/geometry/point_f.h"
 
 namespace viz {
@@ -20,6 +21,8 @@ class VIZ_COMMON_EXPORT StreamVideoDrawQuad : public DrawQuad {
   static const size_t kResourceIdIndex = 0;
 
   StreamVideoDrawQuad();
+  ~StreamVideoDrawQuad() override;
+  StreamVideoDrawQuad(const StreamVideoDrawQuad& quad);
 
   void SetNew(const SharedQuadState* shared_quad_state,
               const gfx::Rect& rect,
@@ -44,7 +47,7 @@ class VIZ_COMMON_EXPORT StreamVideoDrawQuad : public DrawQuad {
 
   struct OverlayResources {
     OverlayResources();
-    gfx::Size size_in_pixels[Resources::kMaxResourceIdCount];
+    gfx::Size size_in_pixels;
   };
   OverlayResources overlay_resources;
 
@@ -52,7 +55,7 @@ class VIZ_COMMON_EXPORT StreamVideoDrawQuad : public DrawQuad {
 
   ResourceId resource_id() const { return resources.ids[kResourceIdIndex]; }
   const gfx::Size& resource_size_in_pixels() const {
-    return overlay_resources.size_in_pixels[kResourceIdIndex];
+    return overlay_resources.size_in_pixels;
   }
 
  private:

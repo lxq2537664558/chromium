@@ -4,11 +4,11 @@
 
 #include "chrome/browser/chromeos/accessibility/switch_access_panel.h"
 
-#include "ash/public/interfaces/accessibility_controller.mojom.h"
-#include "ash/public/interfaces/constants.mojom.h"
+#include "ash/public/cpp/accessibility_controller.h"
+#include "ash/public/cpp/accessibility_controller_enums.h"
 #include "base/no_destructor.h"
-#include "content/public/common/service_manager_connection.h"
-#include "services/service_manager/public/cpp/connector.h"
+#include "content/public/browser/render_widget_host_view.h"
+#include "ui/aura/window.h"
 #include "ui/display/display.h"
 #include "ui/display/screen.h"
 #include "ui/views/widget/widget.h"
@@ -21,7 +21,7 @@ const int kFocusRingBuffer = 5;
 const std::string& UrlForContent() {
   static const base::NoDestructor<std::string> url(
       std::string(EXTENSION_PREFIX) + extension_misc::kSwitchAccessExtensionId +
-      "/menu_panel.html");
+      "/switch_access/menu_panel.html");
   return *url;
 }
 
@@ -29,6 +29,10 @@ const std::string& UrlForContent() {
 
 SwitchAccessPanel::SwitchAccessPanel(content::BrowserContext* browser_context)
     : AccessibilityPanel(browser_context, UrlForContent(), kWidgetName) {
+  content::RenderWidgetHostView* view =
+      GetWebContents()->GetMainFrame()->GetView();
+  view->SetBackgroundColor(SK_ColorTRANSPARENT);
+  view->GetNativeView()->SetTransparent(true);
   Hide();
 }
 
@@ -52,16 +56,16 @@ void SwitchAccessPanel::Show(const gfx::Rect& element_bounds,
         CalculatePanelBounds(element_bounds, screen_bounds, width, height);
   }
 
-  GetAccessibilityController()->SetAccessibilityPanelBounds(
-      panel_bounds, ash::mojom::AccessibilityPanelState::BOUNDED);
+  ash::AccessibilityController::Get()->SetAccessibilityPanelBounds(
+      panel_bounds, ash::AccessibilityPanelState::BOUNDED);
 }
 
 void SwitchAccessPanel::Hide() {
   // This isn't set to (0, 0, 0, 0) because the drop shadow remains visible.
   // TODO(crbug/911344): Find the root cause and fix it.
   gfx::Rect bounds(-1, -1, 1, 1);
-  GetAccessibilityController()->SetAccessibilityPanelBounds(
-      bounds, ash::mojom::AccessibilityPanelState::BOUNDED);
+  ash::AccessibilityController::Get()->SetAccessibilityPanelBounds(
+      bounds, ash::AccessibilityPanelState::BOUNDED);
 }
 
 const gfx::Rect SwitchAccessPanel::CalculatePanelBounds(

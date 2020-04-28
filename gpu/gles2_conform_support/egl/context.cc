@@ -61,6 +61,8 @@ Context::Context(Display* display, const Config* config)
       is_destroyed_(false),
       gpu_driver_bug_workarounds_(
           platform_gpu_feature_info_.enabled_gpu_driver_bug_workarounds),
+      discardable_manager_(gpu::GpuPreferences()),
+      passthrough_discardable_manager_(gpu::GpuPreferences()),
       translator_cache_(gpu::GpuPreferences()) {}
 
 Context::~Context() {
@@ -236,6 +238,10 @@ bool Context::CanWaitUnverifiedSyncToken(const gpu::SyncToken& sync_token) {
   return false;
 }
 
+void Context::SetDisplayTransform(gfx::OverlayTransform transform) {
+  NOTREACHED();
+}
+
 void Context::ApplyCurrentContext(gl::GLSurface* current_surface) {
   DCHECK(HasService());
   // The current_surface will be the same as
@@ -276,7 +282,7 @@ bool Context::CreateService(gl::GLSurface* gl_surface) {
   command_buffer->set_handler(decoder.get());
 
   gl::GLContextAttribs context_attribs;
-  context_attribs.gpu_preference = gl::PreferDiscreteGpu;
+  context_attribs.gpu_preference = gl::GpuPreference::kHighPerformance;
   scoped_refptr<gl::GLContext> gl_context(
       gl::init::CreateGLContext(nullptr, gl_surface, context_attribs));
   if (!gl_context)
@@ -351,10 +357,10 @@ void Context::DestroyService() {
 
   transfer_buffer_.reset();
   gles2_cmd_helper_.reset();
-  command_buffer_.reset();
   if (decoder_)
     decoder_->Destroy(have_context);
   decoder_.reset();
+  command_buffer_.reset();
 }
 
 bool Context::HasService() const {

@@ -25,6 +25,7 @@ class ClipboardProvider : public AutocompleteProvider {
   // AutocompleteProvider implementation.
   void Start(const AutocompleteInput& input, bool minimal_changes) override;
   void Stop(bool clear_cached_results, bool due_to_user_inactivity) override;
+  void DeleteMatch(const AutocompleteMatch& match) override;
   void AddProviderInfo(ProvidersInfo* provider_info) const override;
   void ResetSession() override;
 
@@ -52,6 +53,12 @@ class ClipboardProvider : public AutocompleteProvider {
   // Create functions, it returns a boolean indicating whether there will be a
   // match.
   bool CreateImageMatch(const AutocompleteInput& input);
+
+  // Called when received image data from clipboard.
+  void OnReceiveImage(const AutocompleteInput& input,
+                      TemplateURLService* url_service,
+                      base::TimeDelta clipboard_contents_age,
+                      base::Optional<gfx::Image> optional_image);
 
   // Resize and encode the image data into bytes. This can take some time if the
   // image is large, so this should happen on a background thread.
@@ -85,7 +92,7 @@ class ClipboardProvider : public AutocompleteProvider {
 
   // Used to cancel image construction callbacks if autocomplete Stop() is
   // called.
-  base::WeakPtrFactory<ClipboardProvider> callback_weak_ptr_factory_;
+  base::WeakPtrFactory<ClipboardProvider> callback_weak_ptr_factory_{this};
 
   DISALLOW_COPY_AND_ASSIGN(ClipboardProvider);
 };

@@ -6,15 +6,19 @@
 
 #include "build/build_config.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/sessions/session_service.h"
-#include "chrome/browser/sessions/session_service_factory.h"
+#include "chrome/browser/sessions/session_common_utils.h"
 #include "chrome/common/url_constants.h"
 #include "components/sessions/content/content_live_tab.h"
 #include "extensions/buildflags/buildflags.h"
 
+#if BUILDFLAG(ENABLE_SESSION_SERVICE)
+#include "chrome/browser/sessions/session_service.h"
+#include "chrome/browser/sessions/session_service_factory.h"
+#endif
+
 #if BUILDFLAG(ENABLE_EXTENSIONS)
+#include "chrome/browser/apps/app_service/launch_utils.h"
 #include "chrome/browser/apps/platform_apps/platform_app_launch.h"
-#include "chrome/browser/extensions/tab_helper.h"
 #endif
 
 #if !defined(OS_ANDROID)
@@ -70,18 +74,14 @@ bool ChromeTabRestoreServiceClient::ShouldTrackURLForRestore(const GURL& url) {
 
 std::string ChromeTabRestoreServiceClient::GetExtensionAppIDForTab(
     sessions::LiveTab* tab) {
-  std::string extension_app_id;
+  std::string app_id;
 
 #if BUILDFLAG(ENABLE_EXTENSIONS)
-  extensions::TabHelper* extensions_tab_helper =
-      extensions::TabHelper::FromWebContents(
-          static_cast<sessions::ContentLiveTab*>(tab)->web_contents());
-  // extensions_tab_helper is nullptr in some browser tests.
-  if (extensions_tab_helper)
-    extension_app_id = extensions_tab_helper->GetAppId();
+  app_id = apps::GetAppIdForWebContents(
+      static_cast<sessions::ContentLiveTab*>(tab)->web_contents());
 #endif
 
-  return extension_app_id;
+  return app_id;
 }
 
 base::FilePath ChromeTabRestoreServiceClient::GetPathToSaveTo() {
@@ -110,12 +110,12 @@ bool ChromeTabRestoreServiceClient::HasLastSession() {
 }
 
 void ChromeTabRestoreServiceClient::GetLastSession(
-    const sessions::GetLastSessionCallback& callback,
+    sessions::GetLastSessionCallback callback,
     base::CancelableTaskTracker* tracker) {
   DCHECK(HasLastSession());
 #if BUILDFLAG(ENABLE_SESSION_SERVICE)
-  SessionServiceFactory::GetForProfile(profile_)
-      ->GetLastSession(callback, tracker);
+  SessionServiceFactory::GetForProfile(profile_)->GetLastSession(
+      std::move(callback), tracker);
 #endif
 }
 

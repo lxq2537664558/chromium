@@ -7,11 +7,12 @@
 #include <stdint.h>
 
 #include "ash/public/cpp/notification_utils.h"
-#include "ash/public/cpp/vector_icons/vector_icons.h"
 #include "base/bind.h"
 #include "base/macros.h"
 #include "base/strings/utf_string_conversions.h"
+#include "chrome/app/vector_icons/vector_icons.h"
 #include "chrome/browser/browser_process.h"
+#include "chrome/browser/browser_process_platform_part.h"
 #include "chrome/browser/chromeos/policy/browser_policy_connector_chromeos.h"
 #include "chrome/browser/notifications/system_notification_helper.h"
 #include "chrome/browser/profiles/profile_manager.h"
@@ -42,7 +43,7 @@ constexpr base::TimeDelta kNotificationInterval =
 namespace chromeos {
 
 LowDiskNotification::LowDiskNotification()
-    : notification_interval_(kNotificationInterval), weak_ptr_factory_(this) {
+    : notification_interval_(kNotificationInterval) {
   DCHECK(CryptohomeClient::Get());
   CryptohomeClient::Get()->AddObserver(this);
 }
@@ -114,7 +115,7 @@ LowDiskNotification::CreateNotification(Severity severity) {
           message_center::NOTIFICATION_TYPE_SIMPLE, kLowDiskId, title, message,
           base::string16(), GURL(), notifier_id, optional_fields,
           new message_center::HandleNotificationClickDelegate(on_click),
-          ash::kNotificationStorageFullIcon, warning_level);
+          kNotificationStorageFullIcon, warning_level);
 
   return notification;
 }

@@ -60,7 +60,6 @@ class ShellExtensionSystem : public ExtensionSystem {
 
   // ExtensionSystem implementation:
   void InitForRegularProfile(bool extensions_enabled) override;
-  void InitForIncognitoProfile() override;
   ExtensionService* extension_service() override;
   RuntimeData* runtime_data() override;
   ManagementPolicy* management_policy() override;
@@ -74,7 +73,7 @@ class ShellExtensionSystem : public ExtensionSystem {
   AppSorting* app_sorting() override;
   void RegisterExtensionWithRequestContexts(
       const Extension* extension,
-      const base::Closure& callback) override;
+      base::OnceClosure callback) override;
   void UnregisterExtensionWithRequestContexts(
       const std::string& extension_id,
       const UnloadedExtensionReason reason) override;
@@ -87,6 +86,9 @@ class ShellExtensionSystem : public ExtensionSystem {
                      const base::FilePath& temp_dir,
                      bool install_immediately,
                      InstallUpdateCallback install_update_callback) override;
+  void PerformActionBasedOnOmahaAttributes(
+      const std::string& extension_id,
+      const base::Value& attributes) override;
   bool FinishDelayedInstallationIfReady(const std::string& extension_id,
                                         bool install_immediately) override;
 
@@ -110,7 +112,7 @@ class ShellExtensionSystem : public ExtensionSystem {
   // Signaled when the extension system has completed its startup tasks.
   base::OneShotEvent ready_;
 
-  base::WeakPtrFactory<ShellExtensionSystem> weak_factory_;
+  base::WeakPtrFactory<ShellExtensionSystem> weak_factory_{this};
 
   DISALLOW_COPY_AND_ASSIGN(ShellExtensionSystem);
 };

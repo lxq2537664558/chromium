@@ -34,24 +34,28 @@
 #include "base/callback.h"
 #include "base/time/time.h"
 #include "cc/input/browser_controls_state.h"
-#include "cc/paint/paint_canvas.h"
-#include "cc/trees/element_id.h"
+#include "cc/metrics/begin_main_frame_metrics.h"
+#include "cc/paint/element_id.h"
+#include "cc/trees/layer_tree_host_client.h"
+#include "third_party/blink/public/common/input/web_menu_source_type.h"
+#include "third_party/blink/public/common/metrics/document_update_reason.h"
+#include "third_party/blink/public/mojom/manifest/display_mode.mojom-shared.h"
 #include "third_party/blink/public/platform/web_common.h"
-#include "third_party/blink/public/platform/web_float_size.h"
 #include "third_party/blink/public/platform/web_input_event_result.h"
-#include "third_party/blink/public/platform/web_menu_source_type.h"
-#include "third_party/blink/public/platform/web_point.h"
 #include "third_party/blink/public/platform/web_rect.h"
 #include "third_party/blink/public/platform/web_size.h"
 #include "third_party/blink/public/platform/web_text_input_info.h"
 #include "third_party/blink/public/web/web_hit_test_result.h"
 #include "third_party/blink/public/web/web_ime_text_span.h"
+#include "third_party/blink/public/web/web_lifecycle_update.h"
 #include "third_party/blink/public/web/web_range.h"
-#include "third_party/blink/public/web/web_text_direction.h"
+#include "third_party/blink/public/web/web_swap_result.h"
 
 namespace cc {
-struct ApplyViewportChangesArgs;
-class AnimationHost;
+class LayerTreeHost;
+class TaskGraphRunner;
+class UkmRecorderFactory;
+class LayerTreeSettings;
 }
 
 namespace gfx {
@@ -60,17 +64,28 @@ class Point;
 
 namespace blink {
 class WebCoalescedInputEvent;
-class WebLayerTreeView;
 
 class WebWidget {
  public:
-  // Called during set up of the WebWidget to declare the WebLayerTreeView for
-  // the widget to use. This does not pass ownership, but the caller must keep
-  // the pointer valid until Close() is called.
-  virtual void SetLayerTreeView(WebLayerTreeView*, cc::AnimationHost*) = 0;
+  // Initialize compositing. This will create a LayerTreeHost but will not
+  // allocate a frame sink or begin producing frames until SetCompositorVisible
+  // is called.
+  virtual cc::LayerTreeHost* InitializeCompositing(
+      cc::TaskGraphRunner* task_graph_runner,
+      const cc::LayerTreeSettings& settings,
+      std::unique_ptr<cc::UkmRecorderFactory> ukm_recorder_factory) = 0;
 
-  // This method closes and deletes the WebWidget.
-  virtual void Close() {}
+  // This method closes and deletes the WebWidget. If a |cleanup_task| is
+  // provided it should run on the |cleanup_runner| after the WebWidget has
+  // added its own tasks to the |cleanup_runner|.
+  virtual void Close(
+      scoped_refptr<base::SingleThreadTaskRunner> cleanup_runner = nullptr,
+      base::OnceCallback<void()> cleanup_task = base::OnceCallback<void()>()) {}
+
+  // Set the compositor as visible. If |visible| is true, then the compositor
+  // will request a new layer frame sink and begin producing frames from the
+  // compositor.
+  virtual void SetCompositorVisible(bool visible) = 0;
 
   // Returns the current size of the WebWidget.
   virtual WebSize Size() { return WebSize(); }
@@ -78,95 +93,27 @@ class WebWidget {
   // Called to resize the WebWidget.
   virtual void Resize(const WebSize&) {}
 
-  // Resizes the unscaled visual viewport. Normally the unscaled visual
-  // viewport is the same size as the main frame. The passed size becomes the
-  // size of the viewport when unscaled (i.e. scale = 1). This is used to
-  // shrink the visible viewport to allow things like the ChromeOS virtual
-  // keyboard to overlay over content but allow scrolling it into view.
-  virtual void ResizeVisualViewport(const WebSize&) {}
-
   // Called to notify the WebWidget of entering/exiting fullscreen mode.
   virtual void DidEnterFullscreen() {}
   virtual void DidExitFullscreen() {}
-
-  // TODO(crbug.com/704763): Remove the need for this.
-  virtual void SetSuppressFrameRequestsWorkaroundFor704763Only(bool) {}
-
-  // Called to update imperative animation state. This should be called before
-  // paint, although the client can rate-limit these calls.
-  // |last_frame_time| is in seconds. |record_main_frame_metrics| is true when
-  // UMA and UKM metrics should be emitted for animation work.
-  virtual void BeginFrame(base::TimeTicks last_frame_time,
-                          bool record_main_frame_metrics) {}
-
-  // Called after UpdateAllLifecyclePhases has run in response to a BeginFrame.
-  virtual void DidBeginFrame() {}
-
-  // Called when main frame metrics are desired. The local frame's UKM
-  // aggregator must be informed that collection is starting for the
-  // frame.
-  virtual void RecordStartOfFrameMetrics() {}
-
-  // Called when a main frame time metric should be emitted, along with
-  // any metrics that depend upon the main frame total time.
-  virtual void RecordEndOfFrameMetrics(base::TimeTicks frame_begin_time) {}
-
-  // Methods called to mark the beginning and end of input processing work
-  // before rAF scripts are executed. Only called when gathering main frame
-  // UMA and UKM. That is, when RecordStartOfFrameMetrics has been called, and
-  // before RecordEndOfFrameMetrics has been called. Only implement if the
-  // rAF input update will be called as part of a layer tree view main frame
-  // update.
-  virtual void BeginRafAlignedInput() {}
-  virtual void EndRafAlignedInput() {}
-
-  // Methods called to mark the beginning and end of the
-  // LayerTreeHost::UpdateLayers method. Only called when gathering main frame
-  // UMA and UKM. That is, when RecordStartOfFrameMetrics has been called, and
-  // before RecordEndOfFrameMetrics has been called.
-  virtual void BeginUpdateLayers() {}
-  virtual void EndUpdateLayers() {}
-
-  // Methods called to mark the beginning and end of a commit to the impl
-  // thread for a frame. Only called when gathering main frame
-  // UMA and UKM. That is, when RecordStartOfFrameMetrics has been called, and
-  // before RecordEndOfFrameMetrics has been called.
-  virtual void BeginCommitCompositorFrame() {}
-  virtual void EndCommitCompositorFrame() {}
 
   // Called to run through the entire set of document lifecycle phases needed
   // to render a frame of the web widget. This MUST be called before Paint,
   // and it may result in calls to WebViewClient::DidInvalidateRect (for
   // non-composited WebViews).
-  // |LifecycleUpdateReason| must be used to indicate the source of the
+  // |reason| must be used to indicate the source of the
   // update for the purposes of metrics gathering.
-  enum class LifecycleUpdate { kLayout, kPrePaint, kAll };
-  // This must be kept coordinated with DocumentLifecycle::LifecycleUpdateReason
-  enum class LifecycleUpdateReason { kBeginMainFrame, kTest, kOther };
-  virtual void UpdateAllLifecyclePhases(LifecycleUpdateReason reason) {
-    UpdateLifecycle(LifecycleUpdate::kAll, reason);
+  virtual void UpdateAllLifecyclePhases(DocumentUpdateReason reason) {
+    UpdateLifecycle(WebLifecycleUpdate::kAll, reason);
   }
 
   // UpdateLifecycle is used to update to a specific lifestyle phase, as given
   // by |LifecycleUpdate|. To update all lifecycle phases, use
   // UpdateAllLifecyclePhases.
-  // |LifecycleUpdateReason| must be used to indicate the source of the
+  // |reason| must be used to indicate the source of the
   // update for the purposes of metrics gathering.
-  virtual void UpdateLifecycle(LifecycleUpdate requested_update,
-                               LifecycleUpdateReason reason) {}
-
-  // Called to paint the rectangular region within the WebWidget
-  // onto the specified canvas at (view_port.x, view_port.y).
-  //
-  // Before calling PaintContent(), the caller must ensure the lifecycle of the
-  // widget's frame is clean by calling UpdateLifecycle(LifecycleUpdate::All).
-  // It is okay to call paint multiple times once the lifecycle is clean,
-  // assuming no other changes are made to the WebWidget (e.g., once
-  // events are processed, it should be assumed that another call to
-  // UpdateLifecycle is warranted before painting again). Paints starting from
-  // the main LayoutView's property tree state, thus ignoring any transient
-  // transormations (e.g. pinch-zoom, dev tools emulation, etc.).
-  virtual void PaintContent(cc::PaintCanvas*, const WebRect& view_port) {}
+  virtual void UpdateLifecycle(WebLifecycleUpdate requested_update,
+                               DocumentUpdateReason reason) {}
 
   // Called to inform the WebWidget of a change in theme.
   // Implementors that cache rendered copies of widgets need to re-render
@@ -191,46 +138,21 @@ class WebWidget {
   // Called to inform the WebWidget of the mouse cursor's visibility.
   virtual void SetCursorVisibilityState(bool is_visible) {}
 
-  // Inform WebWidget fallback cursor mode toggled.
-  virtual void OnFallbackCursorModeToggled(bool is_on) {}
-
-  // Applies viewport related properties during a commit from the compositor
-  // thread.
-  virtual void ApplyViewportChanges(const cc::ApplyViewportChangesArgs& args) {}
-
-  virtual void RecordWheelAndTouchScrollingCount(bool has_scrolled_by_wheel,
-                                                 bool has_scrolled_by_touch) {}
-
-  virtual void SendOverscrollEventFromImplSide(
-      const gfx::Vector2dF& overscroll_delta,
-      cc::ElementId scroll_latched_element_id) {}
-  virtual void SendScrollEndEventFromImplSide(
-      cc::ElementId scroll_latched_element_id) {}
-
   // Called to inform the WebWidget that mouse capture was lost.
   virtual void MouseCaptureLost() {}
 
   // Called to inform the WebWidget that it has gained or lost keyboard focus.
   virtual void SetFocus(bool) {}
 
+  // Sets the display mode, which comes from the top-level browsing context and
+  // is applied to all widgets.
+  virtual void SetDisplayMode(mojom::DisplayMode) {}
+
   // Returns the anchor and focus bounds of the current selection.
   // If the selection range is empty, it returns the caret bounds.
   virtual bool SelectionBounds(WebRect& anchor, WebRect& focus) const {
     return false;
   }
-
-  // Returns true if the WebWidget is currently animating a GestureFling.
-  virtual bool IsFlinging() const { return false; }
-
-  // Returns true if the WebWidget uses GPU accelerated compositing
-  // to render its contents.
-  virtual bool IsAcceleratedCompositingActive() const { return false; }
-
-  // Returns true if the WebWidget created is of type PepperWidget.
-  virtual bool IsPepperWidget() const { return false; }
-
-  // Returns true if the WebWidget created is of type WebFrameWidget.
-  virtual bool IsWebFrameWidget() const { return false; }
 
   // Calling WebWidgetClient::requestPointerLock() will result in one
   // return call to didAcquirePointerLock() or didNotAcquirePointerLock().

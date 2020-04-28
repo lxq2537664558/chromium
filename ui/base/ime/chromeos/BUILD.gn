@@ -6,6 +6,10 @@ import("//build/config/jumbo.gni")
 
 assert(is_chromeos)
 
+source_set("ime_types") {
+  sources = [ "ime_keyset.h" ]
+}
+
 jumbo_component("chromeos") {
   output_name = "ui_base_ime_chromeos"
 
@@ -19,9 +23,8 @@ jumbo_component("chromeos") {
     "fake_input_method_delegate.cc",
     "fake_input_method_delegate.h",
     "ime_keyboard.cc",
-    "ime_keyboard.h",
-    "ime_keyboard_mus.cc",
-    "ime_keyboard_mus.h",
+    "ime_keyboard_impl.cc",
+    "ime_keyboard_impl.h",
     "ime_keymap.cc",
     "ime_keymap.h",
     "input_method_chromeos.cc",
@@ -47,17 +50,19 @@ jumbo_component("chromeos") {
 
   public_deps = [
     "//ui/base/ime",
-    "//ui/base/ime/chromeos/public/interfaces",
     "//url",
   ]
 
   deps = [
-    "//chromeos",
+    ":ime_types",
+    "//build:branding_buildflags",
+    "//chromeos/constants",
     "//chromeos/ime:gencode",
-    "//services/ws/public/cpp/input_devices",
+    "//chromeos/services/ime/public/mojom",
+    "//chromeos/system",
     "//third_party/icu",
     "//ui/base",
-    "//ui/base/ime/mojo",
     "//ui/chromeos/strings",
+    "//ui/ozone:ozone_base",
   ]
 }

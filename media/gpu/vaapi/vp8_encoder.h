@@ -11,10 +11,10 @@
 #include "base/macros.h"
 #include "base/sequence_checker.h"
 #include "media/base/video_bitrate_allocation.h"
-#include "media/filters/vp8_parser.h"
 #include "media/gpu/vaapi/accelerated_video_encoder.h"
 #include "media/gpu/vp8_picture.h"
 #include "media/gpu/vp8_reference_frame_vector.h"
+#include "media/parsers/vp8_parser.h"
 
 namespace media {
 
@@ -38,9 +38,10 @@ class VP8Encoder : public AcceleratedVideoEncoder {
     // Coded picture buffer size in bits.
     unsigned int cpb_size_bits;
 
+    // Quantization parameter. They are vp8 ac/dc indices and their ranges are
+    // 0-127.
     int initial_qp;
-    int min_qp;
-    int max_qp;
+    ScalingSettings scaling_settings;
 
     bool error_resilient_mode;
   };
@@ -80,6 +81,7 @@ class VP8Encoder : public AcceleratedVideoEncoder {
                    uint32_t framerate) override;
   gfx::Size GetCodedSize() const override;
   size_t GetMaxNumOfRefFrames() const override;
+  ScalingSettings GetScalingSettings() const override;
   bool PrepareEncodeJob(EncodeJob* encode_job) override;
 
  private:

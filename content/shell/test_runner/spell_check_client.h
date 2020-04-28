@@ -16,20 +16,17 @@
 #include "v8/include/v8.h"
 
 namespace blink {
+class WebLocalFrame;
 class WebTextCheckingCompletion;
 }  // namespace blink
 
-namespace test_runner {
-
-class TestRunner;
-class WebTestDelegate;
+namespace content {
 
 class SpellCheckClient : public blink::WebTextCheckClient {
  public:
-  explicit SpellCheckClient(TestRunner* test_runner);
+  explicit SpellCheckClient(blink::WebLocalFrame* frame);
   ~SpellCheckClient() override;
 
-  void SetDelegate(WebTestDelegate* delegate);
   void SetEnabled(bool enabled);
 
   // Sets a callback that will be invoked after each request is revoled.
@@ -49,33 +46,33 @@ class SpellCheckClient : public blink::WebTextCheckClient {
       blink::WebVector<blink::WebString>* optional_suggestions) override;
   void RequestCheckingOfText(
       const blink::WebString& text,
-      blink::WebTextCheckingCompletion* completion) override;
+      std::unique_ptr<blink::WebTextCheckingCompletion> completion) override;
 
  private:
   void FinishLastTextCheck();
 
   void RequestResolved();
 
+  blink::WebLocalFrame* const frame_;
+
   // Do not perform any checking when |enabled_ == false|.
   // Tests related to spell checking should enable it manually.
   bool enabled_ = false;
 
-  // The mock spellchecker used in checkSpelling().
+  // The mock spellchecker used in CheckSpelling().
   MockSpellCheck spell_check_;
 
   blink::WebString last_requested_text_check_string_;
-  blink::WebTextCheckingCompletion* last_requested_text_checking_completion_;
+  std::unique_ptr<blink::WebTextCheckingCompletion>
+      last_requested_text_checking_completion_;
 
   v8::Persistent<v8::Function> resolved_callback_;
 
-  TestRunner* test_runner_;
-  WebTestDelegate* delegate_;
-
-  base::WeakPtrFactory<SpellCheckClient> weak_factory_;
+  base::WeakPtrFactory<SpellCheckClient> weak_factory_{this};
 
   DISALLOW_COPY_AND_ASSIGN(SpellCheckClient);
 };
 
-}  // namespace test_runner
+}  // namespace content
 
 #endif  // CONTENT_SHELL_TEST_RUNNER_SPELL_CHECK_CLIENT_H_

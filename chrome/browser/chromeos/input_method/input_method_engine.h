@@ -12,15 +12,15 @@
 #include <string>
 #include <vector>
 
+#include "chrome/browser/chromeos/input_method/suggestion_handler_interface.h"
 #include "chrome/browser/ui/input_method/input_method_engine_base.h"
+#include "ui/base/ime/candidate_window.h"
 #include "ui/base/ime/chromeos/input_method_descriptor.h"
 #include "ui/base/ime/chromeos/input_method_manager.h"
 #include "ui/base/ime/ime_engine_handler_interface.h"
-#include "ui/base/ime/mojo/ime_engine_factory_registry.mojom.h"
 #include "url/gurl.h"
 
 namespace ui {
-class CandidateWindow;
 struct CompositionText;
 class KeyEvent;
 
@@ -31,13 +31,13 @@ struct InputMethodMenuItem;
 
 namespace input_method {
 class InputMethodEngineBase;
-}
+}  // namespace input_method
 
 namespace chromeos {
+struct AssistiveWindowProperties;
 
-class MojoHelper;
-
-class InputMethodEngine : public ::input_method::InputMethodEngineBase {
+class InputMethodEngine : public ::input_method::InputMethodEngineBase,
+                          public SuggestionHandlerInterface {
  public:
   enum {
     MENU_ITEM_MODIFIED_LABEL = 0x0001,
@@ -74,6 +74,7 @@ class InputMethodEngine : public ::input_method::InputMethodEngineBase {
   struct CandidateWindowProperty {
     CandidateWindowProperty();
     virtual ~CandidateWindowProperty();
+    CandidateWindowProperty(const CandidateWindowProperty& other);
     int page_size;
     bool is_cursor_visible;
     bool is_vertical;
@@ -83,6 +84,11 @@ class InputMethodEngine : public ::input_method::InputMethodEngineBase {
     // window.
     std::string auxiliary_text;
     bool is_auxiliary_text_visible;
+
+    // The index of the current chosen candidate out of total candidates.
+    // value is -1 if there is no current chosen candidate.
+    int current_candidate_index = -1;
+    int total_candidates = 0;
   };
 
   InputMethodEngine();
@@ -92,8 +98,6 @@ class InputMethodEngine : public ::input_method::InputMethodEngineBase {
   // InputMethodEngineBase overrides.
   void Enable(const std::string& component_id) override;
   bool IsActive() const override;
-  void FocusIn(const ui::IMEEngineHandlerInterface::InputContext& input_context)
-      override;
 
   // ui::IMEEngineHandlerInterface overrides.
   void PropertyActivate(const std::string& property_name) override;
@@ -101,12 +105,14 @@ class InputMethodEngine : public ::input_method::InputMethodEngineBase {
   void SetMirroringEnabled(bool mirroring_enabled) override;
   void SetCastingEnabled(bool casting_enabled) override;
 
-  void set_ime_engine_factory_registry_for_testing(
-      ime::mojom::ImeEngineFactoryRegistryPtr registry) {
-    ime_engine_factory_registry_ = std::move(registry);
-  }
-
-  void FlushForTesting();
+  // SuggestionHandlerInterface overrides.
+  bool DismissSuggestion(int context_id, std::string* error) override;
+  bool SetSuggestion(int context_id,
+                     const base::string16& text,
+                     const size_t confirmed_length,
+                     const bool show_tab,
+                     std::string* error) override;
+  bool AcceptSuggestion(int context_id, std::string* error) override;
 
   // This function returns the current property of the candidate window.
   // The caller can use the returned value as the default property and
@@ -128,28 +134,48 @@ class InputMethodEngine : public ::input_method::InputMethodEngineBase {
   // Set the position of the cursor in the candidate window.
   bool SetCursorPosition(int context_id, int candidate_id, std::string* error);
 
+  // Show/Hide given assistive window.
+  bool SetAssistiveWindowProperties(
+      int context_id,
+      const AssistiveWindowProperties& assistive_window,
+      std::string* error);
+
   // Set the list of items that appears in the language menu when this IME is
   // active.
   bool SetMenuItems(
-      const std::vector<input_method::InputMethodManager::MenuItem>& items);
+      const std::vector<input_method::InputMethodManager::MenuItem>& items,
+      std::string* error);
 
   // Update the state of the menu items.
   bool UpdateMenuItems(
-      const std::vector<input_method::InputMethodManager::MenuItem>& items);
+      const std::vector<input_method::InputMethodManager::MenuItem>& items,
+      std::string* error);
 
   // Hides the input view window (from API call).
   void HideInputView();
+
+  // Determine if the key event should be processed by the key
+  // event handler.
+  bool IsValidKeyEvent(const ui::KeyEvent* ui_event) override;
 
  private:
   // input_method::InputMethodEngineBase:
   void UpdateComposition(const ui::CompositionText& composition_text,
                          uint32_t cursor_pos,
                          bool is_visible) override;
+  bool SetCompositionRange(
+      uint32_t before,
+      uint32_t after,
+      const std::vector<ui::ImeTextSpan>& text_spans) override;
+
+  bool SetSelectionRange(uint32_t start, uint32_t end) override;
+
   void CommitTextToInputContext(int context_id,
                                 const std::string& text) override;
-  void DeleteSurroundingTextToInputContext(int offset,
-                                           size_t number_of_chars) override;
-  bool SendKeyEvent(ui::KeyEvent* event, const std::string& code) override;
+
+  bool SendKeyEvent(ui::KeyEvent* event,
+                    const std::string& code,
+                    std::string* error) override;
 
   // Enables overriding input view page to Virtual Keyboard window.
   void EnableInputView();
@@ -160,13 +186,13 @@ class InputMethodEngine : public ::input_method::InputMethodEngineBase {
       ui::ime::InputMethodMenuItem* property);
 
   // The current candidate window.
-  std::unique_ptr<ui::CandidateWindow> candidate_window_;
+  ui::CandidateWindow candidate_window_;
 
   // The current candidate window property.
   CandidateWindowProperty candidate_window_property_;
 
   // Indicates whether the candidate window is visible.
-  bool window_visible_;
+  bool window_visible_ = false;
 
   // Mapping of candidate index to candidate id.
   std::vector<int> candidate_ids_;
@@ -175,14 +201,10 @@ class InputMethodEngine : public ::input_method::InputMethodEngineBase {
   std::map<int, int> candidate_indexes_;
 
   // Whether the screen is in mirroring mode.
-  bool is_mirroring_;
+  bool is_mirroring_ = false;
 
   // Whether the desktop is being casted.
-  bool is_casting_;
-
-  std::unique_ptr<MojoHelper> mojo_helper_;
-
-  ime::mojom::ImeEngineFactoryRegistryPtr ime_engine_factory_registry_;
+  bool is_casting_ = false;
 
   DISALLOW_COPY_AND_ASSIGN(InputMethodEngine);
 };

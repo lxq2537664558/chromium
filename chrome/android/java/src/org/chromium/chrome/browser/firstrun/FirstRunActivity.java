@@ -6,25 +6,25 @@ package org.chromium.chrome.browser.firstrun;
 
 import android.app.Activity;
 import android.os.Bundle;
-import android.support.annotation.CallSuper;
-import android.support.annotation.StringRes;
-import android.support.v4.app.Fragment;
 import android.text.TextUtils;
 import android.view.View;
+
+import androidx.annotation.CallSuper;
+import androidx.annotation.StringRes;
+import androidx.annotation.VisibleForTesting;
+import androidx.fragment.app.Fragment;
 
 import org.chromium.base.ActivityState;
 import org.chromium.base.ApplicationStatus;
 import org.chromium.base.ApplicationStatus.ActivityStateListener;
-import org.chromium.base.VisibleForTesting;
-import org.chromium.base.metrics.CachedMetrics.EnumeratedHistogramSample;
+import org.chromium.base.metrics.RecordHistogram;
 import org.chromium.chrome.R;
-import org.chromium.chrome.browser.ChromeFeatureList;
 import org.chromium.chrome.browser.customtabs.CustomTabActivity;
 import org.chromium.chrome.browser.datareduction.DataReductionPromoUtils;
 import org.chromium.chrome.browser.datareduction.DataReductionProxyUma;
 import org.chromium.chrome.browser.metrics.UmaUtils;
 import org.chromium.chrome.browser.net.spdyproxy.DataReductionProxySettings;
-import org.chromium.chrome.browser.search_engines.TemplateUrlService;
+import org.chromium.chrome.browser.search_engines.TemplateUrlServiceFactory;
 import org.chromium.chrome.browser.searchwidget.SearchWidgetProvider;
 import org.chromium.ui.base.LocalizationUtils;
 
@@ -67,8 +67,6 @@ public class FirstRunActivity extends FirstRunActivityBase implements FirstRunPa
     private static final int SIGNIN_ACCEPT_ANOTHER_ACCOUNT = 3;
     private static final int SIGNIN_NO_THANKS = 4;
     private static final int SIGNIN_MAX = 5;
-    private static final EnumeratedHistogramSample sSigninChoiceHistogram =
-            new EnumeratedHistogramSample("MobileFre.SignInChoice", SIGNIN_MAX);
 
     private static final int FRE_PROGRESS_STARTED = 0;
     private static final int FRE_PROGRESS_WELCOME_SHOWN = 1;
@@ -78,14 +76,8 @@ public class FirstRunActivity extends FirstRunActivityBase implements FirstRunPa
     private static final int FRE_PROGRESS_COMPLETED_NOT_SIGNED_IN = 5;
     private static final int FRE_PROGRESS_DEFAULT_SEARCH_ENGINE_SHOWN = 6;
     private static final int FRE_PROGRESS_MAX = 7;
-    private static final EnumeratedHistogramSample sMobileFreProgressMainIntentHistogram =
-            new EnumeratedHistogramSample("MobileFre.Progress.MainIntent", FRE_PROGRESS_MAX);
-    private static final EnumeratedHistogramSample sMobileFreProgressViewIntentHistogram =
-            new EnumeratedHistogramSample("MobileFre.Progress.ViewIntent", FRE_PROGRESS_MAX);
 
     private static FirstRunActivityObserver sObserver;
-
-    private boolean mShowWelcomePage = true;
 
     private String mResultSignInAccountName;
     private boolean mResultIsDefaultAccount;
@@ -121,12 +113,8 @@ public class FirstRunActivity extends FirstRunActivityBase implements FirstRunPa
      * Defines a sequence of pages to be shown (depending on parameters etc).
      */
     private void createPageSequence() {
-        // An optional welcome page.
-        if (mShowWelcomePage) {
-            mPages.add(new ToSAndUMAFirstRunFragment.Page());
-            mFreProgressStates.add(FRE_PROGRESS_WELCOME_SHOWN);
-        }
-
+        mPages.add(new ToSAndUMAFirstRunFragment.Page());
+        mFreProgressStates.add(FRE_PROGRESS_WELCOME_SHOWN);
         // Other pages will be created by createPostNativePageSequence() after
         // native has been initialized.
     }
@@ -155,11 +143,7 @@ public class FirstRunActivity extends FirstRunActivityBase implements FirstRunPa
 
         // An optional sign-in page.
         if (mFreProperties.getBoolean(SHOW_SIGNIN_PAGE)) {
-            if (ChromeFeatureList.isEnabled(ChromeFeatureList.UNIFIED_CONSENT)) {
-                mPages.add(SigninFirstRunFragment::new);
-            } else {
-                mPages.add(AccountFirstRunFragment::new);
-            }
+            mPages.add(SigninFirstRunFragment::new);
             mFreProgressStates.add(FRE_PROGRESS_SIGNIN_SHOWN);
             notifyAdapter = true;
         }
@@ -211,10 +195,9 @@ public class FirstRunActivity extends FirstRunActivityBase implements FirstRunPa
                 }
 
                 mFreProperties = freProperties;
-                mShowWelcomePage = mFreProperties.getBoolean(SHOW_WELCOME_PAGE);
                 if (TextUtils.isEmpty(mResultSignInAccountName)) {
                     mResultSignInAccountName = mFreProperties.getString(
-                            AccountFirstRunFragment.FORCE_SIGNIN_ACCOUNT_TO);
+                            SigninFirstRunFragment.FORCE_SIGNIN_ACCOUNT_TO);
                 }
 
                 createPageSequence();
@@ -240,7 +223,7 @@ public class FirstRunActivity extends FirstRunActivityBase implements FirstRunPa
             }
         };
         mFirstRunFlowSequencer.start();
-
+        FirstRunStatus.setFirstRunTriggered(true);
         recordFreProgressHistogram(FRE_PROGRESS_STARTED);
         onInitialLayoutInflationComplete();
     }
@@ -257,7 +240,7 @@ public class FirstRunActivity extends FirstRunActivityBase implements FirstRunPa
                 onNativeDependenciesFullyInitialized();
             }
         };
-        TemplateUrlService.getInstance().runWhenLoaded(onNativeFinished);
+        TemplateUrlServiceFactory.get().runWhenLoaded(onNativeFinished);
     }
 
     public boolean isNativeSideIsInitializedForTest() {
@@ -373,7 +356,7 @@ public class FirstRunActivity extends FirstRunActivityBase implements FirstRunPa
                 choice = mResultIsDefaultAccount ? SIGNIN_ACCEPT_DEFAULT_ACCOUNT
                                                  : SIGNIN_ACCEPT_ANOTHER_ACCOUNT;
             }
-            sSigninChoiceHistogram.record(choice);
+            recordSigninChoiceHistogram(choice);
             recordFreProgressHistogram(FRE_PROGRESS_COMPLETED_SIGNED_IN);
         } else {
             recordFreProgressHistogram(FRE_PROGRESS_COMPLETED_NOT_SIGNED_IN);
@@ -422,7 +405,7 @@ public class FirstRunActivity extends FirstRunActivityBase implements FirstRunPa
 
     @Override
     public void refuseSignIn() {
-        sSigninChoiceHistogram.record(SIGNIN_NO_THANKS);
+        recordSigninChoiceHistogram(SIGNIN_NO_THANKS);
         mResultSignInAccountName = null;
         mResultShowSignInSettings = false;
     }
@@ -468,7 +451,7 @@ public class FirstRunActivity extends FirstRunActivityBase implements FirstRunPa
     private boolean jumpToPage(int position) {
         if (sObserver != null) sObserver.onJumpToPage(position);
 
-        if (mShowWelcomePage && !didAcceptTermsOfService()) {
+        if (!didAcceptTermsOfService()) {
             return position == 0;
         }
         if (position >= mPagerAdapter.getCount()) {
@@ -482,7 +465,7 @@ public class FirstRunActivity extends FirstRunActivityBase implements FirstRunPa
 
     private void stopProgressionIfNotAcceptedTermsOfService() {
         if (mPagerAdapter == null) return;
-        mPagerAdapter.setStopAtTheFirstPage(mShowWelcomePage && !didAcceptTermsOfService());
+        mPagerAdapter.setStopAtTheFirstPage(!didAcceptTermsOfService());
     }
 
     private void skipPagesIfNecessary() {
@@ -497,10 +480,17 @@ public class FirstRunActivity extends FirstRunActivityBase implements FirstRunPa
 
     private void recordFreProgressHistogram(int state) {
         if (mLaunchedFromChromeIcon) {
-            sMobileFreProgressMainIntentHistogram.record(state);
+            RecordHistogram.recordEnumeratedHistogram(
+                    "MobileFre.Progress.MainIntent", state, FRE_PROGRESS_MAX);
         } else {
-            sMobileFreProgressViewIntentHistogram.record(state);
+            RecordHistogram.recordEnumeratedHistogram(
+                    "MobileFre.Progress.ViewIntent", state, FRE_PROGRESS_MAX);
         }
+    }
+
+    private static void recordSigninChoiceHistogram(int signInChoice) {
+        RecordHistogram.recordEnumeratedHistogram(
+                "MobileFre.SignInChoice", signInChoice, SIGNIN_MAX);
     }
 
     @Override

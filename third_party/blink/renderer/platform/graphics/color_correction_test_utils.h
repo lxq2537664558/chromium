@@ -9,7 +9,7 @@
 
 #include "third_party/blink/renderer/platform/graphics/graphics_types.h"
 #include "third_party/blink/renderer/platform/runtime_enabled_features.h"
-#include "third_party/blink/renderer/platform/wtf/allocator.h"
+#include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
 #include "third_party/skia/include/core/SkImage.h"
 
@@ -65,7 +65,7 @@ class ColorCorrectionTestUtils {
 
   static bool ConvertPixelsToColorSpaceAndPixelFormatForTest(
       void* src_data,
-      int num_elements,
+      size_t num_elements,
       CanvasColorSpace src_color_space,
       ImageDataStorageFormat src_storage_format,
       CanvasColorSpace dst_color_space,

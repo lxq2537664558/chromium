@@ -5,8 +5,11 @@
 #include <wayland-server.h>
 #include <memory>
 
+#include "base/strings/stringprintf.h"
+#include "base/test/scoped_command_line.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/display/display_observer.h"
+#include "ui/display/display_switches.h"
 #include "ui/ozone/platform/wayland/host/wayland_connection.h"
 #include "ui/ozone/platform/wayland/host/wayland_output_manager.h"
 #include "ui/ozone/platform/wayland/host/wayland_screen.h"
@@ -86,13 +89,12 @@ class WaylandScreenTest : public WaylandTest {
       PlatformWindowType window_type,
       gfx::AcceleratedWidget parent_widget,
       MockPlatformWindowDelegate* delegate) {
-    auto window = std::make_unique<WaylandWindow>(delegate, connection_.get());
     PlatformWindowInitProperties properties;
     properties.bounds = bounds;
     properties.type = window_type;
     properties.parent_widget = parent_widget;
-    EXPECT_TRUE(window->Initialize(std::move(properties)));
-    return window;
+    return WaylandWindow::Create(delegate, connection_.get(),
+                                 std::move(properties));
   }
 
   void UpdateOutputGeometry(wl_resource* output_resource,
@@ -223,9 +225,8 @@ TEST_P(WaylandScreenTest, OutputPropertyChanges) {
   EXPECT_EQ(observer.GetAndClearChangedMetrics(), changed_values);
   EXPECT_EQ(observer.GetDisplay().bounds(), new_rect);
 
-  const float new_scale_value = 2.0f;
-  wl_output_send_scale(output_->resource(), new_scale_value);
-  wl_output_send_done(output_->resource());
+  const int32_t new_scale_value = 2;
+  output_->SetScale(new_scale_value);
 
   Sync();
 
@@ -248,7 +249,7 @@ TEST_P(WaylandScreenTest, GetAcceleratedWidgetAtScreenPoint) {
   EXPECT_EQ(widget_at_screen_point, gfx::kNullAcceleratedWidget);
 
   // Set a focus to the main window. Now, that focused window must be returned.
-  window_->set_pointer_focus(true);
+  window_->SetPointerFocus(true);
   widget_at_screen_point =
       platform_screen_->GetAcceleratedWidgetAtScreenPoint(gfx::Point(10, 10));
   EXPECT_EQ(widget_at_screen_point, window_->GetWidget());
@@ -271,8 +272,8 @@ TEST_P(WaylandScreenTest, GetAcceleratedWidgetAtScreenPoint) {
 
   // Imagine the mouse enters a menu window, which is located on top of the main
   // window, and gathers focus.
-  window_->set_pointer_focus(false);
-  menu_window->set_pointer_focus(true);
+  window_->SetPointerFocus(false);
+  menu_window->SetPointerFocus(true);
   widget_at_screen_point =
       platform_screen_->GetAcceleratedWidgetAtScreenPoint(gfx::Point(
           menu_window->GetBounds().x() + 1, menu_window->GetBounds().y() + 1));
@@ -280,15 +281,15 @@ TEST_P(WaylandScreenTest, GetAcceleratedWidgetAtScreenPoint) {
 
   // Whenever a mouse pointer leaves the menu window, the accelerated widget
   // of that focused window must be returned.
-  window_->set_pointer_focus(true);
-  menu_window->set_pointer_focus(false);
+  window_->SetPointerFocus(true);
+  menu_window->SetPointerFocus(false);
   widget_at_screen_point =
       platform_screen_->GetAcceleratedWidgetAtScreenPoint(gfx::Point(0, 0));
   EXPECT_EQ(widget_at_screen_point, window_->GetWidget());
 
   // Reset the focus to avoid crash on dtor as long as there is no real pointer
   // object.
-  window_->set_pointer_focus(false);
+  window_->SetPointerFocus(false);
 }
 
 TEST_P(WaylandScreenTest, GetDisplayMatching) {
@@ -580,9 +581,51 @@ TEST_P(WaylandScreenTest, GetCursorScreenPoint) {
   EXPECT_EQ(gfx::Point(1912, 1071), platform_screen_->GetCursorScreenPoint());
 }
 
-INSTANTIATE_TEST_SUITE_P(XdgVersionV5Test,
+// Checks that the surface that backs the window receives new scale of the
+// output that it is in.
+TEST_P(WaylandScreenTest, SetBufferScale) {
+  // Place the window onto the output.
+  wl_surface_send_enter(surface_->resource(), output_->resource());
+
+  // Change the scale of the output.  Windows looking into that output must get
+  // the new scale and update scale of their buffers.  The default UI scale
+  // equals the output scale.
+  const int32_t kTripleScale = 3;
+  EXPECT_CALL(*surface_, SetBufferScale(kTripleScale));
+  output_->SetScale(kTripleScale);
+
+  Sync();
+
+  EXPECT_EQ(window_->buffer_scale(), kTripleScale);
+  EXPECT_EQ(window_->ui_scale_, kTripleScale);
+
+  // Now simulate the --force-device-scale-factor=1.5
+  const float kForcedUIScale = 1.5;
+  base::test::ScopedCommandLine command_line;
+  command_line.GetProcessCommandLine()->AppendSwitchASCII(
+      switches::kForceDeviceScaleFactor,
+      base::StringPrintf("%.1f", kForcedUIScale));
+  display::Display::ResetForceDeviceScaleFactorForTesting();
+
+  // Change the scale of the output again.  Windows must update scale of
+  // their buffers but the UI scale must get the forced value.
+  const int32_t kDoubleScale = 2;
+  // Question ourselves before questioning others!
+  EXPECT_NE(kForcedUIScale, kDoubleScale);
+  EXPECT_CALL(*surface_, SetBufferScale(kDoubleScale));
+  output_->SetScale(kDoubleScale);
+
+  Sync();
+
+  EXPECT_EQ(window_->buffer_scale(), kDoubleScale);
+  EXPECT_EQ(window_->ui_scale_, kForcedUIScale);
+
+  display::Display::ResetForceDeviceScaleFactorForTesting();
+}
+
+INSTANTIATE_TEST_SUITE_P(XdgVersionStableTest,
                          WaylandScreenTest,
-                         ::testing::Values(kXdgShellV5));
+                         ::testing::Values(kXdgShellStable));
 INSTANTIATE_TEST_SUITE_P(XdgVersionV6Test,
                          WaylandScreenTest,
                          ::testing::Values(kXdgShellV6));

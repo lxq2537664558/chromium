@@ -32,10 +32,13 @@
 !Android.mk
 .*.sw?
 .DS_Store
+.android
+.ccls-cache
 .cipd
-.clang-coverage
 .classpath
+.code-coverage
 .cproject
+.emulator_sdk
 .gdb_history
 .gdbinit
 .landmines
@@ -64,6 +67,8 @@ vs-chromium-project.txt
 .vscode/
 /_out
 /android_emulator_sdk
+/android_webview/tools/webview_log_verbosifier/.gradle/
+/android_webview/tools/webview_log_verbosifier/.settings/
 /ash/ash_unittests_run.xml
 /base/base_unittests_run.xml
 # See build/.gitignore for entries covering src/build.
@@ -80,6 +85,7 @@ vs-chromium-project.txt
 /chrome/build/chrome.x86.orderfile
 /chrome/build/chrome_child.x64.orderfile
 /chrome/build/chrome_child.x86.orderfile
+/chrome/build/pgo_profiles/
 /chrome/gl_tests_run.xml
 /chrome/gles2_conform_test_run.xml
 /chrome/tab_capture_performance_tests_run.xml
@@ -87,7 +93,6 @@ vs-chromium-project.txt
 /chrome/app/theme/default_100_percent/google_chrome
 /chrome/app/theme/default_200_percent/google_chrome
 /chrome/app/theme/google_chrome
-/chrome/browser/autofill/internal
 /chrome/browser/chromeos/arc/voice_interaction/internal
 /chrome/browser/chromeos/assistant/internal
 /chrome/browser/chromeos/login/screenshot_testing/golden_screenshots/*.png
@@ -97,6 +102,7 @@ vs-chromium-project.txt
 /chrome/browser/google/linkdoctor_internal
 /chrome/browser/internal
 /chrome/browser/media/engagement_internal
+/chrome/browser/media/kaleidoscope/internal
 /chrome/browser/performance_monitor/performance_monitor.xml
 /chrome/browser/protector/internal
 /chrome/browser/resources/chromeos/quickoffice
@@ -108,9 +114,11 @@ vs-chromium-project.txt
 # Asset files downloaded by gclient runhooks.
 /chrome/browser/resources/vr/assets/google_chrome/*.png
 /chrome/browser/resources/vr/assets/google_chrome/*.wav
+/chrome/browser/sharing/internal
 /chrome/browser/spellchecker/internal
 /chrome/browser/ui/media_router/internal
 /chrome/browser_tests_run.xml
+/chrome/chrome_cleaner/internal
 /chrome/chrome_run.xml
 /chrome/chrome_user32_delay_imports.xml
 /chrome/chrome_version_resources.xml
@@ -125,10 +133,12 @@ vs-chromium-project.txt
 /chrome/installer/mini_installer_tests_run.xml
 /chrome/installer_util_strings.xml
 /chrome/interactive_ui_tests_run.xml
+/chrome/services/soda/internal
 /chrome/setup.xml
 /chrome/setup_unittests.xml
 /chrome/sync_integration_tests_run.xml
 /chrome/test/android/telemetry_tests/browser_tests/*.wpr
+/chrome/test/chromedriver/third_party/
 /chrome/test/chromeos/autotest/files/client/deps/chrome_test/test_src/
 /chrome/test/chromeos/autotest/files/client/deps/page_cycler_dep/test_src/
 /chrome/test/chromeos/autotest/files/client/deps/perf_data_dep/test_src/
@@ -153,17 +163,22 @@ vs-chromium-project.txt
 /chrome/test/data/plugin/
 /chrome/test/data/vr/
 /chrome/test/data/webrtc/resources
+/chrome/test/data/xr/ar_playback_datasets/*.mp4
 /chrome/test/data/xr/webvr_info/
-/chrome/test/data/xr/webxr_samples/
 /chrome/test/media_router/internal
 /chrome/test/python_tests/
 /chrome/tools/memory
 /chrome/tools/test/reference_build
 /chrome/unit_tests_run.xml
 /chrome/web_ui_mojo_bindings.xml
-/chrome_elf/chrome_elf_resources.xml
 /chromecast/internal
 /chromeos/assistant/internal
+/chromeos/components/help_app_ui/resources/app
+/chromeos/components/media_app_ui/resources/app
+/chromeos/components/media_app_ui/resources/pkg
+/chromeos/profiles/chromeos.orderfile.txt
+/chromeos/profiles/*.local.txt
+/chromeos/profiles/*.afdo.prof
 /cipd_cache/
 /clank
 /cloud_print/cloud_print_version_resources.xml
@@ -177,8 +192,10 @@ vs-chromium-project.txt
 /components/resources/default_200_percent/google_chrome
 /components/resources/default_300_percent/google_chrome
 /components/search_engines/prepopulated_engines.xml
-/components/test/data/language/
+/components/site_isolation/internal
 /components/suggestions.xml
+/components/test/data/paint_preview/**/*.pb
+/components/test/data/paint_preview/**/*.skp
 /components/variations.xml
 /components/zucchini/testdata/*.exe
 /content/browser/service_worker/proto.xml
@@ -231,7 +248,7 @@ vs-chromium-project.txt
 /net/net_unittests_run.xml
 /net/Release
 /net/testserver.log
-/net/third_party/quiche
+/net/third_party/quiche/src
 /orderfiles
 /out*/
 /ppapi/native_client/nacl_irt.xml
@@ -300,3 +317,6 @@ vs-chromium-project.txt
 
 # Ignore IntelliJ files.
 .idea/
+
+# Ignore the default results output directory for tools/run-swarmed.py
+/results

@@ -16,7 +16,7 @@ namespace autofill {
 
 // static
 StrikeDatabase* StrikeDatabaseFactory::GetForBrowserState(
-    ios::ChromeBrowserState* browser_state) {
+    ChromeBrowserState* browser_state) {
   return static_cast<StrikeDatabase*>(
       GetInstance()->GetServiceForBrowserState(browser_state, true));
 }
@@ -30,17 +30,21 @@ StrikeDatabaseFactory* StrikeDatabaseFactory::GetInstance() {
 StrikeDatabaseFactory::StrikeDatabaseFactory()
     : BrowserStateKeyedServiceFactory(
           "AutofillStrikeDatabase",
-          BrowserStateDependencyManager::GetInstance()) {}
+          BrowserStateDependencyManager::GetInstance()) {
+}
 
 StrikeDatabaseFactory::~StrikeDatabaseFactory() {}
 
 std::unique_ptr<KeyedService> StrikeDatabaseFactory::BuildServiceInstanceFor(
     web::BrowserState* context) const {
-  ios::ChromeBrowserState* chrome_browser_state =
-      ios::ChromeBrowserState::FromBrowserState(context);
+  ChromeBrowserState* chrome_browser_state =
+      ChromeBrowserState::FromBrowserState(context);
+
+  leveldb_proto::ProtoDatabaseProvider* db_provider =
+      chrome_browser_state->GetProtoDatabaseProvider();
+
   return std::make_unique<autofill::StrikeDatabase>(
-      chrome_browser_state->GetStatePath().Append(
-          FILE_PATH_LITERAL("AutofillStrikeDatabase")));
+      db_provider, chrome_browser_state->GetStatePath());
 }
 
 }  // namespace autofill

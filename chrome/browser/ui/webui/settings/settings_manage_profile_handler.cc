@@ -14,7 +14,6 @@
 #include "base/value_conversions.h"
 #include "base/values.h"
 #include "chrome/browser/browser_process.h"
-#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/profiles/gaia_info_update_service.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_attributes_entry.h"
@@ -30,9 +29,7 @@
 #include "chrome/grit/generated_resources.h"
 #include "components/prefs/pref_service.h"
 #include "components/prefs/scoped_user_pref_update.h"
-#include "components/signin/core/browser/account_consistency_method.h"
 #include "content/public/browser/browser_thread.h"
-#include "content/public/browser/notification_service.h"
 #include "content/public/browser/web_ui.h"
 #include "google_apis/gaia/gaia_auth_util.h"
 #include "ui/base/l10n/l10n_util.h"
@@ -49,7 +46,7 @@ const char kProfileShortcutNotFound[] = "profileShortcutNotFound";
 }  // namespace
 
 ManageProfileHandler::ManageProfileHandler(Profile* profile)
-    : profile_(profile), observer_(this), weak_factory_(this) {}
+    : profile_(profile) {}
 
 ManageProfileHandler::~ManageProfileHandler() {}
 

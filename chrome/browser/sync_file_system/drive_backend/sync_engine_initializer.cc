@@ -59,8 +59,7 @@ SyncEngineInitializer::SyncEngineInitializer(
       env_override_(env_override),
       database_path_(database_path),
       find_sync_root_retry_count_(0),
-      largest_change_id_(0),
-      weak_ptr_factory_(this) {
+      largest_change_id_(0) {
   DCHECK(sync_context);
 }
 
@@ -115,8 +114,8 @@ void SyncEngineInitializer::GetAboutResource(
     std::unique_ptr<SyncTaskToken> token) {
   set_used_network(true);
   sync_context_->GetDriveService()->GetAboutResource(
-      base::Bind(&SyncEngineInitializer::DidGetAboutResource,
-                 weak_ptr_factory_.GetWeakPtr(), base::Passed(&token)));
+      base::BindOnce(&SyncEngineInitializer::DidGetAboutResource,
+                     weak_ptr_factory_.GetWeakPtr(), base::Passed(&token)));
 }
 
 void SyncEngineInitializer::DidGetAboutResource(
@@ -233,8 +232,8 @@ void SyncEngineInitializer::CreateSyncRoot(
   options.visibility = google_apis::drive::FILE_VISIBILITY_PRIVATE;
   cancel_callback_ = sync_context_->GetDriveService()->AddNewDirectory(
       root_folder_id_, kSyncRootFolderTitle, options,
-      base::Bind(&SyncEngineInitializer::DidCreateSyncRoot,
-                 weak_ptr_factory_.GetWeakPtr(), base::Passed(&token)));
+      base::BindOnce(&SyncEngineInitializer::DidCreateSyncRoot,
+                     weak_ptr_factory_.GetWeakPtr(), base::Passed(&token)));
 }
 
 void SyncEngineInitializer::DidCreateSyncRoot(

@@ -25,7 +25,12 @@ namespace dbus {
 class Bus;
 }
 
+namespace enterprise_management {
+class SignedData;
+}
+
 namespace login_manager {
+class LoginScreenStorageMetadata;
 class PolicyDescriptor;
 class StartArcMiniContainerRequest;
 class UpgradeArcContainerRequest;
@@ -58,6 +63,15 @@ class COMPONENT_EXPORT(SESSION_MANAGER) SessionManagerClient {
     COUNT
   };
 
+  enum class AdbSideloadResponseCode {
+    // ADB sideload operation has finished successfully.
+    SUCCESS = 1,
+    // ADB sideload operation has failed.
+    FAILED = 2,
+    // ADB sideload requires a powerwash to unblock (to define nvram).
+    NEED_POWERWASH = 3,
+  };
+
   // Interface for observing changes from the session manager.
   class Observer {
    public:
@@ -73,13 +87,7 @@ class COMPONENT_EXPORT(SESSION_MANAGER) SessionManagerClient {
     virtual void EmitLoginPromptVisibleCalled() {}
 
     // Called when the ARC instance is stopped after it had already started.
-    // |clean| is true if the instance was stopped as a result of an explicit
-    // request, false if it died unexpectedly.
-    // |container_instance_id| is the identifier of the container instance.
-    // See details for StartArcInstanceCallback.
-    virtual void ArcInstanceStopped(
-        login_manager::ArcContainerStopReason reason,
-        const std::string& container_instance_id) {}
+    virtual void ArcInstanceStopped() {}
   };
 
   // Interface for performing actions on behalf of the stub implementation.
@@ -147,15 +155,63 @@ class COMPONENT_EXPORT(SESSION_MANAGER) SessionManagerClient {
   // Sends the user's password to the session manager.
   virtual void SaveLoginPassword(const std::string& password) = 0;
 
+  // Used to report errors from |LoginScreenStorageStore()|. |error| should
+  // contain an error message if an error occurred.
+  using LoginScreenStorageStoreCallback =
+      DBusMethodCallback<std::string /* error */>;
+
+  // Stores data to the login screen storage. login screen storage is a D-Bus
+  // API that is used by the custom login screen implementations to inject
+  // credentials into the session and store persistent data across the login
+  // screen restarts.
+  virtual void LoginScreenStorageStore(
+      const std::string& key,
+      const login_manager::LoginScreenStorageMetadata& metadata,
+      const std::string& data,
+      LoginScreenStorageStoreCallback callback) = 0;
+
+  // Used for |LoginScreenStorageRetrieve()| method. |data| argument is the data
+  // returned by the session manager. |error| contains an error message if an
+  // error occurred, otherwise empty.
+  using LoginScreenStorageRetrieveCallback =
+      base::OnceCallback<void(base::Optional<std::string> /* data */,
+                              base::Optional<std::string> /* error */)>;
+
+  // Retrieve data stored earlier with the |LoginScreenStorageStore()| method.
+  virtual void LoginScreenStorageRetrieve(
+      const std::string& key,
+      LoginScreenStorageRetrieveCallback callback) = 0;
+
+  // Used for |LoginScreenStorageListKeys()| method. |keys| argument is the list
+  // of keys currently stored in the login screen storage. In case of error,
+  // |keys| is empty and |error| contains the error message.
+  using LoginScreenStorageListKeysCallback =
+      base::OnceCallback<void(std::vector<std::string> /* keys */,
+                              base::Optional<std::string> /* error */)>;
+
+  // List all keys currently stored in the login screen storage.
+  virtual void LoginScreenStorageListKeys(
+      LoginScreenStorageListKeysCallback callback) = 0;
+
+  // Delete a key and the value associated with it from the login screen
+  // storage.
+  virtual void LoginScreenStorageDelete(const std::string& key) = 0;
+
   // Starts the session for the user.
   virtual void StartSession(
       const cryptohome::AccountIdentifier& cryptohome_id) = 0;
 
-  // Stops the current session.
-  virtual void StopSession() = 0;
+  // Stops the current session. Don't call directly unless there's no user on
+  // the device. Use SessionTerminationManager::StopSession instead.
+  virtual void StopSession(login_manager::SessionStopReason reason) = 0;
 
   // Starts the factory reset.
   virtual void StartDeviceWipe() = 0;
+
+  // Starts a remotely initiated factory reset, similar to |StartDeviceWipe|
+  // above, but also performs additional checks on Chrome OS side.
+  virtual void StartRemoteDeviceWipe(
+      const enterprise_management::SignedData& signed_command) = 0;
 
   // Set the block_demode and check_enrollment flags to 0 in the VPD.
   virtual void ClearForcedReEnrollmentVpd(VoidDBusMethodCallback callback) = 0;
@@ -309,8 +365,10 @@ class COMPONENT_EXPORT(SESSION_MANAGER) SessionManagerClient {
                            VoidDBusMethodCallback callback) = 0;
 
   // Returns whether session manager can be used to restart Chrome in order to
-  // apply per-user session flags.
-  virtual bool SupportsRestartToApplyUserFlags() const = 0;
+  // apply per-user session flags, or start guest session.
+  // This returns true for the real session manager client implementation, and
+  // false for the fake (unless explicitly set by a test).
+  virtual bool SupportsBrowserRestart() const = 0;
 
   // Sets the flags to be applied next time by the session manager when Chrome
   // is restarted inside an already started session for a particular user.
@@ -332,32 +390,28 @@ class COMPONENT_EXPORT(SESSION_MANAGER) SessionManagerClient {
   virtual void GetServerBackedStateKeys(StateKeysCallback callback) = 0;
 
   // StartArcMiniContainer starts a container with only a handful of ARC
-  // processes for Chrome OS login screen.  In case of success, callback will be
-  // called with |container_instance_id| set to a string.  The ID is passed to
-  // ArcInstanceStopped() to identify which instance is stopped. In case of
-  // error, |container_instance_id| will be nullopt.
-  using StartArcMiniContainerCallback =
-      DBusMethodCallback<std::string /* container_instance_id */>;
+  // processes for Chrome OS login screen.
   virtual void StartArcMiniContainer(
       const login_manager::StartArcMiniContainerRequest& request,
-      StartArcMiniContainerCallback callback) = 0;
+      VoidDBusMethodCallback callback) = 0;
 
-  // UpgradeArcContainer upgrades a mini-container to a full ARC container. In
-  // case of success, success_callback is called. In case of error,
-  // error_callback will be called with a |low_free_disk_space| signaling
-  // whether the failure was due to low free disk space.
-  using UpgradeErrorCallback =
-      base::OnceCallback<void(bool low_free_disk_space)>;
+  // UpgradeArcContainer upgrades a mini-container to a full ARC container. On
+  // upgrade failure, the container will be shutdown. The container shutdown
+  // will trigger the ArcInstanceStopped signal (as usual). There are no
+  // guarantees over whether this |callback| is invoked or the
+  // ArcInstanceStopped signal is received first.
   virtual void UpgradeArcContainer(
       const login_manager::UpgradeArcContainerRequest& request,
-      base::OnceClosure success_callback,
-      UpgradeErrorCallback error_callback) = 0;
+      VoidDBusMethodCallback callback) = 0;
 
-  // Asynchronously stops the ARC instance.  Upon completion, invokes
-  // |callback| with the result; true on success, false on failure (either
-  // session manager failed to stop an instance or session manager can not be
-  // reached).
-  virtual void StopArcInstance(VoidDBusMethodCallback callback) = 0;
+  // Asynchronously stops the ARC instance. When |should_backup_log| is set to
+  // true it also initiates ARC log back up operation on debugd for the given
+  // |account_id|. Upon completion, invokes |callback| with the result;
+  // true on success, false on failure (either session manager failed to
+  // stop an instance or session manager can not be reached).
+  virtual void StopArcInstance(const std::string& account_id,
+                               bool should_backup_log,
+                               VoidDBusMethodCallback callback) = 0;
 
   // Adjusts the amount of CPU the ARC instance is allowed to use. When
   // |restriction_state| is CONTAINER_CPU_RESTRICTION_FOREGROUND the limit is
@@ -378,6 +432,25 @@ class COMPONENT_EXPORT(SESSION_MANAGER) SessionManagerClient {
   // Returns nullopt if there is no ARC instance or ARC is not available.
   virtual void GetArcStartTime(
       DBusMethodCallback<base::TimeTicks> callback) = 0;
+
+  using EnableAdbSideloadCallback =
+      base::OnceCallback<void(AdbSideloadResponseCode response_code)>;
+
+  // Asynchronously attempts to enable ARC APK Sideloading. Upon completion,
+  // invokes |callback| with the result; true on success, false on failure of
+  // any kind.
+  virtual void EnableAdbSideload(EnableAdbSideloadCallback callback) = 0;
+
+  using QueryAdbSideloadCallback =
+      base::OnceCallback<void(AdbSideloadResponseCode response_code,
+                              bool is_allowed)>;
+
+  // Asynchronously queries for the current status of ARC APK Sideloading. Upon
+  // completion, invokes |callback| with |succeeded| indicating if the query
+  // could be completed. If |succeeded| is true, |is_allowed| contains the
+  // current status of whether ARC APK Sideloading is allowed on this device,
+  // based on previous explicit user opt-in.
+  virtual void QueryAdbSideload(QueryAdbSideloadCallback callback) = 0;
 
  protected:
   // Use Initialize/Shutdown instead.

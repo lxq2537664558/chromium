@@ -7,12 +7,14 @@
 
 #include <memory>
 #include <string>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
 #include "base/strings/string16.h"
 #include "components/autofill/core/browser/autofill_client.h"
 #include "components/autofill/core/browser/autofill_metrics.h"
+#include "components/autofill/core/browser/payments/legal_message_line.h"
 #include "components/autofill/core/browser/payments/local_card_migration_strike_database.h"
 #include "components/autofill/core/browser/payments/payments_client.h"
 
@@ -86,8 +88,13 @@ class LocalCardMigrationManager {
   virtual ~LocalCardMigrationManager();
 
   // Returns true if all of the conditions for allowing local credit card
-  // migration are satisfied. Initializes the local card list for upload.
-  bool ShouldOfferLocalCardMigration(int imported_credit_card_record_type);
+  // migration are satisfied. Initializes the local card list for upload. Stores
+  // a local copy of |imported_credit_card| and
+  // |imported_credit_card_record_type| locally for later check whether the
+  // imported card is supported. |imported_credit_card| might be null if a user
+  // used server card.
+  bool ShouldOfferLocalCardMigration(const CreditCard* imported_credit_card,
+                                     int imported_credit_card_record_type);
 
   // Called from FormDataImporter or settings page when all migration
   // requirements are met. Fetches legal documents and triggers the
@@ -124,7 +131,19 @@ class LocalCardMigrationManager {
   int GetDetectedValues() const;
 
   // Fetch all migratable credit cards and store in |migratable_credit_cards_|.
+  // Migratable cards are cards whose card number passed luhn check and
+  // expiration date are valid. We do NOT filter unsupported cards here.
+  // Any other usage of this function other than ShouldOfferLocalCardMigration()
+  // and from settings page after OnDidGetUploadDetails, you should call
+  // FilterOutUnsupportedLocalCards right after this function to filter out
+  // unsupported cards. If so, the first OnDidGetUploadDetails() will need to
+  // store the supported ranges locally.
   void GetMigratableCreditCards();
+
+  // For testing.
+  void SetAppLocaleForTesting(const std::string& app_locale) {
+    app_locale_ = app_locale;
+  }
 
  protected:
   // Callback after successfully getting the legal documents. On success,
@@ -156,6 +175,8 @@ class LocalCardMigrationManager {
  private:
   friend class LocalCardMigrationBrowserTest;
   FRIEND_TEST_ALL_PREFIXES(LocalCardMigrationManagerTest,
+                           MigrateCreditCard_MigrateWhenHasSupportedLocalCard);
+  FRIEND_TEST_ALL_PREFIXES(LocalCardMigrationManagerTest,
                            MigrateCreditCard_MigrationPermanentFailure);
   FRIEND_TEST_ALL_PREFIXES(LocalCardMigrationManagerTest,
                            MigrateCreditCard_MigrationTemporaryFailure);
@@ -166,6 +187,13 @@ class LocalCardMigrationManager {
 
   // Returns the LocalCardMigrationStrikeDatabase for |client_|.
   LocalCardMigrationStrikeDatabase* GetLocalCardMigrationStrikeDatabase();
+
+  // Filter the |migratable_credit_cards_| with |supported_card_bin_ranges| and
+  // keep supported local cards in |migratable_credit_cards_|.
+  // Effective after one successful GetUploadDetails call where we fetch the
+  // |supported_card_bin_ranges|.
+  void FilterOutUnsupportedLocalCards(
+      const std::vector<std::pair<int, int>>& supported_card_bin_ranges);
 
   // Pops up a larger, modal dialog showing the local cards to be uploaded.
   void ShowMainMigrationDialog();
@@ -183,7 +211,8 @@ class LocalCardMigrationManager {
     observer_for_testing_ = observer;
   }
 
-  std::unique_ptr<base::DictionaryValue> legal_message_;
+  // The parsed lines from the legal message return from GetUploadDetails.
+  LegalMessageLines legal_message_lines_;
 
   std::string app_locale_;
 
@@ -192,6 +221,12 @@ class LocalCardMigrationManager {
   // Weak reference.
   // May be NULL.  NULL indicates OTR.
   PersonalDataManager* personal_data_manager_;
+
+  // The imported credit card number from the form submission.
+  base::Optional<base::string16> imported_credit_card_number_;
+
+  // The imported credit card record type from the form submission.
+  int imported_credit_card_record_type_;
 
   // Collected information about a pending migration request.
   payments::PaymentsClient::MigrationRequestDetails migration_request_;
@@ -215,7 +250,7 @@ class LocalCardMigrationManager {
   std::unique_ptr<LocalCardMigrationStrikeDatabase>
       local_card_migration_strike_database_;
 
-  base::WeakPtrFactory<LocalCardMigrationManager> weak_ptr_factory_;
+  base::WeakPtrFactory<LocalCardMigrationManager> weak_ptr_factory_{this};
 
   DISALLOW_COPY_AND_ASSIGN(LocalCardMigrationManager);
 };

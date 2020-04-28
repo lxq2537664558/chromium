@@ -78,9 +78,10 @@ class FakePageScheduler final : public PageScheduler {
   bool RequestBeginMainFrameNotExpected(bool new_state) override {
     return false;
   }
-  WTF::HashSet<SchedulingPolicy::Feature>
-  GetActiveFeaturesOptingOutFromBackForwardCache() const override {
-    return WTF::HashSet<SchedulingPolicy::Feature>();
+  WebScopedVirtualTimePauser CreateWebScopedVirtualTimePauser(
+      const String& name,
+      WebScopedVirtualTimePauser::VirtualTaskDuration) override {
+    return WebScopedVirtualTimePauser();
   }
 
  private:

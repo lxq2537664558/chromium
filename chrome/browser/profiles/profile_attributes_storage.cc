@@ -16,11 +16,16 @@
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/post_task.h"
+#include "base/task/thread_pool.h"
+#include "base/task_runner_util.h"
 #include "base/threading/scoped_blocking_call.h"
 #include "build/build_config.h"
 #include "chrome/browser/profiles/profile_avatar_downloader.h"
 #include "chrome/browser/profiles/profile_avatar_icon_util.h"
+#include "chrome/browser/profiles/profile_metrics.h"
 #include "chrome/grit/generated_resources.h"
+#include "components/policy/core/browser/browser_policy_connector.h"
+#include "components/profile_metrics/state.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 #include "third_party/icu/source/i18n/unicode/coll.h"
@@ -54,39 +59,42 @@ const int kDefaultNames[] = {
   IDS_DEFAULT_AVATAR_NAME_26
 };
 
+enum class MultiProfileUserType {
+  kSingleProfile,       // There is only one profile.
+  kActiveMultiProfile,  // Several profiles are actively used.
+  kLatentMultiProfile   // There are several profiles, but only one is actively
+                        // used.
+};
+
 // Reads a PNG from disk and decodes it. If the bitmap was successfully read
-// from disk the then |out_image| will contain the bitmap image, otherwise it
-// will be NULL.
-void ReadBitmap(const base::FilePath& image_path, gfx::Image** out_image) {
+// from disk then this will return the bitmap image, otherwise it will return
+// an empty gfx::Image.
+gfx::Image ReadBitmap(const base::FilePath& image_path) {
   base::ScopedBlockingCall scoped_blocking_call(FROM_HERE,
                                                 base::BlockingType::MAY_BLOCK);
-  *out_image = nullptr;
 
   // If the path doesn't exist, don't even try reading it.
   if (!base::PathExists(image_path))
-    return;
+    return gfx::Image();
 
   std::string image_data;
   if (!base::ReadFileToString(image_path, &image_data)) {
     LOG(ERROR) << "Failed to read PNG file from disk.";
-    return;
+    return gfx::Image();
   }
 
   gfx::Image image = gfx::Image::CreateFrom1xPNGBytes(
       base::RefCountedString::TakeString(&image_data));
-  if (image.IsEmpty()) {
+  if (image.IsEmpty())
     LOG(ERROR) << "Failed to decode PNG file.";
-    return;
-  }
 
-  *out_image = new gfx::Image(image);
+  return image;
 }
 
 // Writes |data| to disk and takes ownership of the pointer. On successful
 // completion, it runs |callback|.
-void SaveBitmap(std::unique_ptr<ImageData> data,
-                const base::FilePath& image_path,
-                const base::Closure& callback) {
+bool SaveBitmap(std::unique_ptr<ImageData> data,
+                const base::FilePath& image_path) {
   base::ScopedBlockingCall scoped_blocking_call(FROM_HERE,
                                                 base::BlockingType::MAY_BLOCK);
 
@@ -94,16 +102,15 @@ void SaveBitmap(std::unique_ptr<ImageData> data,
   base::FilePath dir = image_path.DirName();
   if (!base::DirectoryExists(dir) && !base::CreateDirectory(dir)) {
     LOG(ERROR) << "Failed to create parent directory.";
-    return;
+    return false;
   }
 
   if (base::WriteFile(image_path, reinterpret_cast<char*>(&(*data)[0]),
                       data->size()) == -1) {
     LOG(ERROR) << "Failed to save image to file.";
-    return;
+    return false;
   }
-
-  base::PostTaskWithTraits(FROM_HERE, {content::BrowserThread::UI}, callback);
+  return true;
 }
 
 void RunCallbackIfFileMissing(const base::FilePath& file_path,
@@ -111,7 +118,7 @@ void RunCallbackIfFileMissing(const base::FilePath& file_path,
   base::ScopedBlockingCall scoped_blocking_call(FROM_HERE,
                                                 base::BlockingType::MAY_BLOCK);
   if (!base::PathExists(file_path))
-    base::PostTaskWithTraits(FROM_HERE, {content::BrowserThread::UI}, callback);
+    base::PostTask(FROM_HERE, {content::BrowserThread::UI}, callback);
 }
 
 // Compares two ProfileAttributesEntry using locale-sensitive comparison of
@@ -140,11 +147,84 @@ bool ProfileAttributesSortComparator::operator()(
   return a->GetPath().value() < b->GetPath().value();
 }
 
+MultiProfileUserType GetMultiProfileUserType(
+    const std::vector<ProfileAttributesEntry*>& entries) {
+  DCHECK(entries.size() > 0);
+  if (entries.size() == 1u)
+    return MultiProfileUserType::kSingleProfile;
+
+  int active_count = std::count_if(
+      entries.begin(), entries.end(), [](ProfileAttributesEntry* entry) {
+        return ProfileMetrics::IsProfileActive(entry);
+      });
+
+  if (active_count <= 1)
+    return MultiProfileUserType::kLatentMultiProfile;
+  return MultiProfileUserType::kActiveMultiProfile;
+}
+
+profile_metrics::AvatarState GetAvatarState(ProfileAttributesEntry* entry) {
+  size_t index = entry->GetAvatarIconIndex();
+  bool is_modern = profiles::IsModernAvatarIconIndex(index);
+  if (entry->GetSigninState() == SigninState::kNotSignedIn) {
+    if (index == profiles::GetPlaceholderAvatarIndex())
+      return profile_metrics::AvatarState::kSignedOutDefault;
+    return is_modern ? profile_metrics::AvatarState::kSignedOutModern
+                     : profile_metrics::AvatarState::kSignedOutOld;
+  }
+  if (entry->IsUsingGAIAPicture())
+    return profile_metrics::AvatarState::kSignedInGaia;
+  return is_modern ? profile_metrics::AvatarState::kSignedInModern
+                   : profile_metrics::AvatarState::kSignedInOld;
+}
+
+profile_metrics::NameState GetNameState(ProfileAttributesEntry* entry) {
+  bool has_default_name = entry->IsUsingDefaultName();
+  switch (entry->GetNameForm()) {
+    case NameForm::kGaiaName:
+      return profile_metrics::NameState::kGaiaName;
+    case NameForm::kLocalName:
+      return has_default_name ? profile_metrics::NameState::kDefaultName
+                              : profile_metrics::NameState::kCustomName;
+    case NameForm::kGaiaAndLocalName:
+      return has_default_name ? profile_metrics::NameState::kGaiaAndDefaultName
+                              : profile_metrics::NameState::kGaiaAndCustomName;
+  }
+}
+
+profile_metrics::UnconsentedPrimaryAccountType GetUnconsentedPrimaryAccountType(
+    ProfileAttributesEntry* entry) {
+  if (entry->GetSigninState() == SigninState::kNotSignedIn)
+    return profile_metrics::UnconsentedPrimaryAccountType::kSignedOut;
+  if (entry->IsChild())
+    return profile_metrics::UnconsentedPrimaryAccountType::kChild;
+  // TODO(crbug.com/1060113): Replace this check by
+  // !entry->GetHostedDomain().has_value() in M84 (once the cache gets
+  // reasonably well populated).
+  if (policy::BrowserPolicyConnector::IsNonEnterpriseUser(
+          base::UTF16ToUTF8(entry->GetUserName()))) {
+    return profile_metrics::UnconsentedPrimaryAccountType::kConsumer;
+  }
+  // TODO(crbug.com/1060113): Figure out how to distinguish EDU accounts from
+  // other enterprise.
+  return profile_metrics::UnconsentedPrimaryAccountType::kEnterprise;
+}
+
+void RecordProfileState(ProfileAttributesEntry* entry,
+                        profile_metrics::StateSuffix suffix) {
+  profile_metrics::LogProfileAvatar(GetAvatarState(entry), suffix);
+  profile_metrics::LogProfileName(GetNameState(entry), suffix);
+  profile_metrics::LogProfileAccountType(
+      GetUnconsentedPrimaryAccountType(entry), suffix);
+  profile_metrics::LogProfileDaysSinceLastUse(
+      (base::Time::Now() - entry->GetActiveTime()).InDays(), suffix);
+}
+
 }  // namespace
 
 ProfileAttributesStorage::ProfileAttributesStorage(PrefService* prefs)
     : prefs_(prefs),
-      file_task_runner_(base::CreateSequencedTaskRunnerWithTraits(
+      file_task_runner_(base::ThreadPool::CreateSequencedTaskRunner(
           {base::MayBlock(), base::TaskPriority::USER_VISIBLE,
            base::TaskShutdownBehavior::SKIP_ON_SHUTDOWN})) {}
 
@@ -216,7 +296,8 @@ base::string16 ProfileAttributesStorage::ChooseNameForNewProfile(
 
     if (std::none_of(entries.begin(), entries.end(),
                      [name](ProfileAttributesEntry* entry) {
-                       return entry->GetName() == name;
+                       return entry->GetLocalProfileName() == name ||
+                              entry->GetName() == name;
                      })) {
       return name;
     }
@@ -224,7 +305,23 @@ base::string16 ProfileAttributesStorage::ChooseNameForNewProfile(
 }
 
 bool ProfileAttributesStorage::IsDefaultProfileName(
-    const base::string16& name) const {
+    const base::string16& name,
+    bool include_check_for_legacy_profile_name) const {
+  // Check whether it's one of the "Person %d" style names.
+  std::string default_name_format = l10n_util::GetStringFUTF8(
+      IDS_NEW_NUMBERED_PROFILE_NAME, base::ASCIIToUTF16("%d"));
+  int generic_profile_number;  // Unused. Just a placeholder for sscanf.
+  int assignments =
+      sscanf(base::UTF16ToUTF8(name).c_str(), default_name_format.c_str(),
+             &generic_profile_number);
+  if (assignments == 1)
+    return true;
+
+#if !defined(OS_CHROMEOS) && !defined(OS_ANDROID)
+  if (!include_check_for_legacy_profile_name)
+    return false;
+#endif
+
   // Check if it's a "First user" old-style name.
   if (name == l10n_util::GetStringUTF16(IDS_DEFAULT_PROFILE_NAME) ||
       name == l10n_util::GetStringUTF16(IDS_LEGACY_DEFAULT_PROFILE_NAME))
@@ -235,17 +332,7 @@ bool ProfileAttributesStorage::IsDefaultProfileName(
     if (name == l10n_util::GetStringUTF16(kDefaultNames[i]))
       return true;
   }
-
-  // Check whether it's one of the "Person %d" style names.
-  std::string default_name_format = l10n_util::GetStringFUTF8(
-      IDS_NEW_NUMBERED_PROFILE_NAME, base::ASCIIToUTF16("%d"));
-
-  int generic_profile_number;  // Unused. Just a placeholder for sscanf.
-  int assignments = sscanf(base::UTF16ToUTF8(name).c_str(),
-                           default_name_format.c_str(),
-                           &generic_profile_number);
-  // Unless it matched the format, this is a custom name.
-  return assignments == 1;
+  return false;
 }
 
 size_t ProfileAttributesStorage::ChooseAvatarIconIndexForNewProfile() const {
@@ -265,9 +352,9 @@ const gfx::Image* ProfileAttributesStorage::LoadAvatarPictureFromPath(
     const base::FilePath& image_path) const {
   // If the picture is already loaded then use it.
   if (cached_avatar_images_.count(key)) {
-    if (cached_avatar_images_[key]->IsEmpty())
+    if (cached_avatar_images_[key].IsEmpty())
       return nullptr;
-    return cached_avatar_images_[key].get();
+    return &cached_avatar_images_[key];
   }
 
   // Don't download the image if downloading is disabled for tests.
@@ -279,12 +366,12 @@ const gfx::Image* ProfileAttributesStorage::LoadAvatarPictureFromPath(
     return nullptr;
   cached_avatar_images_loading_[key] = true;
 
-  gfx::Image** image = new gfx::Image*;
-  file_task_runner_->PostTaskAndReply(
-      FROM_HERE, base::BindOnce(&ReadBitmap, image_path, image),
+  base::PostTaskAndReplyWithResult(
+      file_task_runner_.get(), FROM_HERE,
+      base::BindOnce(&ReadBitmap, image_path),
       base::BindOnce(&ProfileAttributesStorage::OnAvatarPictureLoaded,
                      const_cast<ProfileAttributesStorage*>(this)->AsWeakPtr(),
-                     profile_path, key, image));
+                     profile_path, key));
   return nullptr;
 }
 
@@ -294,6 +381,40 @@ void ProfileAttributesStorage::AddObserver(Observer* obs) {
 
 void ProfileAttributesStorage::RemoveObserver(Observer* obs) {
   observer_list_.RemoveObserver(obs);
+}
+
+void ProfileAttributesStorage::RecordProfilesState() {
+  std::vector<ProfileAttributesEntry*> entries = GetAllProfilesAttributes();
+  if (entries.size() == 0)
+    return;
+
+  MultiProfileUserType type = GetMultiProfileUserType(entries);
+
+  for (ProfileAttributesEntry* entry : entries) {
+    RecordProfileState(entry, profile_metrics::StateSuffix::kAll);
+
+    switch (type) {
+      case MultiProfileUserType::kSingleProfile:
+        RecordProfileState(entry, profile_metrics::StateSuffix::kSingleProfile);
+        break;
+      case MultiProfileUserType::kActiveMultiProfile:
+        RecordProfileState(entry,
+                           profile_metrics::StateSuffix::kActiveMultiProfile);
+        break;
+      case MultiProfileUserType::kLatentMultiProfile: {
+        RecordProfileState(entry,
+                           profile_metrics::StateSuffix::kLatentMultiProfile);
+        if (ProfileMetrics::IsProfileActive(entry)) {
+          RecordProfileState(
+              entry, profile_metrics::StateSuffix::kLatentMultiProfileActive);
+        } else {
+          RecordProfileState(
+              entry, profile_metrics::StateSuffix::kLatentMultiProfileOthers);
+        }
+        break;
+      }
+    }
+  }
 }
 
 void ProfileAttributesStorage::NotifyOnProfileAvatarChanged(
@@ -311,8 +432,7 @@ void ProfileAttributesStorage::NotifyOnProfileHighResAvatarLoaded(
 void ProfileAttributesStorage::DownloadHighResAvatarIfNeeded(
     size_t icon_index,
     const base::FilePath& profile_path) {
-// Downloading is only supported on desktop.
-#if defined(OS_ANDROID) || defined(OS_CHROMEOS)
+#if defined(OS_ANDROID)
   return;
 #endif
   DCHECK(!disable_avatar_download_for_testing_);
@@ -336,10 +456,7 @@ void ProfileAttributesStorage::DownloadHighResAvatarIfNeeded(
 void ProfileAttributesStorage::DownloadHighResAvatar(
     size_t icon_index,
     const base::FilePath& profile_path) {
-// Downloading is only supported on desktop.
-#if defined(OS_ANDROID) || defined(OS_CHROMEOS)
-  return;
-#endif
+#if !defined(OS_ANDROID)
   const char* file_name =
       profiles::GetDefaultAvatarIconFileNameAtIndex(icon_index);
   DCHECK(file_name);
@@ -353,21 +470,24 @@ void ProfileAttributesStorage::DownloadHighResAvatar(
   std::unique_ptr<ProfileAvatarDownloader>& current_downloader =
       avatar_images_downloads_in_progress_[file_name];
   current_downloader.reset(new ProfileAvatarDownloader(
-      icon_index, base::Bind(&ProfileAttributesStorage::SaveAvatarImageAtPath,
-                             AsWeakPtr(), profile_path)));
+      icon_index,
+      base::BindOnce(&ProfileAttributesStorage::SaveAvatarImageAtPathNoCallback,
+                     AsWeakPtr(), profile_path)));
 
   current_downloader->Start();
+#endif
 }
 
 void ProfileAttributesStorage::SaveAvatarImageAtPath(
     const base::FilePath& profile_path,
-    const gfx::Image* image,
+    gfx::Image image,
     const std::string& key,
-    const base::FilePath& image_path) {
-  cached_avatar_images_[key].reset(new gfx::Image(*image));
+    const base::FilePath& image_path,
+    base::OnceClosure callback) {
+  cached_avatar_images_[key] = image;
 
   std::unique_ptr<ImageData> data(new ImageData);
-  scoped_refptr<base::RefCountedMemory> png_data = image->As1xPNGBytes();
+  scoped_refptr<base::RefCountedMemory> png_data = image.As1xPNGBytes();
   data->assign(png_data->front(), png_data->front() + png_data->size());
 
   // Remove the file from the list of downloads in progress. Note that this list
@@ -376,45 +496,65 @@ void ProfileAttributesStorage::SaveAvatarImageAtPath(
   if (downloader_iter != avatar_images_downloads_in_progress_.end()) {
     // We mustn't delete the avatar downloader right here, since we're being
     // called by it.
-    content::BrowserThread::DeleteSoon(content::BrowserThread::UI, FROM_HERE,
-                                       downloader_iter->second.release());
+    base::DeleteSoon(FROM_HERE, {content::BrowserThread::UI},
+                     downloader_iter->second.release());
     avatar_images_downloads_in_progress_.erase(downloader_iter);
   }
 
   if (data->empty()) {
     LOG(ERROR) << "Failed to PNG encode the image.";
   } else {
-    base::Closure callback =
-        base::Bind(&ProfileAttributesStorage::OnAvatarPictureSaved, AsWeakPtr(),
-                   key, profile_path);
-    file_task_runner_->PostTask(
-        FROM_HERE,
-        base::BindOnce(&SaveBitmap, std::move(data), image_path, callback));
+    base::PostTaskAndReplyWithResult(
+        file_task_runner_.get(), FROM_HERE,
+        base::BindOnce(&SaveBitmap, std::move(data), image_path),
+        base::BindOnce(&ProfileAttributesStorage::OnAvatarPictureSaved,
+                       AsWeakPtr(), key, profile_path, std::move(callback)));
   }
 }
 
 void ProfileAttributesStorage::OnAvatarPictureLoaded(
     const base::FilePath& profile_path,
     const std::string& key,
-    gfx::Image** image) const {
+    gfx::Image image) const {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
   cached_avatar_images_loading_[key] = false;
-
-  if (*image) {
-    cached_avatar_images_[key].reset(*image);
-  } else {
-    // Place an empty image in the cache to avoid reloading it again.
-    cached_avatar_images_[key].reset(new gfx::Image());
+  if (cached_avatar_images_.count(key)) {
+    if (!cached_avatar_images_[key].IsEmpty() || image.IsEmpty()) {
+      // If GAIA picture is not empty that means that it has been set with the
+      // most up-to-date value while the picture was being loaded from disk.
+      // If GAIA picture is empty and the image loaded from disk is also empty
+      // then there is no need to update.
+      return;
+    }
   }
-  delete image;
+
+  // Even if the image is empty (e.g. because decoding failed), place it in the
+  // cache to avoid reloading it again.
+  cached_avatar_images_[key] = std::move(image);
 
   NotifyOnProfileHighResAvatarLoaded(profile_path);
 }
 
 void ProfileAttributesStorage::OnAvatarPictureSaved(
     const std::string& file_name,
-    const base::FilePath& profile_path) const {
+    const base::FilePath& profile_path,
+    base::OnceClosure callback,
+    bool success) const {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  if (!success)
+    return;
+
+  if (callback)
+    std::move(callback).Run();
 
   NotifyOnProfileHighResAvatarLoaded(profile_path);
+}
+
+void ProfileAttributesStorage::SaveAvatarImageAtPathNoCallback(
+    const base::FilePath& profile_path,
+    gfx::Image image,
+    const std::string& key,
+    const base::FilePath& image_path) {
+  SaveAvatarImageAtPath(profile_path, image, key, image_path,
+                        base::OnceClosure());
 }

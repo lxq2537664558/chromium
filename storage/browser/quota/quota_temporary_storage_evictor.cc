@@ -45,8 +45,7 @@ QuotaTemporaryStorageEvictor::QuotaTemporaryStorageEvictor(
     int64_t interval_ms)
     : quota_eviction_handler_(quota_eviction_handler),
       interval_ms_(interval_ms),
-      timer_disabled_for_testing_(false),
-      weak_factory_(this) {
+      timer_disabled_for_testing_(false) {
   DCHECK(quota_eviction_handler);
 }
 
@@ -77,9 +76,12 @@ void QuotaTemporaryStorageEvictor::ReportPerRoundHistogram() {
   base::Time now = base::Time::Now();
   UMA_HISTOGRAM_TIMES("Quota.TimeSpentToAEvictionRound",
                       now - round_statistics_.start_time);
-  if (!time_of_end_of_last_round_.is_null())
+  if (!time_of_end_of_last_round_.is_null()) {
     UMA_HISTOGRAM_MINUTES("Quota.TimeDeltaOfEvictionRounds",
                           now - time_of_end_of_last_round_);
+  }
+  time_of_end_of_last_round_ = now;
+
   UMA_HISTOGRAM_MBYTES("Quota.DiskspaceShortage",
                        round_statistics_.diskspace_shortage_at_round);
   UMA_HISTOGRAM_MBYTES("Quota.EvictedBytesPerRound",
@@ -114,7 +116,6 @@ void QuotaTemporaryStorageEvictor::OnEvictionRoundStarted() {
 
 void QuotaTemporaryStorageEvictor::OnEvictionRoundFinished() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  in_progress_eviction_origins_.clear();
 
   // Check if skipped round
   if (round_statistics_.num_evicted_origins_in_round) {
@@ -203,8 +204,7 @@ void QuotaTemporaryStorageEvictor::OnGotEvictionRoundInfo(
     // TODO(michaeln): if the reason for eviction is low physical disk space,
     // make 'unlimited' origins subject to eviction too.
     quota_eviction_handler_->GetEvictionOrigin(
-        blink::mojom::StorageType::kTemporary, in_progress_eviction_origins_,
-        settings.pool_size,
+        blink::mojom::StorageType::kTemporary, settings.pool_size,
         base::BindOnce(&QuotaTemporaryStorageEvictor::OnGotEvictionOrigin,
                        weak_factory_.GetWeakPtr()));
     return;
@@ -234,7 +234,6 @@ void QuotaTemporaryStorageEvictor::OnGotEvictionOrigin(
   }
 
   DCHECK(!origin->GetURL().is_empty());
-  in_progress_eviction_origins_.insert(*origin);
 
   quota_eviction_handler_->EvictOriginData(
       *origin, blink::mojom::StorageType::kTemporary,

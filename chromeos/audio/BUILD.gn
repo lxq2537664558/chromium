@@ -14,6 +14,7 @@ component("audio") {
     "//chromeos/dbus/audio",
     "//components/prefs",
     "//media/base:video_facing",
+    "//services/media_session/public/mojom",
   ]
   sources = [
     "audio_device.cc",
@@ -39,6 +40,8 @@ source_set("unit_tests") {
     "//chromeos/dbus/audio",
     "//components/prefs:test_support",
     "//media/base:video_facing",
+    "//services/media_session/public/mojom",
+    "//testing/gmock",
     "//testing/gtest",
   ]
   sources = [

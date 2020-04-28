@@ -9,24 +9,27 @@
 #include "ash/app_list/views/app_list_page.h"
 #include "ash/assistant/model/assistant_ui_model_observer.h"
 #include "ash/public/cpp/app_list/app_list_types.h"
+#include "ash/public/cpp/assistant/controller/assistant_controller.h"
+#include "ash/public/cpp/assistant/controller/assistant_controller_observer.h"
+#include "ash/public/cpp/assistant/controller/assistant_ui_controller.h"
 #include "base/macros.h"
 #include "base/optional.h"
+#include "base/scoped_observer.h"
 
 namespace ash {
-class AssistantViewDelegate;
-class AssistantWebView;
-}  // namespace ash
-
-namespace app_list {
 
 class AssistantMainView;
+class AssistantViewDelegate;
+class ContentsView;
+class ViewShadow;
 
 // The Assistant page for the app list.
 class APP_LIST_EXPORT AssistantPageView : public AppListPage,
-                                          public ash::AssistantUiModelObserver {
+                                          public AssistantControllerObserver,
+                                          public AssistantUiModelObserver {
  public:
-  explicit AssistantPageView(
-      ash::AssistantViewDelegate* assistant_view_delegate);
+  AssistantPageView(AssistantViewDelegate* assistant_view_delegate,
+                    ContentsView* contents_view);
   ~AssistantPageView() override;
 
   void InitLayout();
@@ -34,39 +37,70 @@ class APP_LIST_EXPORT AssistantPageView : public AppListPage,
   // views::View:
   const char* GetClassName() const override;
   gfx::Size CalculatePreferredSize() const override;
+  int GetHeightForWidth(int width) const override;
+  void OnBoundsChanged(const gfx::Rect& prev_bounds) override;
   void RequestFocus() override;
   void GetAccessibleNodeData(ui::AXNodeData* node_data) override;
+  void ChildPreferredSizeChanged(views::View* child) override;
+  void ChildVisibilityChanged(views::View* child) override;
+  void VisibilityChanged(views::View* starting_from, bool is_visible) override;
 
   // ui::EventHandler:
   void OnMouseEvent(ui::MouseEvent* event) override;
   void OnGestureEvent(ui::GestureEvent* event) override;
 
   // AppListPage:
-  gfx::Rect GetPageBoundsForState(ash::AppListState state) const override;
-  gfx::Rect GetSearchBoxBounds() const override;
+  void OnShown() override;
+  void OnAnimationStarted(AppListState from_state,
+                          AppListState to_state) override;
+  base::Optional<int> GetSearchBoxTop(
+      AppListViewState view_state) const override;
+  gfx::Rect GetPageBoundsForState(
+      AppListState state,
+      const gfx::Rect& contents_bounds,
+      const gfx::Rect& search_box_bounds) const override;
   views::View* GetFirstFocusableView() override;
   views::View* GetLastFocusableView() override;
+  void AnimateYPosition(AppListViewState target_view_state,
+                        const TransformAnimator& animator) override;
+
+  // AssistantControllerObserver:
+  void OnAssistantControllerDestroying() override;
 
   // AssistantUiModelObserver:
-  void OnUiModeChanged(ash::AssistantUiMode ui_mode) override;
   void OnUiVisibilityChanged(
-      ash::AssistantVisibility new_visibility,
-      ash::AssistantVisibility old_visibility,
-      base::Optional<ash::AssistantEntryPoint> entry_point,
-      base::Optional<ash::AssistantExitPoint> exit_point) override;
-
-  gfx::Rect AddShadowBorderToBounds(const gfx::Rect& bounds) const;
+      AssistantVisibility new_visibility,
+      AssistantVisibility old_visibility,
+      base::Optional<AssistantEntryPoint> entry_point,
+      base::Optional<AssistantExitPoint> exit_point) override;
 
  private:
-  ash::AssistantViewDelegate* const assistant_view_delegate_;
+  int GetChildViewHeightForWidth(int width) const;
+  void MaybeUpdateAppListState(int child_height);
+  gfx::Rect AddShadowBorderToBounds(const gfx::Rect& bounds) const;
 
-  // Owned by the views hierarchy.
+  AssistantViewDelegate* const assistant_view_delegate_;
+  ContentsView* const contents_view_;
+
+  // Owned by the view hierarchy.
   AssistantMainView* assistant_main_view_ = nullptr;
-  ash::AssistantWebView* assistant_web_view_ = nullptr;
+
+  int min_height_dip_;
+
+  std::unique_ptr<ViewShadow> view_shadow_;
+
+  ScopedObserver<AssistantController, AssistantControllerObserver>
+      assistant_controller_observer_{this};
+
+  ScopedObserver<AssistantUiController,
+                 AssistantUiModelObserver,
+                 &AssistantUiController::AddModelObserver,
+                 &AssistantUiController::RemoveModelObserver>
+      assistant_ui_model_observer_{this};
 
   DISALLOW_COPY_AND_ASSIGN(AssistantPageView);
 };
 
-}  // namespace app_list
+}  // namespace ash
 
 #endif  // ASH_APP_LIST_VIEWS_ASSISTANT_ASSISTANT_PAGE_VIEW_H_

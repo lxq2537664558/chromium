@@ -22,6 +22,7 @@ import android.os.Handler;
 import android.os.Looper;
 import android.os.Process;
 import android.support.test.filters.SmallTest;
+import android.support.test.runner.AndroidJUnit4;
 
 import org.json.JSONObject;
 import org.junit.After;
@@ -33,7 +34,6 @@ import org.junit.runner.RunWith;
 import org.chromium.base.FileUtils;
 import org.chromium.base.PathUtils;
 import org.chromium.base.annotations.JNINamespace;
-import org.chromium.base.test.BaseJUnit4ClassRunner;
 import org.chromium.base.test.util.Feature;
 import org.chromium.net.CronetTestRule.CronetTestFramework;
 import org.chromium.net.CronetTestRule.OnlyRunNativeCronet;
@@ -58,7 +58,7 @@ import java.util.concurrent.atomic.AtomicReference;
 /**
  * Test CronetEngine.
  */
-@RunWith(BaseJUnit4ClassRunner.class)
+@RunWith(AndroidJUnit4.class)
 @JNINamespace("cronet")
 public class CronetUrlRequestContextTest {
     @Rule
@@ -411,7 +411,7 @@ public class CronetUrlRequestContextTest {
         assertTrue(logFile.exists());
         assertTrue(logFile.length() != 0);
         assertFalse(hasBytesInNetLog(logFile));
-        FileUtils.recursivelyDeleteFile(netLogDir);
+        FileUtils.recursivelyDeleteFile(netLogDir, FileUtils.DELETE_ALL);
         assertFalse(netLogDir.exists());
     }
 
@@ -471,7 +471,7 @@ public class CronetUrlRequestContextTest {
         assertTrue(logFile.exists());
         assertTrue(logFile.length() != 0);
 
-        FileUtils.recursivelyDeleteFile(netLogDir);
+        FileUtils.recursivelyDeleteFile(netLogDir, FileUtils.DELETE_ALL);
         assertFalse(netLogDir.exists());
     }
 
@@ -567,9 +567,9 @@ public class CronetUrlRequestContextTest {
         assertTrue(containsStringInNetLog(logFile2, mUrl404));
         assertTrue(containsStringInNetLog(logFile2, mUrl500));
 
-        FileUtils.recursivelyDeleteFile(netLogDir1);
+        FileUtils.recursivelyDeleteFile(netLogDir1, FileUtils.DELETE_ALL);
         assertFalse(netLogDir1.exists());
-        FileUtils.recursivelyDeleteFile(netLogDir2);
+        FileUtils.recursivelyDeleteFile(netLogDir2, FileUtils.DELETE_ALL);
         assertFalse(netLogDir2.exists());
     }
 
@@ -743,7 +743,7 @@ public class CronetUrlRequestContextTest {
             assertEquals("Engine is shut down.", e.getMessage());
         }
         assertFalse(logFile.exists());
-        FileUtils.recursivelyDeleteFile(netLogDir);
+        FileUtils.recursivelyDeleteFile(netLogDir, FileUtils.DELETE_ALL);
         assertFalse(netLogDir.exists());
     }
 
@@ -801,7 +801,7 @@ public class CronetUrlRequestContextTest {
         assertTrue(logFile.exists());
         assertTrue(logFile.length() != 0);
         assertFalse(hasBytesInNetLog(logFile));
-        FileUtils.recursivelyDeleteFile(netLogDir);
+        FileUtils.recursivelyDeleteFile(netLogDir, FileUtils.DELETE_ALL);
         assertFalse(netLogDir.exists());
     }
 
@@ -861,7 +861,7 @@ public class CronetUrlRequestContextTest {
         assertTrue(logFile.exists());
         assertTrue(logFile.length() != 0);
         assertFalse(hasBytesInNetLog(logFile));
-        FileUtils.recursivelyDeleteFile(netLogDir);
+        FileUtils.recursivelyDeleteFile(netLogDir, FileUtils.DELETE_ALL);
         assertFalse(netLogDir.exists());
     }
 
@@ -916,7 +916,7 @@ public class CronetUrlRequestContextTest {
         assertTrue(logFile.exists());
         assertTrue(logFile.length() != 0);
         assertTrue(hasBytesInNetLog(logFile));
-        FileUtils.recursivelyDeleteFile(netLogDir);
+        FileUtils.recursivelyDeleteFile(netLogDir, FileUtils.DELETE_ALL);
         assertFalse(netLogDir.exists());
     }
 

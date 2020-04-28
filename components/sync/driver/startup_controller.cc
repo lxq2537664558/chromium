@@ -64,8 +64,7 @@ StartupController::StartupController(
     : get_preferred_data_types_callback_(std::move(get_preferred_data_types)),
       should_start_callback_(std::move(should_start)),
       start_engine_callback_(std::move(start_engine)),
-      bypass_deferred_startup_(false),
-      weak_factory_(this) {}
+      bypass_deferred_startup_(false) {}
 
 StartupController::~StartupController() {}
 
@@ -163,10 +162,8 @@ void StartupController::OnDataTypeRequestsSyncStartup(ModelType type) {
   // Measure the time spent waiting for init and the type that triggered it.
   // We could measure the time spent deferred on a per-datatype basis, but
   // for now this is probably sufficient.
-  // TODO(wychen): enum uma should be strongly typed. crbug.com/661401
   UMA_HISTOGRAM_ENUMERATION("Sync.Startup.TypeTriggeringInit",
-                            ModelTypeToHistogramInt(type),
-                            static_cast<int>(ModelType::NUM_ENTRIES));
+                            ModelTypeHistogramValue(type));
   if (!start_up_time_.is_null()) {
     RecordTimeDeferred();
     UMA_HISTOGRAM_ENUMERATION("Sync.Startup.DeferredInitTrigger",

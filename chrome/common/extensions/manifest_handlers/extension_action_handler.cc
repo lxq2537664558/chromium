@@ -6,12 +6,10 @@
 
 #include <memory>
 
-#include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/values.h"
-#include "chrome/common/extensions/api/extension_action/action_info.h"
 #include "chrome/common/extensions/extension_constants.h"
-#include "chrome/grit/generated_resources.h"
+#include "extensions/common/api/extension_action/action_info.h"
 #include "extensions/common/extension.h"
 #include "extensions/common/file_util.h"
 #include "extensions/common/image_util.h"
@@ -29,9 +27,11 @@ bool ExtensionActionHandler::Parse(Extension* extension,
                                    base::string16* error) {
   const char* key = nullptr;
   const char* error_key = nullptr;
+  ActionInfo::Type type = ActionInfo::TYPE_ACTION;
   if (extension->manifest()->HasKey(manifest_keys::kAction)) {
     key = manifest_keys::kAction;
     error_key = manifest_errors::kInvalidAction;
+    // type ACTION is correct.
   }
 
   if (extension->manifest()->HasKey(manifest_keys::kPageAction)) {
@@ -42,6 +42,7 @@ bool ExtensionActionHandler::Parse(Extension* extension,
     }
     key = manifest_keys::kPageAction;
     error_key = manifest_errors::kInvalidPageAction;
+    type = ActionInfo::TYPE_PAGE;
   }
 
   if (extension->manifest()->HasKey(manifest_keys::kBrowserAction)) {
@@ -52,6 +53,7 @@ bool ExtensionActionHandler::Parse(Extension* extension,
     }
     key = manifest_keys::kBrowserAction;
     error_key = manifest_errors::kInvalidBrowserAction;
+    type = ActionInfo::TYPE_BROWSER;
   }
 
   if (key) {
@@ -62,41 +64,22 @@ bool ExtensionActionHandler::Parse(Extension* extension,
     }
 
     std::unique_ptr<ActionInfo> action_info =
-        ActionInfo::Load(extension, dict, error);
+        ActionInfo::Load(extension, type, dict, error);
     if (!action_info)
       return false;  // Failed to parse extension action definition.
 
-    if (key == manifest_keys::kAction) {
-      ActionInfo::SetExtensionActionInfo(extension, std::move(action_info));
-    } else {
-      if (dict->HasKey(manifest_keys::kActionDefaultState)) {
-        *error =
-            base::ASCIIToUTF16(manifest_errors::kDefaultStateShouldNotBeSet);
-        return false;
-      }
-
-      if (key == manifest_keys::kPageAction)
-        ActionInfo::SetPageActionInfo(extension, std::move(action_info));
-      else
-        ActionInfo::SetBrowserActionInfo(extension, std::move(action_info));
-    }
+    ActionInfo::SetExtensionActionInfo(extension, std::move(action_info));
   } else {  // No key, used for synthesizing an action for extensions with none.
     if (Manifest::IsComponentLocation(extension->location()))
       return true;  // Don't synthesize actions for component extensions.
     if (extension->was_installed_by_default())
       return true;  // Don't synthesize actions for default extensions.
-    if (extension->manifest()->HasKey(
-            manifest_keys::kSynthesizeExtensionAction)) {
-      *error = base::ASCIIToUTF16(base::StringPrintf(
-          "Key %s is reserved.", manifest_keys::kSynthesizeExtensionAction));
-      return false;  // No one should use this key.
-    }
 
     // Set an empty page action. We use a page action (instead of a browser
     // action) because the action should not be seen as enabled on every page.
-    std::unique_ptr<ActionInfo> action_info(new ActionInfo());
+    auto action_info = std::make_unique<ActionInfo>(ActionInfo::TYPE_PAGE);
     action_info->synthesized = true;
-    ActionInfo::SetPageActionInfo(extension, std::move(action_info));
+    ActionInfo::SetExtensionActionInfo(extension, std::move(action_info));
   }
 
   return true;
@@ -106,24 +89,29 @@ bool ExtensionActionHandler::Validate(
     const Extension* extension,
     std::string* error,
     std::vector<InstallWarning>* warnings) const {
-  int error_message = 0;
-  const ActionInfo* action = ActionInfo::GetPageActionInfo(extension);
-  if (action) {
-    error_message = IDS_EXTENSION_LOAD_ICON_FOR_PAGE_ACTION_FAILED;
-  } else {
-    action = ActionInfo::GetBrowserActionInfo(extension);
-    error_message = IDS_EXTENSION_LOAD_ICON_FOR_BROWSER_ACTION_FAILED;
+  const ActionInfo* action = ActionInfo::GetExtensionActionInfo(extension);
+  if (!action || action->default_icon.empty())
+    return true;
+
+  const char* manifest_key = nullptr;
+  switch (action->type) {
+    case ActionInfo::TYPE_ACTION:
+      manifest_key = manifest_keys::kAction;
+      break;
+    case ActionInfo::TYPE_BROWSER:
+      manifest_key = manifest_keys::kBrowserAction;
+      break;
+    case ActionInfo::TYPE_PAGE:
+      manifest_key = manifest_keys::kPageAction;
+      break;
   }
+  DCHECK(manifest_key);
 
   // Analyze the icons for visibility using the default toolbar color, since
   // the majority of Chrome users don't modify their theme.
-  if (action && !action->default_icon.empty() &&
-      !file_util::ValidateExtensionIconSet(
-          action->default_icon, extension, error_message,
-          image_util::kDefaultToolbarColor, error)) {
-    return false;
-  }
-  return true;
+  return file_util::ValidateExtensionIconSet(
+      action->default_icon, extension, manifest_key,
+      image_util::kDefaultToolbarColor, error);
 }
 
 bool ExtensionActionHandler::AlwaysParseForType(Manifest::Type type) const {
@@ -132,8 +120,9 @@ bool ExtensionActionHandler::AlwaysParseForType(Manifest::Type type) const {
 
 base::span<const char* const> ExtensionActionHandler::Keys() const {
   static constexpr const char* kKeys[] = {
-      manifest_keys::kPageAction, manifest_keys::kBrowserAction,
-      manifest_keys::kSynthesizeExtensionAction};
+      manifest_keys::kPageAction,
+      manifest_keys::kBrowserAction,
+  };
   return kKeys;
 }
 

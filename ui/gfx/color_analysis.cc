@@ -18,6 +18,7 @@
 #include "base/bind.h"
 #include "base/callback.h"
 #include "base/logging.h"
+#include "base/numerics/ranges.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 #include "third_party/skia/include/core/SkUnPreMultiply.h"
 #include "ui/gfx/codec/png_codec.h"
@@ -30,7 +31,7 @@ namespace color_utils {
 namespace {
 
 // RGBA KMean Constants
-const uint32_t kNumberOfClusters = 4;
+const int kNumberOfClusters = 4;
 const int kNumberOfIterations = 50;
 
 const HSL kDefaultLowerHSLBound = {-1, -1, 0.15};
@@ -413,12 +414,13 @@ int GridSampler::GetSample(int width, int height) {
   // ..........
   // .3.7......
   // ..........
-  const int kPadX = 1;
-  const int kPadY = 1;
-  int x = kPadX +
-      (calls_ / kNumberOfClusters) * ((width - 2 * kPadX) / kNumberOfClusters);
-  int y = kPadY +
-      (calls_ % kNumberOfClusters) * ((height - 2 * kPadY) / kNumberOfClusters);
+  // But don't inset if the image is too narrow or too short.
+  const int kInsetX = (width > 2 ? 1 : 0);
+  const int kInsetY = (height > 2 ? 1 : 0);
+  int x = kInsetX + (calls_ / kNumberOfClusters) *
+                        ((width - 2 * kInsetX) / kNumberOfClusters);
+  int y = kInsetY + (calls_ % kNumberOfClusters) *
+                        ((height - 2 * kInsetY) / kNumberOfClusters);
   int index = x + (y * width);
   ++calls_;
   return index % (width * height);
@@ -468,7 +470,7 @@ SkColor CalculateKMeanColorOfBuffer(uint8_t* decoded_data,
   SkColor color = kDefaultBgColor;
   if (img_width > 0 && img_height > 0) {
     std::vector<KMeanCluster> clusters;
-    clusters.resize(kNumberOfClusters, KMeanCluster());
+    clusters.resize(static_cast<size_t>(kNumberOfClusters), KMeanCluster());
 
     // Pick a starting point for each cluster
     auto new_cluster = clusters.begin();
@@ -636,7 +638,7 @@ SkColor CalculateKMeanColorOfBitmap(const SkBitmap& bitmap,
   // we can end up creating a larger buffer than we have data for, and the end
   // of the buffer will remain uninitialized after we copy/UnPreMultiply the
   // image data into it).
-  height = std::min(height, bitmap.height());
+  height = base::ClampToRange(height, 0, bitmap.height());
 
   // SkBitmap uses pre-multiplied alpha but the KMean clustering function
   // above uses non-pre-multiplied alpha. Transform the bitmap before we
@@ -959,22 +961,6 @@ bool ApplyColorReduction(const SkBitmap& source_bitmap,
   }
 
   return true;
-}
-
-bool ComputePrincipalComponentImage(const SkBitmap& source_bitmap,
-                                    SkBitmap* target_bitmap) {
-  if (!target_bitmap) {
-    NOTREACHED();
-    return false;
-  }
-
-  gfx::Matrix3F covariance = ComputeColorCovariance(source_bitmap);
-  gfx::Matrix3F eigenvectors = gfx::Matrix3F::Zeros();
-  gfx::Vector3dF eigenvals = covariance.SolveEigenproblem(&eigenvectors);
-  gfx::Vector3dF principal = eigenvectors.get_column(0);
-  if (eigenvals == gfx::Vector3dF() || principal == gfx::Vector3dF())
-    return false;  // This may happen for some edge cases.
-  return ApplyColorReduction(source_bitmap, principal, true, target_bitmap);
 }
 
 }  // color_utils

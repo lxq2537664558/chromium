@@ -27,3 +27,4 @@ std::string QuicGetTestMemoryCachePathImpl() {
   // The file path is known to be an ascii string.
   return path.MaybeAsASCII();
 }
+

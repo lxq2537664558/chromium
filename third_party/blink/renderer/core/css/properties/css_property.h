@@ -19,14 +19,14 @@ namespace blink {
 
 class ComputedStyle;
 class CrossThreadStyleValue;
+class ExecutionContext;
 class LayoutObject;
-class StylePropertyShorthand;
 class SVGComputedStyle;
-
-enum PhysicalBoxSide { kTopSide, kRightSide, kBottomSide, kLeftSide };
 
 class CORE_EXPORT CSSProperty : public CSSUnresolvedProperty {
  public:
+  using Flags = uint16_t;
+
   static const CSSProperty& Get(CSSPropertyID);
 
   // For backwards compatibility when passing around CSSUnresolvedProperty
@@ -40,20 +40,31 @@ class CORE_EXPORT CSSProperty : public CSSUnresolvedProperty {
   bool IDEquals(CSSPropertyID id) const { return PropertyID() == id; }
   bool IsResolvedProperty() const override { return true; }
 
+  Flags GetFlags() const { return flags_; }
   bool IsInterpolable() const { return flags_ & kInterpolable; }
   bool IsCompositableProperty() const { return flags_ & kCompositableProperty; }
   bool IsDescriptor() const { return flags_ & kDescriptor; }
-  bool SupportsPercentage() const { return flags_ & kSupportsPercentage; }
   bool IsProperty() const { return flags_ & kProperty; }
-  bool IsValidForVisitedLink() const { return flags_ & kValidForVisitedLink; }
   bool IsShorthand() const { return flags_ & kShorthand; }
   bool IsLonghand() const { return flags_ & kLonghand; }
   bool IsInherited() const { return flags_ & kInherited; }
+  bool IsVisited() const { return flags_ & kVisited; }
+  bool IsInternal() const { return flags_ & kInternal; }
+  bool IsAffectedByForcedColors() const {
+    return flags_ & kIsAffectedByForcedColors;
+  }
+  bool IsValidForFirstLetter() const { return flags_ & kValidForFirstLetter; }
+  bool IsValidForCue() const { return flags_ & kValidForCue; }
+  bool IsValidForMarker() const { return flags_ & kValidForMarker; }
+  bool IsSurrogate() const { return flags_ & kSurrogate; }
+  bool AffectsFont() const { return flags_ & kAffectsFont; }
 
   bool IsRepeated() const { return repetition_separator_ != '\0'; }
   char RepetitionSeparator() const { return repetition_separator_; }
 
-  virtual bool IsAffectedByAll() const { return IsEnabled() && IsProperty(); }
+  virtual bool IsAffectedByAll() const {
+    return IsWebExposed() && IsProperty();
+  }
   virtual bool IsLayoutDependentProperty() const { return false; }
   virtual bool IsLayoutDependent(const ComputedStyle* style,
                                  LayoutObject* layout_object) const {
@@ -64,71 +75,75 @@ class CORE_EXPORT CSSProperty : public CSSUnresolvedProperty {
       const ComputedStyle&,
       const SVGComputedStyle&,
       const LayoutObject*,
-      Node*,
       bool allow_visited_style) const {
     return nullptr;
   }
-  // TODO: Resolve computed auto alignment in applyProperty/ComputedStyle and
-  // remove this non-const Node parameter.
   const CSSValue* CSSValueFromComputedStyle(const ComputedStyle&,
                                             const LayoutObject*,
-                                            Node*,
                                             bool allow_visited_style) const;
-  virtual std::unique_ptr<CrossThreadStyleValue>
-  CrossThreadStyleValueFromComputedStyle(const ComputedStyle& computed_style,
-                                         const LayoutObject* layout_object,
-                                         Node* node,
-                                         bool allow_visited_style) const;
+  std::unique_ptr<CrossThreadStyleValue> CrossThreadStyleValueFromComputedStyle(
+      const ComputedStyle& computed_style,
+      const LayoutObject* layout_object,
+      bool allow_visited_style) const;
   virtual const CSSProperty& ResolveDirectionAwareProperty(TextDirection,
                                                            WritingMode) const {
     return *this;
   }
-  static void FilterEnabledCSSPropertiesIntoVector(const CSSPropertyID*,
-                                                   size_t length,
-                                                   Vector<const CSSProperty*>&);
+  virtual const CSSProperty* GetVisitedProperty() const { return nullptr; }
+  virtual const CSSProperty* GetUnvisitedProperty() const { return nullptr; }
 
- protected:
-  enum Flag : uint16_t {
+  virtual const CSSProperty* SurrogateFor(TextDirection, WritingMode) const {
+    return nullptr;
+  }
+
+  static void FilterWebExposedCSSPropertiesIntoVector(
+      const ExecutionContext*,
+      const CSSPropertyID*,
+      size_t length,
+      Vector<const CSSProperty*>&);
+
+  enum Flag : Flags {
     kInterpolable = 1 << 0,
     kCompositableProperty = 1 << 1,
     kDescriptor = 1 << 2,
-    kSupportsPercentage = 1 << 3,
-    kProperty = 1 << 4,
-    kValidForVisitedLink = 1 << 5,
-    kShorthand = 1 << 6,
-    kLonghand = 1 << 7,
-    kInherited = 1 << 8
+    kProperty = 1 << 3,
+    kShorthand = 1 << 4,
+    kLonghand = 1 << 5,
+    kInherited = 1 << 6,
+    // Visited properties are internal counterparts to properties that
+    // are permitted in :visited styles. They are used to handle and store the
+    // computed value as seen by painting (as opposed to the computed value
+    // seen by CSSOM, which is represented by the unvisited property).
+    kVisited = 1 << 7,
+    kInternal = 1 << 8,
+    kIsAffectedByForcedColors = 1 << 9,
+    // Animation properties have this flag set. (I.e. longhands of the
+    // 'animation' and 'transition' shorthands).
+    kAnimation = 1 << 10,
+    // https://drafts.csswg.org/css-pseudo-4/#first-letter-styling
+    kValidForFirstLetter = 1 << 11,
+    // https://w3c.github.io/webvtt/#the-cue-pseudo-element
+    kValidForCue = 1 << 12,
+    // https://drafts.csswg.org/css-pseudo-4/#marker-pseudo
+    kValidForMarker = 1 << 13,
+    // A surrogate is a (non-alias) property which acts like another property,
+    // for example -webkit-writing-mode is a surrogate for writing-mode, and
+    // inline-size is a surrogate for either width or height.
+    kSurrogate = 1 << 14,
+    kAffectsFont = 1 << 15,
   };
 
   constexpr CSSProperty(CSSPropertyID property_id,
-                        uint16_t flags,
+                        Flags flags,
                         char repetition_separator)
       : CSSUnresolvedProperty(),
         property_id_(property_id),
         flags_(flags),
         repetition_separator_(repetition_separator) {}
 
-  static const StylePropertyShorthand& BorderDirections();
-  static const CSSProperty& ResolveAfterToPhysicalProperty(
-      TextDirection,
-      WritingMode,
-      const StylePropertyShorthand&);
-  static const CSSProperty& ResolveBeforeToPhysicalProperty(
-      TextDirection,
-      WritingMode,
-      const StylePropertyShorthand&);
-  static const CSSProperty& ResolveEndToPhysicalProperty(
-      TextDirection,
-      WritingMode,
-      const StylePropertyShorthand&);
-  static const CSSProperty& ResolveStartToPhysicalProperty(
-      TextDirection,
-      WritingMode,
-      const StylePropertyShorthand&);
-
  private:
   CSSPropertyID property_id_;
-  uint16_t flags_;
+  Flags flags_;
   char repetition_separator_;
 };
 

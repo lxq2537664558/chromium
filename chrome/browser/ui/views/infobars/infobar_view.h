@@ -19,7 +19,6 @@ class ImageButton;
 class ImageView;
 class Label;
 class Link;
-class LinkListener;
 class MenuRunner;
 }  // namespace views
 
@@ -42,7 +41,6 @@ class InfoBarView : public infobars::InfoBar,
       const views::ViewHierarchyChangedDetails& details) override;
   void OnPaint(gfx::Canvas* canvas) override;
   void OnThemeChanged() override;
-  void OnNativeThemeChanged(const ui::NativeTheme* theme) override;
 
   // views::ButtonListener:
   // NOTE: This must not be called if we're unowned.  (Subclasses should ignore
@@ -60,14 +58,13 @@ class InfoBarView : public infobars::InfoBar,
 
   // Creates a link with the appropriate font and color for an infobar.
   // NOTE: Subclasses must ignore link clicks if we're unowned.
-  views::Link* CreateLink(const base::string16& text,
-                          views::LinkListener* listener) const;
+  views::Link* CreateLink(const base::string16& text);
 
-  // Given |labels| and the total |available_width| to display them in, sets
-  // each label's size so that the longest label shrinks until it reaches the
-  // length of the next-longest label, then both shrink until reaching the
+  // Given |views| and the total |available_width| to display them in, sets
+  // each view's size so that the longest view shrinks until it reaches the
+  // length of the next-longest view, then both shrink until reaching the
   // length of the next-longest, and so forth.
-  static void AssignWidths(Labels* labels, int available_width);
+  static void AssignWidths(Views* views, int available_width);
 
   // Returns the minimum width the content (that is, everything between the icon
   // and the close button) can be shrunk to.  This is used to prevent the close
@@ -92,16 +89,16 @@ class InfoBarView : public infobars::InfoBar,
  private:
   FRIEND_TEST_ALL_PREFIXES(InfoBarViewTest, ShouldDrawSeparator);
 
-  // Does the actual work for AssignWidths().  Assumes |labels| is sorted by
+  // Does the actual work for AssignWidths().  Assumes |views| is sorted by
   // decreasing preferred width.
-  static void AssignWidthsSorted(Labels* labels, int available_width);
+  static void AssignWidthsSorted(Views* views, int available_width);
 
   // Returns whether this infobar should draw a 1 px separator at its top.
   bool ShouldDrawSeparator() const;
 
-  // Returns how many DIPs the container should reserve for a separator between
+  // Returns how much space the container should reserve for a separator between
   // infobars, in addition to the height of the infobars themselves.
-  int GetSeparatorHeightDip() const;
+  int GetSeparatorHeight() const;
 
   // Returns the current color for the theme property |id|.  Will return the
   // wrong value if no theme provider is available.
@@ -110,6 +107,9 @@ class InfoBarView : public infobars::InfoBar,
   // Sets various attributes on |label| that are common to all child links and
   // labels.
   void SetLabelDetails(views::Label* label) const;
+
+  // Callback used by the link created by CreateLink().
+  void LinkClicked(views::Link* source, int event_flags);
 
   // The optional icon at the left edge of the InfoBar.
   views::ImageView* icon_ = nullptr;

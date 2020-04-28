@@ -12,9 +12,12 @@
 #include <utility>
 #include <vector>
 
+#include "base/feature_list.h"
 #include "base/logging.h"
 #include "base/macros.h"
 #include "base/memory/weak_ptr.h"
+#include "base/observer_list.h"
+#include "base/observer_list_types.h"
 #include "build/build_config.h"
 #include "components/infobars/core/infobar_delegate.h"
 #include "components/translate/core/browser/translate_prefs.h"
@@ -29,16 +32,9 @@ class InfoBarManager;
 
 namespace translate {
 
-// The number of times user should consecutively translate for "Always
-// Translate" to automatically trigger.
-extern const int kAutoAlwaysThreshold;
-// The number of times user should consecutively dismiss the translate infobar
-// for "Never Translate" to automatically trigger.
-extern const int kAutoNeverThreshold;
-// The maximum number of times "Always Translate" is automatically triggered.
-extern const int kMaxNumberOfAutoAlways;
-// The maximum number of times "Never Translate" is automatically triggered.
-extern const int kMaxNumberOfAutoNever;
+// Feature flag used to control the auto-always and auto-never snackbar
+// parameters (i.e. threshold and maximum-number-of).
+extern const base::Feature kTranslateAutoSnackbars;
 
 // Feature flag for "Translate Compact Infobar UI" project.
 extern const base::Feature kTranslateCompactUI;
@@ -49,7 +45,7 @@ class TranslateManager;
 class TranslateInfoBarDelegate : public infobars::InfoBarDelegate {
  public:
   // An observer to handle different translate steps' UI changes.
-  class Observer {
+  class Observer : public base::CheckedObserver {
    public:
     // Handles UI changes on the translate step given.
     virtual void OnTranslateStepChanged(translate::TranslateStep step,
@@ -59,12 +55,16 @@ class TranslateInfoBarDelegate : public infobars::InfoBarDelegate {
     // Called when the TranslateInfoBarDelegate instance is destroyed.
     virtual void OnTranslateInfoBarDelegateDestroyed(
         TranslateInfoBarDelegate* delegate) = 0;
-
-   protected:
-    virtual ~Observer() {}
   };
 
   static const size_t kNoIndex;
+
+  // Get the threshold and maximum number of occurences that parameterize
+  // automatic always- and never-translate.
+  static int GetAutoAlwaysThreshold();
+  static int GetAutoNeverThreshold();
+  static int GetMaximumNumberOfAutoAlways();
+  static int GetMaximumNumberOfAutoNever();
 
   ~TranslateInfoBarDelegate() override;
 
@@ -215,8 +215,11 @@ class TranslateInfoBarDelegate : public infobars::InfoBarDelegate {
   // May return NULL if the driver has been destroyed.
   TranslateDriver* GetTranslateDriver();
 
-  // Set a observer.
-  virtual void SetObserver(Observer* observer);
+  // Add an observer.
+  virtual void AddObserver(Observer* observer);
+
+  // Remove an observer.
+  virtual void RemoveObserver(Observer* observer);
 
   // InfoBarDelegate:
   infobars::InfoBarDelegate::InfoBarIdentifier GetIdentifier() const override;
@@ -254,9 +257,9 @@ class TranslateInfoBarDelegate : public infobars::InfoBarDelegate {
   // (due to language detection, preferences...)
   bool triggered_from_menu_;
 
-  // A observer to handle front-end changes on different steps.
+  // Observers to handle front-end changes on different steps.
   // It's only used when we try to reuse the existing UI.
-  Observer* observer_;
+  base::ObserverList<Observer> observers_;
 
   DISALLOW_COPY_AND_ASSIGN(TranslateInfoBarDelegate);
 };

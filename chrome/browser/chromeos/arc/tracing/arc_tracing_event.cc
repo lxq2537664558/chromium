@@ -6,6 +6,8 @@
 
 #include <inttypes.h>
 
+#include <ostream>
+
 #include "base/strings/stringprintf.h"
 #include "base/trace_event/common/trace_event_common.h"
 
@@ -65,6 +67,10 @@ ArcTracingEvent::ArcTracingEvent(base::Value dictionary)
 
 ArcTracingEvent::~ArcTracingEvent() = default;
 
+ArcTracingEvent::ArcTracingEvent(ArcTracingEvent&&) = default;
+
+ArcTracingEvent& ArcTracingEvent::operator=(ArcTracingEvent&&) = default;
+
 int ArcTracingEvent::GetPid() const {
   return GetIntegerFromDictionary(GetDictionary(), kKeyPid,
                                   0 /* default_value */);
@@ -120,25 +126,26 @@ void ArcTracingEvent::SetPhase(char phase) {
   dictionary_.SetKey(kKeyPhase, base::Value(std::string() + phase));
 }
 
-int64_t ArcTracingEvent::GetTimestamp() const {
+uint64_t ArcTracingEvent::GetTimestamp() const {
   return GetDoubleFromDictionary(GetDictionary(), kKeyTimestamp,
                                  0.0 /* default_value */);
 }
 
-void ArcTracingEvent::SetTimestamp(double timestamp) {
-  dictionary_.SetKey(kKeyTimestamp, base::Value(timestamp));
+void ArcTracingEvent::SetTimestamp(uint64_t timestamp) {
+  dictionary_.SetKey(kKeyTimestamp,
+                     base::Value(static_cast<double>(timestamp)));
 }
 
-int64_t ArcTracingEvent::GetDuration() const {
+uint64_t ArcTracingEvent::GetDuration() const {
   return GetDoubleFromDictionary(GetDictionary(), kKeyDuration,
                                  0.0 /* default_value */);
 }
 
-void ArcTracingEvent::SetDuration(double duration) {
-  dictionary_.SetKey(kKeyDuration, base::Value(duration));
+void ArcTracingEvent::SetDuration(uint64_t duration) {
+  dictionary_.SetKey(kKeyDuration, base::Value(static_cast<double>(duration)));
 }
 
-int64_t ArcTracingEvent::GetEndTimestamp() const {
+uint64_t ArcTracingEvent::GetEndTimestamp() const {
   return GetTimestamp() + GetDuration();
 }
 

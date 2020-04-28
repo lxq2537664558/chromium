@@ -34,6 +34,7 @@
 #include "extensions/browser/event_router_factory.h"
 #include "extensions/browser/extension_prefs.h"
 #include "extensions/browser/extension_registry.h"
+#include "extensions/browser/extension_util.h"
 #include "extensions/browser/notification_types.h"
 #include "extensions/common/cors_util.h"
 #include "extensions/common/extension.h"
@@ -41,7 +42,6 @@
 #include "extensions/common/manifest_handlers/permissions_parser.h"
 #include "extensions/common/permissions/permission_set.h"
 #include "extensions/common/permissions/permissions_data.h"
-#include "services/network/public/cpp/features.h"
 
 using content::RenderProcessHost;
 using extensions::permissions_api_helpers::PackPermissionSet;
@@ -154,7 +154,7 @@ class PermissionsUpdater::NetworkPermissionsUpdateHelper {
   base::OnceClosure dispatch_event_;
   std::unique_ptr<KeyedServiceShutdownNotifier::Subscription>
       shutdown_subscription_;
-  base::WeakPtrFactory<NetworkPermissionsUpdateHelper> weak_factory_;
+  base::WeakPtrFactory<NetworkPermissionsUpdateHelper> weak_factory_{this};
 
   DISALLOW_COPY_AND_ASSIGN(NetworkPermissionsUpdateHelper);
 };
@@ -181,10 +181,6 @@ void PermissionsUpdater::NetworkPermissionsUpdateHelper::UpdatePermissions(
       CreateCorsOriginAccessAllowList(
           *extension,
           PermissionsData::EffectiveHostPermissionsMode::kOmitTabSpecific);
-  if (!base::FeatureList::IsEnabled(network::features::kNetworkService)) {
-    ExtensionsClient::Get()->AddOriginAccessPermissions(*extension, true,
-                                                        &allow_list);
-  }
 
   NetworkPermissionsUpdateHelper* helper = new NetworkPermissionsUpdateHelper(
       browser_context,
@@ -226,10 +222,6 @@ void PermissionsUpdater::NetworkPermissionsUpdateHelper::
         CreateCorsOriginAccessAllowList(
             *extension,
             PermissionsData::EffectiveHostPermissionsMode::kOmitTabSpecific);
-    if (!base::FeatureList::IsEnabled(network::features::kNetworkService)) {
-      ExtensionsClient::Get()->AddOriginAccessPermissions(*extension, true,
-                                                          &allow_list);
-    }
     browser_context->SetCorsOriginAccessListForOrigin(
         url::Origin::Create(extension->url()), std::move(allow_list),
         CreateCorsOriginAccessBlockList(*extension), barrier_closure);
@@ -245,8 +237,7 @@ PermissionsUpdater::NetworkPermissionsUpdateHelper::
               ->Get(browser_context)
               ->Subscribe(
                   base::Bind(&NetworkPermissionsUpdateHelper::OnShutdown,
-                             base::Unretained(this)))),
-      weak_factory_(this) {}
+                             base::Unretained(this)))) {}
 
 PermissionsUpdater::NetworkPermissionsUpdateHelper::
     ~NetworkPermissionsUpdateHelper() {}
@@ -296,6 +287,10 @@ void PermissionsUpdater::GrantOptionalPermissions(
   // host permissions enabled). They're also added to the active set, which is
   // the permission set stored in preferences representing the extension's
   // currently-desired permission state.
+  // TODO(tjudkins): The reasoning for this doesn't entirely hold true now that
+  // we check both the granted permissions and runtime permissions to detect a
+  // permission increase. We should address this as we continue working on
+  // reducing the different ways we store permissions into a unified concept.
   constexpr int permissions_store_mask =
       kActivePermissions | kGrantedPermissions | kRuntimeGrantedPermissions;
   AddPermissionsImpl(extension, permissions, permissions_store_mask,
@@ -436,7 +431,8 @@ void PermissionsUpdater::SetPolicyHostRestrictions(
 
 void PermissionsUpdater::SetUsesDefaultHostRestrictions(
     const Extension* extension) {
-  extension->permissions_data()->SetUsesDefaultHostRestrictions();
+  extension->permissions_data()->SetUsesDefaultHostRestrictions(
+      util::GetBrowserContextId(browser_context_));
   NetworkPermissionsUpdateHelper::UpdatePermissions(browser_context_, POLICY,
                                                     extension, PermissionSet(),
                                                     base::DoNothing::Once());
@@ -448,6 +444,7 @@ void PermissionsUpdater::SetDefaultPolicyHostRestrictions(
   DCHECK_EQ(0, init_flag_ & INIT_FLAG_TRANSIENT);
 
   PermissionsData::SetDefaultPolicyHostRestrictions(
+      util::GetBrowserContextId(browser_context_),
       default_runtime_blocked_hosts, default_runtime_allowed_hosts);
 
   // Update the BrowserContext origin lists, and send notification to the
@@ -527,9 +524,9 @@ void PermissionsUpdater::InitializePermissions(const Extension* extension) {
     bounded_active = bounded_wrapper.get();
   }
 
-  std::unique_ptr<const PermissionSet> granted_permissions;
-  ScriptingPermissionsModifier::WithholdPermissionsIfNecessary(
-      *extension, *prefs, *bounded_active, &granted_permissions);
+  std::unique_ptr<const PermissionSet> granted_permissions =
+      ScriptingPermissionsModifier::WithholdPermissionsIfNecessary(
+          *extension, *prefs, *bounded_active);
 
   if (GetDelegate())
     GetDelegate()->InitializePermissions(extension, &granted_permissions);
@@ -544,6 +541,8 @@ void PermissionsUpdater::InitializePermissions(const Extension* extension) {
       SetPolicyHostRestrictions(extension,
                                 management->GetPolicyBlockedHosts(extension),
                                 management->GetPolicyAllowedHosts(extension));
+    } else {
+      SetUsesDefaultHostRestrictions(extension);
     }
   }
 

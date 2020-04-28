@@ -72,7 +72,7 @@ class AffiliationBackend;
 //
 //         void ShouldFillInto(const FacetURI& wi, FillDelegate* delegate) {
 //           service_->GetAffiliationsAndBranding(wi, StrategyOnCacheMiss::FAIL,
-//               base::Bind(
+//               base::BindOnce(
 //                   &ExampleAffiliatedCredentialFiller::OnAffiliationResult,
 //                   AsWeakPtr(),
 //                   delegate));
@@ -162,7 +162,7 @@ class AffiliationService : public KeyedService {
   scoped_refptr<base::SequencedTaskRunner> backend_task_runner_;
 
   SEQUENCE_CHECKER(sequence_checker_);
-  base::WeakPtrFactory<AffiliationService> weak_ptr_factory_;
+  base::WeakPtrFactory<AffiliationService> weak_ptr_factory_{this};
 
   DISALLOW_COPY_AND_ASSIGN(AffiliationService);
 };

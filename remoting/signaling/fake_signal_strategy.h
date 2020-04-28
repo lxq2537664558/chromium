@@ -16,6 +16,7 @@
 #include "remoting/signaling/iq_sender.h"
 #include "remoting/signaling/signal_strategy.h"
 #include "remoting/signaling/signaling_address.h"
+#include "remoting/signaling/signaling_tracker.h"
 
 namespace base {
 class SingleThreadTaskRunner;
@@ -25,6 +26,9 @@ namespace remoting {
 
 class FakeSignalStrategy : public SignalStrategy {
  public:
+  using PeerCallback = base::RepeatingCallback<void(
+      std::unique_ptr<jingle_xmpp::XmlElement> message)>;
+
   // Calls ConenctTo() to connect |peer1| and |peer2|. Both |peer1| and |peer2|
   // must belong to the current thread.
   static void Connect(FakeSignalStrategy* peer1, FakeSignalStrategy* peer2);
@@ -40,7 +44,14 @@ class FakeSignalStrategy : public SignalStrategy {
     send_delay_ = delay;
   }
 
-  void SetState(State state) const;
+  void set_signaling_tracker(SignalingTracker* signaling_tracker) {
+    signaling_tracker_ = signaling_tracker;
+  }
+
+  void SetError(Error error);
+  void SetIsSignInError(bool is_sign_in_error);
+  void SetState(State state);
+  void SetPeerCallback(const PeerCallback& peer_callback);
 
   // Connects current FakeSignalStrategy to receive messages from |peer|.
   void ConnectTo(FakeSignalStrategy* peer);
@@ -50,6 +61,17 @@ class FakeSignalStrategy : public SignalStrategy {
   // Simulate IQ messages re-ordering by swapping the delivery order of
   // next pair of messages.
   void SimulateMessageReordering();
+
+  // If this is enabled, calling Connect() will transition the signal strategy
+  // state to CONNECTING instead of CONNECTED, and caller needs to call
+  // ProceedConnect() to transition to CONNECTED, or Disconnect() to transition
+  // to DISCONNECTED.
+  void SimulateTwoStageConnect();
+
+  // Called by the |peer_|. Takes ownership of |stanza|.
+  void OnIncomingMessage(std::unique_ptr<jingle_xmpp::XmlElement> stanza);
+
+  void ProceedConnect();
 
   // SignalStrategy interface.
   void Connect() override;
@@ -61,23 +83,21 @@ class FakeSignalStrategy : public SignalStrategy {
   void RemoveListener(Listener* listener) override;
   bool SendStanza(std::unique_ptr<jingle_xmpp::XmlElement> stanza) override;
   std::string GetNextId() override;
+  bool IsSignInError() const override;
+  const SignalingTracker& signaling_tracker() const override;
 
  private:
-  typedef base::Callback<void(std::unique_ptr<jingle_xmpp::XmlElement> message)>
-      PeerCallback;
-
   static void DeliverMessageOnThread(
       scoped_refptr<base::SingleThreadTaskRunner> thread,
       base::WeakPtr<FakeSignalStrategy> target,
       std::unique_ptr<jingle_xmpp::XmlElement> stanza);
 
-  // Called by the |peer_|. Takes ownership of |stanza|.
-  void OnIncomingMessage(std::unique_ptr<jingle_xmpp::XmlElement> stanza);
   void NotifyListeners(std::unique_ptr<jingle_xmpp::XmlElement> stanza);
-  void SetPeerCallback(const PeerCallback& peer_callback);
 
   scoped_refptr<base::SingleThreadTaskRunner> main_thread_;
 
+  Error error_ = OK;
+  bool is_sign_in_error_ = false;
   State state_ = CONNECTED;
 
   SignalingAddress address_;
@@ -89,14 +109,17 @@ class FakeSignalStrategy : public SignalStrategy {
   base::TimeDelta send_delay_;
 
   bool simulate_reorder_ = false;
+  bool simulate_two_stage_connect_ = false;
   std::unique_ptr<jingle_xmpp::XmlElement> pending_stanza_;
 
   // All received messages, includes thouse still in |pending_messages_|.
   std::vector<std::unique_ptr<jingle_xmpp::XmlElement>> received_messages_;
 
+  SignalingTracker* signaling_tracker_;
+
   SEQUENCE_CHECKER(sequence_checker_);
 
-  base::WeakPtrFactory<FakeSignalStrategy> weak_factory_;
+  base::WeakPtrFactory<FakeSignalStrategy> weak_factory_{this};
 
   DISALLOW_COPY_AND_ASSIGN(FakeSignalStrategy);
 };

@@ -538,7 +538,7 @@ TEST_F(AllocatorShimTest, NewHandlerConcurrency) {
 
 #if defined(OS_WIN) && BUILDFLAG(USE_ALLOCATOR_SHIM)
 TEST_F(AllocatorShimTest, ShimReplacesCRTHeapWhenEnabled) {
-  ASSERT_NE(::GetProcessHeap(), reinterpret_cast<HANDLE>(_get_heap_handle()));
+  ASSERT_EQ(::GetProcessHeap(), reinterpret_cast<HANDLE>(_get_heap_handle()));
 }
 #endif  // defined(OS_WIN) && BUILDFLAG(USE_ALLOCATOR_SHIM)
 
@@ -549,6 +549,10 @@ static size_t GetAllocatedSize(void* ptr) {
 #elif defined(OS_MACOSX)
 static size_t GetAllocatedSize(void* ptr) {
   return malloc_size(ptr);
+}
+#elif defined(OS_LINUX)
+static size_t GetAllocatedSize(void* ptr) {
+  return malloc_usable_size(ptr);
 }
 #else
 #define NO_MALLOC_SIZE

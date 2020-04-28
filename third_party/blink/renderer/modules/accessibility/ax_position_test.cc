@@ -77,6 +77,12 @@ constexpr char kAOM[] = R"HTML(
     </script>
     )HTML";
 
+constexpr char kMap[] = R"HTML(
+    <br id="br">
+    <map id="map">
+      <area shape="rect" coords="0,0,10,10" href="about:blank">
+    </map>
+    )HTML";
 }  // namespace
 
 //
@@ -316,10 +322,10 @@ TEST_F(AccessibilityTest, AXPositionComparisonOperators) {
   SetBodyInnerHTML(R"HTML(<input id="input" type="text" value="value">
                    <p id="paragraph">hello<br>there</p>)HTML");
 
-  const AXObject* root = GetAXRootObject();
-  ASSERT_NE(nullptr, root);
-  const auto root_first = AXPosition::CreateFirstPositionInObject(*root);
-  const auto root_last = AXPosition::CreateLastPositionInObject(*root);
+  const AXObject* body = GetAXRootObject()->FirstChild();
+  ASSERT_NE(nullptr, body);
+  const auto root_first = AXPosition::CreateFirstPositionInObject(*body);
+  const auto root_last = AXPosition::CreateLastPositionInObject(*body);
 
   const AXObject* input = GetAXObjectByElementId("input");
   ASSERT_NE(nullptr, input);
@@ -674,9 +680,10 @@ TEST_F(AccessibilityTest, PositionInHTMLLabel) {
   const Node* paragraph = GetElementById("paragraph");
   ASSERT_NE(nullptr, paragraph);
 
-  const AXObject* ax_root = GetAXRootObject();
-  ASSERT_NE(nullptr, ax_root);
-  ASSERT_EQ(ax::mojom::Role::kRootWebArea, ax_root->RoleValue());
+  const AXObject* ax_body = GetAXRootObject()->FirstChild();
+  ASSERT_NE(nullptr, ax_body);
+  ASSERT_EQ(ax::mojom::Role::kGenericContainer, ax_body->RoleValue());
+
   // The HTML label element should be ignored.
   const AXObject* ax_label = GetAXObjectByElementId("label");
   ASSERT_NE(nullptr, ax_label);
@@ -698,7 +705,7 @@ TEST_F(AccessibilityTest, PositionInHTMLLabel) {
         AXPosition::FromPosition(position, TextAffinity::kDownstream,
                                  AXPositionAdjustmentBehavior::kMoveLeft);
     EXPECT_FALSE(ax_position.IsTextPosition());
-    EXPECT_EQ(ax_root, ax_position.ContainerObject());
+    EXPECT_EQ(ax_body, ax_position.ContainerObject());
     EXPECT_EQ(0, ax_position.ChildIndex());
     EXPECT_EQ(ax_paragraph, ax_position.ChildAfterTreePosition());
 
@@ -729,7 +736,18 @@ TEST_F(AccessibilityTest, PositionInIgnoredObject) {
   ASSERT_NE(nullptr, ax_root);
   ASSERT_EQ(ax::mojom::Role::kRootWebArea, ax_root->RoleValue());
   ASSERT_EQ(1, ax_root->ChildCount());
-  const AXObject* ax_visible = ax_root->FirstChild();
+
+  const AXObject* ax_body = ax_root->FirstChild();
+  ASSERT_NE(nullptr, ax_body);
+  ASSERT_EQ(ax::mojom::Role::kGenericContainer, ax_body->RoleValue());
+  ASSERT_EQ(2, ax_body->ChildCount());
+
+  const AXObject* ax_hidden = GetAXObjectByElementId("hidden");
+  ASSERT_NE(nullptr, ax_hidden);
+  ASSERT_EQ(ax::mojom::Role::kGenericContainer, ax_hidden->RoleValue());
+  ASSERT_TRUE(ax_hidden->AccessibilityIsIgnoredButIncludedInTree());
+
+  const AXObject* ax_visible = GetAXObjectByElementId("visible");
   ASSERT_NE(nullptr, ax_visible);
   ASSERT_EQ(ax::mojom::Role::kParagraph, ax_visible->RoleValue());
 
@@ -751,39 +769,37 @@ TEST_F(AccessibilityTest, PositionInIgnoredObject) {
             ax_position_before_visible_from_dom.ChildAfterTreePosition());
 
   // A position at the beginning of the body will appear to be before the hidden
-  // element in the DOM, but it should be before the visible object in the
-  // accessibility tree since the hidden element is not in the tree. Hence, when
-  // converting to the corresponding DOM position, it should be before the
-  // visible element in the DOM as well.
+  // element in the DOM.
   const auto ax_position_first =
       AXPosition::CreateFirstPositionInObject(*ax_root);
   const auto position_first = ax_position_first.ToPositionWithAffinity();
-  EXPECT_EQ(GetDocument().body(), position_first.AnchorNode());
+  EXPECT_EQ(GetDocument().body()->parentElement(), position_first.AnchorNode());
   EXPECT_FALSE(position_first.GetPosition().IsBeforeChildren());
-  EXPECT_EQ(2, position_first.GetPosition().OffsetInContainerNode());
-  EXPECT_EQ(visible, position_first.GetPosition().ComputeNodeAfterPosition());
+  EXPECT_EQ(1, position_first.GetPosition().OffsetInContainerNode());
+  EXPECT_EQ(GetDocument().body(),
+            position_first.GetPosition().ComputeNodeAfterPosition());
 
   const auto ax_position_first_from_dom =
       AXPosition::FromPosition(position_first);
   EXPECT_EQ(ax_position_first, ax_position_first_from_dom);
-  EXPECT_EQ(ax_visible, ax_position_first_from_dom.ChildAfterTreePosition());
+  EXPECT_EQ(ax_body, ax_position_first_from_dom.ChildAfterTreePosition());
 
   // A DOM position before |hidden| should convert to an accessibility position
-  // before |visible|.
+  // before |hidden| because the node is ignored but included in the tree.
   const auto position_before = Position::BeforeNode(*hidden);
   const auto ax_position_before_from_dom =
       AXPosition::FromPosition(position_before);
-  EXPECT_EQ(ax_root, ax_position_before_from_dom.ContainerObject());
+  EXPECT_EQ(ax_body, ax_position_before_from_dom.ContainerObject());
   EXPECT_EQ(0, ax_position_before_from_dom.ChildIndex());
-  EXPECT_EQ(ax_visible, ax_position_before_from_dom.ChildAfterTreePosition());
+  EXPECT_EQ(ax_hidden, ax_position_before_from_dom.ChildAfterTreePosition());
 
   // A DOM position after |hidden| should convert to an accessibility position
   // before |visible|.
   const auto position_after = Position::AfterNode(*hidden);
   const auto ax_position_after_from_dom =
       AXPosition::FromPosition(position_after);
-  EXPECT_EQ(ax_root, ax_position_after_from_dom.ContainerObject());
-  EXPECT_EQ(0, ax_position_after_from_dom.ChildIndex());
+  EXPECT_EQ(ax_body, ax_position_after_from_dom.ContainerObject());
+  EXPECT_EQ(1, ax_position_after_from_dom.ChildIndex());
   EXPECT_EQ(ax_visible, ax_position_after_from_dom.ChildAfterTreePosition());
 }
 
@@ -791,7 +807,7 @@ TEST_F(AccessibilityTest, PositionInIgnoredObject) {
 // Aria-hidden can cause things in the DOM to be hidden from accessibility.
 //
 
-TEST_F(AccessibilityTest, BeforePositionInARIAHiddenShouldSkipARIAHidden) {
+TEST_F(AccessibilityTest, BeforePositionInARIAHiddenShouldNotSkipARIAHidden) {
   SetBodyInnerHTML(R"HTML(
       <div role="main" id="container">
         <p id="before">Before aria-hidden.</p>
@@ -804,6 +820,8 @@ TEST_F(AccessibilityTest, BeforePositionInARIAHiddenShouldSkipARIAHidden) {
   ASSERT_NE(nullptr, container);
   const Node* after = GetElementById("after");
   ASSERT_NE(nullptr, after);
+  const Node* hidden = GetElementById("ariaHidden");
+  ASSERT_NE(nullptr, hidden);
 
   const AXObject* ax_before = GetAXObjectByElementId("before");
   ASSERT_NE(nullptr, ax_before);
@@ -811,18 +829,19 @@ TEST_F(AccessibilityTest, BeforePositionInARIAHiddenShouldSkipARIAHidden) {
   const AXObject* ax_after = GetAXObjectByElementId("after");
   ASSERT_NE(nullptr, ax_after);
   ASSERT_EQ(ax::mojom::Role::kParagraph, ax_after->RoleValue());
-  ASSERT_NE(nullptr, GetAXObjectByElementId("ariaHidden"));
-  ASSERT_TRUE(GetAXObjectByElementId("ariaHidden")->AccessibilityIsIgnored());
+  const AXObject* ax_hidden = GetAXObjectByElementId("ariaHidden");
+  ASSERT_NE(nullptr, ax_hidden);
+  ASSERT_TRUE(ax_hidden->AccessibilityIsIgnored());
 
   const auto ax_position = AXPosition::CreatePositionAfterObject(*ax_before);
   const auto position = ax_position.ToPositionWithAffinity();
   EXPECT_EQ(container, position.AnchorNode());
-  EXPECT_EQ(5, position.GetPosition().OffsetInContainerNode());
-  EXPECT_EQ(after, position.GetPosition().ComputeNodeAfterPosition());
+  EXPECT_EQ(3, position.GetPosition().OffsetInContainerNode());
+  EXPECT_EQ(hidden, position.GetPosition().ComputeNodeAfterPosition());
 
   const auto ax_position_from_dom = AXPosition::FromPosition(position);
   EXPECT_EQ(ax_position, ax_position_from_dom);
-  EXPECT_EQ(ax_after, ax_position_from_dom.ChildAfterTreePosition());
+  EXPECT_EQ(ax_hidden, ax_position_from_dom.ChildAfterTreePosition());
 }
 
 TEST_F(AccessibilityTest, PreviousPositionAfterARIAHiddenShouldSkipARIAHidden) {
@@ -883,7 +902,7 @@ TEST_F(AccessibilityTest, FromPositionInARIAHidden) {
   const AXObject* ax_container = GetAXObjectByElementId("container");
   ASSERT_NE(nullptr, ax_container);
   ASSERT_EQ(ax::mojom::Role::kMain, ax_container->RoleValue());
-  ASSERT_EQ(2, ax_container->ChildCount());
+  ASSERT_EQ(3, ax_container->ChildCount());
   const AXObject* ax_before = GetAXObjectByElementId("before");
   ASSERT_NE(nullptr, ax_before);
   ASSERT_EQ(ax::mojom::Role::kParagraph, ax_before->RoleValue());
@@ -891,41 +910,68 @@ TEST_F(AccessibilityTest, FromPositionInARIAHidden) {
   ASSERT_NE(nullptr, ax_after);
   ASSERT_EQ(ax::mojom::Role::kParagraph, ax_after->RoleValue());
   ASSERT_NE(nullptr, GetAXObjectByElementId("ariaHidden"));
-  ASSERT_TRUE(GetAXObjectByElementId("ariaHidden")->AccessibilityIsIgnored());
+  const AXObject* ax_hidden = GetAXObjectByElementId("ariaHidden");
+  ASSERT_TRUE(ax_hidden->AccessibilityIsIgnored());
 
   const auto position_first = Position::FirstPositionInNode(*hidden);
+  auto ax_position_left =
+      AXPosition::FromPosition(position_first, TextAffinity::kDownstream,
+                               AXPositionAdjustmentBehavior::kMoveLeft);
+  EXPECT_TRUE(ax_position_left.IsValid());
+  EXPECT_TRUE(ax_position_left.IsTextPosition());
+  EXPECT_EQ(ax_hidden->FirstChild(), ax_position_left.ContainerObject());
+  EXPECT_EQ(0, ax_position_left.TextOffset());
+  // This is an "after children" position.
+  EXPECT_EQ(nullptr, ax_position_left.ChildAfterTreePosition());
+
+  auto ax_position_right =
+      AXPosition::FromPosition(position_first, TextAffinity::kDownstream,
+                               AXPositionAdjustmentBehavior::kMoveRight);
+  EXPECT_TRUE(ax_position_right.IsValid());
+  EXPECT_TRUE(ax_position_right.IsTextPosition());
+  EXPECT_EQ(ax_hidden->FirstChild(), ax_position_right.ContainerObject());
+  EXPECT_EQ(0, ax_position_right.TextOffset());
+  EXPECT_EQ(nullptr, ax_position_right.ChildAfterTreePosition());
+
   const auto position_before = Position::BeforeNode(*hidden);
+  ax_position_left =
+      AXPosition::FromPosition(position_before, TextAffinity::kDownstream,
+                               AXPositionAdjustmentBehavior::kMoveLeft);
+  EXPECT_TRUE(ax_position_left.IsValid());
+  EXPECT_FALSE(ax_position_left.IsTextPosition());
+  EXPECT_EQ(ax_container, ax_position_left.ContainerObject());
+  EXPECT_EQ(1, ax_position_left.ChildIndex());
+  // This is an "after children" position.
+  EXPECT_EQ(ax_hidden, ax_position_left.ChildAfterTreePosition());
+
+  ax_position_right =
+      AXPosition::FromPosition(position_before, TextAffinity::kDownstream,
+                               AXPositionAdjustmentBehavior::kMoveRight);
+  EXPECT_TRUE(ax_position_right.IsValid());
+  EXPECT_FALSE(ax_position_right.IsTextPosition());
+  EXPECT_EQ(ax_container, ax_position_right.ContainerObject());
+  EXPECT_EQ(1, ax_position_right.ChildIndex());
+  EXPECT_EQ(ax_hidden, ax_position_right.ChildAfterTreePosition());
+
   const auto position_after = Position::AfterNode(*hidden);
-  const auto positions = {position_first, position_before, position_after};
+  ax_position_left =
+      AXPosition::FromPosition(position_after, TextAffinity::kDownstream,
+                               AXPositionAdjustmentBehavior::kMoveLeft);
+  EXPECT_TRUE(ax_position_left.IsValid());
+  EXPECT_FALSE(ax_position_left.IsTextPosition());
+  EXPECT_EQ(ax_hidden, ax_position_left.ContainerObject());
+  EXPECT_EQ(1, ax_position_left.ChildIndex());
+  // This is an "after children" position.
+  EXPECT_EQ(nullptr, ax_position_left.ChildAfterTreePosition());
 
-  for (const auto& position : positions) {
-    //
-    // |kMoveLeft| will create "after children" positions that are anchored to
-    // the paragraph before the element that is aria-hidden.
-    //
-    // |kMoveRight| will create positions that are anchored to the paragraph
-    // after the element that is aria-hidden.
-    //
-
-    const auto ax_position_left =
-        AXPosition::FromPosition(position, TextAffinity::kDownstream,
-                                 AXPositionAdjustmentBehavior::kMoveLeft);
-    EXPECT_TRUE(ax_position_left.IsValid());
-    EXPECT_FALSE(ax_position_left.IsTextPosition());
-    EXPECT_EQ(ax_before, ax_position_left.ContainerObject());
-    EXPECT_EQ(1, ax_position_left.ChildIndex());
-    // This is an "after children" position.
-    EXPECT_EQ(nullptr, ax_position_left.ChildAfterTreePosition());
-
-    const auto ax_position_right =
-        AXPosition::FromPosition(position, TextAffinity::kDownstream,
-                                 AXPositionAdjustmentBehavior::kMoveRight);
-    EXPECT_TRUE(ax_position_right.IsValid());
-    EXPECT_FALSE(ax_position_right.IsTextPosition());
-    EXPECT_EQ(ax_container, ax_position_right.ContainerObject());
-    EXPECT_EQ(1, ax_position_right.ChildIndex());
-    EXPECT_EQ(ax_after, ax_position_right.ChildAfterTreePosition());
-  }
+  ax_position_right =
+      AXPosition::FromPosition(position_after, TextAffinity::kDownstream,
+                               AXPositionAdjustmentBehavior::kMoveRight);
+  EXPECT_TRUE(ax_position_right.IsValid());
+  EXPECT_FALSE(ax_position_right.IsTextPosition());
+  EXPECT_EQ(ax_container, ax_position_right.ContainerObject());
+  EXPECT_EQ(2, ax_position_right.ChildIndex());
+  EXPECT_EQ(ax_after, ax_position_right.ChildAfterTreePosition());
 }
 
 //
@@ -1194,6 +1240,165 @@ TEST_F(AccessibilityTest, PositionInCSSContent) {
   EXPECT_EQ(12, position_after.GetPosition().OffsetInContainerNode());
 }
 
+TEST_F(AccessibilityTest, PositionInCSSImageContent) {
+  constexpr char css_content_no_text[] = R"HTML(
+   <style>
+   .heading::before {
+    content: url(data:image/gif;base64,);
+   }
+   </style>
+   <h1 id="heading" class="heading">Heading</h1>)HTML";
+  SetBodyInnerHTML(css_content_no_text);
+
+  const Node* heading = GetElementById("heading");
+  ASSERT_NE(nullptr, heading);
+
+  const AXObject* ax_heading = GetAXObjectByElementId("heading");
+  ASSERT_NE(nullptr, ax_heading);
+  ASSERT_EQ(ax::mojom::Role::kHeading, ax_heading->RoleValue());
+  ASSERT_EQ(2, ax_heading->ChildCount());
+
+  const AXObject* ax_css_before = ax_heading->FirstChild();
+  ASSERT_NE(nullptr, ax_css_before);
+  ASSERT_EQ(ax::mojom::Role::kImage, ax_css_before->RoleValue());
+
+  const auto ax_position_before =
+      AXPosition::CreateFirstPositionInObject(*ax_css_before);
+  const auto position = ax_position_before.ToPositionWithAffinity(
+      AXPositionAdjustmentBehavior::kMoveLeft);
+  EXPECT_EQ(GetDocument().body(), position.AnchorNode());
+  EXPECT_EQ(3, position.GetPosition().OffsetInContainerNode());
+}
+
+TEST_F(AccessibilityTest, PositionInTableWithCSSContent) {
+  SetBodyInnerHTML(kHTMLTable);
+
+  // Add some CSS content, i.e. a plus symbol before and a colon after each
+  // table header cell.
+  Element* const style_element =
+      GetDocument().CreateRawElement(html_names::kStyleTag);
+  ASSERT_NE(nullptr, style_element);
+  style_element->setTextContent(R"STYLE(
+      th::before {
+        content: "+";
+      }
+      th::after {
+        content: ":";
+      }
+      )STYLE");
+  GetDocument().body()->insertBefore(style_element,
+                                     GetDocument().body()->firstChild());
+  UpdateAllLifecyclePhasesForTest();
+
+  const Node* first_header_cell = GetElementById("firstHeaderCell");
+  ASSERT_NE(nullptr, first_header_cell);
+  const Node* last_header_cell = GetElementById("lastHeaderCell");
+  ASSERT_NE(nullptr, last_header_cell);
+
+  // CSS text nodes are not in the DOM tree.
+  const Node* first_header_cell_text = first_header_cell->firstChild();
+  ASSERT_NE(nullptr, first_header_cell_text);
+  ASSERT_FALSE(first_header_cell_text->IsPseudoElement());
+  ASSERT_TRUE(first_header_cell_text->IsTextNode());
+  const Node* last_header_cell_text = last_header_cell->firstChild();
+  ASSERT_NE(nullptr, last_header_cell_text);
+  ASSERT_FALSE(last_header_cell_text->IsPseudoElement());
+  ASSERT_TRUE(last_header_cell_text->IsTextNode());
+
+  const AXObject* ax_first_header_cell =
+      GetAXObjectByElementId("firstHeaderCell");
+  ASSERT_NE(nullptr, ax_first_header_cell);
+  ASSERT_EQ(ax::mojom::Role::kColumnHeader, ax_first_header_cell->RoleValue());
+  const AXObject* ax_last_header_cell =
+      GetAXObjectByElementId("lastHeaderCell");
+  ASSERT_NE(nullptr, ax_last_header_cell);
+  ASSERT_EQ(ax::mojom::Role::kColumnHeader, ax_last_header_cell->RoleValue());
+
+  ASSERT_EQ(3, ax_first_header_cell->ChildCount());
+  AXObject* const ax_first_cell_css_before = ax_first_header_cell->FirstChild();
+  ASSERT_NE(nullptr, ax_first_cell_css_before);
+  ASSERT_EQ(ax::mojom::Role::kStaticText,
+            ax_first_cell_css_before->RoleValue());
+
+  ASSERT_EQ(3, ax_last_header_cell->ChildCount());
+  AXObject* const ax_last_cell_css_after = ax_last_header_cell->LastChild();
+  ASSERT_NE(nullptr, ax_last_cell_css_after);
+  ASSERT_EQ(ax::mojom::Role::kStaticText, ax_last_cell_css_after->RoleValue());
+
+  // The first position inside the first header cell should be before the plus
+  // symbol inside the CSS content. It should be valid in the accessibility tree
+  // but not valid in the DOM tree.
+  auto ax_position_before =
+      AXPosition::CreateFirstPositionInObject(*ax_first_header_cell);
+  EXPECT_TRUE(ax_position_before.IsTextPosition());
+  EXPECT_EQ(0, ax_position_before.TextOffset());
+  auto position_before = ax_position_before.ToPositionWithAffinity(
+      AXPositionAdjustmentBehavior::kMoveRight);
+  EXPECT_EQ(first_header_cell_text, position_before.AnchorNode());
+  EXPECT_EQ(0, position_before.GetPosition().OffsetInContainerNode());
+
+  // Same situation as above, but explicitly create a text position inside the
+  // CSS content, instead of having it implicitly created by
+  // CreateFirstPositionInObject.
+  ax_position_before =
+      AXPosition::CreateFirstPositionInObject(*ax_first_cell_css_before);
+  EXPECT_TRUE(ax_position_before.IsTextPosition());
+  EXPECT_EQ(0, ax_position_before.TextOffset());
+  position_before = ax_position_before.ToPositionWithAffinity(
+      AXPositionAdjustmentBehavior::kMoveRight);
+  EXPECT_EQ(first_header_cell_text, position_before.AnchorNode());
+  EXPECT_EQ(0, position_before.GetPosition().OffsetInContainerNode());
+
+  // Same situation as above, but now create a text position inside the inline
+  // text box representing the CSS content after the last header cell.
+  ax_first_cell_css_before->LoadInlineTextBoxes();
+  ASSERT_NE(nullptr, ax_first_cell_css_before->FirstChild());
+  ax_position_before = AXPosition::CreateFirstPositionInObject(
+      *ax_first_cell_css_before->FirstChild());
+  EXPECT_TRUE(ax_position_before.IsTextPosition());
+  EXPECT_EQ(0, ax_position_before.TextOffset());
+  position_before = ax_position_before.ToPositionWithAffinity(
+      AXPositionAdjustmentBehavior::kMoveRight);
+  EXPECT_EQ(first_header_cell_text, position_before.AnchorNode());
+  EXPECT_EQ(0, position_before.GetPosition().OffsetInContainerNode());
+
+  // An "after children" position inside the last header cell should be after
+  // the CSS content that displays a colon. It should be valid in the
+  // accessibility tree but not valid in the DOM tree.
+  auto ax_position_after =
+      AXPosition::CreateLastPositionInObject(*ax_last_header_cell);
+  EXPECT_FALSE(ax_position_after.IsTextPosition());
+  EXPECT_EQ(3, ax_position_after.ChildIndex());
+  auto position_after = ax_position_after.ToPositionWithAffinity(
+      AXPositionAdjustmentBehavior::kMoveLeft);
+  EXPECT_EQ(last_header_cell_text, position_after.AnchorNode());
+  EXPECT_EQ(8, position_after.GetPosition().OffsetInContainerNode());
+
+  // Similar to the last case, but explicitly create a text position inside the
+  // CSS content after the last header cell.
+  ax_position_after =
+      AXPosition::CreateLastPositionInObject(*ax_last_cell_css_after);
+  EXPECT_TRUE(ax_position_after.IsTextPosition());
+  EXPECT_EQ(1, ax_position_after.TextOffset());
+  position_after = ax_position_after.ToPositionWithAffinity(
+      AXPositionAdjustmentBehavior::kMoveLeft);
+  EXPECT_EQ(last_header_cell_text, position_after.AnchorNode());
+  EXPECT_EQ(8, position_after.GetPosition().OffsetInContainerNode());
+
+  // Same situation as above, but now create a text position inside the inline
+  // text box representing the CSS content after the last header cell.
+  ax_last_cell_css_after->LoadInlineTextBoxes();
+  ASSERT_NE(nullptr, ax_last_cell_css_after->FirstChild());
+  ax_position_after = AXPosition::CreateLastPositionInObject(
+      *ax_last_cell_css_after->FirstChild());
+  EXPECT_TRUE(ax_position_after.IsTextPosition());
+  EXPECT_EQ(1, ax_position_after.TextOffset());
+  position_after = ax_position_after.ToPositionWithAffinity(
+      AXPositionAdjustmentBehavior::kMoveLeft);
+  EXPECT_EQ(last_header_cell_text, position_after.AnchorNode());
+  EXPECT_EQ(8, position_after.GetPosition().OffsetInContainerNode());
+}
+
 //
 // Objects deriving from |AXMockObject|, e.g. table columns, are in the
 // accessibility tree but are neither in the DOM or layout trees.
@@ -1419,6 +1624,61 @@ TEST_F(AccessibilityTest, DISABLED_PositionInVirtualAOMNode) {
       AXPosition::FromPosition(position_after);
   EXPECT_EQ(ax_position_after, ax_position_after_from_dom);
   EXPECT_EQ(ax_after, ax_position_after_from_dom.ChildAfterTreePosition());
+}
+
+TEST_F(AccessibilityTest, PositionInInvalidMapLayout) {
+  SetBodyInnerHTML(kMap);
+
+  Node* br = GetElementById("br");
+  ASSERT_NE(nullptr, br);
+  Node* map = GetElementById("map");
+  ASSERT_NE(nullptr, map);
+
+  // Create an invalid layout by appending a child to the <br>
+  br->appendChild(map);
+  GetDocument().UpdateStyleAndLayoutTree();
+
+  const AXObject* ax_map = GetAXObjectByElementId("map");
+  ASSERT_NE(nullptr, ax_map);
+  ASSERT_EQ(ax::mojom::Role::kGenericContainer, ax_map->RoleValue());
+
+  const auto ax_position_before =
+      AXPosition::CreatePositionBeforeObject(*ax_map);
+  const auto position_before = ax_position_before.ToPositionWithAffinity();
+  EXPECT_EQ(nullptr, position_before.AnchorNode());
+  EXPECT_EQ(0, position_before.GetPosition().OffsetInContainerNode());
+
+  const auto ax_position_after = AXPosition::CreatePositionAfterObject(*ax_map);
+  const auto position_after = ax_position_after.ToPositionWithAffinity();
+  EXPECT_EQ(nullptr, position_after.AnchorNode());
+  EXPECT_EQ(0, position_after.GetPosition().OffsetInContainerNode());
+}
+
+TEST_P(ParameterizedAccessibilityTest,
+       ToPositionWithAffinityWithMultipleInlineTextBoxes) {
+  // "&#10" is a Line Feed ("\n").
+  SetBodyInnerHTML(
+      R"HTML(<style>p { white-space: pre-line; }</style>
+      <p id="paragraph">Hello &#10; world</p>)HTML");
+  const Node* text = GetElementById("paragraph")->firstChild();
+  ASSERT_NE(nullptr, text);
+  ASSERT_TRUE(text->IsTextNode());
+  AXObject* ax_static_text = GetAXObjectByElementId("paragraph")->FirstChild();
+
+  ASSERT_NE(nullptr, ax_static_text);
+  ASSERT_EQ(ax::mojom::Role::kStaticText, ax_static_text->RoleValue());
+
+  ax_static_text->LoadInlineTextBoxes();
+  ASSERT_EQ(3, ax_static_text->ChildCount());
+
+  // This test expects the starting offset of the last InlineTextBox object to
+  // equates the sum of the previous inline text boxes length, without the
+  // collapsed white-spaces.
+  const auto ax_position =
+      AXPosition::CreatePositionBeforeObject(*(ax_static_text->LastChild()));
+  const auto position = ax_position.ToPositionWithAffinity();
+  EXPECT_EQ(LayoutNGEnabled() ? 7 : 6,
+            position.GetPosition().OffsetInContainerNode());
 }
 
 }  // namespace test

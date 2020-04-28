@@ -16,6 +16,7 @@
 #include "content/public/renderer/content_renderer_client.h"
 #include "headless/lib/browser/headless_platform_event_source.h"
 #include "headless/lib/headless_content_client.h"
+#include "headless/public/headless_browser.h"
 #include "headless/public/headless_export.h"
 
 namespace base {
@@ -35,6 +36,7 @@ class HEADLESS_EXPORT HeadlessContentMainDelegate
  public:
   explicit HeadlessContentMainDelegate(
       std::unique_ptr<HeadlessBrowserImpl> browser);
+  explicit HeadlessContentMainDelegate(HeadlessBrowser::Options options);
   ~HeadlessContentMainDelegate() override;
 
   // content::ContentMainDelegate implementation:
@@ -46,6 +48,7 @@ class HEADLESS_EXPORT HeadlessContentMainDelegate
 #if defined(OS_MACOSX)
   void PreCreateMainMessageLoop() override;
 #endif
+  content::ContentClient* CreateContentClient() override;
   content::ContentBrowserClient* CreateContentBrowserClient() override;
   content::ContentUtilityClient* CreateContentUtilityClient() override;
   content::ContentRendererClient* CreateContentRendererClient() override;
@@ -61,7 +64,10 @@ class HEADLESS_EXPORT HeadlessContentMainDelegate
  private:
   friend class HeadlessBrowserTest;
 
-  static void InitializeResourceBundle();
+  void Init();
+
+  HeadlessBrowser::Options* options();
+
   static HeadlessContentMainDelegate* GetInstance();
 
   void InitLogging(const base::CommandLine& command_line);
@@ -74,6 +80,8 @@ class HEADLESS_EXPORT HeadlessContentMainDelegate
   HeadlessPlatformEventSource platform_event_source_;
 
   std::unique_ptr<HeadlessBrowserImpl> browser_;
+  std::unique_ptr<HeadlessBrowser::Options> options_;
+
   base::debug::CrashKeyString* headless_crash_key_;  // Note: never deallocated.
 
   DISALLOW_COPY_AND_ASSIGN(HeadlessContentMainDelegate);

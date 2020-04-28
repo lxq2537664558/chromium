@@ -13,12 +13,14 @@
 #include "ios/chrome/browser/application_context.h"
 #include "ios/chrome/browser/browser_state/chrome_browser_state.h"
 #include "ios/chrome/browser/chrome_url_constants.h"
+#import "ios/chrome/browser/main/browser.h"
 #import "ios/chrome/browser/signin/authentication_service.h"
 #import "ios/chrome/browser/signin/authentication_service_factory.h"
 #include "ios/chrome/browser/sync/profile_sync_service_factory.h"
 #include "ios/chrome/browser/sync/sync_observer_bridge.h"
 #include "ios/chrome/browser/sync/sync_setup_service_factory.h"
 #import "ios/chrome/browser/ui/commands/application_commands.h"
+#import "ios/chrome/browser/ui/commands/command_dispatcher.h"
 #import "ios/chrome/browser/ui/commands/open_new_tab_command.h"
 #import "ios/chrome/browser/ui/icons/chrome_icon.h"
 #import "ios/chrome/browser/ui/settings/google_services/manage_sync_settings_command_handler.h"
@@ -49,72 +51,75 @@
     ManageSyncSettingsTableViewController* viewController;
 // Mediator.
 @property(nonatomic, strong) ManageSyncSettingsMediator* mediator;
-// Web and app activity view controller.
-@property(nonatomic, weak)
-    UINavigationController* webAndAppSettingDetailsController;
 // Sync service.
 @property(nonatomic, assign, readonly) syncer::SyncService* syncService;
+// Dismiss callback for Web and app setting details view.
+@property(nonatomic, copy) ios::DismissASMViewControllerBlock
+    dismissWebAndAppSettingDetailsControllerBlock;
 
 @end
 
 @implementation ManageSyncSettingsCoordinator
 
+@synthesize baseNavigationController = _baseNavigationController;
+
+- (instancetype)initWithBaseNavigationController:
+                    (UINavigationController*)navigationController
+                                         browser:(Browser*)browser {
+  if (self = [super initWithBaseViewController:navigationController
+                                       browser:browser]) {
+    _baseNavigationController = navigationController;
+  }
+  return self;
+}
+
 - (void)start {
-  DCHECK(self.dispatcher);
-  DCHECK(self.navigationController);
+  DCHECK(self.baseNavigationController);
   self.mediator = [[ManageSyncSettingsMediator alloc]
       initWithSyncService:self.syncService
-          userPrefService:self.browserState->GetPrefs()];
-  self.mediator.syncSetupService =
-      SyncSetupServiceFactory::GetForBrowserState(self.browserState);
+          userPrefService:self.browser->GetBrowserState()->GetPrefs()];
+  self.mediator.syncSetupService = SyncSetupServiceFactory::GetForBrowserState(
+      self.browser->GetBrowserState());
   self.mediator.commandHandler = self;
   self.viewController = [[ManageSyncSettingsTableViewController alloc]
-      initWithTableViewStyle:UITableViewStyleGrouped
-                 appBarStyle:ChromeTableViewControllerStyleNoAppBar];
+      initWithStyle:UITableViewStyleGrouped];
   self.viewController.serviceDelegate = self.mediator;
   self.viewController.presentationDelegate = self;
   self.viewController.modelDelegate = self.mediator;
   self.mediator.consumer = self.viewController;
-  [self.navigationController pushViewController:self.viewController
-                                       animated:YES];
+  [self.baseNavigationController pushViewController:self.viewController
+                                           animated:YES];
   _syncObserver.reset(new SyncObserverBridge(self, self.syncService));
 }
 
 #pragma mark - Properties
 
 - (syncer::SyncService*)syncService {
-  return ProfileSyncServiceFactory::GetForBrowserState(self.browserState);
+  return ProfileSyncServiceFactory::GetForBrowserState(
+      self.browser->GetBrowserState());
 }
 
 #pragma mark - Private
 
-// Called by the close button of the Web and app activity view controller.
-- (void)closeGoogleActivitySettings:(id)sender {
-  DCHECK(self.webAndAppSettingDetailsController);
-  [self.navigationController dismissViewControllerAnimated:YES completion:nil];
-  self.webAndAppSettingDetailsController = nil;
-}
-
 // Closes the Manage sync settings view controller.
 - (void)closeManageSyncSettings {
   if (self.viewController.navigationController) {
-    if (self.webAndAppSettingDetailsController) {
-      [self.navigationController dismissViewControllerAnimated:NO
-                                                    completion:nil];
-      self.webAndAppSettingDetailsController = nil;
+    if (self.dismissWebAndAppSettingDetailsControllerBlock) {
+      self.dismissWebAndAppSettingDetailsControllerBlock(NO);
+      self.dismissWebAndAppSettingDetailsControllerBlock = nil;
     }
-    [self.navigationController popToViewController:self.viewController
-                                          animated:NO];
-    [self.navigationController popViewControllerAnimated:YES];
+    [self.baseNavigationController popToViewController:self.viewController
+                                              animated:NO];
+    [self.baseNavigationController popViewControllerAnimated:YES];
   }
 }
 
 #pragma mark - ManageSyncSettingsTableViewControllerPresentationDelegate
 
-- (void)manageSyncSettingsTableViewControllerWasPopped:
+- (void)manageSyncSettingsTableViewControllerWasRemoved:
     (ManageSyncSettingsTableViewController*)controller {
   DCHECK_EQ(self.viewController, controller);
-  [self.delegate manageSyncSettingsCoordinatorWasPopped:self];
+  [self.delegate manageSyncSettingsCoordinatorWasRemoved:self];
 }
 
 #pragma mark - ChromeIdentityBrowserOpener
@@ -124,7 +129,9 @@
     viewController:(UIViewController*)viewController {
   OpenNewTabCommand* command =
       [OpenNewTabCommand commandWithURLFromChrome:net::GURLWithNSURL(url)];
-  [self.dispatcher closeSettingsUIAndOpenURL:command];
+  id<ApplicationCommands> handler = HandlerForProtocol(
+      self.browser->GetCommandDispatcher(), ApplicationCommands);
+  [handler closeSettingsUIAndOpenURL:command];
 }
 
 #pragma mark - ManageSyncSettingsCommandHandler
@@ -136,36 +143,40 @@
   // Otherwise, show the full encryption options.
   if (self.syncService->GetUserSettings()->IsPassphraseRequired()) {
     controllerToPush = [[SyncEncryptionPassphraseTableViewController alloc]
-        initWithBrowserState:self.browserState];
+        initWithBrowserState:self.browser->GetBrowserState()];
   } else {
     controllerToPush = [[SyncEncryptionTableViewController alloc]
-        initWithBrowserState:self.browserState];
+        initWithBrowserState:self.browser->GetBrowserState()];
   }
-  controllerToPush.dispatcher = self.dispatcher;
-  [self.navigationController pushViewController:controllerToPush animated:YES];
+  // TODO(crbug.com/1045047): Use HandlerForProtocol after commands protocol
+  // clean up.
+  controllerToPush.dispatcher = static_cast<
+      id<ApplicationCommands, BrowserCommands, BrowsingDataCommands>>(
+      self.browser->GetCommandDispatcher());
+  [self.baseNavigationController pushViewController:controllerToPush
+                                           animated:YES];
+}
+
+- (void)openTrustedVaultReauth {
+  id<ApplicationCommands> applicationCommands =
+      static_cast<id<ApplicationCommands>>(
+          self.browser->GetCommandDispatcher());
+  [applicationCommands
+      showTrustedVaultReauthenticationFromViewController:self.viewController];
 }
 
 - (void)openWebAppActivityDialog {
   AuthenticationService* authService =
-      AuthenticationServiceFactory::GetForBrowserState(self.browserState);
+      AuthenticationServiceFactory::GetForBrowserState(
+          self.browser->GetBrowserState());
   base::RecordAction(base::UserMetricsAction(
       "Signin_AccountSettings_GoogleActivityControlsClicked"));
-  DCHECK(!self.webAndAppSettingDetailsController);
-  self.webAndAppSettingDetailsController =
+  self.dismissWebAndAppSettingDetailsControllerBlock =
       ios::GetChromeBrowserProvider()
           ->GetChromeIdentityService()
-          ->CreateWebAndAppSettingDetailsController(
-              authService->GetAuthenticatedIdentity(), self);
-  UIImage* closeIcon = [ChromeIcon closeIcon];
-  SEL action = @selector(closeGoogleActivitySettings:);
-  [self.webAndAppSettingDetailsController.topViewController navigationItem]
-      .leftBarButtonItem = [ChromeIcon templateBarButtonItemWithImage:closeIcon
-                                                               target:self
-                                                               action:action];
-  [self.navigationController
-      presentViewController:self.webAndAppSettingDetailsController
-                   animated:YES
-                 completion:nil];
+          ->PresentWebAndAppSettingDetailsController(
+              authService->GetAuthenticatedIdentity(), self.viewController,
+              YES);
 }
 
 - (void)openDataFromChromeSyncWebPage {
@@ -173,14 +184,15 @@
       GURL(kSyncGoogleDashboardURL),
       GetApplicationContext()->GetApplicationLocale());
   OpenNewTabCommand* command = [OpenNewTabCommand commandWithURLFromChrome:url];
-  [self.dispatcher closeSettingsUIAndOpenURL:command];
+  id<ApplicationCommands> handler = HandlerForProtocol(
+      self.browser->GetCommandDispatcher(), ApplicationCommands);
+  [handler closeSettingsUIAndOpenURL:command];
 }
 
 #pragma mark - SyncObserverModelBridge
 
 - (void)onSyncStateChanged {
-  if (self.syncService->GetDisableReasons() !=
-      syncer::SyncService::DISABLE_REASON_NONE) {
+  if (!self.syncService->GetDisableReasons().Empty()) {
     [self closeManageSyncSettings];
   }
 }

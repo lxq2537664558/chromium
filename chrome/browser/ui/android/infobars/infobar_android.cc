@@ -11,9 +11,9 @@
 #include "base/strings/string_util.h"
 #include "chrome/browser/android/resource_mapper.h"
 #include "chrome/browser/infobars/infobar_service.h"
+#include "chrome/browser/ui/messages/android/jni_headers/InfoBar_jni.h"
 #include "components/infobars/core/infobar.h"
 #include "components/infobars/core/infobar_delegate.h"
-#include "jni/InfoBar_jni.h"
 
 using base::android::JavaParamRef;
 using base::android::JavaRef;
@@ -79,9 +79,10 @@ void InfoBarAndroid::CloseJavaInfoBar() {
   if (!java_info_bar_.is_null()) {
     JNIEnv* env = base::android::AttachCurrentThread();
     Java_InfoBar_closeInfoBar(env, java_info_bar_);
+    java_info_bar_.Reset(nullptr);
   }
 }
 
-int InfoBarAndroid::GetEnumeratedIconId() {
-  return ResourceMapper::MapFromChromiumId(delegate()->GetIconId());
+int InfoBarAndroid::GetJavaIconId() {
+  return ResourceMapper::MapToJavaDrawableId(delegate()->GetIconId());
 }

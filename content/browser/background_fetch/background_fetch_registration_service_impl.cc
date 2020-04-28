@@ -19,12 +19,10 @@
 #include "content/browser/background_fetch/background_fetch_request_match_params.h"
 #include "content/browser/bad_message.h"
 #include "content/browser/storage_partition_impl.h"
-#include "content/common/service_worker/service_worker_types.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/render_process_host.h"
-#include "mojo/public/cpp/bindings/interface_request.h"
-#include "mojo/public/cpp/bindings/strong_binding.h"
+#include "mojo/public/cpp/bindings/self_owned_receiver.h"
 #include "third_party/blink/public/mojom/fetch/fetch_api_request.mojom.h"
 
 namespace content {
@@ -37,28 +35,28 @@ constexpr size_t kMaxTitleLength = 1024 * 1024;
 }  // namespace
 
 // static
-blink::mojom::BackgroundFetchRegistrationServicePtrInfo
+mojo::PendingRemote<blink::mojom::BackgroundFetchRegistrationService>
 BackgroundFetchRegistrationServiceImpl::CreateInterfaceInfo(
     BackgroundFetchRegistrationId registration_id,
-    scoped_refptr<BackgroundFetchContext> background_fetch_context) {
+    base::WeakPtr<BackgroundFetchContext> background_fetch_context) {
   DCHECK(background_fetch_context);
 
-  blink::mojom::BackgroundFetchRegistrationServicePtr interface;
+  mojo::PendingRemote<blink::mojom::BackgroundFetchRegistrationService>
+      mojo_interface;
 
-  mojo::MakeStrongBinding(
+  mojo::MakeSelfOwnedReceiver(
       base::WrapUnique(new BackgroundFetchRegistrationServiceImpl(
           std::move(registration_id), std::move(background_fetch_context))),
-      mojo::MakeRequest(&interface));
+      mojo_interface.InitWithNewPipeAndPassReceiver());
 
-  return interface.PassInterface();
+  return mojo_interface;
 }
 
 BackgroundFetchRegistrationServiceImpl::BackgroundFetchRegistrationServiceImpl(
     BackgroundFetchRegistrationId registration_id,
-    scoped_refptr<BackgroundFetchContext> background_fetch_context)
+    base::WeakPtr<BackgroundFetchContext> background_fetch_context)
     : registration_id_(std::move(registration_id)),
-      background_fetch_context_(std::move(background_fetch_context)),
-      binding_(this) {
+      background_fetch_context_(std::move(background_fetch_context)) {
   DCHECK(background_fetch_context_);
   DCHECK(!registration_id_.is_null());
 }
@@ -71,7 +69,13 @@ void BackgroundFetchRegistrationServiceImpl::MatchRequests(
     blink::mojom::CacheQueryOptionsPtr cache_query_options,
     bool match_all,
     MatchRequestsCallback callback) {
-  DCHECK_CURRENTLY_ON(BrowserThread::IO);
+  DCHECK_CURRENTLY_ON(ServiceWorkerContext::GetCoreThreadId());
+  if (!background_fetch_context_) {
+    // Return without running the callback because this case happens only when
+    // the browser is shutting down.
+    return;
+  }
+
   // Create BackgroundFetchMatchRequestMatchParams.
   auto match_params = std::make_unique<BackgroundFetchRequestMatchParams>(
       std::move(request_to_match), std::move(cache_query_options), match_all);
@@ -84,7 +88,12 @@ void BackgroundFetchRegistrationServiceImpl::UpdateUI(
     const base::Optional<std::string>& title,
     const SkBitmap& icon,
     UpdateUICallback callback) {
-  DCHECK_CURRENTLY_ON(BrowserThread::IO);
+  DCHECK_CURRENTLY_ON(ServiceWorkerContext::GetCoreThreadId());
+  if (!background_fetch_context_) {
+    // Return without running the callback because this case happens only when
+    // the browser is shutting down.
+    return;
+  }
 
   if (title && !ValidateTitle(*title)) {
     std::move(callback).Run(
@@ -101,21 +110,23 @@ void BackgroundFetchRegistrationServiceImpl::UpdateUI(
 }
 
 void BackgroundFetchRegistrationServiceImpl::Abort(AbortCallback callback) {
-  DCHECK_CURRENTLY_ON(BrowserThread::IO);
+  DCHECK_CURRENTLY_ON(ServiceWorkerContext::GetCoreThreadId());
+  if (!background_fetch_context_) {
+    // Return without running the callback because this case happens only when
+    // the browser is shutting down.
+    return;
+  }
   background_fetch_context_->Abort(registration_id_, std::move(callback));
 }
 
 void BackgroundFetchRegistrationServiceImpl::AddRegistrationObserver(
-    blink::mojom::BackgroundFetchRegistrationObserverPtr observer) {
-  DCHECK_CURRENTLY_ON(BrowserThread::IO);
-
+    mojo::PendingRemote<blink::mojom::BackgroundFetchRegistrationObserver>
+        observer) {
+  DCHECK_CURRENTLY_ON(ServiceWorkerContext::GetCoreThreadId());
+  if (!background_fetch_context_)
+    return;
   background_fetch_context_->AddRegistrationObserver(
       registration_id_.unique_id(), std::move(observer));
-}
-
-void BackgroundFetchRegistrationServiceImpl::Bind(
-    blink::mojom::BackgroundFetchRegistrationServicePtr* interface_ptr) {
-  binding_.Bind(mojo::MakeRequest(interface_ptr));
 }
 
 bool BackgroundFetchRegistrationServiceImpl::ValidateTitle(

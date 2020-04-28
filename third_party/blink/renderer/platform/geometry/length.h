@@ -23,9 +23,12 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_PLATFORM_GEOMETRY_LENGTH_H_
 #define THIRD_PARTY_BLINK_RENDERER_PLATFORM_GEOMETRY_LENGTH_H_
 
+#include <cstring>
+
 #include "third_party/blink/renderer/platform/geometry/layout_unit.h"
 #include "third_party/blink/renderer/platform/platform_export.h"
-#include "third_party/blink/renderer/platform/wtf/allocator.h"
+#include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
+#include "third_party/blink/renderer/platform/wtf/math_extras.h"
 
 namespace blink {
 
@@ -59,7 +62,7 @@ class PLATFORM_EXPORT Length {
     kExtendToZoom,
     kDeviceWidth,
     kDeviceHeight,
-    kMaxSizeNone
+    kNone
   };
 
   Length() : int_value_(0), quirk_(false), type_(kAuto), is_float_(false) {}
@@ -86,7 +89,7 @@ class PLATFORM_EXPORT Length {
 
   Length(double v, Length::Type t, bool q = false)
       : quirk_(q), type_(t), is_float_(true) {
-    float_value_ = static_cast<float>(v);
+    float_value_ = clampTo<float>(v);
   }
 
   explicit Length(scoped_refptr<CalculationValue>);
@@ -113,7 +116,7 @@ class PLATFORM_EXPORT Length {
 
   bool operator==(const Length& o) const {
     return (type_ == o.type_) && (quirk_ == o.quirk_) &&
-           (IsMaxSizeNone() || (GetFloatValue() == o.GetFloatValue()) ||
+           (IsNone() || (GetFloatValue() == o.GetFloatValue()) ||
             IsCalculatedEqual(o));
   }
   bool operator!=(const Length& o) const { return !(*this == o); }
@@ -144,7 +147,7 @@ class PLATFORM_EXPORT Length {
   static Length ExtendToZoom() { return Length(kExtendToZoom); }
   static Length DeviceWidth() { return Length(kDeviceWidth); }
   static Length DeviceHeight() { return Length(kDeviceHeight); }
-  static Length MaxSizeNone() { return Length(kMaxSizeNone); }
+  static Length None() { return Length(kNone); }
   static Length FitContent() { return Length(kFitContent); }
   template <typename NUMBER_TYPE>
   static Length Percent(NUMBER_TYPE number) {
@@ -180,26 +183,31 @@ class PLATFORM_EXPORT Length {
 
   CalculationValue& GetCalculationValue() const;
 
+  // If |this| is calculated, returns the underlying |CalculationValue|. If not,
+  // returns a |CalculationValue| constructed from |GetPixelsAndPercent()|. Hits
+  // a DCHECK if |this| is not a specified value (e.g., 'auto').
+  scoped_refptr<CalculationValue> AsCalculationValue() const;
+
   Length::Type GetType() const { return static_cast<Length::Type>(type_); }
   bool Quirk() const { return quirk_; }
 
   void SetQuirk(bool quirk) { quirk_ = quirk; }
 
-  bool IsMaxSizeNone() const { return GetType() == kMaxSizeNone; }
+  bool IsNone() const { return GetType() == kNone; }
 
   // FIXME calc: https://bugs.webkit.org/show_bug.cgi?id=80357. A calculated
   // Length always contains a percentage, and without a maxValue passed to these
   // functions it's impossible to determine the sign or zero-ness. We assume all
   // calc values are positive and non-zero for now.
   bool IsZero() const {
-    DCHECK(!IsMaxSizeNone());
+    DCHECK(!IsNone());
     if (IsCalculated())
       return false;
 
     return is_float_ ? !float_value_ : !int_value_;
   }
   bool IsPositive() const {
-    if (IsMaxSizeNone())
+    if (IsNone())
       return false;
     if (IsCalculated())
       return true;
@@ -207,14 +215,18 @@ class PLATFORM_EXPORT Length {
     return GetFloatValue() > 0;
   }
   bool IsNegative() const {
-    if (IsMaxSizeNone() || IsCalculated())
+    if (IsNone() || IsCalculated())
       return false;
 
     return GetFloatValue() < 0;
   }
 
+  // For the layout purposes, if this |Length| is a block-axis size, see
+  // |IsIntrinsicOrAuto()|, it is usually a better choice.
   bool IsAuto() const { return GetType() == kAuto; }
   bool IsFixed() const { return GetType() == kFixed; }
+  // For the block axis, intrinsic sizes such as `min-content` behave the same
+  // as `auto`. https://www.w3.org/TR/css-sizing-3/#valdef-width-min-content
   bool IsIntrinsicOrAuto() const { return GetType() == kAuto || IsIntrinsic(); }
   bool IsIntrinsic() const {
     return GetType() == kMinContent || GetType() == kMaxContent ||
@@ -262,7 +274,7 @@ class PLATFORM_EXPORT Length {
   }
 
   float GetFloatValue() const {
-    DCHECK(!IsMaxSizeNone());
+    DCHECK(!IsNone());
     return is_float_ ? float_value_ : int_value_;
   }
   float NonNanCalculatedValue(LayoutUnit max_value) const;
@@ -273,7 +285,7 @@ class PLATFORM_EXPORT Length {
 
  private:
   int GetIntValue() const {
-    DCHECK(!IsMaxSizeNone());
+    DCHECK(!IsNone());
     return is_float_ ? static_cast<int>(float_value_) : int_value_;
   }
 

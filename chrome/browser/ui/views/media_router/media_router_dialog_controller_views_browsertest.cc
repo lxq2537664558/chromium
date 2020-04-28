@@ -4,6 +4,7 @@
 
 #include "base/macros.h"
 #include "build/build_config.h"
+#include "chrome/browser/media/router/media_router_metrics.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
@@ -40,12 +41,12 @@ void MediaRouterDialogControllerViewsTest::OpenMediaRouterDialog() {
   // Create a reference to initiator contents.
   initiator_ = browser()->tab_strip_model()->GetActiveWebContents();
 
-  dialog_controller_ =
-      MediaRouterDialogControllerViews::GetOrCreateForWebContents(initiator_);
+  dialog_controller_ = static_cast<MediaRouterDialogControllerViews*>(
+      MediaRouterDialogController::GetOrCreateForWebContents(initiator_));
   ASSERT_TRUE(dialog_controller_);
 
   // Show the media router dialog for the initiator.
-  dialog_controller_->ShowMediaRouterDialog();
+  dialog_controller_->ShowMediaRouterDialog(MediaRouterDialogOpenOrigin::PAGE);
   ASSERT_TRUE(dialog_controller_->IsShowingMediaRouterDialog());
 }
 

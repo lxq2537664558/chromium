@@ -130,6 +130,15 @@ const CrosView = (function() {
   }
 
   /**
+   *  Set storing combined debug logs status.
+   *
+   *  @private
+   */
+  function setStoreFeedbackSystemLogsStatus_(status) {
+    $(CrosView.STORE_FEEDBACK_SYSTEM_LOGS_STATUS_ID).innerText = status;
+  }
+
+  /**
    *  Set status for current debug mode.
    *
    *  @private
@@ -177,6 +186,11 @@ const CrosView = (function() {
           $(CrosView.STORE_COMBINED_DEBUG_LOGS_STATUS_ID).innerText = '';
           g_browser.storeCombinedDebugLogs();
         }, false);
+    $(CrosView.STORE_FEEDBACK_SYSTEM_LOGS_ID)
+        .addEventListener('click', function(event) {
+          $(CrosView.STORE_FEEDBACK_SYSTEM_LOGS_STATUS_ID).innerText = '';
+          g_browser.storeFeedbackSystemLogs();
+        }, false);
 
     $(CrosView.DEBUG_WIFI_ID).addEventListener('click', function(event) {
       setNetworkDebugMode_('wifi');
@@ -186,9 +200,6 @@ const CrosView = (function() {
     }, false);
     $(CrosView.DEBUG_CELLULAR_ID).addEventListener('click', function(event) {
       setNetworkDebugMode_('cellular');
-    }, false);
-    $(CrosView.DEBUG_WIMAX_ID).addEventListener('click', function(event) {
-      setNetworkDebugMode_('wimax');
     }, false);
     $(CrosView.DEBUG_NONE_ID).addEventListener('click', function(event) {
       setNetworkDebugMode_('none');
@@ -248,10 +259,13 @@ const CrosView = (function() {
       'chromeos-view-store-combined-debug-logs';
   CrosView.STORE_COMBINED_DEBUG_LOGS_STATUS_ID =
       'chromeos-view-store-combined-debug-logs-status';
+  CrosView.STORE_FEEDBACK_SYSTEM_LOGS_ID =
+      'chromeos-view-store-feedback-system-logs';
+  CrosView.STORE_FEEDBACK_SYSTEM_LOGS_STATUS_ID =
+      'chromeos-view-store-feedback-system-logs-status';
   CrosView.DEBUG_WIFI_ID = 'chromeos-view-network-debugging-wifi';
   CrosView.DEBUG_ETHERNET_ID = 'chromeos-view-network-debugging-ethernet';
   CrosView.DEBUG_CELLULAR_ID = 'chromeos-view-network-debugging-cellular';
-  CrosView.DEBUG_WIMAX_ID = 'chromeos-view-network-debugging-wimax';
   CrosView.DEBUG_NONE_ID = 'chromeos-view-network-debugging-none';
   CrosView.DEBUG_STATUS_ID = 'chromeos-view-network-debugging-status';
 
@@ -264,6 +278,7 @@ const CrosView = (function() {
     onONCFileParse: setParseStatus_,
     onStoreDebugLogs: setStoreDebugLogsStatus_,
     onStoreCombinedDebugLogs: setStoreCombinedDebugLogsStatus_,
+    onStoreFeedbackSystemLogs: setStoreFeedbackSystemLogsStatus_,
     onSetNetworkDebugMode: setNetworkDebugModeStatus_,
   };
 

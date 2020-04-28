@@ -39,7 +39,7 @@ class TestDataOfferDelegate : public DataOfferDelegate {
 
   // Called when |mime_type| is offered by the client.
   void OnOffer(const std::string& mime_type) override {
-    mime_types_.push_back(mime_type);
+    mime_types_.insert(mime_type);
   }
 
   // Called when possible |source_actions| is offered by the client.
@@ -51,14 +51,14 @@ class TestDataOfferDelegate : public DataOfferDelegate {
   // Called when current |action| is offered by the client.
   void OnAction(DndAction dnd_action) override { dnd_action_ = dnd_action; }
 
-  const std::vector<std::string>& mime_types() const { return mime_types_; }
+  const base::flat_set<std::string>& mime_types() const { return mime_types_; }
   const base::flat_set<DndAction>& source_actions() const {
     return source_actions_;
   }
   DndAction dnd_action() const { return dnd_action_; }
 
  private:
-  std::vector<std::string> mime_types_;
+  base::flat_set<std::string> mime_types_;
   base::flat_set<DndAction> source_actions_;
   DndAction dnd_action_ = DndAction::kNone;
 
@@ -133,7 +133,7 @@ TEST_F(DataOfferTest, SetTextDropData) {
   data.SetString(base::string16(base::ASCIIToUTF16("Test data")));
 
   TestDataOfferDelegate delegate;
-  DataOffer data_offer(&delegate);
+  DataOffer data_offer(&delegate, DataOffer::Purpose::DRAG_DROP);
 
   EXPECT_EQ(0u, delegate.mime_types().size());
   EXPECT_EQ(0u, delegate.source_actions().size());
@@ -144,17 +144,60 @@ TEST_F(DataOfferTest, SetTextDropData) {
   data_offer.SetSourceActions(source_actions);
   data_offer.SetActions(base::flat_set<DndAction>(), DndAction::kMove);
 
-  EXPECT_EQ(1u, delegate.mime_types().size());
-  EXPECT_EQ("text/plain", delegate.mime_types()[0]);
+  EXPECT_EQ(1u, delegate.mime_types().count("text/plain;charset=utf-8"));
+  EXPECT_EQ(1u, delegate.mime_types().count("text/plain;charset=utf-16"));
   EXPECT_EQ(2u, delegate.source_actions().size());
   EXPECT_EQ(1u, delegate.source_actions().count(DndAction::kCopy));
   EXPECT_EQ(1u, delegate.source_actions().count(DndAction::kMove));
   EXPECT_EQ(DndAction::kMove, delegate.dnd_action());
 }
 
+TEST_F(DataOfferTest, SetHTMLDropData) {
+  const std::string html_data = "Test HTML data 🔥 ❄";
+
+  base::flat_set<DndAction> source_actions;
+  source_actions.insert(DndAction::kCopy);
+  source_actions.insert(DndAction::kMove);
+
+  ui::OSExchangeData data;
+  data.SetHtml(base::UTF8ToUTF16(html_data), GURL());
+
+  TestDataOfferDelegate delegate;
+  DataOffer data_offer(&delegate, DataOffer::Purpose::DRAG_DROP);
+
+  EXPECT_EQ(0u, delegate.mime_types().size());
+  EXPECT_EQ(0u, delegate.source_actions().size());
+  EXPECT_EQ(DndAction::kNone, delegate.dnd_action());
+
+  TestFileHelper file_helper;
+  data_offer.SetDropData(&file_helper, data);
+  data_offer.SetSourceActions(source_actions);
+  data_offer.SetActions(base::flat_set<DndAction>(), DndAction::kMove);
+
+  EXPECT_EQ(1u, delegate.mime_types().count("text/html;charset=utf-8"));
+  EXPECT_EQ(1u, delegate.mime_types().count("text/html;charset=utf-16"));
+  EXPECT_EQ(2u, delegate.source_actions().size());
+  EXPECT_EQ(1u, delegate.source_actions().count(DndAction::kCopy));
+  EXPECT_EQ(1u, delegate.source_actions().count(DndAction::kMove));
+  EXPECT_EQ(DndAction::kMove, delegate.dnd_action());
+
+  base::ScopedFD read, write;
+  std::string result;
+  EXPECT_TRUE(base::CreatePipe(&read, &write));
+  data_offer.Receive("text/html;charset=utf-8", std::move(write));
+  ReadString(std::move(read), &result);
+  EXPECT_EQ(result, html_data);
+
+  base::string16 result16;
+  EXPECT_TRUE(base::CreatePipe(&read, &write));
+  data_offer.Receive("text/html;charset=utf-16", std::move(write));
+  ReadString16(std::move(read), &result16);
+  EXPECT_EQ(result16, base::UTF8ToUTF16(html_data));
+}
+
 TEST_F(DataOfferTest, SetFileDropData) {
   TestDataOfferDelegate delegate;
-  DataOffer data_offer(&delegate);
+  DataOffer data_offer(&delegate, DataOffer::Purpose::DRAG_DROP);
 
   TestFileHelper file_helper;
   ui::OSExchangeData data;
@@ -162,12 +205,12 @@ TEST_F(DataOfferTest, SetFileDropData) {
   data_offer.SetDropData(&file_helper, data);
 
   EXPECT_EQ(1u, delegate.mime_types().size());
-  EXPECT_EQ("text/uri-list", delegate.mime_types()[0]);
+  EXPECT_EQ(1u, delegate.mime_types().count("text/uri-list"));
 }
 
 TEST_F(DataOfferTest, SetPickleDropData) {
   TestDataOfferDelegate delegate;
-  DataOffer data_offer(&delegate);
+  DataOffer data_offer(&delegate, DataOffer::Purpose::DRAG_DROP);
 
   TestFileHelper file_helper;
   ui::OSExchangeData data;
@@ -182,12 +225,12 @@ TEST_F(DataOfferTest, SetPickleDropData) {
   data_offer.SetDropData(&file_helper, data);
 
   EXPECT_EQ(1u, delegate.mime_types().size());
-  EXPECT_EQ("text/uri-list", delegate.mime_types()[0]);
+  EXPECT_EQ(1u, delegate.mime_types().count("text/uri-list"));
 }
 
 TEST_F(DataOfferTest, ReceiveString) {
   TestDataOfferDelegate delegate;
-  DataOffer data_offer(&delegate);
+  DataOffer data_offer(&delegate, DataOffer::Purpose::DRAG_DROP);
 
   TestFileHelper file_helper;
   ui::OSExchangeData data;
@@ -199,14 +242,56 @@ TEST_F(DataOfferTest, ReceiveString) {
   ASSERT_TRUE(base::CreatePipe(&read_pipe, &write_pipe));
 
   data_offer.Receive("text/plain", std::move(write_pipe));
-  base::string16 result;
-  ASSERT_TRUE(ReadString16(std::move(read_pipe), &result));
-  EXPECT_EQ(base::ASCIIToUTF16("Test data"), result);
+  std::string result;
+  ASSERT_TRUE(ReadString(std::move(read_pipe), &result));
+  EXPECT_EQ("Test data", result);
+
+  base::ScopedFD read_pipe_16;
+  base::ScopedFD write_pipe_16;
+  ASSERT_TRUE(base::CreatePipe(&read_pipe_16, &write_pipe_16));
+  data_offer.Receive("text/plain;charset=utf-16", std::move(write_pipe_16));
+  base::string16 result_16;
+  ASSERT_TRUE(ReadString16(std::move(read_pipe_16), &result_16));
+  EXPECT_EQ(base::ASCIIToUTF16("Test data"), result_16);
+
+  base::ScopedFD read_pipe_8;
+  base::ScopedFD write_pipe_8;
+  ASSERT_TRUE(base::CreatePipe(&read_pipe_8, &write_pipe_8));
+  data_offer.Receive("text/plain;charset=utf-8", std::move(write_pipe_8));
+  std::string result_8;
+  ASSERT_TRUE(ReadString(std::move(read_pipe_8), &result_8));
+  EXPECT_EQ("Test data", result_8);
+}
+
+TEST_F(DataOfferTest, ReceiveHTML) {
+  TestDataOfferDelegate delegate;
+  DataOffer data_offer(&delegate, DataOffer::Purpose::DRAG_DROP);
+
+  TestFileHelper file_helper;
+  ui::OSExchangeData data;
+  data.SetHtml(base::ASCIIToUTF16("Test HTML data"), GURL());
+  data_offer.SetDropData(&file_helper, data);
+
+  base::ScopedFD read_pipe_16;
+  base::ScopedFD write_pipe_16;
+  ASSERT_TRUE(base::CreatePipe(&read_pipe_16, &write_pipe_16));
+  data_offer.Receive("text/html;charset=utf-16", std::move(write_pipe_16));
+  base::string16 result_16;
+  ASSERT_TRUE(ReadString16(std::move(read_pipe_16), &result_16));
+  EXPECT_EQ(base::ASCIIToUTF16("Test HTML data"), result_16);
+
+  base::ScopedFD read_pipe_8;
+  base::ScopedFD write_pipe_8;
+  ASSERT_TRUE(base::CreatePipe(&read_pipe_8, &write_pipe_8));
+  data_offer.Receive("text/html;charset=utf-8", std::move(write_pipe_8));
+  std::string result_8;
+  ASSERT_TRUE(ReadString(std::move(read_pipe_8), &result_8));
+  EXPECT_EQ("Test HTML data", result_8);
 }
 
 TEST_F(DataOfferTest, ReceiveUriList) {
   TestDataOfferDelegate delegate;
-  DataOffer data_offer(&delegate);
+  DataOffer data_offer(&delegate, DataOffer::Purpose::DRAG_DROP);
 
   TestFileHelper file_helper;
   ui::OSExchangeData data;
@@ -225,7 +310,7 @@ TEST_F(DataOfferTest, ReceiveUriList) {
 
 TEST_F(DataOfferTest, ReceiveUriListFromPickle_ReceiveAfterUrlIsResolved) {
   TestDataOfferDelegate delegate;
-  DataOffer data_offer(&delegate);
+  DataOffer data_offer(&delegate, DataOffer::Purpose::DRAG_DROP);
 
   TestFileHelper file_helper;
   ui::OSExchangeData data;
@@ -261,7 +346,7 @@ TEST_F(DataOfferTest, ReceiveUriListFromPickle_ReceiveAfterUrlIsResolved) {
 
 TEST_F(DataOfferTest, ReceiveUriListFromPickle_ReceiveBeforeUrlIsResolved) {
   TestDataOfferDelegate delegate;
-  DataOffer data_offer(&delegate);
+  DataOffer data_offer(&delegate, DataOffer::Purpose::DRAG_DROP);
 
   TestFileHelper file_helper;
   ui::OSExchangeData data;
@@ -309,7 +394,7 @@ TEST_F(DataOfferTest, ReceiveUriListFromPickle_ReceiveBeforeUrlIsResolved) {
 TEST_F(DataOfferTest,
        ReceiveUriListFromPickle_ReceiveBeforeEmptyUrlIsReturned) {
   TestDataOfferDelegate delegate;
-  DataOffer data_offer(&delegate);
+  DataOffer data_offer(&delegate, DataOffer::Purpose::DRAG_DROP);
 
   TestFileHelper file_helper;
   ui::OSExchangeData data;
@@ -340,21 +425,22 @@ TEST_F(DataOfferTest,
   EXPECT_EQ(base::ASCIIToUTF16(""), result);
 }
 
-TEST_F(DataOfferTest, SetClipboardData) {
+TEST_F(DataOfferTest, SetClipboardDataPlainText) {
   TestDataOfferDelegate delegate;
-  DataOffer data_offer(&delegate);
+  DataOffer data_offer(&delegate, DataOffer::Purpose::COPY_PASTE);
 
   TestFileHelper file_helper;
   {
-    ui::ScopedClipboardWriter writer(ui::CLIPBOARD_TYPE_COPY_PASTE);
+    ui::ScopedClipboardWriter writer(ui::ClipboardBuffer::kCopyPaste);
     writer.WriteText(base::UTF8ToUTF16("Test data"));
   }
   data_offer.SetClipboardData(&file_helper,
                               *ui::Clipboard::GetForCurrentThread());
 
-  EXPECT_EQ(2u, delegate.mime_types().size());
-  EXPECT_EQ("text/plain;charset=utf-8", delegate.mime_types()[0]);
-  EXPECT_EQ("UTF8_STRING", delegate.mime_types()[1]);
+  EXPECT_EQ(3u, delegate.mime_types().size());
+  EXPECT_EQ(1u, delegate.mime_types().count("text/plain;charset=utf-8"));
+  EXPECT_EQ(1u, delegate.mime_types().count("text/plain;charset=utf-16"));
+  EXPECT_EQ(1u, delegate.mime_types().count("UTF8_STRING"));
 
   base::ScopedFD read_pipe;
   base::ScopedFD write_pipe;
@@ -363,12 +449,75 @@ TEST_F(DataOfferTest, SetClipboardData) {
   data_offer.Receive("text/plain;charset=utf-8", std::move(write_pipe));
   std::string result;
   ASSERT_TRUE(ReadString(std::move(read_pipe), &result));
-  EXPECT_EQ(std::string("Test data"), result);
+  EXPECT_EQ("Test data", result);
+
+  ASSERT_TRUE(base::CreatePipe(&read_pipe, &write_pipe));
+  data_offer.Receive("text/plain;charset=utf-16", std::move(write_pipe));
+  base::string16 result16;
+  ASSERT_TRUE(ReadString16(std::move(read_pipe), &result16));
+  EXPECT_EQ("Test data", base::UTF16ToUTF8(result16));
+}
+
+TEST_F(DataOfferTest, SetClipboardDataHTML) {
+  TestDataOfferDelegate delegate;
+  DataOffer data_offer(&delegate, DataOffer::Purpose::COPY_PASTE);
+
+  TestFileHelper file_helper;
+  {
+    ui::ScopedClipboardWriter writer(ui::ClipboardBuffer::kCopyPaste);
+    writer.WriteHTML(base::UTF8ToUTF16("Test data"), "");
+  }
+  data_offer.SetClipboardData(&file_helper,
+                              *ui::Clipboard::GetForCurrentThread());
+
+  EXPECT_EQ(2u, delegate.mime_types().size());
+  EXPECT_EQ(1u, delegate.mime_types().count("text/html;charset=utf-8"));
+  EXPECT_EQ(1u, delegate.mime_types().count("text/html;charset=utf-16"));
+
+  base::ScopedFD read_pipe;
+  base::ScopedFD write_pipe;
+  ASSERT_TRUE(base::CreatePipe(&read_pipe, &write_pipe));
+
+  data_offer.Receive("text/html;charset=utf-8", std::move(write_pipe));
+  std::string result;
+  ASSERT_TRUE(ReadString(std::move(read_pipe), &result));
+  EXPECT_EQ("Test data", result);
+
+  ASSERT_TRUE(base::CreatePipe(&read_pipe, &write_pipe));
+  data_offer.Receive("text/html;charset=utf-16", std::move(write_pipe));
+  base::string16 result16;
+  ASSERT_TRUE(ReadString16(std::move(read_pipe), &result16));
+  EXPECT_EQ("Test data", base::UTF16ToUTF8(result16));
+}
+
+TEST_F(DataOfferTest, SetClipboardDataRTF) {
+  TestDataOfferDelegate delegate;
+  DataOffer data_offer(&delegate, DataOffer::Purpose::COPY_PASTE);
+
+  TestFileHelper file_helper;
+  {
+    ui::ScopedClipboardWriter writer(ui::ClipboardBuffer::kCopyPaste);
+    writer.WriteRTF("Test data");
+  }
+  data_offer.SetClipboardData(&file_helper,
+                              *ui::Clipboard::GetForCurrentThread());
+
+  EXPECT_EQ(1u, delegate.mime_types().size());
+  EXPECT_EQ(1u, delegate.mime_types().count("text/rtf"));
+
+  base::ScopedFD read_pipe;
+  base::ScopedFD write_pipe;
+  ASSERT_TRUE(base::CreatePipe(&read_pipe, &write_pipe));
+
+  data_offer.Receive("text/rtf", std::move(write_pipe));
+  std::string result;
+  ASSERT_TRUE(ReadString(std::move(read_pipe), &result));
+  EXPECT_EQ("Test data", result);
 }
 
 TEST_F(DataOfferTest, AcceptWithNull) {
   TestDataOfferDelegate delegate;
-  DataOffer data_offer(&delegate);
+  DataOffer data_offer(&delegate, DataOffer::Purpose::COPY_PASTE);
   data_offer.Accept(nullptr);
 }
 

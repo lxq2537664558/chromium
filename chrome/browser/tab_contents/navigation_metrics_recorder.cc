@@ -6,6 +6,8 @@
 
 #include "build/build_config.h"
 #include "chrome/browser/metrics/chrome_metrics_service_accessor.h"
+#include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/profiles/profile_metrics.h"
 #include "components/navigation_metrics/navigation_metrics.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/browser_thread.h"
@@ -60,6 +62,14 @@ void NavigationMetricsRecorder::DidFinishNavigation(
         "SiteIsolationActive", "Enabled");
   }
 
+  // Also register a synthetic field trial when we encounter a navigation to an
+  // OOPIF.
+  if (is_synthetic_isolation_trial_enabled_ &&
+      navigation_handle->GetRenderFrameHost()->IsCrossProcessSubframe()) {
+    ChromeMetricsServiceAccessor::RegisterSyntheticFieldTrial(
+        "OutOfProcessIframesActive", "Enabled");
+  }
+
   if (!navigation_handle->IsInMainFrame())
     return;
 
@@ -67,9 +77,11 @@ void NavigationMetricsRecorder::DidFinishNavigation(
   content::NavigationEntry* last_committed_entry =
       web_contents()->GetController().GetLastCommittedEntry();
 
+  Profile* profile = Profile::FromBrowserContext(context);
   navigation_metrics::RecordMainFrameNavigation(
       last_committed_entry->GetVirtualURL(),
-      navigation_handle->IsSameDocument(), context->IsOffTheRecord());
+      navigation_handle->IsSameDocument(), profile->IsOffTheRecord(),
+      ProfileMetrics::GetBrowserProfileType(profile));
 }
 
 WEB_CONTENTS_USER_DATA_KEY_IMPL(NavigationMetricsRecorder)

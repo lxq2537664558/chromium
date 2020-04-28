@@ -21,6 +21,7 @@ constexpr int kCornerRadiusDip = 20;
 constexpr int kMiniUiCornerRadiusDip = 24;
 constexpr int kMaxHeightDip = 640;
 constexpr int kMaxHeightEmbeddedDip = 440;
+constexpr int kMinHeightEmbeddedDip = 180;
 constexpr int kPaddingDip = 14;
 constexpr int kPreferredWidthDip = 640;
 constexpr int kSpacingDip = 8;
@@ -44,6 +45,8 @@ extern const aura::WindowProperty<bool>* const kOnlyAllowMouseClickEvents;
 // Returns the default font list for Assistant UI.
 COMPONENT_EXPORT(ASSISTANT_UI_CONSTANTS)
 const gfx::FontList& GetDefaultFontList();
+
+constexpr int kWarmerWelcomesMaxTimesTriggered = 3;
 
 }  // namespace ui
 }  // namespace assistant

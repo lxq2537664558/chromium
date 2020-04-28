@@ -19,6 +19,7 @@
 #include "build/build_config.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/devtools_agent_host.h"
+#include "content/public/browser/devtools_agent_host_client_channel.h"
 #include "content/public/browser/devtools_socket_factory.h"
 #include "content/public/browser/favicon_status.h"
 #include "content/public/browser/navigation_entry.h"
@@ -64,8 +65,9 @@ class UnixDomainServerSocketFactory : public content::DevToolsSocketFactory {
   // content::DevToolsSocketFactory.
   std::unique_ptr<net::ServerSocket> CreateForHttpServer() override {
     std::unique_ptr<net::UnixDomainServerSocket> socket(
-        new net::UnixDomainServerSocket(base::Bind(&CanUserConnectToDevTools),
-                                        true /* use_abstract_namespace */));
+        new net::UnixDomainServerSocket(
+            base::BindRepeating(&CanUserConnectToDevTools),
+            true /* use_abstract_namespace */));
     if (socket->BindAndListen(socket_name_, kBackLog) != net::OK)
       return std::unique_ptr<net::ServerSocket>();
 
@@ -185,17 +187,15 @@ BrowserContext* ShellDevToolsManagerDelegate::GetDefaultBrowserContext() {
 }
 
 void ShellDevToolsManagerDelegate::ClientAttached(
-    content::DevToolsAgentHost* agent_host,
-    content::DevToolsAgentHostClient* client) {
+    content::DevToolsAgentHostClientChannel* channel) {
   // Make sure we don't receive notifications twice for the same client.
-  CHECK(clients_.find(client) == clients_.end());
-  clients_.insert(client);
+  CHECK(clients_.find(channel->GetClient()) == clients_.end());
+  clients_.insert(channel->GetClient());
 }
 
 void ShellDevToolsManagerDelegate::ClientDetached(
-    content::DevToolsAgentHost* agent_host,
-    content::DevToolsAgentHostClient* client) {
-  clients_.erase(client);
+    content::DevToolsAgentHostClientChannel* channel) {
+  clients_.erase(channel->GetClient());
 }
 
 scoped_refptr<DevToolsAgentHost>

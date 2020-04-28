@@ -10,7 +10,6 @@
 
 #include "base/base64.h"
 #include "base/bind.h"
-#include "base/callback_helpers.h"
 #include "base/command_line.h"
 #include "base/macros.h"
 #include "base/memory/ptr_util.h"
@@ -34,9 +33,14 @@
 #include "third_party/webrtc/api/audio_codecs/audio_encoder_factory_template.h"
 #include "third_party/webrtc/api/audio_codecs/opus/audio_decoder_opus.h"
 #include "third_party/webrtc/api/audio_codecs/opus/audio_encoder_opus.h"
-#include "third_party/webrtc/api/create_peerconnection_factory.h"
+#include "third_party/webrtc/api/call/call_factory_interface.h"
+#include "third_party/webrtc/api/peer_connection_interface.h"
+#include "third_party/webrtc/api/rtc_event_log/rtc_event_log_factory.h"
 #include "third_party/webrtc/api/stats/rtcstats_objects.h"
 #include "third_party/webrtc/api/video_codecs/builtin_video_decoder_factory.h"
+#include "third_party/webrtc/media/engine/webrtc_media_engine.h"
+#include "third_party/webrtc/modules/audio_processing/include/audio_processing.h"
+#include "third_party/webrtc_overrides/task_queue_factory.h"
 
 using jingle_xmpp::QName;
 using jingle_xmpp::XmlElement;
@@ -57,8 +61,7 @@ const int kTransportInfoSendDelayMs = 20;
 // XML namespace for the transport elements.
 const char kTransportNamespace[] = "google:remoting:webrtc";
 
-// Global minimum/maximum bitrates set for the PeerConnection.
-const int kMinBitrateBps = 1e6;  // 1 Mbps.
+// Global maximum bitrate set for the PeerConnection.
 const int kMaxBitrateBps = 1e8;  // 100 Mbps.
 
 // Frequency of polling for RTCStats. Polling is needed because WebRTC native
@@ -155,11 +158,10 @@ class CreateSessionDescriptionObserver
         result_callback);
   }
   void OnSuccess(webrtc::SessionDescriptionInterface* desc) override {
-    base::ResetAndReturn(&result_callback_)
-        .Run(base::WrapUnique(desc), std::string());
+    std::move(result_callback_).Run(base::WrapUnique(desc), std::string());
   }
-  void OnFailure(const std::string& error) override {
-    base::ResetAndReturn(&result_callback_).Run(nullptr, error);
+  void OnFailure(webrtc::RTCError error) override {
+    std::move(result_callback_).Run(nullptr, error.message());
   }
 
  protected:
@@ -189,11 +191,11 @@ class SetSessionDescriptionObserver
   }
 
   void OnSuccess() override {
-    base::ResetAndReturn(&result_callback_).Run(true, std::string());
+    std::move(result_callback_).Run(true, std::string());
   }
 
-  void OnFailure(const std::string& error) override {
-    base::ResetAndReturn(&result_callback_).Run(false, error);
+  void OnFailure(webrtc::RTCError error) override {
+    std::move(result_callback_).Run(false, error.message());
   }
 
  protected:
@@ -221,7 +223,7 @@ class RTCStatsCollectorCallback : public webrtc::RTCStatsCollectorCallback {
 
   void OnStatsDelivered(
       const rtc::scoped_refptr<const webrtc::RTCStatsReport>& report) override {
-    base::ResetAndReturn(&result_callback_).Run(report);
+    std::move(result_callback_).Run(report);
   }
 
  protected:
@@ -248,16 +250,28 @@ class WebrtcTransport::PeerConnectionWrapper
       : transport_(transport) {
     audio_module_ = new rtc::RefCountedObject<WebrtcAudioModule>();
 
-    peer_connection_factory_ = webrtc::CreatePeerConnectionFactory(
-        worker_thread,  // network_thread
-        worker_thread,
-        rtc::Thread::Current(),  // signaling_thread
-        audio_module_,
-        webrtc::CreateAudioEncoderFactory<webrtc::AudioEncoderOpus>(),
-        webrtc::CreateAudioDecoderFactory<webrtc::AudioDecoderOpus>(),
-        std::move(encoder_factory), webrtc::CreateBuiltinVideoDecoderFactory(),
-        nullptr,   // audio_mixer
-        nullptr);  // audio_processing
+    webrtc::PeerConnectionFactoryDependencies pcf_deps;
+    pcf_deps.network_thread = worker_thread;
+    pcf_deps.worker_thread = worker_thread;
+    pcf_deps.signaling_thread = rtc::Thread::Current();
+    pcf_deps.task_queue_factory = CreateWebRtcTaskQueueFactory();
+    pcf_deps.call_factory = webrtc::CreateCallFactory();
+    pcf_deps.event_log_factory = std::make_unique<webrtc::RtcEventLogFactory>(
+        pcf_deps.task_queue_factory.get());
+    cricket::MediaEngineDependencies media_deps;
+    media_deps.task_queue_factory = pcf_deps.task_queue_factory.get();
+    media_deps.adm = audio_module_;
+    media_deps.audio_encoder_factory =
+        webrtc::CreateAudioEncoderFactory<webrtc::AudioEncoderOpus>();
+    media_deps.audio_decoder_factory =
+        webrtc::CreateAudioDecoderFactory<webrtc::AudioDecoderOpus>();
+    media_deps.video_encoder_factory = std::move(encoder_factory);
+    media_deps.video_decoder_factory =
+        webrtc::CreateBuiltinVideoDecoderFactory();
+    media_deps.audio_processing = webrtc::AudioProcessingBuilder().Create();
+    pcf_deps.media_engine = cricket::CreateMediaEngine(std::move(media_deps));
+    peer_connection_factory_ =
+        webrtc::CreateModularPeerConnectionFactory(std::move(pcf_deps));
 
     webrtc::PeerConnectionInterface::RTCConfiguration rtc_config;
     rtc_config.enable_dtls_srtp = true;
@@ -273,8 +287,10 @@ class WebrtcTransport::PeerConnectionWrapper
 
     rtc_config.sdp_semantics = webrtc::SdpSemantics::kUnifiedPlan;
 
+    webrtc::PeerConnectionDependencies dependencies(this);
+    dependencies.allocator = std::move(port_allocator);
     peer_connection_ = peer_connection_factory_->CreatePeerConnection(
-        rtc_config, std::move(port_allocator), nullptr, this);
+        rtc_config, std::move(dependencies));
   }
 
   ~PeerConnectionWrapper() override {
@@ -356,14 +372,13 @@ WebrtcTransport::WebrtcTransport(
     EventHandler* event_handler)
     : transport_context_(transport_context),
       event_handler_(event_handler),
-      handshake_hmac_(crypto::HMAC::SHA256),
-      weak_factory_(this) {
+      handshake_hmac_(crypto::HMAC::SHA256) {
   transport_context_->set_relay_mode(TransportContext::RelayMode::TURN);
 
   video_encoder_factory_ = new WebrtcDummyVideoEncoderFactory();
   std::unique_ptr<cricket::PortAllocator> port_allocator =
       transport_context_->port_allocator_factory()->CreatePortAllocator(
-          transport_context_);
+          transport_context_, weak_factory_.GetWeakPtr());
 
   // Takes ownership of video_encoder_factory_.
   peer_connection_wrapper_.reset(new PeerConnectionWrapper(
@@ -538,6 +553,11 @@ bool WebrtcTransport::ProcessTransportInfo(XmlElement* transport_info) {
   return true;
 }
 
+const SessionOptions& WebrtcTransport::session_options() const {
+  DCHECK(thread_checker_.CalledOnValidThread());
+  return session_options_;
+}
+
 void WebrtcTransport::Close(ErrorCode error) {
   DCHECK(thread_checker_.CalledOnValidThread());
   if (!peer_connection_wrapper_)
@@ -555,20 +575,20 @@ void WebrtcTransport::Close(ErrorCode error) {
 }
 
 void WebrtcTransport::ApplySessionOptions(const SessionOptions& options) {
+  DCHECK(thread_checker_.CalledOnValidThread());
+  session_options_ = options;
   base::Optional<std::string> video_codec = options.Get("Video-Codec");
   if (video_codec) {
     preferred_video_codec_ = *video_codec;
   }
 }
 
-void WebrtcTransport::OnAudioSenderCreated(
-    rtc::scoped_refptr<webrtc::RtpSenderInterface> sender) {}
+void WebrtcTransport::OnAudioTransceiverCreated(
+    rtc::scoped_refptr<webrtc::RtpTransceiverInterface> transceiver) {}
 
-void WebrtcTransport::OnVideoSenderCreated(
-    rtc::scoped_refptr<webrtc::RtpSenderInterface> sender) {
-  // TODO(lambroslambrou): Store the VideoSender here, instead of looping over
-  // all Senders in GetVideoSender().
-  DCHECK_EQ(GetVideoSender(), sender);
+void WebrtcTransport::OnVideoTransceiverCreated(
+    rtc::scoped_refptr<webrtc::RtpTransceiverInterface> transceiver) {
+  video_transceiver_ = transceiver;
   SetSenderBitrates(MaxBitrateForConnection());
 }
 
@@ -798,11 +818,6 @@ void WebrtcTransport::OnStatsDelivered(
   // (~600kbps).
   // Set the global bitrate caps in addition to the VideoSender bitrates. The
   // global caps affect the probing configuration used by b/w estimator.
-  // Setting min bitrate here enables padding.
-  //
-  // TODO(sergeyu): Padding needs to be enabled to workaround b/w estimator not
-  // handling spiky traffic patterns well. This won't be necessary with a
-  // better bandwidth estimator.
   int max_bitrate_bps = MaxBitrateForConnection();
   SetPeerConnectionBitrates(max_bitrate_bps);
   SetSenderBitrates(max_bitrate_bps);
@@ -827,7 +842,6 @@ int WebrtcTransport::MaxBitrateForConnection() {
 
 void WebrtcTransport::SetPeerConnectionBitrates(int max_bitrate_bps) {
   webrtc::BitrateSettings bitrate;
-  bitrate.min_bitrate_bps = kMinBitrateBps;
   bitrate.max_bitrate_bps = max_bitrate_bps;
   peer_connection()->SetBitrate(bitrate);
 }
@@ -853,7 +867,6 @@ void WebrtcTransport::SetSenderBitrates(int max_bitrate_bps) {
                << sender->id();
   }
 
-  parameters.encodings[0].min_bitrate_bps = kMinBitrateBps;
   parameters.encodings[0].max_bitrate_bps = max_bitrate_bps;
   webrtc::RTCError result = sender->SetParameters(parameters);
   DCHECK(result.ok()) << "SetParameters() failed: " << result.message();
@@ -941,13 +954,7 @@ void WebrtcTransport::AddPendingCandidatesIfPossible() {
 
 rtc::scoped_refptr<webrtc::RtpSenderInterface>
 WebrtcTransport::GetVideoSender() {
-  auto senders = peer_connection()->GetSenders();
-  for (rtc::scoped_refptr<webrtc::RtpSenderInterface> sender : senders) {
-    if (sender->media_type() == cricket::MediaType::MEDIA_TYPE_VIDEO) {
-      return sender;
-    }
-  }
-  return nullptr;
+  return video_transceiver_ ? video_transceiver_->sender() : nullptr;
 }
 
 }  // namespace protocol

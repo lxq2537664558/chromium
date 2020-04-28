@@ -8,71 +8,51 @@
 
 #include "base/logging.h"
 #include "base/strings/utf_string_conversions.h"
+#include "ui/accessibility/ax_enums.mojom.h"
 #include "ui/accessibility/ax_node_data.h"
 #include "ui/base/cursor/cursor.h"
 #include "ui/events/event.h"
 #include "ui/events/keycodes/keyboard_codes.h"
 #include "ui/gfx/canvas.h"
-#include "ui/gfx/color_palette.h"
 #include "ui/gfx/color_utils.h"
 #include "ui/gfx/font_list.h"
 #include "ui/native_theme/native_theme.h"
-#include "ui/views/controls/link_listener.h"
 #include "ui/views/native_cursor.h"
 #include "ui/views/style/platform_style.h"
 
 namespace views {
 
-const char Link::kViewClassName[] = "Link";
-constexpr int Link::kFocusBorderPadding;
-
 Link::Link(const base::string16& title, int text_context, int text_style)
-    : Label(title, text_context, text_style),
-      requested_enabled_color_(gfx::kPlaceholderColor),
-      requested_enabled_color_set_(false) {
-  Init();
+    : Label(title, text_context, text_style) {
+  RecalculateFont();
+
+  enabled_changed_subscription_ = AddEnabledChangedCallback(
+      base::BindRepeating(&Link::RecalculateFont, base::Unretained(this)));
+
+  // Label() indirectly calls SetText(), but at that point our virtual override
+  // will not be reached.  Call it explicitly here to configure focus.
+  SetText(GetText());
 }
 
 Link::~Link() = default;
 
-// static
-Link::FocusStyle Link::GetDefaultFocusStyle() {
-  return FocusStyle::UNDERLINE;
-}
+SkColor Link::GetColor() const {
+  // TODO(tapted): Use style::GetColor().
+  const ui::NativeTheme* theme = GetNativeTheme();
+  DCHECK(theme);
+  if (!GetEnabled())
+    return theme->GetSystemColor(ui::NativeTheme::kColorId_LinkDisabled);
 
-Link::FocusStyle Link::GetFocusStyle() const {
-  // Use the default, unless the link would "always" be underlined.
-  if (underline_ && GetDefaultFocusStyle() == FocusStyle::UNDERLINE)
-    return FocusStyle::RING;
+  if (requested_enabled_color_.has_value())
+    return requested_enabled_color_.value();
 
-  return GetDefaultFocusStyle();
-}
-
-void Link::PaintFocusRing(gfx::Canvas* canvas) const {
-  if (GetFocusStyle() == FocusStyle::RING) {
-    gfx::Rect focus_ring_bounds = GetTextBounds();
-    focus_ring_bounds.Inset(gfx::Insets(-kFocusBorderPadding));
-    focus_ring_bounds.Intersect(GetLocalBounds());
-    canvas->DrawFocusRect(focus_ring_bounds);
-  }
-}
-
-gfx::Insets Link::GetInsets() const {
-  gfx::Insets insets = Label::GetInsets();
-  if (GetFocusStyle() == FocusStyle::RING &&
-      focus_behavior() != FocusBehavior::NEVER) {
-    DCHECK(!text().empty());
-    insets += gfx::Insets(kFocusBorderPadding);
-  }
-  return insets;
-}
-
-const char* Link::GetClassName() const {
-  return kViewClassName;
+  return GetNativeTheme()->GetSystemColor(
+      pressed_ ? ui::NativeTheme::kColorId_LinkPressed
+               : ui::NativeTheme::kColorId_LinkEnabled);
 }
 
 gfx::NativeCursor Link::GetCursor(const ui::MouseEvent& event) {
-  if (!enabled())
+  if (!GetEnabled())
     return gfx::kNullCursor;
   return GetNativeHandCursor();
 }
@@ -84,7 +64,7 @@ bool Link::CanProcessEventsWithinSubtree() const {
 }
 
 bool Link::OnMousePressed(const ui::MouseEvent& event) {
-  if (!enabled() ||
+  if (!GetEnabled() ||
       (!event.IsLeftMouseButton() && !event.IsMiddleMouseButton()))
     return false;
   SetPressed(true);
@@ -92,7 +72,7 @@ bool Link::OnMousePressed(const ui::MouseEvent& event) {
 }
 
 bool Link::OnMouseDragged(const ui::MouseEvent& event) {
-  SetPressed(enabled() &&
+  SetPressed(GetEnabled() &&
              (event.IsLeftMouseButton() || event.IsMiddleMouseButton()) &&
              HitTestPoint(event.location()));
   return true;
@@ -102,14 +82,14 @@ void Link::OnMouseReleased(const ui::MouseEvent& event) {
   // Change the highlight first just in case this instance is deleted
   // while calling the controller
   OnMouseCaptureLost();
-  if (enabled() &&
+  if (GetEnabled() &&
       (event.IsLeftMouseButton() || event.IsMiddleMouseButton()) &&
       HitTestPoint(event.location())) {
     // Focus the link on click.
     RequestFocus();
 
-    if (listener_)
-      listener_->LinkClicked(this, event.flags());
+    if (!callback_.is_null())
+      callback_.Run(this, event.flags());
   }
 }
 
@@ -130,22 +110,22 @@ bool Link::OnKeyPressed(const ui::KeyEvent& event) {
   // Focus the link on key pressed.
   RequestFocus();
 
-  if (listener_)
-    listener_->LinkClicked(this, event.flags());
+  if (!callback_.is_null())
+    callback_.Run(this, event.flags());
 
   return true;
 }
 
 void Link::OnGestureEvent(ui::GestureEvent* event) {
-  if (!enabled())
+  if (!GetEnabled())
     return;
 
   if (event->type() == ui::ET_GESTURE_TAP_DOWN) {
     SetPressed(true);
   } else if (event->type() == ui::ET_GESTURE_TAP) {
     RequestFocus();
-    if (listener_)
-      listener_->LinkClicked(this, event->flags());
+    if (!callback_.is_null())
+      callback_.Run(this, event->flags());
   } else {
     SetPressed(false);
     return;
@@ -163,7 +143,9 @@ bool Link::SkipDefaultKeyEventProcessing(const ui::KeyEvent& event) {
 
 void Link::GetAccessibleNodeData(ui::AXNodeData* node_data) {
   Label::GetAccessibleNodeData(node_data);
-  node_data->role = ax::mojom::Role::kLink;
+  // Prevent invisible links from being announced by screen reader.
+  node_data->role =
+      GetText().empty() ? ax::mojom::Role::kIgnored : ax::mojom::Role::kLink;
 }
 
 void Link::OnFocus() {
@@ -190,42 +172,18 @@ void Link::SetText(const base::string16& text) {
   ConfigureFocus();
 }
 
-void Link::OnNativeThemeChanged(const ui::NativeTheme* theme) {
-  Label::OnNativeThemeChanged(theme);
+void Link::OnThemeChanged() {
+  Label::OnThemeChanged();
   Label::SetEnabledColor(GetColor());
 }
 
 void Link::SetEnabledColor(SkColor color) {
-  requested_enabled_color_set_ = true;
   requested_enabled_color_ = color;
   Label::SetEnabledColor(GetColor());
 }
 
 bool Link::IsSelectionSupported() const {
   return false;
-}
-
-void Link::SetUnderline(bool underline) {
-  if (underline_ == underline)
-    return;
-  underline_ = underline;
-  RecalculateFont();
-}
-
-void Link::Init() {
-  listener_ = nullptr;
-  pressed_ = false;
-  underline_ = GetDefaultFocusStyle() != FocusStyle::UNDERLINE;
-  RecalculateFont();
-
-  enabled_changed_subscription_ = AddEnabledChangedCallback(
-      base::BindRepeating(&Link::RecalculateFont, base::Unretained(this)));
-
-  // Label::Init() calls SetText(), but if that's being called from Label(), our
-  // SetText() override will not be reached (because the constructed class is
-  // only a Label at the moment, not yet a Link).  So explicitly configure focus
-  // here.
-  ConfigureFocus();
 }
 
 void Link::SetPressed(bool pressed) {
@@ -238,13 +196,10 @@ void Link::SetPressed(bool pressed) {
 }
 
 void Link::RecalculateFont() {
-  // Underline the link if it is enabled and |underline_| is true. Also
-  // underline to indicate focus when that's the style.
   const int style = font_list().GetFontStyle();
-  const bool underline =
-      underline_ || (HasFocus() && GetFocusStyle() == FocusStyle::UNDERLINE);
-  const int intended_style = (enabled() && underline) ?
-      (style | gfx::Font::UNDERLINE) : (style & ~gfx::Font::UNDERLINE);
+  const int intended_style = (GetEnabled() && HasFocus())
+                                 ? (style | gfx::Font::UNDERLINE)
+                                 : (style & ~gfx::Font::UNDERLINE);
 
   if (style != intended_style)
     Label::SetFontList(font_list().DeriveWithStyle(intended_style));
@@ -252,7 +207,7 @@ void Link::RecalculateFont() {
 
 void Link::ConfigureFocus() {
   // Disable focusability for empty links.
-  if (text().empty()) {
+  if (GetText().empty()) {
     SetFocusBehavior(FocusBehavior::NEVER);
   } else {
 #if defined(OS_MACOSX)
@@ -263,19 +218,9 @@ void Link::ConfigureFocus() {
   }
 }
 
-SkColor Link::GetColor() {
-  // TODO(tapted): Use style::GetColor().
-  const ui::NativeTheme* theme = GetNativeTheme();
-  DCHECK(theme);
-  if (!enabled())
-    return theme->GetSystemColor(ui::NativeTheme::kColorId_LinkDisabled);
-
-  if (requested_enabled_color_set_)
-    return requested_enabled_color_;
-
-  return GetNativeTheme()->GetSystemColor(
-      pressed_ ? ui::NativeTheme::kColorId_LinkPressed
-               : ui::NativeTheme::kColorId_LinkEnabled);
-}
+BEGIN_METADATA(Link)
+METADATA_PARENT_CLASS(Label)
+ADD_READONLY_PROPERTY_METADATA(Link, SkColor, Color)
+END_METADATA()
 
 }  // namespace views

@@ -5,11 +5,14 @@
 #include "third_party/blink/renderer/core/html/anchor_element_metrics_sender.h"
 
 #include "base/metrics/histogram_macros.h"
-#include "services/service_manager/public/cpp/interface_provider.h"
+#include "third_party/blink/public/common/browser_interface_broker_proxy.h"
 #include "third_party/blink/public/common/features.h"
+#include "third_party/blink/public/platform/task_type.h"
 #include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
+#include "third_party/blink/renderer/core/html/anchor_element_metrics.h"
 #include "third_party/blink/renderer/core/html/html_anchor_element.h"
+#include "ui/gfx/geometry/mojom/geometry.mojom-shared.h"
 
 namespace blink {
 
@@ -66,11 +69,13 @@ void AnchorElementMetricsSender::SendClickedAnchorMetricsToBrowser(
 }
 
 void AnchorElementMetricsSender::SendAnchorMetricsVectorToBrowser(
-    Vector<mojom::blink::AnchorElementMetricsPtr> metrics) {
+    Vector<mojom::blink::AnchorElementMetricsPtr> metrics,
+    const IntSize& viewport_size) {
   if (!AssociateInterface())
     return;
 
-  metrics_host_->ReportAnchorElementMetricsOnLoad(std::move(metrics));
+  metrics_host_->ReportAnchorElementMetricsOnLoad(std::move(metrics),
+                                                  gfx::Size(viewport_size));
   has_onload_report_sent_ = true;
   anchor_elements_.clear();
 }
@@ -80,8 +85,6 @@ void AnchorElementMetricsSender::AddAnchorElement(HTMLAnchorElement& element) {
     return;
 
   bool is_ad_frame_element = ShouldDiscardAnchorElement(element);
-  UMA_HISTOGRAM_BOOLEAN("AnchorElementMetrics.IsAdFrameElement",
-                        is_ad_frame_element);
 
   // We ignore anchor elements that are in ad frames.
   if (is_ad_frame_element)
@@ -97,11 +100,12 @@ AnchorElementMetricsSender::GetAnchorElements() const {
 
 void AnchorElementMetricsSender::Trace(Visitor* visitor) {
   visitor->Trace(anchor_elements_);
+  visitor->Trace(metrics_host_);
   Supplement<Document>::Trace(visitor);
 }
 
 bool AnchorElementMetricsSender::AssociateInterface() {
-  if (metrics_host_)
+  if (metrics_host_.is_bound())
     return true;
 
   Document* document = GetSupplementable();
@@ -109,14 +113,34 @@ bool AnchorElementMetricsSender::AssociateInterface() {
   if (!document->GetFrame())
     return false;
 
-  document->GetFrame()->GetInterfaceProvider().GetInterface(
-      mojo::MakeRequest(&metrics_host_));
+  document->GetBrowserInterfaceBroker().GetInterface(
+      metrics_host_.BindNewPipeAndPassReceiver(
+          document->GetExecutionContext()->GetTaskRunner(
+              TaskType::kInternalDefault)));
   return true;
 }
 
 AnchorElementMetricsSender::AnchorElementMetricsSender(Document& document)
-    : Supplement<Document>(document) {
+    : Supplement<Document>(document),
+      metrics_host_(document.GetExecutionContext()) {
   DCHECK(!document.ParentDocument());
+}
+
+void AnchorElementMetricsSender::DidFinishLifecycleUpdate(
+    const LocalFrameView& local_frame_view) {
+  // Check that layout is stable. If it is, we can perform the onload update and
+  // stop observing future events.
+  Document* document = local_frame_view.GetFrame().GetDocument();
+  if (document->Lifecycle().GetState() <
+      DocumentLifecycle::kAfterPerformLayout) {
+    return;
+  }
+
+  // Stop listening to updates, as the onload report can be sent now.
+  document->View()->UnregisterFromLifecycleNotifications(this);
+
+  // Send onload report.
+  AnchorElementMetrics::MaybeReportViewportMetricsOnLoad(*document);
 }
 
 }  // namespace blink

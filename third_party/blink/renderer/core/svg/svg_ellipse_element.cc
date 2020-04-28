@@ -26,7 +26,7 @@
 
 namespace blink {
 
-inline SVGEllipseElement::SVGEllipseElement(Document& document)
+SVGEllipseElement::SVGEllipseElement(Document& document)
     : SVGGeometryElement(svg_names::kEllipseTag, document),
       cx_(MakeGarbageCollected<SVGAnimatedLength>(
           this,
@@ -58,15 +58,13 @@ inline SVGEllipseElement::SVGEllipseElement(Document& document)
   AddToPropertyMap(ry_);
 }
 
-void SVGEllipseElement::Trace(blink::Visitor* visitor) {
+void SVGEllipseElement::Trace(Visitor* visitor) {
   visitor->Trace(cx_);
   visitor->Trace(cy_);
   visitor->Trace(rx_);
   visitor->Trace(ry_);
   SVGGeometryElement::Trace(visitor);
 }
-
-DEFINE_NODE_FACTORY(SVGEllipseElement)
 
 Path SVGEllipseElement::AsPath() const {
   Path path;

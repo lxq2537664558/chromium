@@ -43,12 +43,6 @@ class SVGString final : public SVGPropertyBase {
   typedef void TearOffType;
   typedef String PrimitiveType;
 
-  static SVGString* Create() { return MakeGarbageCollected<SVGString>(); }
-
-  static SVGString* Create(const String& value) {
-    return MakeGarbageCollected<SVGString>(value);
-  }
-
   SVGString() = default;
   explicit SVGString(const String& value) : value_(value) {}
 
@@ -64,7 +58,7 @@ class SVGString final : public SVGPropertyBase {
   }
 
   void Add(SVGPropertyBase*, SVGElement*) override;
-  void CalculateAnimatedValue(SVGAnimationElement*,
+  void CalculateAnimatedValue(const SVGAnimateElement&,
                               float percentage,
                               unsigned repeat_count,
                               SVGPropertyBase* from,
@@ -82,8 +76,6 @@ class SVGString final : public SVGPropertyBase {
  private:
   String value_;
 };
-
-DEFINE_SVG_PROPERTY_TYPE_CASTS(SVGString);
 
 }  // namespace blink
 

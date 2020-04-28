@@ -11,13 +11,13 @@
 #include <vector>
 
 #include "base/macros.h"
-#include "base/memory/ref_counted.h"
+#include "base/memory/ref_counted_delete_on_sequence.h"
 #include "base/memory/weak_ptr.h"
 #include "base/optional.h"
 #include "content/browser/background_fetch/background_fetch_delegate_proxy.h"
 #include "content/browser/background_fetch/background_fetch_event_dispatcher.h"
 #include "content/browser/background_fetch/storage/get_initialization_data_task.h"
-#include "content/browser/devtools/devtools_background_services_context.h"
+#include "content/browser/devtools/devtools_background_services_context_impl.h"
 #include "content/common/content_export.h"
 #include "content/public/browser/browser_thread.h"
 #include "third_party/blink/public/mojom/background_fetch/background_fetch.mojom.h"
@@ -41,9 +41,12 @@ class ServiceWorkerContextWrapper;
 // fetch requests from the Mojo service and from other callers.
 // Background Fetch requests function similarly to normal fetches except that
 // they are persistent across Chromium or service worker shutdown.
+//
+// Deleted on the service worker core thread.
+// TODO(crbug.com/824858): Make this single-threaded after the service worker
+// core thread moves to the UI thread.
 class CONTENT_EXPORT BackgroundFetchContext
-    : public base::RefCountedThreadSafe<BackgroundFetchContext,
-                                        BrowserThread::DeleteOnIOThread> {
+    : public base::RefCountedDeleteOnSequence<BackgroundFetchContext> {
  public:
   // The BackgroundFetchContext will watch the ServiceWorkerContextWrapper so
   // that it can respond to service worker events such as unregister.
@@ -52,9 +55,9 @@ class CONTENT_EXPORT BackgroundFetchContext
       const scoped_refptr<ServiceWorkerContextWrapper>& service_worker_context,
       const scoped_refptr<CacheStorageContextImpl>& cache_storage_context,
       scoped_refptr<storage::QuotaManagerProxy> quota_manager_proxy,
-      scoped_refptr<DevToolsBackgroundServicesContext> devtools_context);
+      scoped_refptr<DevToolsBackgroundServicesContextImpl> devtools_context);
 
-  void InitializeOnIOThread();
+  void InitializeOnCoreThread();
 
   // Called by the StoragePartitionImpl destructor.
   void Shutdown();
@@ -84,7 +87,7 @@ class CONTENT_EXPORT BackgroundFetchContext
                   const SkBitmap& icon,
                   blink::mojom::BackgroundFetchUkmDataPtr ukm_data,
                   int render_frame_tree_node_id,
-                  const ResourceRequestInfo::WebContentsGetter& wc_getter,
+                  const WebContents::Getter& wc_getter,
                   blink::mojom::BackgroundFetchService::FetchCallback callback);
 
   // Gets display size for the icon for Background Fetch UI.
@@ -111,7 +114,8 @@ class CONTENT_EXPORT BackgroundFetchContext
   // will unregister itself when the Mojo endpoint goes away.
   void AddRegistrationObserver(
       const std::string& unique_id,
-      blink::mojom::BackgroundFetchRegistrationObserverPtr observer);
+      mojo::PendingRemote<blink::mojom::BackgroundFetchRegistrationObserver>
+          observer);
 
   // Updates the title or icon of the Background Fetch identified by
   // |registration_id|. The |callback| will be invoked when the title has been
@@ -129,6 +133,8 @@ class CONTENT_EXPORT BackgroundFetchContext
     return registration_notifier_.get();
   }
 
+  base::WeakPtr<BackgroundFetchContext> GetWeakPtr();
+
  private:
   using GetPermissionCallback =
       base::OnceCallback<void(BackgroundFetchPermission)>;
@@ -138,13 +144,11 @@ class CONTENT_EXPORT BackgroundFetchContext
   friend class BackgroundFetchServiceTest;
   friend class BackgroundFetchJobControllerTest;
   friend class base::DeleteHelper<BackgroundFetchContext>;
-  friend class base::RefCountedThreadSafe<BackgroundFetchContext,
-                                          BrowserThread::DeleteOnIOThread>;
-  friend struct BrowserThread::DeleteOnThread<BrowserThread::IO>;
+  friend class base::RefCountedDeleteOnSequence<BackgroundFetchContext>;
 
   ~BackgroundFetchContext();
 
-  void ShutdownOnIO();
+  void ShutdownOnCoreThread();
 
   // Called when an existing registration has been retrieved from the data
   // manager. If the registration does not exist then |registration| is nullptr.
@@ -196,7 +200,7 @@ class CONTENT_EXPORT BackgroundFetchContext
 
   std::unique_ptr<BackgroundFetchDataManager> data_manager_;
   scoped_refptr<ServiceWorkerContextWrapper> service_worker_context_;
-  scoped_refptr<DevToolsBackgroundServicesContext> devtools_context_;
+  scoped_refptr<DevToolsBackgroundServicesContextImpl> devtools_context_;
   std::unique_ptr<BackgroundFetchRegistrationNotifier> registration_notifier_;
   BackgroundFetchDelegateProxy delegate_proxy_;
   std::unique_ptr<BackgroundFetchScheduler> scheduler_;
@@ -209,7 +213,8 @@ class CONTENT_EXPORT BackgroundFetchContext
            blink::mojom::BackgroundFetchService::FetchCallback>
       fetch_callbacks_;
 
-  base::WeakPtrFactory<BackgroundFetchContext> weak_factory_;  // Must be last.
+  base::WeakPtrFactory<BackgroundFetchContext> weak_factory_{
+      this};  // Must be last.
 
   DISALLOW_COPY_AND_ASSIGN(BackgroundFetchContext);
 };

@@ -56,11 +56,6 @@ def run_script(argv, funcs):
   # behavior of the script.
   parser.add_argument('--args', type=parse_json, default=[])
 
-  parser.add_argument(
-      '--use-src-side-runtest-py', action='store_true',
-      help='Use the src-side copy of runtest.py, as opposed to the build-side '
-           'one')
-
   subparsers = parser.add_subparsers()
 
   run_parser = subparsers.add_parser('run')
@@ -83,24 +78,6 @@ def run_command(argv, env=None, cwd=None):
   rc = test_env.run_command(argv, env=env, cwd=cwd)
   print 'Command %r returned exit code %d' % (argv, rc)
   return rc
-
-
-def run_runtest(cmd_args, runtest_args):
-  env = os.environ.copy()
-  env['CHROME_HEADLESS'] = '1'
-
-  return run_command([
-      sys.executable,
-      os.path.join(
-          cmd_args.paths['checkout'], 'infra', 'scripts', 'runtest_wrapper.py'),
-      '--',
-      '--target', cmd_args.build_config_fs,
-      '--xvfb',
-      '--builder-name', cmd_args.properties['buildername'],
-      '--slave-name', cmd_args.properties['slavename'],
-      '--build-number', str(cmd_args.properties['buildnumber']),
-      '--build-properties', json.dumps(cmd_args.properties),
-  ] + runtest_args, env=env)
 
 
 @contextlib.contextmanager
@@ -162,6 +139,29 @@ def parse_common_test_results(json_results, test_separator='/'):
     results[key][test] = data
 
   return results
+
+
+def write_interrupted_test_results_to(filepath, test_start_time):
+  """Writes a test results JSON file* to filepath.
+
+  This JSON file is formatted to explain that something went wrong.
+
+  *src/docs/testing/json_test_results_format.md
+
+  Args:
+    filepath: A path to a file to write the output to.
+    test_start_time: The start time of the test run expressed as a
+      floating-point offset in seconds from the UNIX epoch.
+  """
+  with open(filepath, 'w') as fh:
+    output = {
+        'interrupted': True,
+        'num_failures_by_type': {},
+        'seconds_since_epoch': test_start_time,
+        'tests': {},
+        'version': 3,
+    }
+    json.dump(output, fh)
 
 
 def get_gtest_summary_passes(output):
@@ -276,7 +276,7 @@ class BaseIsolatedScriptArgsAdapter(object):
     raise RuntimeError('this method is not yet implemented')
 
   def generate_isolated_script_cmd(self):
-    isolated_script_cmd = [sys.executable] + self._rest_args
+    isolated_script_cmd = [sys.executable] + self.rest_args
 
     isolated_script_cmd += self.generate_test_output_args(
         self.options.isolated_script_test_output)
@@ -319,6 +319,9 @@ class BaseIsolatedScriptArgsAdapter(object):
   def clean_up_after_test_run(self):
     pass
 
+  def do_post_test_run_tasks(self):
+    pass
+
   def run_test(self):
     self.parse_args()
     cmd = self.generate_isolated_script_cmd()
@@ -339,6 +342,7 @@ class BaseIsolatedScriptArgsAdapter(object):
       else:
         exit_code = test_env.run_command(cmd, env=env)
       print 'Command returned exit code %d' % exit_code
+      self.do_post_test_run_tasks()
       return exit_code
     except Exception:
       traceback.print_exc()

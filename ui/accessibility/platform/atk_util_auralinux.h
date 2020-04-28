@@ -11,10 +11,6 @@
 #include "base/memory/singleton.h"
 #include "ui/accessibility/ax_export.h"
 
-#if defined(USE_X11)
-#include "ui/gfx/x/x11.h"
-#endif
-
 namespace ui {
 
 // These values are duplicates of the GDK values that can be found in
@@ -48,16 +44,11 @@ class AX_EXPORT AtkUtilAuraLinux {
 
   static DiscardAtkKeyEvent HandleAtkKeyEvent(AtkKeyEventStruct* key_event);
 
-#if defined(USE_X11)
-  static DiscardAtkKeyEvent HandleKeyEvent(XEvent* xevent);
-#endif
-
  private:
   friend struct base::DefaultSingletonTraits<AtkUtilAuraLinux>;
 
   bool ShouldEnableAccessibility();
 
-  bool PlatformShouldEnableAccessibility();
   void PlatformInitializeAsync();
 
   DISALLOW_COPY_AND_ASSIGN(AtkUtilAuraLinux);

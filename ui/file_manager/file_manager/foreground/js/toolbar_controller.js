@@ -17,10 +17,12 @@ class ToolbarController {
    *     the toolbar.
    * @param {!FileSelectionHandler} selectionHandler
    * @param {!DirectoryModel} directoryModel
+   * @param {!VolumeManager} volumeManager
+   * @param {!A11yAnnounce} a11y
    */
   constructor(
       toolbar, navigationList, listContainer, locationLine, selectionHandler,
-      directoryModel) {
+      directoryModel, volumeManager, a11y) {
     /**
      * @private {!HTMLElement}
      * @const
@@ -55,11 +57,37 @@ class ToolbarController {
     this.deleteButton_ = queryRequiredElement('#delete-button', this.toolbar_);
 
     /**
+     * @private {!HTMLElement}
+     * @const
+     */
+    this.readOnlyIndicator_ =
+        queryRequiredElement('#read-only-indicator', this.toolbar_);
+
+    /**
      * @private {!cr.ui.Command}
      * @const
      */
     this.deleteCommand_ = assertInstanceof(
-        queryRequiredElement('#delete', assert(this.toolbar_.ownerDocument)),
+        queryRequiredElement(
+            '#delete', assert(this.toolbar_.ownerDocument.body)),
+        cr.ui.Command);
+
+    /**
+     * @private {!cr.ui.Command}
+     * @const
+     */
+    this.refreshCommand_ = assertInstanceof(
+        queryRequiredElement(
+            '#refresh', assert(this.toolbar_.ownerDocument.body)),
+        cr.ui.Command);
+
+    /**
+     * @private {!cr.ui.Command}
+     * @const
+     */
+    this.newFolderCommand_ = assertInstanceof(
+        queryRequiredElement(
+            '#new-folder', assert(this.toolbar_.ownerDocument.body)),
         cr.ui.Command);
 
     /**
@@ -92,6 +120,18 @@ class ToolbarController {
      */
     this.directoryModel_ = directoryModel;
 
+    /**
+     * @private {!VolumeManager}
+     * @const
+     */
+    this.volumeManager_ = volumeManager;
+
+    /**
+     * @private {!A11yAnnounce}
+     * @const
+     */
+    this.a11y_ = a11y;
+
     this.selectionHandler_.addEventListener(
         FileSelectionHandler.EventType.CHANGE,
         this.onSelectionChanged_.bind(this));
@@ -102,8 +142,15 @@ class ToolbarController {
     this.deleteButton_.addEventListener(
         'click', this.onDeleteButtonClicked_.bind(this));
 
-    this.navigationList_.addEventListener(
-        'relayout', this.onNavigationListRelayout_.bind(this));
+    // The old layout needed the cancel selection button to resize every
+    // time the splitter was moved. Not needed for files-ng.
+    if (!util.isFilesNg()) {
+      this.navigationList_.addEventListener(
+          'relayout', this.onNavigationListRelayout_.bind(this));
+    }
+
+    this.directoryModel_.addEventListener(
+        'directory-changed', this.updateCurrentDirectoryButtons_.bind(this));
 
     // Watch visibility of toolbar buttons to update the width of location line.
     const observer =
@@ -118,11 +165,42 @@ class ToolbarController {
   }
 
   /**
+   * Updates toolbar's UI elements which are related to current directory.
+   * @private
+   */
+  updateCurrentDirectoryButtons_() {
+    this.updateRefreshCommand_();
+
+    this.newFolderCommand_.canExecuteChange(this.listContainer_.currentList);
+
+    const currentDirectory = this.directoryModel_.getCurrentDirEntry();
+    const locationInfo = currentDirectory &&
+        this.volumeManager_.getLocationInfo(currentDirectory);
+    // Normally, isReadOnly can be used to show the label. This property
+    // is always true for fake volumes (eg. Google Drive root). However, "Linux
+    // files" is a fake volume on first access until the VM is loaded and the
+    // mount point is initialised. The volume is technically read-only since the
+    // temportary fake volume can (and should) not be written to. However,
+    // showing the read only label is not appropriate since the volume will
+    // become read-write once all loading has completed.
+    this.readOnlyIndicator_.hidden =
+        !(locationInfo && locationInfo.isReadOnly &&
+          locationInfo.rootType !== VolumeManagerCommon.RootType.CROSTINI);
+  }
+
+  /** @private */
+  updateRefreshCommand_() {
+    const volumeInfo = this.directoryModel_.getCurrentVolumeInfo();
+    this.refreshCommand_.canExecuteChange(this.listContainer_.currentList);
+  }
+
+  /**
    * Handles selection's change event to update the UI.
    * @private
    */
   onSelectionChanged_() {
     const selection = this.selectionHandler_.selection;
+    this.updateRefreshCommand_();
 
     // Update the label "x files selected." on the header.
     let text;
@@ -149,10 +227,8 @@ class ToolbarController {
     this.deleteButton_.hidden =
         (selection.totalCount === 0 || this.directoryModel_.isReadOnly() ||
          selection.hasReadOnlyEntry() ||
-         (util.isMyFilesVolumeEnabled() &&
-          this.directoryModel_.getCurrentRootType() ==
-              VolumeManagerCommon.RootType.DOWNLOADS &&
-          selection.entries.some(entry => entry.fullPath === '/Downloads')));
+         selection.entries.some(
+             entry => util.isNonModifiable(this.volumeManager_, entry)));
 
     // Set .selecting class to containing element to change the view
     // accordingly.
@@ -181,6 +257,7 @@ class ToolbarController {
    */
   onCancelSelectionButtonClicked_() {
     this.directoryModel_.selectEntries([]);
+    this.a11y_.speakA11yMessage(str('SELECTION_CANCELLATION'));
   }
 
   /**
@@ -188,7 +265,6 @@ class ToolbarController {
    * @private
    */
   onDeleteButtonClicked_() {
-    this.deleteButton_.blur();
     this.deleteCommand_.canExecuteChange(this.listContainer_.currentList);
     this.deleteCommand_.execute(this.listContainer_.currentList);
   }
@@ -198,10 +274,13 @@ class ToolbarController {
    * @private
    */
   onNavigationListRelayout_() {
-    // Make the width of spacer same as the width of navigation list.
-    const navWidth =
-        parseFloat(window.getComputedStyle(this.navigationList_).width);
-    this.cancelSelectionButtonWrapper_.style.width = navWidth + 'px';
+    // Not needed for files-ng, see comment above where this function is used.
+    if (!util.isFilesNg()) {
+      // Make the width of spacer same as the width of navigation list.
+      const navWidth =
+          parseFloat(window.getComputedStyle(this.navigationList_).width);
+      this.cancelSelectionButtonWrapper_.style.width = navWidth + 'px';
+    }
   }
 
   /**

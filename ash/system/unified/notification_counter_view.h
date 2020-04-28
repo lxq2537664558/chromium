@@ -19,8 +19,14 @@ class NotificationCounterView : public TrayItemView, public SessionObserver {
 
   void Update();
 
+  // Returns a string describing the current state for accessibility.
+  base::string16 GetAccessibleNameString() const;
+
   // SessionObserver:
   void OnSessionStateChanged(session_manager::SessionState state) override;
+
+  // views::TrayItemView:
+  const char* GetClassName() const override;
 
  private:
   // The type / number of the icon that is currently set to the image view.
@@ -42,6 +48,9 @@ class QuietModeView : public TrayItemView, public SessionObserver {
 
   // SessionObserver:
   void OnSessionStateChanged(session_manager::SessionState state) override;
+
+  // views::TrayItemView:
+  const char* GetClassName() const override;
 
  private:
   DISALLOW_COPY_AND_ASSIGN(QuietModeView);

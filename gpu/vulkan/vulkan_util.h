@@ -12,9 +12,19 @@
 #include <memory>
 #include <vector>
 
+#include "base/containers/span.h"
+#include "gpu/vulkan/semaphore_handle.h"
 #include "gpu/vulkan/vulkan_export.h"
 
 namespace gpu {
+
+// Submits semaphores to be signaled to the vulkan queue. Semaphores are
+// signaled once this submission is executed. vk_fence is an optional handle
+// to fence to be signaled once this submission completes execution.
+VULKAN_EXPORT bool SubmitSignalVkSemaphores(
+    VkQueue vk_queue,
+    const base::span<VkSemaphore>& vk_semaphore,
+    VkFence vk_fence = VK_NULL_HANDLE);
 
 // Submits a semaphore to be signaled to the vulkan queue. Semaphore is
 // signaled once this submission is executed. vk_fence is an optional handle
@@ -28,7 +38,7 @@ VULKAN_EXPORT bool SubmitSignalVkSemaphore(VkQueue vk_queue,
 // handle to fence to be signaled once this submission completes execution.
 VULKAN_EXPORT bool SubmitWaitVkSemaphores(
     VkQueue vk_queue,
-    const std::vector<VkSemaphore>& vk_semaphores,
+    const base::span<VkSemaphore>& vk_semaphores,
     VkFence vk_fence = VK_NULL_HANDLE);
 
 // Submits a semaphore to be waited upon to the vulkan queue. Semaphore is
@@ -43,6 +53,16 @@ VULKAN_EXPORT bool SubmitWaitVkSemaphore(VkQueue vk_queue,
 VULKAN_EXPORT VkSemaphore
 CreateExternalVkSemaphore(VkDevice vk_device,
                           VkExternalSemaphoreHandleTypeFlags handle_types);
+
+// Imports a semaphore from a handle.
+VULKAN_EXPORT VkSemaphore ImportVkSemaphoreHandle(VkDevice vk_device,
+                                                  SemaphoreHandle handle);
+
+// Gets a handle from a semaphore
+VULKAN_EXPORT SemaphoreHandle
+GetVkSemaphoreHandle(VkDevice vk_device,
+                     VkSemaphore vk_semaphore,
+                     VkExternalSemaphoreHandleTypeFlagBits handle_type);
 
 }  // namespace gpu
 

@@ -10,6 +10,7 @@
 
 #include "base/bind.h"
 #include "base/callback.h"
+#include "base/debug/stack_trace.h"
 #include "base/lazy_instance.h"
 #include "base/logging.h"
 #include "base/metrics/histogram_macros.h"
@@ -17,10 +18,13 @@
 #include "chrome/renderer/safe_browsing/feature_extractor_clock.h"
 #include "chrome/renderer/safe_browsing/phishing_classifier.h"
 #include "chrome/renderer/safe_browsing/scorer.h"
-#include "components/safe_browsing/proto/csd.pb.h"
+#include "components/safe_browsing/content/common/safe_browsing.mojom-forward.h"
+#include "components/safe_browsing/content/common/safe_browsing.mojom-shared.h"
+#include "components/safe_browsing/core/proto/csd.pb.h"
 #include "content/public/renderer/document_state.h"
 #include "content/public/renderer/render_frame.h"
 #include "content/public/renderer/render_thread.h"
+#include "mojo/public/cpp/bindings/self_owned_receiver.h"
 #include "services/service_manager/public/cpp/interface_provider.h"
 #include "third_party/blink/public/platform/web_url.h"
 #include "third_party/blink/public/web/web_document.h"
@@ -52,9 +56,9 @@ base::LazyInstance<std::unique_ptr<const safe_browsing::Scorer>>::
 
 // static
 void PhishingClassifierFilter::Create(
-    mojom::PhishingModelSetterRequest request) {
-  mojo::MakeStrongBinding(std::make_unique<PhishingClassifierFilter>(),
-                          std::move(request));
+    mojo::PendingReceiver<mojom::PhishingModelSetter> receiver) {
+  mojo::MakeSelfOwnedReceiver(std::make_unique<PhishingClassifierFilter>(),
+                              std::move(receiver));
 }
 
 PhishingClassifierFilter::PhishingClassifierFilter() {}
@@ -105,7 +109,7 @@ PhishingClassifierDelegate::PhishingClassifierDelegate(
     SetPhishingScorer(g_phishing_scorer.Get().get());
 
   registry_.AddInterface(
-      base::BindRepeating(&PhishingClassifierDelegate::PhishingDetectorRequest,
+      base::BindRepeating(&PhishingClassifierDelegate::PhishingDetectorReceiver,
                           base::Unretained(this)));
 }
 
@@ -126,14 +130,11 @@ void PhishingClassifierDelegate::SetPhishingScorer(
     CancelPendingClassification(NEW_PHISHING_SCORER);
   }
   classifier_->set_phishing_scorer(scorer);
-  // Start classifying the current page if all conditions are met.
-  // See MaybeStartClassification() for details.
-  MaybeStartClassification();
 }
 
-void PhishingClassifierDelegate::PhishingDetectorRequest(
-    mojom::PhishingDetectorRequest request) {
-  phishing_detector_bindings_.AddBinding(this, std::move(request));
+void PhishingClassifierDelegate::PhishingDetectorReceiver(
+    mojo::PendingReceiver<mojom::PhishingDetector> receiver) {
+  phishing_detector_receivers_.Add(this, std::move(receiver));
 }
 
 void PhishingClassifierDelegate::OnInterfaceRequestForFrame(
@@ -145,6 +146,9 @@ void PhishingClassifierDelegate::OnInterfaceRequestForFrame(
 void PhishingClassifierDelegate::StartPhishingDetection(
     const GURL& url,
     StartPhishingDetectionCallback callback) {
+  if (!callback_.is_null())
+    std::move(callback_).Run(mojom::PhishingDetectorResult::CANCELLED, "");
+
   last_url_received_from_browser_ = StripRef(url);
   callback_ = std::move(callback);
   // Start classifying the current page if all conditions are met.
@@ -186,6 +190,17 @@ void PhishingClassifierDelegate::PageCaptured(base::string16* page_text,
   last_finished_load_url_ = render_frame()->GetWebFrame()->GetDocument().Url();
   classifier_page_text_.swap(*page_text);
   have_page_text_ = true;
+
+  GURL stripped_last_load_url(StripRef(last_finished_load_url_));
+  if (stripped_last_load_url == StripRef(last_url_sent_to_classifier_)) {
+    DVLOG(2) << "Toplevel URL is unchanged, not starting classification.";
+    return;
+  }
+
+  UMA_HISTOGRAM_BOOLEAN(
+      "SBClientPhishing.PageCapturedMatchesBrowserURL",
+      (last_url_received_from_browser_ == stripped_last_load_url));
+
   MaybeStartClassification();
 }
 
@@ -206,14 +221,18 @@ void PhishingClassifierDelegate::CancelPendingClassification(
 
 void PhishingClassifierDelegate::ClassificationDone(
     const ClientPhishingRequest& verdict) {
-  // We no longer need the page text.
-  classifier_page_text_.clear();
   DVLOG(2) << "Phishy verdict = " << verdict.is_phishing()
            << " score = " << verdict.client_score();
-  if (verdict.client_score() != PhishingClassifier::kInvalidScore &&
-      !callback_.is_null()) {
+  if (callback_.is_null())
+    return;
+
+  if (verdict.client_score() != PhishingClassifier::kInvalidScore) {
     DCHECK_EQ(last_url_sent_to_classifier_.spec(), verdict.url());
-    std::move(callback_).Run(verdict.SerializeAsString());
+    std::move(callback_).Run(mojom::PhishingDetectorResult::SUCCESS,
+                             verdict.SerializeAsString());
+  } else {
+    std::move(callback_).Run(mojom::PhishingDetectorResult::INVALID_SCORE,
+                             verdict.SerializeAsString());
   }
 }
 
@@ -233,6 +252,9 @@ void PhishingClassifierDelegate::MaybeStartClassification() {
   if (!classifier_->is_ready()) {
     DVLOG(2) << "Not starting classification, no Scorer created.";
     // Keep classifier_page_text_, in case a Scorer is set later.
+    if (!callback_.is_null())
+      std::move(callback_).Run(
+          mojom::PhishingDetectorResult::CLASSIFIER_NOT_READY, "");
     return;
   }
 
@@ -244,20 +266,13 @@ void PhishingClassifierDelegate::MaybeStartClassification() {
     last_url_sent_to_classifier_ = last_finished_load_url_;
     classifier_page_text_.clear();  // we won't need this.
     have_page_text_ = false;
+    if (!callback_.is_null())
+      std::move(callback_).Run(
+          mojom::PhishingDetectorResult::FORWARD_BACK_TRANSITION, "");
     return;
   }
 
   GURL stripped_last_load_url(StripRef(last_finished_load_url_));
-  if (stripped_last_load_url == StripRef(last_url_sent_to_classifier_)) {
-    // We've already classified this toplevel URL, so this was likely an
-    // same-document navigation or a subframe navigation.  The browser should
-    // not send a StartPhishingDetection IPC in this case.
-    DVLOG(2) << "Toplevel URL is unchanged, not starting classification.";
-    classifier_page_text_.clear();  // we won't need this.
-    have_page_text_ = false;
-    return;
-  }
-
   if (!have_page_text_) {
     DVLOG(2) << "Not starting classification, there is no page text ready.";
     return;

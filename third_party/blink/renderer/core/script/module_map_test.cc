@@ -30,7 +30,7 @@ class TestSingleModuleClient final : public SingleModuleClient {
   TestSingleModuleClient() = default;
   ~TestSingleModuleClient() override {}
 
-  void Trace(blink::Visitor* visitor) override {
+  void Trace(Visitor* visitor) override {
     visitor->Trace(module_script_);
     SingleModuleClient::Trace(visitor);
   }
@@ -64,16 +64,17 @@ class TestModuleRecordResolver final : public ModuleRecordResolver {
     FAIL() << "UnregisterModuleScript shouldn't be called in ModuleMapTest";
   }
 
-  const ModuleScript* GetHostDefined(const ModuleRecord&) const override {
+  const ModuleScript* GetModuleScriptFromModuleRecord(
+      v8::Local<v8::Module>) const override {
     NOTREACHED();
     return nullptr;
   }
 
-  ModuleRecord Resolve(const String& specifier,
-                       const ModuleRecord& referrer,
-                       ExceptionState&) override {
+  v8::Local<v8::Module> Resolve(const String& specifier,
+                                v8::Local<v8::Module> referrer,
+                                ExceptionState&) override {
     NOTREACHED();
-    return ModuleRecord();
+    return v8::Local<v8::Module>();
   }
 
  private:
@@ -87,7 +88,7 @@ class ModuleMapTestModulator final : public DummyModulator {
   explicit ModuleMapTestModulator(ScriptState*);
   ~ModuleMapTestModulator() override {}
 
-  void Trace(blink::Visitor*) override;
+  void Trace(Visitor*) override;
 
   TestModuleRecordResolver* GetTestModuleRecordResolver() {
     return resolver_.Get();
@@ -102,27 +103,29 @@ class ModuleMapTestModulator final : public DummyModulator {
   ScriptState* GetScriptState() override { return script_state_; }
 
   class TestModuleScriptFetcher final
-      : public GarbageCollectedFinalized<TestModuleScriptFetcher>,
+      : public GarbageCollected<TestModuleScriptFetcher>,
         public ModuleScriptFetcher {
     USING_GARBAGE_COLLECTED_MIXIN(TestModuleScriptFetcher);
 
    public:
-    explicit TestModuleScriptFetcher(ModuleMapTestModulator* modulator)
-        : modulator_(modulator) {}
+    TestModuleScriptFetcher(ModuleMapTestModulator* modulator,
+                            util::PassKey<ModuleScriptLoader> pass_key)
+        : ModuleScriptFetcher(pass_key), modulator_(modulator) {}
     void Fetch(FetchParameters& request,
                ResourceFetcher*,
-               const Modulator* modulator_for_built_in_modules,
                ModuleGraphLevel,
                ModuleScriptFetcher::Client* client) override {
       TestRequest* test_request = MakeGarbageCollected<TestRequest>(
           ModuleScriptCreationParams(
-              request.Url(), ParkableString(String("").ReleaseImpl()), nullptr,
-              request.GetResourceRequest().GetFetchCredentialsMode()),
+              request.Url(),
+              ModuleScriptCreationParams::ModuleType::kJavaScriptModule,
+              ParkableString(String("").ReleaseImpl()), nullptr,
+              request.GetResourceRequest().GetCredentialsMode()),
           client);
       modulator_->test_requests_.push_back(test_request);
     }
     String DebugName() const override { return "TestModuleScriptFetcher"; }
-    void Trace(blink::Visitor* visitor) override {
+    void Trace(Visitor* visitor) override {
       ModuleScriptFetcher::Trace(visitor);
       visitor->Trace(modulator_);
     }
@@ -132,11 +135,13 @@ class ModuleMapTestModulator final : public DummyModulator {
   };
 
   ModuleScriptFetcher* CreateModuleScriptFetcher(
-      ModuleScriptCustomFetchType) override {
-    return MakeGarbageCollected<TestModuleScriptFetcher>(this);
+      ModuleScriptCustomFetchType,
+      util::PassKey<ModuleScriptLoader> pass_key) override {
+    return MakeGarbageCollected<TestModuleScriptFetcher>(this, pass_key);
   }
 
-  Vector<ModuleRequest> ModuleRequestsFromModuleRecord(ModuleRecord) override {
+  Vector<ModuleRequest> ModuleRequestsFromModuleRecord(
+      v8::Local<v8::Module>) override {
     return Vector<ModuleRequest>();
   }
 
@@ -144,7 +149,7 @@ class ModuleMapTestModulator final : public DummyModulator {
     return Thread::Current()->GetTaskRunner().get();
   }
 
-  struct TestRequest final : public GarbageCollectedFinalized<TestRequest> {
+  struct TestRequest final : public GarbageCollected<TestRequest> {
     TestRequest(const ModuleScriptCreationParams& params,
                 ModuleScriptFetcher::Client* client)
         : params_(params), client_(client) {}
@@ -152,7 +157,7 @@ class ModuleMapTestModulator final : public DummyModulator {
       client_->NotifyFetchFinished(*params_,
                                    HeapVector<Member<ConsoleMessage>>());
     }
-    void Trace(blink::Visitor* visitor) { visitor->Trace(client_); }
+    void Trace(Visitor* visitor) { visitor->Trace(client_); }
 
    private:
     base::Optional<ModuleScriptCreationParams> params_;
@@ -168,7 +173,7 @@ ModuleMapTestModulator::ModuleMapTestModulator(ScriptState* script_state)
     : script_state_(script_state),
       resolver_(MakeGarbageCollected<TestModuleRecordResolver>()) {}
 
-void ModuleMapTestModulator::Trace(blink::Visitor* visitor) {
+void ModuleMapTestModulator::Trace(Visitor* visitor) {
   visitor->Trace(test_requests_);
   visitor->Trace(script_state_);
   visitor->Trace(resolver_);
@@ -198,8 +203,7 @@ class ModuleMapTest : public PageTestBase {
 
 void ModuleMapTest::SetUp() {
   PageTestBase::SetUp(IntSize(500, 500));
-  GetDocument().SetURL(KURL("https://example.com"));
-  GetDocument().SetSecurityOrigin(SecurityOrigin::Create(GetDocument().Url()));
+  NavigateTo(KURL("https://example.com"));
   modulator_ = MakeGarbageCollected<ModuleMapTestModulator>(
       ToScriptStateForMainWorld(&GetFrame()));
   map_ = MakeGarbageCollected<ModuleMap>(modulator_);

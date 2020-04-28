@@ -37,7 +37,6 @@
 #include "base/macros.h"
 #include "services/network/public/mojom/fetch_api.mojom-blink.h"
 #include "third_party/blink/renderer/core/core_export.h"
-#include "third_party/blink/renderer/platform/cross_thread_copier.h"
 #include "third_party/blink/renderer/platform/heap/handle.h"
 #include "third_party/blink/renderer/platform/loader/fetch/raw_resource.h"
 #include "third_party/blink/renderer/platform/loader/fetch/resource_error.h"
@@ -45,16 +44,16 @@
 #include "third_party/blink/renderer/platform/network/http_header_map.h"
 #include "third_party/blink/renderer/platform/timer.h"
 #include "third_party/blink/renderer/platform/weborigin/referrer.h"
-#include "third_party/blink/renderer/platform/wtf/allocator.h"
+#include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
+#include "third_party/blink/renderer/platform/wtf/cross_thread_copier.h"
 #include "third_party/blink/renderer/platform/wtf/forward.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
-#include "third_party/blink/renderer/platform/wtf/time.h"
 
 namespace blink {
 
 class ExecutionContext;
-class Document;
 class KURL;
+class LocalFrame;
 class ResourceRequest;
 class SecurityOrigin;
 class ThreadableLoaderClient;
@@ -68,7 +67,7 @@ class ThreadableLoaderClient;
 // the constructor.
 // In either case, Start() must be called to actaully begin the request.
 class CORE_EXPORT ThreadableLoader final
-    : public GarbageCollectedFinalized<ThreadableLoader>,
+    : public GarbageCollected<ThreadableLoader>,
       private RawResourceClient {
   USING_GARBAGE_COLLECTED_MIXIN(ThreadableLoader);
 
@@ -111,7 +110,7 @@ class CORE_EXPORT ThreadableLoader final
   CreateAccessControlPreflightRequestForTesting(const ResourceRequest&);
 
   // Must be called to actually begin the request.
-  void Start(const ResourceRequest&);
+  void Start(ResourceRequest);
 
   // A ThreadableLoader may have a timeout specified. It is possible, in some
   // cases, for the timeout to be overridden after the request is sent (for
@@ -121,7 +120,7 @@ class CORE_EXPORT ThreadableLoader final
   // time the request started.
   //
   // Passing a timeout of zero means there should be no timeout.
-  void SetTimeout(const TimeDelta& timeout);
+  void SetTimeout(const base::TimeDelta& timeout);
 
   void Cancel();
 
@@ -132,7 +131,7 @@ class CORE_EXPORT ThreadableLoader final
 
   void SetDefersLoading(bool);
 
-  void Trace(blink::Visitor* visitor) override;
+  void Trace(Visitor* visitor) override;
 
  private:
   class AssignOnScopeExit;
@@ -162,7 +161,6 @@ class CORE_EXPORT ThreadableLoader final
                         const ResourceResponse&) override;
   void RedirectBlocked() override;
   void DataDownloaded(Resource*, uint64_t) override;
-  void DidReceiveResourceTiming(Resource*, const ResourceTimingInfo&) override;
   void DidDownloadToBlob(Resource*, scoped_refptr<BlobDataHandle>) override;
 
   // Notify Inspector and log to console about resource response. Use this
@@ -205,22 +203,22 @@ class CORE_EXPORT ThreadableLoader final
 
   const SecurityOrigin* GetSecurityOrigin() const;
 
-  // Returns null if the loader is not associated with Document.
-  // TODO(kinuko): Remove dependency to document.
-  Document* GetDocument() const;
+  // Returns null if the loader is not associated with a frame.
+  // TODO(kinuko): Remove dependency to frame.
+  LocalFrame* GetFrame() const;
 
   Member<ThreadableLoaderClient> client_;
   Member<ExecutionContext> execution_context_;
   Member<ResourceFetcher> resource_fetcher_;
 
-  TimeDelta timeout_;
+  base::TimeDelta timeout_;
   // Some items may be overridden by m_forceDoNotAllowStoredCredentials and
   // m_securityOrigin. In such a case, build a ResourceLoaderOptions with
   // up-to-date values from them and this variable, and use it.
   const ResourceLoaderOptions resource_loader_options_;
 
   // True when feature OutOfBlinkCors is enabled (https://crbug.com/736308).
-  bool out_of_blink_cors_;
+  const bool out_of_blink_cors_;
 
   // Corresponds to the CORS flag in the Fetch spec.
   bool cors_flag_ = false;
@@ -235,8 +233,8 @@ class CORE_EXPORT ThreadableLoader final
   // Saved so that we can use the original value for the modes in
   // ResponseReceived() where |resource| might be a reused one (e.g. preloaded
   // resource) which can have different modes.
-  network::mojom::FetchRequestMode fetch_request_mode_;
-  network::mojom::FetchCredentialsMode fetch_credentials_mode_;
+  network::mojom::RequestMode request_mode_;
+  network::mojom::CredentialsMode credentials_mode_;
 
   // Holds the original request for fallback in case the Service Worker
   // does not respond.
@@ -256,12 +254,13 @@ class CORE_EXPORT ThreadableLoader final
   HTTPHeaderMap request_headers_;
 
   TaskRunnerTimer<ThreadableLoader> timeout_timer_;
-  TimeTicks request_started_;  // Time an asynchronous fetch request is started
+  base::TimeTicks
+      request_started_;  // Time an asynchronous fetch request is started
 
   // Max number of times that this ThreadableLoader can follow.
   int redirect_limit_;
 
-  network::mojom::FetchRedirectMode redirect_mode_;
+  network::mojom::RedirectMode redirect_mode_;
 
   // Holds the referrer after a redirect response was received. This referrer is
   // used to populate the HTTP Referer header when following the redirect.

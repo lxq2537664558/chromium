@@ -46,15 +46,16 @@ SVGGraphicsElement::SVGGraphicsElement(const QualifiedName& tag_name,
 
 SVGGraphicsElement::~SVGGraphicsElement() = default;
 
-void SVGGraphicsElement::Trace(blink::Visitor* visitor) {
+void SVGGraphicsElement::Trace(Visitor* visitor) {
   visitor->Trace(transform_);
   SVGElement::Trace(visitor);
   SVGTests::Trace(visitor);
 }
 
 static bool IsViewportElement(const Element& element) {
-  return (IsSVGSVGElement(element) || IsSVGSymbolElement(element) ||
-          IsSVGForeignObjectElement(element) || IsSVGImageElement(element));
+  return (IsA<SVGSVGElement>(element) || IsA<SVGSymbolElement>(element) ||
+          IsA<SVGForeignObjectElement>(element) ||
+          IsA<SVGImageElement>(element));
 }
 
 AffineTransform SVGGraphicsElement::ComputeCTM(
@@ -65,12 +66,11 @@ AffineTransform SVGGraphicsElement::ComputeCTM(
 
   for (const Element* current_element = this; current_element && !done;
        current_element = current_element->ParentOrShadowHostElement()) {
-    if (!current_element->IsSVGElement())
+    auto* svg_element = DynamicTo<SVGElement>(current_element);
+    if (!svg_element)
       break;
 
-    ctm = ToSVGElement(current_element)
-              ->LocalCoordinateSpaceTransform(mode)
-              .Multiply(ctm);
+    ctm = svg_element->LocalCoordinateSpaceTransform(mode).Multiply(ctm);
 
     switch (mode) {
       case kNearestViewportScope:
@@ -90,14 +90,16 @@ AffineTransform SVGGraphicsElement::ComputeCTM(
 }
 
 SVGMatrixTearOff* SVGGraphicsElement::getCTM() {
-  GetDocument().UpdateStyleAndLayoutForNode(this);
+  GetDocument().UpdateStyleAndLayoutForNode(this,
+                                            DocumentUpdateReason::kJavaScript);
 
   return MakeGarbageCollected<SVGMatrixTearOff>(
       ComputeCTM(kNearestViewportScope));
 }
 
 SVGMatrixTearOff* SVGGraphicsElement::getScreenCTM() {
-  GetDocument().UpdateStyleAndLayoutForNode(this);
+  GetDocument().UpdateStyleAndLayoutForNode(this,
+                                            DocumentUpdateReason::kJavaScript);
 
   return MakeGarbageCollected<SVGMatrixTearOff>(ComputeCTM(kScreenScope));
 }
@@ -124,7 +126,7 @@ void SVGGraphicsElement::SvgAttributeChanged(const QualifiedName& attr_name) {
   // creation.
   if (SVGTests::IsKnownAttribute(attr_name)) {
     SVGElement::InvalidationGuard invalidation_guard(this);
-    LazyReattachIfAttached();
+    SetForceReattachLayoutTree();
     return;
   }
 
@@ -149,7 +151,7 @@ SVGElement* SVGGraphicsElement::nearestViewportElement() const {
   for (Element* current = ParentOrShadowHostElement(); current;
        current = current->ParentOrShadowHostElement()) {
     if (IsViewportElement(*current))
-      return ToSVGElement(current);
+      return To<SVGElement>(current);
   }
 
   return nullptr;
@@ -160,7 +162,7 @@ SVGElement* SVGGraphicsElement::farthestViewportElement() const {
   for (Element* current = ParentOrShadowHostElement(); current;
        current = current->ParentOrShadowHostElement()) {
     if (IsViewportElement(*current))
-      farthest = ToSVGElement(current);
+      farthest = To<SVGElement>(current);
   }
   return farthest;
 }
@@ -171,7 +173,7 @@ FloatRect SVGGraphicsElement::GetBBox() {
 }
 
 SVGRectTearOff* SVGGraphicsElement::getBBoxFromJavascript() {
-  GetDocument().UpdateStyleAndLayout();
+  GetDocument().UpdateStyleAndLayout(DocumentUpdateReason::kJavaScript);
 
   // FIXME: Eventually we should support getBBox for detached elements.
   FloatRect boundingBox;

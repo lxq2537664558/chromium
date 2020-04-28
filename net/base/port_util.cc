@@ -8,7 +8,7 @@
 #include <set>
 
 #include "base/lazy_instance.h"
-#include "base/logging.h"
+#include "base/notreached.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "url/url_constants.h"
@@ -72,8 +72,8 @@ const int kRestrictedPorts[] = {
     548,     // AFP (Apple Filing Protocol)
     556,     // remotefs
     563,     // nntp+ssl
-    587,     // stmp?
-    601,     // ??
+    587,     // smtp (rfc6409)
+    601,     // syslog-conn (rfc3195)
     636,     // ldap+ssl
     993,     // ldap+ssl
     995,     // pop3+ssl
@@ -116,7 +116,7 @@ bool IsPortAllowedForScheme(int port, base::StringPiece url_scheme) {
   if (g_explicitly_allowed_ports.Get().count(port) > 0)
     return true;
 
-  // FTP requests have an extra set of whitelisted schemes.
+  // FTP requests have an extra set of allowed schemes.
   if (base::LowerCaseEqualsASCII(url_scheme, url::kFtpScheme)) {
     for (int allowed_ftp_port : kAllowedFtpPorts) {
       if (allowed_ftp_port == port)

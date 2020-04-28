@@ -18,7 +18,7 @@
 #include "base/memory/aligned_memory.h"
 #include "base/optional.h"
 #include "cc/base/math_util.h"
-#include "cc/paint/node_holder.h"
+#include "cc/paint/node_id.h"
 #include "cc/paint/paint_canvas.h"
 #include "cc/paint/paint_export.h"
 #include "cc/paint/paint_flags.h"
@@ -96,6 +96,7 @@ enum class PaintOpType : uint8_t {
   SaveLayerAlpha,
   Scale,
   SetMatrix,
+  SetNodeId,
   Translate,
   LastPaintOpType = Translate,
 };
@@ -155,7 +156,6 @@ class CC_PAINT_EXPORT PaintOp {
                      bool can_use_lcd_text,
                      bool context_supports_distance_field_text,
                      int max_texture_size,
-                     size_t max_texture_bytes,
                      const SkMatrix& original_ctm);
     SerializeOptions(const SerializeOptions&);
     SerializeOptions& operator=(const SerializeOptions&);
@@ -171,7 +171,6 @@ class CC_PAINT_EXPORT PaintOp {
     bool can_use_lcd_text = false;
     bool context_supports_distance_field_text = true;
     int max_texture_size = 0;
-    size_t max_texture_bytes = 0.f;
     SkMatrix original_ctm = SkMatrix::I();
 
     // Optional.
@@ -184,7 +183,8 @@ class CC_PAINT_EXPORT PaintOp {
     DeserializeOptions(TransferCacheDeserializeHelper* transfer_cache,
                        ServicePaintCache* paint_cache,
                        SkStrikeClient* strike_client,
-                       std::vector<uint8_t>* scratch_buffer);
+                       std::vector<uint8_t>* scratch_buffer,
+                       bool is_privileged);
     TransferCacheDeserializeHelper* transfer_cache = nullptr;
     ServicePaintCache* paint_cache = nullptr;
     SkStrikeClient* strike_client = nullptr;
@@ -192,6 +192,9 @@ class CC_PAINT_EXPORT PaintOp {
     bool crash_dump_on_failure = false;
     // Used to memcpy Skia flattenables into to avoid TOCTOU issues.
     std::vector<uint8_t>* scratch_buffer = nullptr;
+    // True if the deserialization is happening on a privileged gpu channel.
+    // e.g. in the case of UI.
+    bool is_privileged = false;
   };
 
   // Indicates how PaintImages are serialized.
@@ -226,6 +229,13 @@ class CC_PAINT_EXPORT PaintOp {
   // For draw ops, returns true if a conservative bounding rect can be provided
   // for the op.
   static bool GetBounds(const PaintOp* op, SkRect* rect);
+
+  // Returns the minimum conservative bounding rect that |op| draws to on a
+  // canvas. |clip_rect| and |ctm| are the current clip rect and transform on
+  // this canvas.
+  static gfx::Rect ComputePaintRect(const PaintOp* op,
+                                    const SkRect& clip_rect,
+                                    const SkMatrix& ctm);
 
   // Returns true if the op lies outside the current clip and should be skipped.
   // Should only be used with draw ops.
@@ -741,8 +751,8 @@ class CC_PAINT_EXPORT DrawTextBlobOp final : public PaintOpWithFlags {
   DrawTextBlobOp(sk_sp<SkTextBlob> blob,
                  SkScalar x,
                  SkScalar y,
-                 const PaintFlags& flags,
-                 const NodeHolder& node_holder);
+                 NodeId node_id,
+                 const PaintFlags& flags);
   ~DrawTextBlobOp();
   static void RasterWithFlags(const DrawTextBlobOp* op,
                               const PaintFlags* flags,
@@ -756,7 +766,7 @@ class CC_PAINT_EXPORT DrawTextBlobOp final : public PaintOpWithFlags {
   SkScalar x;
   SkScalar y;
   // This field isn't serialized.
-  NodeHolder node_holder;
+  NodeId node_id = kInvalidNodeId;
 
  private:
   DrawTextBlobOp();
@@ -888,6 +898,20 @@ class CC_PAINT_EXPORT SetMatrixOp final : public PaintOp {
   ThreadsafeMatrix matrix;
 };
 
+class CC_PAINT_EXPORT SetNodeIdOp final : public PaintOp {
+ public:
+  static constexpr PaintOpType kType = PaintOpType::SetNodeId;
+  explicit SetNodeIdOp(int node_id) : PaintOp(kType), node_id(node_id) {}
+  static void Raster(const SetNodeIdOp* op,
+                     SkCanvas* canvas,
+                     const PlaybackParams& params);
+  bool IsValid() const { return true; }
+  static bool AreEqual(const PaintOp* left, const PaintOp* right);
+  HAS_SERIALIZATION_FUNCTIONS();
+
+  int node_id;
+};
+
 class CC_PAINT_EXPORT TranslateOp final : public PaintOp {
  public:
   static constexpr PaintOpType kType = PaintOpType::Translate;
@@ -933,6 +957,12 @@ class CC_PAINT_EXPORT PaintOpBuffer : public SkRefCnt {
   void Playback(SkCanvas* canvas) const;
   void Playback(SkCanvas* canvas, const PlaybackParams& params) const;
 
+  // Deserialize PaintOps from |input|. The original content will be
+  // overwritten.
+  bool Deserialize(const volatile void* input,
+                   size_t input_size,
+                   const PaintOp::DeserializeOptions& options);
+
   static sk_sp<PaintOpBuffer> MakeFromMemory(
       const volatile void* input,
       size_t input_size,
@@ -945,6 +975,8 @@ class CC_PAINT_EXPORT PaintOpBuffer : public SkRefCnt {
   size_t bytes_used() const {
     return sizeof(*this) + reserved_ + subrecord_bytes_used_;
   }
+  // Returns the number of bytes used by paint ops.
+  size_t paint_ops_size() const { return used_ + subrecord_bytes_used_; }
   // Returns the total number of ops including sub-records.
   size_t total_op_count() const { return op_count_ + subrecord_op_count_; }
 
@@ -966,7 +998,7 @@ class CC_PAINT_EXPORT PaintOpBuffer : public SkRefCnt {
   }
 
   template <typename T, typename... Args>
-  void push(Args&&... args) {
+  const T* push(Args&&... args) {
     static_assert(std::is_convertible<T, PaintOp>::value, "T not a PaintOp.");
     static_assert(alignof(T) <= PaintOpAlign, "");
     static_assert(sizeof(T) < std::numeric_limits<uint16_t>::max(),
@@ -978,6 +1010,7 @@ class CC_PAINT_EXPORT PaintOpBuffer : public SkRefCnt {
     DCHECK_EQ(op->type, static_cast<uint32_t>(T::kType));
     op->skip = skip;
     AnalyzeAddedOp(op);
+    return op;
   }
 
   void UpdateSaveLayerBounds(size_t offset, const SkRect& bounds) {

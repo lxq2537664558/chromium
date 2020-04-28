@@ -4,56 +4,94 @@
 
 #include "chrome/browser/chromeos/login/screens/recommend_apps_screen.h"
 
+#include "chrome/browser/chromeos/login/screen_manager.h"
 #include "chrome/browser/chromeos/login/screens/recommend_apps/recommend_apps_fetcher.h"
+#include "chrome/browser/policy/profile_policy_connector.h"
+#include "chrome/browser/profiles/profile_manager.h"
+#include "chrome/browser/ui/webui/chromeos/login/recommend_apps_screen_handler.h"
+#include "components/user_manager/user_manager.h"
 
 namespace chromeos {
+
+// static
+std::string RecommendAppsScreen::GetResultString(Result result) {
+  switch (result) {
+    case Result::SELECTED:
+      return "Selected";
+    case Result::SKIPPED:
+      return "Skipped";
+    case Result::LOAD_ERROR:
+      return "LoadError";
+    case Result::NOT_APPLICABLE:
+      return BaseScreen::kNotApplicable;
+  }
+}
+
+// static
+RecommendAppsScreen* RecommendAppsScreen::Get(ScreenManager* manager) {
+  return static_cast<RecommendAppsScreen*>(
+      manager->GetScreen(RecommendAppsScreenView::kScreenId));
+}
 
 RecommendAppsScreen::RecommendAppsScreen(
     RecommendAppsScreenView* view,
     const ScreenExitCallback& exit_callback)
-    : BaseScreen(OobeScreen::SCREEN_RECOMMEND_APPS),
+    : BaseScreen(RecommendAppsScreenView::kScreenId,
+                 OobeScreenPriority::DEFAULT),
       view_(view),
       exit_callback_(exit_callback) {
   DCHECK(view_);
 
   view_->Bind(this);
-  view_->AddObserver(this);
 }
 
 RecommendAppsScreen::~RecommendAppsScreen() {
-  if (view_) {
+  if (view_)
     view_->Bind(nullptr);
-    view_->RemoveObserver(this);
-  }
 }
 
-void RecommendAppsScreen::Show() {
+// TODO(https://crbug.com/1070917) Migrate to OnUserAction.
+void RecommendAppsScreen::OnSkip() {
+  if (is_hidden())
+    return;
+  exit_callback_.Run(Result::SKIPPED);
+}
+
+void RecommendAppsScreen::OnInstall() {
+  if (is_hidden())
+    return;
+  exit_callback_.Run(Result::SELECTED);
+}
+
+void RecommendAppsScreen::OnViewDestroyed(RecommendAppsScreenView* view) {
+  DCHECK_EQ(view, view_);
+  view_ = nullptr;
+}
+
+bool RecommendAppsScreen::MaybeSkip() {
+  const user_manager::UserManager* user_manager =
+      user_manager::UserManager::Get();
+  DCHECK(user_manager->IsUserLoggedIn());
+  bool is_managed_account = ProfileManager::GetActiveUserProfile()
+                                ->GetProfilePolicyConnector()
+                                ->IsManaged();
+  bool is_child_account = user_manager->IsLoggedInAsChildUser();
+  if (is_managed_account || is_child_account) {
+    exit_callback_.Run(Result::NOT_APPLICABLE);
+    return true;
+  }
+  return false;
+}
+
+void RecommendAppsScreen::ShowImpl() {
   view_->Show();
 
   recommend_apps_fetcher_ = RecommendAppsFetcher::Create(this);
   recommend_apps_fetcher_->Start();
 }
 
-void RecommendAppsScreen::Hide() {
+void RecommendAppsScreen::HideImpl() {
   view_->Hide();
-}
-
-void RecommendAppsScreen::OnSkip() {
-  exit_callback_.Run(Result::SKIPPED);
-}
-
-void RecommendAppsScreen::OnRetry() {
-  recommend_apps_fetcher_->Retry();
-}
-
-void RecommendAppsScreen::OnInstall() {
-  exit_callback_.Run(Result::SELECTED);
-}
-
-void RecommendAppsScreen::OnViewDestroyed(RecommendAppsScreenView* view) {
-  DCHECK_EQ(view, view_);
-  view_->RemoveObserver(this);
-  view_ = nullptr;
 }
 
 void RecommendAppsScreen::OnLoadSuccess(const base::Value& app_list) {
@@ -62,8 +100,9 @@ void RecommendAppsScreen::OnLoadSuccess(const base::Value& app_list) {
 }
 
 void RecommendAppsScreen::OnLoadError() {
-  if (view_)
-    view_->OnLoadError();
+  if (is_hidden())
+    return;
+  exit_callback_.Run(Result::LOAD_ERROR);
 }
 
 void RecommendAppsScreen::OnParseResponseError() {

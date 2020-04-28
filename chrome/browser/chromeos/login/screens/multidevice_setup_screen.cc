@@ -7,11 +7,11 @@
 #include "base/feature_list.h"
 #include "base/logging.h"
 #include "base/metrics/histogram_macros.h"
-#include "chrome/browser/chromeos/login/screens/multidevice_setup_screen_view.h"
 #include "chrome/browser/chromeos/login/users/chrome_user_manager_util.h"
 #include "chrome/browser/chromeos/multidevice_setup/multidevice_setup_client_factory.h"
 #include "chrome/browser/chromeos/multidevice_setup/oobe_completion_tracker_factory.h"
 #include "chrome/browser/profiles/profile_manager.h"
+#include "chrome/browser/ui/webui/chromeos/login/multidevice_setup_screen_handler.h"
 #include "chromeos/services/multidevice_setup/public/cpp/multidevice_setup_client.h"
 #include "chromeos/services/multidevice_setup/public/cpp/oobe_completion_tracker.h"
 
@@ -27,7 +27,8 @@ constexpr const char kDeclinedSetupUserAction[] = "setup-declined";
 MultiDeviceSetupScreen::MultiDeviceSetupScreen(
     MultiDeviceSetupScreenView* view,
     const base::RepeatingClosure& exit_callback)
-    : BaseScreen(OobeScreen::SCREEN_MULTIDEVICE_SETUP),
+    : BaseScreen(MultiDeviceSetupScreenView::kScreenId,
+                 OobeScreenPriority::DEFAULT),
       view_(view),
       exit_callback_(exit_callback) {
   DCHECK(view_);
@@ -38,7 +39,7 @@ MultiDeviceSetupScreen::~MultiDeviceSetupScreen() {
   view_->Bind(nullptr);
 }
 
-void MultiDeviceSetupScreen::Show() {
+void MultiDeviceSetupScreen::ShowImpl() {
   // Only attempt the setup flow for non-guest users.
   if (chrome_user_manager_util::IsPublicSessionOrEphemeralLogin()) {
     ExitScreen();
@@ -75,7 +76,7 @@ void MultiDeviceSetupScreen::Show() {
   oobe_completion_tracker->MarkOobeShown();
 }
 
-void MultiDeviceSetupScreen::Hide() {
+void MultiDeviceSetupScreen::HideImpl() {
   view_->Hide();
 }
 

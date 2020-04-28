@@ -21,6 +21,7 @@ class Message;
 }
 
 namespace content {
+class RenderFrameHostImpl;
 class RenderFrameProxyHost;
 
 // CrossProcessFrameConnector provides the platform view abstraction for
@@ -67,7 +68,7 @@ class CONTENT_EXPORT CrossProcessFrameConnector
       RenderFrameProxyHost* frame_proxy_in_parent_renderer);
   ~CrossProcessFrameConnector() override;
 
-  bool OnMessageReceived(const IPC::Message &msg);
+  bool OnMessageReceived(const IPC::Message& msg);
 
   // |view| corresponds to B2's RenderWidgetHostViewChildFrame in the example
   // above.
@@ -78,7 +79,6 @@ class CONTENT_EXPORT CrossProcessFrameConnector
   RenderWidgetHostViewBase* GetParentRenderWidgetHostView() override;
   RenderWidgetHostViewBase* GetRootRenderWidgetHostView() override;
   void RenderProcessGone() override;
-  void FirstSurfaceActivation(const viz::SurfaceInfo& surface_info) override;
   void SendIntrinsicSizingInfoToParent(
       const blink::WebIntrinsicSizingInfo&) override;
 
@@ -86,22 +86,21 @@ class CONTENT_EXPORT CrossProcessFrameConnector
   gfx::PointF TransformPointToRootCoordSpace(
       const gfx::PointF& point,
       const viz::SurfaceId& surface_id) override;
-  bool TransformPointToLocalCoordSpaceLegacy(
-      const gfx::PointF& point,
-      const viz::SurfaceId& original_surface,
-      const viz::SurfaceId& local_surface_id,
-      gfx::PointF* transformed_point) override;
   bool TransformPointToCoordSpaceForView(
       const gfx::PointF& point,
       RenderWidgetHostViewBase* target_view,
       const viz::SurfaceId& local_surface_id,
       gfx::PointF* transformed_point) override;
-  void ForwardAckedTouchpadZoomEvent(const blink::WebGestureEvent& event,
-                                     InputEventAckState ack_result) override;
+  void ForwardAckedTouchpadZoomEvent(
+      const blink::WebGestureEvent& event,
+      blink::mojom::InputEventResultState ack_result) override;
   bool BubbleScrollEvent(const blink::WebGestureEvent& event) override;
   bool HasFocus() override;
   void FocusRootView() override;
-  bool LockMouse() override;
+  blink::mojom::PointerLockResult LockMouse(
+      bool request_unadjusted_movement) override;
+  blink::mojom::PointerLockResult ChangeMouseLock(
+      bool request_unadjusted_movement) override;
   void UnlockMouse() override;
   void EnableAutoResize(const gfx::Size& min_size,
                         const gfx::Size& max_size) override;
@@ -111,12 +110,11 @@ class CONTENT_EXPORT CrossProcessFrameConnector
   bool IsHidden() const override;
   bool IsThrottled() const override;
   bool IsSubtreeThrottled() const override;
-#if defined(USE_AURA)
-  void EmbedRendererWindowTreeClientInParent(
-      ws::mojom::WindowTreeClientPtr window_tree_client) override;
-#endif
   void DidUpdateVisualProperties(
       const cc::RenderFrameMetadata& metadata) override;
+  void DidAckGestureEvent(
+      const blink::WebGestureEvent& event,
+      blink::mojom::InputEventResultState ack_result) override;
 
   // Set the visibility of immediate child views, i.e. views whose parent view
   // is |view_|.
@@ -124,10 +122,19 @@ class CONTENT_EXPORT CrossProcessFrameConnector
 
   void SetScreenSpaceRect(const gfx::Rect& screen_space_rect) override;
 
+  void SetIsInert(bool inert);
+
+  // Handlers for messages received from the parent frame called
+  // from RenderFrameProxyHost to be sent to |view_|.
+  void OnSetInheritedEffectiveTouchAction(cc::TouchAction);
+  void OnVisibilityChanged(blink::mojom::FrameVisibility visibility);
+
   // Exposed for tests.
   RenderWidgetHostViewBase* GetRootRenderWidgetHostViewForTesting() {
     return GetRootRenderWidgetHostView();
   }
+
+  void UpdateRenderThrottlingStatus(bool is_throttled, bool subtree_throttled);
 
   // These enums back crashed frame histograms - see MaybeLogCrash() and
   // MaybeLogShownCrash() below.  Please do not modify or remove existing enum
@@ -180,22 +187,21 @@ class CONTENT_EXPORT CrossProcessFrameConnector
   void OnSynchronizeVisualProperties(
       const viz::FrameSinkId& frame_sink_id,
       const FrameVisualProperties& visual_properties);
-  void OnUpdateViewportIntersection(const gfx::Rect& viewport_intersection,
-                                    const gfx::Rect& compositor_visible_rect,
-                                    blink::FrameOcclusionState occlusion_state);
-  void OnVisibilityChanged(blink::mojom::FrameVisibility visibility);
-  void OnSetIsInert(bool);
-  void OnSetInheritedEffectiveTouchAction(cc::TouchAction);
-  void OnUpdateRenderThrottlingStatus(bool is_throttled,
-                                      bool subtree_throttled);
+  void OnUpdateViewportIntersection(
+      const blink::ViewportIntersectionState& viewport_intersection);
+
+  // Gets the current RenderFrameHost for the
+  // |frame_proxy_in_parent_renderer_|'s (i.e., the child frame's)
+  // FrameTreeNode. This corresponds to B2 in the class-level comment
+  // above for CrossProcessFrameConnector.
+  RenderFrameHostImpl* current_child_frame_host() const;
 
   // The RenderFrameProxyHost that routes messages to the parent frame's
   // renderer process.
   RenderFrameProxyHost* frame_proxy_in_parent_renderer_;
 
   bool is_inert_ = false;
-  cc::TouchAction inherited_effective_touch_action_ =
-      cc::TouchAction::kTouchActionAuto;
+  cc::TouchAction inherited_effective_touch_action_ = cc::TouchAction::kAuto;
 
   bool is_throttled_ = false;
   bool subtree_throttled_ = false;

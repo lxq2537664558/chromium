@@ -10,11 +10,10 @@
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/safe_browsing/safe_browsing_service.h"
 #include "chrome/common/safe_browsing/crx_info.pb.h"
-#include "components/safe_browsing/db/v4_protocol_manager_util.h"
+#include "components/safe_browsing/core/db/v4_protocol_manager_util.h"
 #include "content/public/browser/browser_thread.h"
 #include "net/base/escape.h"
 #include "net/traffic_annotation/network_traffic_annotation.h"
-#include "net/url_request/url_request_status.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "services/network/public/cpp/simple_url_loader.h"
 #include "url/gurl.h"
@@ -23,7 +22,7 @@ using content::BrowserThread;
 
 namespace extensions {
 
-BlacklistStateFetcher::BlacklistStateFetcher() : weak_ptr_factory_(this) {}
+BlacklistStateFetcher::BlacklistStateFetcher() {}
 
 BlacklistStateFetcher::~BlacklistStateFetcher() {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
@@ -43,7 +42,7 @@ void BlacklistStateFetcher::Request(const std::string& id,
     }
   }
 
-  bool request_already_sent = base::ContainsKey(callbacks_, id);
+  bool request_already_sent = base::Contains(callbacks_, id);
   callbacks_.insert(std::make_pair(id, callback));
   if (request_already_sent)
     return;

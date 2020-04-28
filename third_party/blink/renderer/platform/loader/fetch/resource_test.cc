@@ -11,10 +11,9 @@
 #include "third_party/blink/renderer/platform/loader/fetch/resource_response.h"
 #include "third_party/blink/renderer/platform/loader/testing/mock_resource.h"
 #include "third_party/blink/renderer/platform/loader/testing/mock_resource_client.h"
-#include "third_party/blink/renderer/platform/shared_buffer.h"
 #include "third_party/blink/renderer/platform/testing/testing_platform_support_with_mock_scheduler.h"
 #include "third_party/blink/renderer/platform/testing/url_test_helpers.h"
-#include "third_party/blink/renderer/platform/wtf/time.h"
+#include "third_party/blink/renderer/platform/wtf/shared_buffer.h"
 #include "third_party/blink/renderer/platform/wtf/vector.h"
 
 namespace blink {
@@ -29,7 +28,7 @@ class MockPlatform final : public TestingPlatformSupportWithMockScheduler {
   // From blink::Platform:
   void CacheMetadata(blink::mojom::CodeCacheType cache_type,
                      const WebURL& url,
-                     Time,
+                     base::Time,
                      const uint8_t*,
                      size_t) override {
     cached_urls_.push_back(url);
@@ -500,8 +499,17 @@ TEST(ResourceTest, RedirectDuringRevalidation) {
   EXPECT_FALSE(resource->IsAlive());
 }
 
+class ScopedResourceMockClock {
+ public:
+  explicit ScopedResourceMockClock(const base::Clock* clock) {
+    Resource::SetClockForTesting(clock);
+  }
+  ~ScopedResourceMockClock() { Resource::SetClockForTesting(nullptr); }
+};
+
 TEST(ResourceTest, StaleWhileRevalidateCacheControl) {
   ScopedTestingPlatformSupport<MockPlatform> mock;
+  ScopedResourceMockClock clock(mock->test_task_runner()->GetMockClock());
   const KURL url("http://127.0.0.1:8000/foo.html");
   ResourceResponse response(url);
   response.SetHttpStatusCode(200);
@@ -529,6 +537,7 @@ TEST(ResourceTest, StaleWhileRevalidateCacheControl) {
 
 TEST(ResourceTest, StaleWhileRevalidateCacheControlWithRedirect) {
   ScopedTestingPlatformSupport<MockPlatform> mock;
+  ScopedResourceMockClock clock(mock->test_task_runner()->GetMockClock());
   const KURL url("http://127.0.0.1:8000/foo.html");
   const KURL redirect_target_url("http://127.0.0.1:8000/food.html");
   ResourceResponse response(url);
@@ -564,6 +573,13 @@ TEST(ResourceTest, StaleWhileRevalidateCacheControlWithRedirect) {
   EXPECT_FALSE(resource->MustRevalidateDueToCacheHeaders(true));
   EXPECT_TRUE(resource->ShouldRevalidateStaleResponse());
   EXPECT_TRUE(resource->StaleRevalidationRequested());
+}
+
+// This is a regression test for https://crbug.com/1062837.
+TEST(ResourceTest, DefaultOverheadSize) {
+  const KURL url("http://127.0.0.1:8000/foo.html");
+  auto* resource = MakeGarbageCollected<MockResource>(url);
+  EXPECT_EQ(resource->CalculateOverheadSizeForTest(), resource->OverheadSize());
 }
 
 }  // namespace blink

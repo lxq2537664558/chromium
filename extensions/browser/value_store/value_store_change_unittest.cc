@@ -4,7 +4,6 @@
 
 #include "base/json/json_reader.h"
 #include "base/json/json_writer.h"
-#include "base/logging.h"
 #include "base/values.h"
 #include "extensions/browser/value_store/value_store_change.h"
 #include "extensions/common/value_builder.h"
@@ -18,8 +17,7 @@ using extensions::ListBuilder;
 namespace {
 
 TEST(ValueStoreChangeTest, NullOldValue) {
-  ValueStoreChange change("key", nullptr,
-                          std::make_unique<base::Value>("value"));
+  ValueStoreChange change("key", base::nullopt, base::Value("value"));
 
   EXPECT_EQ("key", change.key());
   EXPECT_EQ(NULL, change.old_value());
@@ -30,8 +28,7 @@ TEST(ValueStoreChangeTest, NullOldValue) {
 }
 
 TEST(ValueStoreChangeTest, NullNewValue) {
-  ValueStoreChange change("key", std::make_unique<base::Value>("value"),
-                          nullptr);
+  ValueStoreChange change("key", base::Value("value"), base::nullopt);
 
   EXPECT_EQ("key", change.key());
   {
@@ -42,8 +39,8 @@ TEST(ValueStoreChangeTest, NullNewValue) {
 }
 
 TEST(ValueStoreChangeTest, NonNullValues) {
-  ValueStoreChange change("key", std::make_unique<base::Value>("old_value"),
-                          std::make_unique<base::Value>("new_value"));
+  ValueStoreChange change("key", base::Value("old_value"),
+                          base::Value("new_value"));
 
   EXPECT_EQ("key", change.key());
   {
@@ -67,15 +64,14 @@ TEST(ValueStoreChangeTest, ToJson) {
           .Build();
 
   ValueStoreChangeList change_list;
-  change_list.push_back(ValueStoreChange("key", value->CreateDeepCopy(),
-                                         value->CreateDeepCopy()));
-  change_list.push_back(ValueStoreChange(
-      "key.with.dots", value->CreateDeepCopy(), value->CreateDeepCopy()));
+  change_list.push_back(
+      ValueStoreChange("key", value->Clone(), value->Clone()));
+  change_list.push_back(
+      ValueStoreChange("key.with.dots", value->Clone(), value->Clone()));
 
   std::string json = ValueStoreChange::ToJson(change_list);
-  std::unique_ptr<base::Value> from_json(
-      base::JSONReader::ReadDeprecated(json));
-  ASSERT_TRUE(from_json.get());
+  base::Optional<base::Value> from_json = base::JSONReader::Read(json);
+  ASSERT_TRUE(from_json);
 
   DictionaryBuilder v1(*value);
   DictionaryBuilder v2(*value);

@@ -48,6 +48,7 @@ class CSSComputedStyleDeclaration;
 class ContainerNode;
 class Document;
 class Element;
+class ExecutionContext;
 class HTMLElement;
 class LocalFrame;
 class MutableCSSPropertyValueSet;
@@ -74,7 +75,7 @@ class CORE_EXPORT EditingStyle final : public GarbageCollected<EditingStyle> {
     kExtractMatchingStyle,
     kDoNotExtractMatchingStyle
   };
-  static float no_font_delta_;
+  static constexpr float kNoFontDelta = 0.0f;
 
   EditingStyle() = default;
   EditingStyle(ContainerNode*,
@@ -90,9 +91,9 @@ class CORE_EXPORT EditingStyle final : public GarbageCollected<EditingStyle> {
   void OverrideWithStyle(const CSSPropertyValueSet*);
   void Clear();
   EditingStyle* Copy() const;
-  EditingStyle* ExtractAndRemoveBlockProperties();
+  EditingStyle* ExtractAndRemoveBlockProperties(const ExecutionContext*);
   EditingStyle* ExtractAndRemoveTextDirection(SecureContextMode);
-  void RemoveBlockProperties();
+  void RemoveBlockProperties(const ExecutionContext*);
   void RemoveStyleAddedByElement(Element*);
   void RemoveStyleConflictingWithStyleOfElement(Element*);
   void CollapseTextDecorationProperties(SecureContextMode);
@@ -100,7 +101,9 @@ class CORE_EXPORT EditingStyle final : public GarbageCollected<EditingStyle> {
     kIgnoreTextOnlyProperties,
     kDoNotIgnoreTextOnlyProperties
   };
-  EditingTriState TriStateOfStyle(EditingStyle*, SecureContextMode) const;
+  EditingTriState TriStateOfStyle(ExecutionContext*,
+                                  EditingStyle*,
+                                  SecureContextMode) const;
   EditingTriState TriStateOfStyle(const VisibleSelection&,
                                   SecureContextMode) const;
   bool ConflictsWithInlineStyleOfElement(HTMLElement* element) const {
@@ -147,7 +150,7 @@ class CORE_EXPORT EditingStyle final : public GarbageCollected<EditingStyle> {
   int LegacyFontSize(Document*) const;
 
   float FontSizeDelta() const { return font_size_delta_; }
-  bool HasFontSizeDelta() const { return font_size_delta_ != no_font_delta_; }
+  bool HasFontSizeDelta() const { return font_size_delta_ != kNoFontDelta; }
 
   void SetProperty(CSSPropertyID,
                    const String& value,
@@ -177,7 +180,7 @@ class CORE_EXPORT EditingStyle final : public GarbageCollected<EditingStyle> {
 
   Member<MutableCSSPropertyValueSet> mutable_style_;
   bool is_monospace_font_ = false;
-  float font_size_delta_ = no_font_delta_;
+  float font_size_delta_ = kNoFontDelta;
   bool is_vertical_align_ = false;
 
   friend class HTMLElementEquivalent;

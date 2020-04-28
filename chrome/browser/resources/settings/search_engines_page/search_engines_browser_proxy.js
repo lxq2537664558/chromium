@@ -2,6 +2,10 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+// clang-format off
+// #import {addSingletonGetter, sendWithPromise} from 'chrome://resources/js/cr.m.js';
+// clang-format on
+
 /**
  * @fileoverview A helper object used from the "Manage search engines" section
  * to interact with the browser.
@@ -27,7 +31,7 @@
  *            urlLocked: boolean}}
  * @see chrome/browser/ui/webui/settings/search_engine_manager_handler.cc
  */
-let SearchEngine;
+/* #export */ let SearchEngine;
 
 /**
  * @typedef {{
@@ -36,11 +40,11 @@ let SearchEngine;
  *   extensions: !Array<!SearchEngine>
  * }}
  */
-let SearchEnginesInfo;
+/* #export */ let SearchEnginesInfo;
 
 cr.define('settings', function() {
   /** @interface */
-  class SearchEnginesBrowserProxy {
+  /* #export */ class SearchEnginesBrowserProxy {
     /** @param {number} modelIndex */
     setDefaultSearchEngine(modelIndex) {}
 
@@ -68,14 +72,12 @@ cr.define('settings', function() {
      * @return {!Promise<boolean>}
      */
     validateSearchEngineInput(fieldName, fieldValue) {}
-
-    turnOnGoogleAssistant() {}
   }
 
   /**
    * @implements {settings.SearchEnginesBrowserProxy}
    */
-  class SearchEnginesBrowserProxyImpl {
+  /* #export */ class SearchEnginesBrowserProxyImpl {
     /** @override */
     setDefaultSearchEngine(modelIndex) {
       chrome.send('setDefaultSearchEngine', [modelIndex]);
@@ -115,17 +117,13 @@ cr.define('settings', function() {
       return cr.sendWithPromise(
           'validateSearchEngineInput', fieldName, fieldValue);
     }
-
-    /** @override */
-    turnOnGoogleAssistant() {
-      chrome.send('turnOnGoogleAssistant');
-    }
   }
 
   // The singleton instance_ is replaced with a test version of this wrapper
   // during testing.
   cr.addSingletonGetter(SearchEnginesBrowserProxyImpl);
 
+  // #cr_define_end
   return {
     SearchEnginesBrowserProxy: SearchEnginesBrowserProxy,
     SearchEnginesBrowserProxyImpl: SearchEnginesBrowserProxyImpl,

@@ -5,6 +5,7 @@
 #include "components/sync/driver/sync_driver_switches.h"
 
 #include "base/command_line.h"
+#include "build/build_config.h"
 
 namespace switches {
 
@@ -39,77 +40,32 @@ const char kSyncShortInitialRetryOverride[] =
 // This flag significantly shortens the delay between nudge cycles. Its primary
 // purpose is to speed up integration tests. The normal delay allows coalescing
 // and prevention of server overload, so don't use this unless you're really
-// sure
-// that it's what you want.
+// sure that it's what you want.
 const char kSyncShortNudgeDelayForTest[] = "sync-short-nudge-delay-for-test";
 
 // Allows custom passphrase users to receive Wallet data for secondary accounts
 // while in transport-only mode.
 const base::Feature kSyncAllowWalletDataInTransportModeWithCustomPassphrase{
     "SyncAllowAutofillWalletDataInTransportModeWithCustomPassphrase",
-    base::FEATURE_ENABLED_BY_DEFAULT};
+    base::FEATURE_DISABLED_BY_DEFAULT};
 
 // If enabled, the sync engine will be shut down in the "paused" state.
 const base::Feature kStopSyncInPausedState{"StopSyncInPausedState",
                                            base::FEATURE_DISABLED_BY_DEFAULT};
 
-// For each below, if enabled, the SyncableService implementation of the
-// corresponding datatype(s) is wrapped within the USS architecture.
-const base::Feature kSyncPseudoUSSAppList{"SyncPseudoUSSAppList",
-                                          base::FEATURE_ENABLED_BY_DEFAULT};
-const base::Feature kSyncPseudoUSSApps{"SyncPseudoUSSApps",
-                                       base::FEATURE_ENABLED_BY_DEFAULT};
-const base::Feature kSyncPseudoUSSArcPackage{"SyncPseudoUSSArcPackage",
-                                             base::FEATURE_ENABLED_BY_DEFAULT};
-const base::Feature kSyncPseudoUSSDictionary{"SyncPseudoUSSDictionary",
-                                             base::FEATURE_ENABLED_BY_DEFAULT};
-const base::Feature kSyncPseudoUSSExtensionSettings{
-    "SyncPseudoUSSExtensionSettings", base::FEATURE_ENABLED_BY_DEFAULT};
-const base::Feature kSyncPseudoUSSExtensions{"SyncPseudoUSSExtensions",
-                                             base::FEATURE_ENABLED_BY_DEFAULT};
-const base::Feature kSyncPseudoUSSFavicons{"SyncPseudoUSSFavicons",
-                                           base::FEATURE_ENABLED_BY_DEFAULT};
-const base::Feature kSyncPseudoUSSHistoryDeleteDirectives{
-    "SyncPseudoUSSHistoryDeleteDirectives", base::FEATURE_ENABLED_BY_DEFAULT};
-const base::Feature kSyncPseudoUSSPreferences{"SyncPseudoUSSPreferences",
-                                              base::FEATURE_ENABLED_BY_DEFAULT};
-const base::Feature kSyncPseudoUSSPriorityPreferences{
-    "SyncPseudoUSSPriorityPreferences", base::FEATURE_ENABLED_BY_DEFAULT};
-const base::Feature kSyncPseudoUSSSearchEngines{
-    "SyncPseudoUSSSearchEngines", base::FEATURE_ENABLED_BY_DEFAULT};
-const base::Feature kSyncPseudoUSSSupervisedUsers{
-    "SyncPseudoUSSSupervisedUsers", base::FEATURE_ENABLED_BY_DEFAULT};
-const base::Feature kSyncPseudoUSSThemes{"SyncPseudoUSSThemes",
-                                         base::FEATURE_ENABLED_BY_DEFAULT};
+// Enable USS implementation of Nigori datatype.
+const base::Feature kSyncUSSNigori{"SyncUSSNigori",
+                                   base::FEATURE_ENABLED_BY_DEFAULT};
 
-// Controls whether a user can receive tabs from their synced devices
-const base::Feature kSyncSendTabToSelf{"SyncSendTabToSelf",
-                                       base::FEATURE_ENABLED_BY_DEFAULT};
-
-// If enabled, allows the Sync machinery to start with a signed-in account that
-// has *not* been chosen as Chrome's primary account (see IdentityManager). Only
-// has an effect if SyncStandaloneTransport is also enabled.
-const base::Feature kSyncSupportSecondaryAccount{
-    "SyncSupportSecondaryAccount", base::FEATURE_DISABLED_BY_DEFAULT};
-
-// Enable USS implementation of Bookmarks datatype.
-const base::Feature kSyncUSSBookmarks{"SyncUSSBookmarks",
-                                      base::FEATURE_DISABLED_BY_DEFAULT};
-
-// Enable USS implementation of Passwords datatype.
-const base::Feature kSyncUSSPasswords{"SyncUSSPasswords",
-                                      base::FEATURE_DISABLED_BY_DEFAULT};
-
-// Enable USS implementation of autofill profile datatype.
-const base::Feature kSyncUSSAutofillProfile{"SyncUSSAutofillProfile",
+// Controls whether to enable syncing of Wi-Fi configurations.
+const base::Feature kSyncWifiConfigurations{"SyncWifiConfigurations",
                                             base::FEATURE_DISABLED_BY_DEFAULT};
 
-// Enable USS implementation of autofill wallet datatype.
-const base::Feature kSyncUSSAutofillWalletData{
-    "SyncUSSAutofillWalletData", base::FEATURE_ENABLED_BY_DEFAULT};
+const base::Feature kSyncDeviceInfoInTransportMode{
+    "SyncDeviceInfoInTransportMode", base::FEATURE_DISABLED_BY_DEFAULT};
 
-// Enable USS implementation of autofill wallet metadata datatype.
-const base::Feature kSyncUSSAutofillWalletMetadata{
-    "SyncUSSAutofillWalletMetadata", base::FEATURE_DISABLED_BY_DEFAULT};
+// Enables the running of backend ProfileSyncService tasks on the ThreadPool.
+const base::Feature kProfileSyncServiceUsesThreadPool{
+    "ProfileSyncServiceUsesThreadPool", base::FEATURE_DISABLED_BY_DEFAULT};
 
 }  // namespace switches

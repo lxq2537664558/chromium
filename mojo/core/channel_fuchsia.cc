@@ -95,7 +95,7 @@ class MessageView {
   MessageView(Channel::MessagePtr message, size_t offset)
       : message_(std::move(message)),
         offset_(offset),
-        handles_(message_->TakeHandlesForTransport()) {
+        handles_(message_->TakeHandles()) {
     DCHECK_GT(message_->data_num_bytes(), offset_);
   }
 
@@ -159,7 +159,7 @@ class ChannelFuchsia : public Channel,
   ChannelFuchsia(Delegate* delegate,
                  ConnectionParams connection_params,
                  HandlePolicy handle_policy,
-                 scoped_refptr<base::TaskRunner> io_task_runner)
+                 scoped_refptr<base::SingleThreadTaskRunner> io_task_runner)
       : Channel(delegate, handle_policy),
         self_(this),
         handle_(
@@ -300,8 +300,8 @@ class ChannelFuchsia : public Channel,
       zx_handle_t handles[ZX_CHANNEL_MAX_MSG_HANDLES] = {};
 
       zx_status_t read_result =
-          handle_.read(0, buffer, buffer_capacity, &bytes_read, handles,
-                       base::size(handles), &handles_read);
+          handle_.read(0, buffer, handles, buffer_capacity, base::size(handles),
+                       &bytes_read, &handles_read);
       if (read_result == ZX_OK) {
         for (size_t i = 0; i < handles_read; ++i) {
           incoming_handles_.emplace_back(handles[i]);
@@ -397,7 +397,7 @@ class ChannelFuchsia : public Channel,
   scoped_refptr<Channel> self_;
 
   zx::channel handle_;
-  scoped_refptr<base::TaskRunner> io_task_runner_;
+  scoped_refptr<base::SingleThreadTaskRunner> io_task_runner_;
 
   // These members are only used on the IO thread.
   std::unique_ptr<base::MessagePumpForIO::ZxHandleWatchController> read_watch_;
@@ -417,7 +417,7 @@ scoped_refptr<Channel> Channel::Create(
     Delegate* delegate,
     ConnectionParams connection_params,
     HandlePolicy handle_policy,
-    scoped_refptr<base::TaskRunner> io_task_runner) {
+    scoped_refptr<base::SingleThreadTaskRunner> io_task_runner) {
   return new ChannelFuchsia(delegate, std::move(connection_params),
                             handle_policy, std::move(io_task_runner));
 }

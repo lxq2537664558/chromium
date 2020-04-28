@@ -4,7 +4,7 @@
 
 #include "base/win/scoped_winrt_initializer.h"
 
-#include "base/logging.h"
+#include "base/check_op.h"
 #include "base/win/com_init_util.h"
 #include "base/win/core_winrt_util.h"
 #include "base/win/windows_version.h"
@@ -15,7 +15,7 @@ namespace win {
 ScopedWinrtInitializer::ScopedWinrtInitializer()
     : hr_(base::win::RoInitialize(RO_INIT_MULTITHREADED)) {
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
-  DCHECK_GE(GetVersion(), VERSION_WIN8);
+  DCHECK_GE(GetVersion(), Version::WIN8);
 #if DCHECK_IS_ON()
   if (SUCCEEDED(hr_))
     AssertComApartmentType(ComApartmentType::MTA);

@@ -9,11 +9,12 @@
 #include <utility>
 
 #include "base/bind.h"
+#include "base/check_op.h"
 #include "base/compiler_specific.h"
 #include "base/location.h"
-#include "base/logging.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/metrics/histogram_macros.h"
+#include "base/notreached.h"
 #include "base/single_thread_task_runner.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/stringprintf.h"
@@ -32,28 +33,24 @@ namespace net {
 
 namespace {
 
-std::unique_ptr<base::Value> NetLogSpdyStreamErrorCallback(
-    spdy::SpdyStreamId stream_id,
-    int net_error,
-    const std::string* description,
-    NetLogCaptureMode /* capture_mode */) {
-  auto dict = std::make_unique<base::DictionaryValue>();
-  dict->SetInteger("stream_id", static_cast<int>(stream_id));
-  dict->SetString("net_error", ErrorToShortString(net_error));
-  dict->SetString("description", *description);
-  return std::move(dict);
+base::Value NetLogSpdyStreamErrorParams(spdy::SpdyStreamId stream_id,
+                                        int net_error,
+                                        const std::string* description) {
+  base::Value dict(base::Value::Type::DICTIONARY);
+  dict.SetIntKey("stream_id", static_cast<int>(stream_id));
+  dict.SetStringKey("net_error", ErrorToShortString(net_error));
+  dict.SetStringKey("description", *description);
+  return dict;
 }
 
-std::unique_ptr<base::Value> NetLogSpdyStreamWindowUpdateCallback(
-    spdy::SpdyStreamId stream_id,
-    int32_t delta,
-    int32_t window_size,
-    NetLogCaptureMode /* capture_mode */) {
-  auto dict = std::make_unique<base::DictionaryValue>();
-  dict->SetInteger("stream_id", stream_id);
-  dict->SetInteger("delta", delta);
-  dict->SetInteger("window_size", window_size);
-  return std::move(dict);
+base::Value NetLogSpdyStreamWindowUpdateParams(spdy::SpdyStreamId stream_id,
+                                               int32_t delta,
+                                               int32_t window_size) {
+  base::Value dict(base::Value::Type::DICTIONARY);
+  dict.SetIntKey("stream_id", stream_id);
+  dict.SetIntKey("delta", delta);
+  dict.SetIntKey("window_size", window_size);
+  return dict;
 }
 
 }  // namespace
@@ -109,11 +106,9 @@ SpdyStream::SpdyStream(SpdyStreamType type,
       net_log_(net_log),
       raw_received_bytes_(0),
       raw_sent_bytes_(0),
-      send_bytes_(0),
       recv_bytes_(0),
       write_handler_guard_(false),
-      traffic_annotation_(traffic_annotation),
-      weak_ptr_factory_(this) {
+      traffic_annotation_(traffic_annotation) {
   CHECK(type_ == SPDY_BIDIRECTIONAL_STREAM ||
         type_ == SPDY_REQUEST_RESPONSE_STREAM ||
         type_ == SPDY_PUSH_STREAM);
@@ -123,7 +118,6 @@ SpdyStream::SpdyStream(SpdyStreamType type,
 
 SpdyStream::~SpdyStream() {
   CHECK(!write_handler_guard_);
-  UpdateHistograms();
 }
 
 void SpdyStream::SetDelegate(Delegate* delegate) {
@@ -240,10 +234,10 @@ bool SpdyStream::AdjustSendWindowSize(int32_t delta_window_size) {
 
   send_window_size_ += delta_window_size;
 
-  net_log_.AddEvent(
-      NetLogEventType::HTTP2_STREAM_UPDATE_SEND_WINDOW,
-      base::Bind(&NetLogSpdyStreamWindowUpdateCallback, stream_id_,
-                 delta_window_size, send_window_size_));
+  net_log_.AddEvent(NetLogEventType::HTTP2_STREAM_UPDATE_SEND_WINDOW, [&] {
+    return NetLogSpdyStreamWindowUpdateParams(stream_id_, delta_window_size,
+                                              send_window_size_);
+  });
 
   PossiblyResumeIfSendStalled();
   return true;
@@ -274,7 +268,7 @@ void SpdyStream::IncreaseSendWindowSize(int32_t delta_window_size) {
         "Received WINDOW_UPDATE [delta: %d] for stream %d overflows "
         "send_window_size_ [current: %d]",
         delta_window_size, stream_id_, send_window_size_);
-    session_->ResetStream(stream_id_, ERR_SPDY_FLOW_CONTROL_ERROR, desc);
+    session_->ResetStream(stream_id_, ERR_HTTP2_FLOW_CONTROL_ERROR, desc);
   }
 }
 
@@ -293,10 +287,10 @@ void SpdyStream::DecreaseSendWindowSize(int32_t delta_window_size) {
 
   send_window_size_ -= delta_window_size;
 
-  net_log_.AddEvent(
-      NetLogEventType::HTTP2_STREAM_UPDATE_SEND_WINDOW,
-      base::Bind(&NetLogSpdyStreamWindowUpdateCallback, stream_id_,
-                 -delta_window_size, send_window_size_));
+  net_log_.AddEvent(NetLogEventType::HTTP2_STREAM_UPDATE_SEND_WINDOW, [&] {
+    return NetLogSpdyStreamWindowUpdateParams(stream_id_, -delta_window_size,
+                                              send_window_size_);
+  });
 }
 
 void SpdyStream::OnReadBufferConsumed(
@@ -322,10 +316,10 @@ void SpdyStream::IncreaseRecvWindowSize(int32_t delta_window_size) {
             std::numeric_limits<int32_t>::max() - recv_window_size_);
 
   recv_window_size_ += delta_window_size;
-  net_log_.AddEvent(
-      NetLogEventType::HTTP2_STREAM_UPDATE_RECV_WINDOW,
-      base::Bind(&NetLogSpdyStreamWindowUpdateCallback, stream_id_,
-                 delta_window_size, recv_window_size_));
+  net_log_.AddEvent(NetLogEventType::HTTP2_STREAM_UPDATE_RECV_WINDOW, [&] {
+    return NetLogSpdyStreamWindowUpdateParams(stream_id_, delta_window_size,
+                                              recv_window_size_);
+  });
 
   unacked_recv_window_bytes_ += delta_window_size;
   if (unacked_recv_window_bytes_ > max_recv_window_size_ / 2) {
@@ -344,7 +338,7 @@ void SpdyStream::DecreaseRecvWindowSize(int32_t delta_window_size) {
   // the peer, that means that the receive window is not being respected.
   if (delta_window_size > recv_window_size_ - unacked_recv_window_bytes_) {
     session_->ResetStream(
-        stream_id_, ERR_SPDY_FLOW_CONTROL_ERROR,
+        stream_id_, ERR_HTTP2_FLOW_CONTROL_ERROR,
         "delta_window_size is " + base::NumberToString(delta_window_size) +
             " in DecreaseRecvWindowSize, which is larger than the receive " +
             "window size of " + base::NumberToString(recv_window_size_));
@@ -352,10 +346,10 @@ void SpdyStream::DecreaseRecvWindowSize(int32_t delta_window_size) {
   }
 
   recv_window_size_ -= delta_window_size;
-  net_log_.AddEvent(
-      NetLogEventType::HTTP2_STREAM_UPDATE_RECV_WINDOW,
-      base::Bind(&NetLogSpdyStreamWindowUpdateCallback, stream_id_,
-                 -delta_window_size, recv_window_size_));
+  net_log_.AddEvent(NetLogEventType::HTTP2_STREAM_UPDATE_RECV_WINDOW, [&] {
+    return NetLogSpdyStreamWindowUpdateParams(stream_id_, -delta_window_size,
+                                              recv_window_size_);
+  });
 }
 
 int SpdyStream::GetPeerAddress(IPEndPoint* address) const {
@@ -391,16 +385,16 @@ void SpdyStream::OnHeadersReceived(
           response_headers.find(spdy::kHttp2StatusHeader);
       if (it == response_headers.end()) {
         const std::string error("Response headers do not include :status.");
-        LogStreamError(ERR_SPDY_PROTOCOL_ERROR, error);
-        session_->ResetStream(stream_id_, ERR_SPDY_PROTOCOL_ERROR, error);
+        LogStreamError(ERR_HTTP2_PROTOCOL_ERROR, error);
+        session_->ResetStream(stream_id_, ERR_HTTP2_PROTOCOL_ERROR, error);
         return;
       }
 
       int status;
       if (!StringToInt(it->second, &status)) {
         const std::string error("Cannot parse :status.");
-        LogStreamError(ERR_SPDY_PROTOCOL_ERROR, error);
-        session_->ResetStream(stream_id_, ERR_SPDY_PROTOCOL_ERROR, error);
+        LogStreamError(ERR_HTTP2_PROTOCOL_ERROR, error);
+        session_->ResetStream(stream_id_, ERR_HTTP2_PROTOCOL_ERROR, error);
         return;
       }
 
@@ -430,8 +424,8 @@ void SpdyStream::OnHeadersReceived(
           // the response headers only after request headers are sent.
           if (io_state_ == STATE_IDLE) {
             const std::string error("Response received before request sent.");
-            LogStreamError(ERR_SPDY_PROTOCOL_ERROR, error);
-            session_->ResetStream(stream_id_, ERR_SPDY_PROTOCOL_ERROR, error);
+            LogStreamError(ERR_HTTP2_PROTOCOL_ERROR, error);
+            session_->ResetStream(stream_id_, ERR_HTTP2_PROTOCOL_ERROR, error);
             return;
           }
           break;
@@ -460,8 +454,8 @@ void SpdyStream::OnHeadersReceived(
       // Second header block is trailers.
       if (type_ == SPDY_PUSH_STREAM) {
         const std::string error("Trailers not supported for push stream.");
-        LogStreamError(ERR_SPDY_PROTOCOL_ERROR, error);
-        session_->ResetStream(stream_id_, ERR_SPDY_PROTOCOL_ERROR, error);
+        LogStreamError(ERR_HTTP2_PROTOCOL_ERROR, error);
+        session_->ResetStream(stream_id_, ERR_HTTP2_PROTOCOL_ERROR, error);
         return;
       }
 
@@ -472,8 +466,8 @@ void SpdyStream::OnHeadersReceived(
     case TRAILERS_RECEIVED:
       // No further header blocks are allowed after trailers.
       const std::string error("Header block received after trailers.");
-      LogStreamError(ERR_SPDY_PROTOCOL_ERROR, error);
-      session_->ResetStream(stream_id_, ERR_SPDY_PROTOCOL_ERROR, error);
+      LogStreamError(ERR_HTTP2_PROTOCOL_ERROR, error);
+      session_->ResetStream(stream_id_, ERR_HTTP2_PROTOCOL_ERROR, error);
       break;
   }
 }
@@ -501,22 +495,22 @@ void SpdyStream::OnDataReceived(std::unique_ptr<SpdyBuffer> buffer) {
 
   if (response_state_ == READY_FOR_HEADERS) {
     const std::string error("DATA received before headers.");
-    LogStreamError(ERR_SPDY_PROTOCOL_ERROR, error);
-    session_->ResetStream(stream_id_, ERR_SPDY_PROTOCOL_ERROR, error);
+    LogStreamError(ERR_HTTP2_PROTOCOL_ERROR, error);
+    session_->ResetStream(stream_id_, ERR_HTTP2_PROTOCOL_ERROR, error);
     return;
   }
 
   if (response_state_ == TRAILERS_RECEIVED && buffer) {
     const std::string error("DATA received after trailers.");
-    LogStreamError(ERR_SPDY_PROTOCOL_ERROR, error);
-    session_->ResetStream(stream_id_, ERR_SPDY_PROTOCOL_ERROR, error);
+    LogStreamError(ERR_HTTP2_PROTOCOL_ERROR, error);
+    session_->ResetStream(stream_id_, ERR_HTTP2_PROTOCOL_ERROR, error);
     return;
   }
 
   if (io_state_ == STATE_HALF_CLOSED_REMOTE) {
     const std::string error("DATA received on half-closed (remove) stream.");
-    LogStreamError(ERR_SPDY_STREAM_CLOSED, error);
-    session_->ResetStream(stream_id_, ERR_SPDY_STREAM_CLOSED, error);
+    LogStreamError(ERR_HTTP2_STREAM_CLOSED, error);
+    session_->ResetStream(stream_id_, ERR_HTTP2_STREAM_CLOSED, error);
     return;
   }
 
@@ -563,7 +557,7 @@ void SpdyStream::OnDataReceived(std::unique_ptr<SpdyBuffer> buffer) {
   if (!weak_this)
     return;
   buffer->AddConsumeCallback(
-      base::Bind(&SpdyStream::OnReadBufferConsumed, GetWeakPtr()));
+      base::BindRepeating(&SpdyStream::OnReadBufferConsumed, GetWeakPtr()));
 
   // May close |this|.
   delegate_->OnDataReceived(std::move(buffer));
@@ -654,8 +648,6 @@ int SpdyStream::OnDataSent(size_t frame_size) {
   CHECK_GE(frame_size, spdy::kDataFrameMinimumSize);
   CHECK_LE(frame_payload_size, spdy::kHttp2DefaultFramePayloadLimit);
 
-  send_bytes_ += frame_payload_size;
-
   // If more data is available to send, dispatch it and
   // return that the write operation is still ongoing.
   pending_send_data_->DidConsume(frame_payload_size);
@@ -669,18 +661,18 @@ int SpdyStream::OnDataSent(size_t frame_size) {
 }
 
 void SpdyStream::LogStreamError(int error, const std::string& description) {
-  net_log_.AddEvent(NetLogEventType::HTTP2_STREAM_ERROR,
-                    base::Bind(&NetLogSpdyStreamErrorCallback, stream_id_,
-                               error, &description));
+  net_log_.AddEvent(NetLogEventType::HTTP2_STREAM_ERROR, [&] {
+    return NetLogSpdyStreamErrorParams(stream_id_, error, &description);
+  });
 }
 
 void SpdyStream::OnClose(int status) {
   // In most cases, the stream should already be CLOSED. The exception is when a
   // SpdySession is shutting down while the stream is in an intermediate state.
   io_state_ = STATE_CLOSED;
-  if (status == ERR_SPDY_RST_STREAM_NO_ERROR_RECEIVED) {
+  if (status == ERR_HTTP2_RST_STREAM_NO_ERROR_RECEIVED) {
     if (response_state_ == READY_FOR_HEADERS) {
-      status = ERR_SPDY_PROTOCOL_ERROR;
+      status = ERR_HTTP2_PROTOCOL_ERROR;
     } else {
       status = OK;
     }
@@ -770,8 +762,9 @@ SpdyStream::ShouldRequeueStream SpdyStream::PossiblyResumeIfSendStalled() {
   if (session_->IsSendStalled() || send_window_size_ <= 0) {
     return Requeue;
   }
-  net_log_.AddEvent(NetLogEventType::HTTP2_STREAM_FLOW_CONTROL_UNSTALLED,
-                    NetLog::IntCallback("stream_id", stream_id_));
+  net_log_.AddEventWithIntParams(
+      NetLogEventType::HTTP2_STREAM_FLOW_CONTROL_UNSTALLED, "stream_id",
+      stream_id_);
   send_stalled_by_flow_control_ = false;
   QueueNextDataFrame();
   return DoNotRequeue;
@@ -835,36 +828,6 @@ size_t SpdyStream::EstimateMemoryUsage() const {
          base::trace_event::EstimateMemoryUsage(response_headers_);
 }
 
-void SpdyStream::UpdateHistograms() {
-  // We need at least the receive timers to be filled in, as otherwise
-  // metrics can be bogus.
-  if (recv_first_byte_time_.is_null() || recv_last_byte_time_.is_null())
-    return;
-
-  base::TimeTicks effective_send_time;
-  if (type_ == SPDY_PUSH_STREAM) {
-    // Push streams shouldn't have |send_time_| filled in.
-    DCHECK(send_time_.is_null());
-    effective_send_time = recv_first_byte_time_;
-  } else {
-    // For non-push streams, we also need |send_time_| to be filled
-    // in.
-    if (send_time_.is_null())
-      return;
-    effective_send_time = send_time_;
-  }
-
-  UMA_HISTOGRAM_TIMES("Net.SpdyStreamTimeToFirstByte",
-                      recv_first_byte_time_ - effective_send_time);
-  UMA_HISTOGRAM_TIMES("Net.SpdyStreamDownloadTime",
-                      recv_last_byte_time_ - recv_first_byte_time_);
-  UMA_HISTOGRAM_TIMES("Net.SpdyStreamTime",
-                      recv_last_byte_time_ - effective_send_time);
-
-  UMA_HISTOGRAM_COUNTS_1M("Net.SpdySendBytes", send_bytes_);
-  UMA_HISTOGRAM_COUNTS_1M("Net.SpdyRecvBytes", recv_bytes_);
-}
-
 void SpdyStream::QueueNextDataFrame() {
   // Until the request has been completely sent, we cannot be sure
   // that our stream_id is correct.
@@ -901,8 +864,13 @@ void SpdyStream::QueueNextDataFrame() {
     // This currently isn't strictly needed, since write frames are
     // discarded only if the stream is about to be closed. But have it
     // here anyway just in case this changes.
-    data_buffer->AddConsumeCallback(base::Bind(
+    data_buffer->AddConsumeCallback(base::BindRepeating(
         &SpdyStream::OnWriteBufferConsumed, GetWeakPtr(), payload_size));
+  }
+
+  if (session_->GreasedFramesEnabled() && delegate_ &&
+      delegate_->CanGreaseFrameType()) {
+    session_->EnqueueGreasedFrame(GetWeakPtr());
   }
 
   session_->EnqueueStreamWrite(
@@ -915,7 +883,7 @@ void SpdyStream::SaveResponseHeaders(
     int status) {
   DCHECK(response_headers_.empty());
   if (response_headers.find("transfer-encoding") != response_headers.end()) {
-    session_->ResetStream(stream_id_, ERR_SPDY_PROTOCOL_ERROR,
+    session_->ResetStream(stream_id_, ERR_HTTP2_PROTOCOL_ERROR,
                           "Received transfer-encoding header");
     return;
   }
@@ -931,7 +899,7 @@ void SpdyStream::SaveResponseHeaders(
       (status / 100 != 2 && status / 100 != 3 && status != 416)) {
     SpdySession::RecordSpdyPushedStreamFateHistogram(
         SpdyPushedStreamFate::kUnsupportedStatusCode);
-    session_->ResetStream(stream_id_, ERR_SPDY_CLIENT_REFUSED_STREAM,
+    session_->ResetStream(stream_id_, ERR_HTTP2_CLIENT_REFUSED_STREAM,
                           "Unsupported status code for pushed stream.");
     return;
   }

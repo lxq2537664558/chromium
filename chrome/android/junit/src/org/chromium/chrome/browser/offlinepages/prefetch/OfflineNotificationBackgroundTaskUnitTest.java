@@ -9,7 +9,6 @@ import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
-import static org.junit.Assert.fail;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
@@ -24,10 +23,13 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import android.content.Context;
+import android.os.Build;
 
 import org.junit.After;
 import org.junit.Before;
+import org.junit.Rule;
 import org.junit.Test;
+import org.junit.rules.TestRule;
 import org.junit.runner.RunWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Captor;
@@ -41,14 +43,15 @@ import org.robolectric.annotation.Config;
 import org.robolectric.shadows.multidex.ShadowMultiDex;
 
 import org.chromium.base.Callback;
-import org.chromium.base.ContextUtils;
-import org.chromium.base.library_loader.ProcessInitException;
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.chrome.browser.DeviceConditions;
 import org.chromium.chrome.browser.ShadowDeviceConditions;
+import org.chromium.chrome.browser.background_task_scheduler.ChromeNativeBackgroundTaskDelegate;
+import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.init.BrowserParts;
 import org.chromium.chrome.browser.init.ChromeBrowserInitializer;
 import org.chromium.chrome.browser.offlinepages.OfflinePageBridge;
+import org.chromium.chrome.test.util.browser.Features;
 import org.chromium.components.background_task_scheduler.BackgroundTaskScheduler;
 import org.chromium.components.background_task_scheduler.BackgroundTaskSchedulerFactory;
 import org.chromium.components.background_task_scheduler.TaskIds;
@@ -64,6 +67,7 @@ import java.util.concurrent.TimeUnit;
 /** Unit tests for {@link OfflineNotificationBackgroundTask}. */
 @RunWith(BaseRobolectricTestRunner.class)
 @Config(manifest = Config.NONE, shadows = {ShadowMultiDex.class, ShadowDeviceConditions.class})
+@Features.DisableFeatures(ChromeFeatureList.PREFETCH_NOTIFICATION_SCHEDULING_INTEGRATION)
 public class OfflineNotificationBackgroundTaskUnitTest {
     /**
      * Fake of BackgroundTaskScheduler system service.
@@ -96,7 +100,8 @@ public class OfflineNotificationBackgroundTaskUnitTest {
             mTaskInfos = new HashMap<>();
         }
     }
-
+    @Rule
+    public TestRule mFeaturesProcessorRule = new Features.JUnitProcessor();
     @Spy
     private OfflineNotificationBackgroundTask mOfflineNotificationBackgroundTask =
             new OfflineNotificationBackgroundTask();
@@ -118,21 +123,18 @@ public class OfflineNotificationBackgroundTaskUnitTest {
     @Before
     public void setUp() {
         MockitoAnnotations.initMocks(this);
+        mOfflineNotificationBackgroundTask.setDelegate(new ChromeNativeBackgroundTaskDelegate());
         // Set up the context.
         doNothing().when(mChromeBrowserInitializer).handlePreNativeStartup(any(BrowserParts.class));
-        try {
-            doAnswer(new Answer<Void>() {
-                @Override
-                public Void answer(InvocationOnMock invocation) {
-                    mBrowserParts.getValue().finishNativeInitialization();
-                    return null;
-                }
-            })
-                    .when(mChromeBrowserInitializer)
-                    .handlePostNativeStartup(eq(true), mBrowserParts.capture());
-        } catch (ProcessInitException ex) {
-            fail("Unexpected exception while initializing mock of ChromeBrowserInitializer.");
-        }
+        doAnswer(new Answer<Void>() {
+            @Override
+            public Void answer(InvocationOnMock invocation) {
+                mBrowserParts.getValue().finishNativeInitialization();
+                return null;
+            }
+        })
+                .when(mChromeBrowserInitializer)
+                .handlePostNativeStartup(eq(true), mBrowserParts.capture());
 
         doAnswer((invocation) -> {
             Object callback = invocation.getArguments()[1];
@@ -157,17 +159,13 @@ public class OfflineNotificationBackgroundTaskUnitTest {
         mCalendar.set(2017, 1, 1, 0, 0, 0);
 
         OfflineNotificationBackgroundTask.setCalendarForTesting(mCalendar);
-        clearPrefs();
+        PrefetchPrefs.setNotificationEnabled(true);
     }
 
     @After
     public void tearDown() {
         // Ensure that an empty content notificaition is not shown in any test.
         verify(mPrefetchedPagesNotifier, never()).showNotification("");
-    }
-
-    private void clearPrefs() {
-        ContextUtils.getAppSharedPreferences().edit().clear().apply();
     }
 
     /**
@@ -199,10 +197,10 @@ public class OfflineNotificationBackgroundTaskUnitTest {
     }
 
     private void setupDeviceOnlineStatus(boolean online) {
-        DeviceConditions deviceConditions =
-                new DeviceConditions(false /* POWER_CONNECTED */, 75 /* BATTERY_LEVEL */,
-                        online ? ConnectionType.CONNECTION_WIFI : ConnectionType.CONNECTION_NONE,
-                        false /* POWER_SAVE */, false /* metered */);
+        DeviceConditions deviceConditions = new DeviceConditions(false /* POWER_CONNECTED */,
+                75 /* BATTERY_LEVEL */,
+                online ? ConnectionType.CONNECTION_WIFI : ConnectionType.CONNECTION_NONE,
+                false /* POWER_SAVE */, false /* metered */, true /* screenOnAndUnlocked */);
         ShadowDeviceConditions.setCurrentConditions(deviceConditions);
     }
 
@@ -463,5 +461,42 @@ public class OfflineNotificationBackgroundTaskUnitTest {
         assertTaskScheduledForOfflineDelay(
                 "After waiting for tomorrow morning, the next delay should be normal "
                 + "even if the last notification was sent well in the future.");
+    }
+
+    @Test
+    @Config(sdk = Build.VERSION_CODES.O)
+    public void disabledPrefDoesNothingSdkO() {
+        // Set up the prefs so that a notification should be shown.
+        PrefetchPrefs.setHasNewPages(true);
+        PrefetchPrefs.setOfflineCounter(OfflineNotificationBackgroundTask.OFFLINE_POLLING_ATTEMPTS);
+        PrefetchPrefs.setIgnoredNotificationCounter(0);
+        setupDeviceOnlineStatus(false);
+
+        // Set up the Content Suggestions notifications preference.
+        PrefetchPrefs.setNotificationEnabled(false);
+
+        runTaskAndExpectTaskDone();
+        assertNativeStarted();
+        assertNotificationShown();
+    }
+
+    @Test
+    @Config(sdk = Build.VERSION_CODES.N_MR1)
+    public void disabledPrefPreventsNotificationShow() {
+        // Set up the prefs so that a notification would be shown, if not for the Content
+        // Suggestions notifications preference.
+        PrefetchPrefs.setHasNewPages(true);
+        PrefetchPrefs.setOfflineCounter(OfflineNotificationBackgroundTask.OFFLINE_POLLING_ATTEMPTS);
+        PrefetchPrefs.setIgnoredNotificationCounter(0);
+        setupDeviceOnlineStatus(false);
+
+        // Set up the Content Suggestions notifications preference.
+        PrefetchPrefs.setNotificationEnabled(false);
+
+        runTask();
+        assertNativeDidNotStart();
+        assertNoTaskScheduled("If the notifications preference was disabled, the task should not "
+                + "reschedule itself.");
+        assertNotificationNotShown();
     }
 }

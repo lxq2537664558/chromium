@@ -17,11 +17,11 @@
 
 namespace viz {
 class BeginFrameSource;
+struct FrameTimingDetails;
 }
 
 namespace cc {
 
-class MutatorEvents;
 class LayerTreeHost;
 class LayerTreeHostSingleThreadClient;
 class RenderFrameMetadataObserver;
@@ -41,7 +41,6 @@ class CC_EXPORT SingleThreadProxy : public Proxy,
 
   // Proxy implementation
   bool IsStarted() const override;
-  bool CommitToActiveTree() const override;
   void SetLayerTreeFrameSink(
       LayerTreeFrameSink* layer_tree_frame_sink) override;
   void ReleaseLayerTreeFrameSink() override;
@@ -54,7 +53,7 @@ class CC_EXPORT SingleThreadProxy : public Proxy,
   bool RequestedAnimatePending() override;
   void SetDeferMainFrameUpdate(bool defer_main_frame_update) override;
   void StartDeferringCommits(base::TimeDelta timeout) override;
-  void StopDeferringCommits() override;
+  void StopDeferringCommits(PaintHoldingCommitTrigger) override;
   bool CommitRequested() const override;
   void Start() override;
   void Stop() override;
@@ -63,7 +62,7 @@ class CC_EXPORT SingleThreadProxy : public Proxy,
       std::unique_ptr<PaintWorkletLayerPainter> painter) override;
   bool SupportsImplScrolling() const override;
   bool MainFrameWillHappenForTesting() override;
-  void SetURLForUkm(const GURL& url) override {
+  void SetSourceURL(ukm::SourceId source_id, const GURL& url) override {
     // Single-threaded mode is only for browser compositing and for renderers in
     // layout tests. This will still get called in the latter case, but we don't
     // need to record UKM in that case.
@@ -79,7 +78,8 @@ class CC_EXPORT SingleThreadProxy : public Proxy,
   // SchedulerClient implementation
   bool WillBeginImplFrame(const viz::BeginFrameArgs& args) override;
   void DidFinishImplFrame() override;
-  void DidNotProduceFrame(const viz::BeginFrameAck& ack) override;
+  void DidNotProduceFrame(const viz::BeginFrameAck& ack,
+                          FrameSkippedReason reason) override;
   void WillNotReceiveBeginFrame() override;
   void ScheduledActionSendBeginMainFrame(
       const viz::BeginFrameArgs& args) override;
@@ -97,6 +97,7 @@ class CC_EXPORT SingleThreadProxy : public Proxy,
   void FrameIntervalUpdated(base::TimeDelta interval) override;
   size_t CompositedAnimationsCount() const override;
   size_t MainThreadAnimationsCount() const override;
+  bool HasCustomPropertyAnimations() const override;
   bool CurrentFrameHadRAF() const override;
   bool NextFrameHasPendingRAF() const override;
 
@@ -112,9 +113,8 @@ class CC_EXPORT SingleThreadProxy : public Proxy,
   void SetNeedsPrepareTilesOnImplThread() override;
   void SetNeedsCommitOnImplThread() override;
   void SetVideoNeedsBeginFrames(bool needs_begin_frames) override;
-  void PostAnimationEventsToMainThreadOnImplThread(
-      std::unique_ptr<MutatorEvents> events) override;
   bool IsInsideDraw() override;
+  bool IsBeginMainFrameExpected() override;
   void RenewTreePriority() override {}
   void PostDelayedAnimationTaskOnImplThread(base::OnceClosure task,
                                             base::TimeDelta delay) override {}
@@ -126,17 +126,16 @@ class CC_EXPORT SingleThreadProxy : public Proxy,
                                    bool skip_draw) override;
   void NeedsImplSideInvalidation(bool needs_first_draw_on_activation) override;
   void RequestBeginMainFrameNotExpected(bool new_state) override;
-  uint32_t GenerateChildSurfaceSequenceNumberSync() override;
   void NotifyImageDecodeRequestFinished() override;
   void DidPresentCompositorFrameOnImplThread(
       uint32_t frame_token,
       std::vector<LayerTreeHost::PresentationTimeCallback> callbacks,
-      const gfx::PresentationFeedback& feedback) override;
-  void DidGenerateLocalSurfaceIdAllocationOnImplThread(
-      const viz::LocalSurfaceIdAllocation& allocation) override;
+      const viz::FrameTimingDetails& details) override;
   void NotifyAnimationWorkletStateChange(
       AnimationWorkletMutationState state,
       ElementListType element_list_type) override;
+  void NotifyPaintWorkletStateChange(
+      Scheduler::PaintWorkletState state) override;
 
   void RequestNewLayerTreeFrameSink();
 
@@ -154,7 +153,7 @@ class CC_EXPORT SingleThreadProxy : public Proxy,
   void BeginMainFrameAbortedOnImplThread(CommitEarlyOutReason reason);
   void DoBeginMainFrame(const viz::BeginFrameArgs& begin_frame_args);
   void DoPainting();
-  void DoCommit();
+  void DoCommit(const viz::BeginFrameArgs& commit_args);
   DrawResult DoComposite(LayerTreeHostImpl::FrameData* frame);
   void DoSwap();
   void DidCommitAndDrawFrame();
@@ -202,6 +201,10 @@ class CC_EXPORT SingleThreadProxy : public Proxy,
   // initialized.
   bool layer_tree_frame_sink_lost_;
 
+  // A number that kept incrementing in CompositeImmediately, which indicates a
+  // new impl frame.
+  uint64_t begin_frame_sequence_number_ = 1u;
+
   // This is the callback for the scheduled RequestNewLayerTreeFrameSink.
   base::CancelableOnceClosure layer_tree_frame_sink_creation_callback_;
 
@@ -209,9 +212,9 @@ class CC_EXPORT SingleThreadProxy : public Proxy,
 
   // WeakPtrs generated by this factory will be invalidated when
   // LayerTreeFrameSink is released.
-  base::WeakPtrFactory<SingleThreadProxy> frame_sink_bound_weak_factory_;
+  base::WeakPtrFactory<SingleThreadProxy> frame_sink_bound_weak_factory_{this};
 
-  base::WeakPtrFactory<SingleThreadProxy> weak_factory_;
+  base::WeakPtrFactory<SingleThreadProxy> weak_factory_{this};
 };
 
 // For use in the single-threaded case. In debug builds, it pretends that the

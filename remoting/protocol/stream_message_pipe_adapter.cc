@@ -8,7 +8,6 @@
 #include <utility>
 
 #include "base/bind.h"
-#include "base/callback_helpers.h"
 #include "net/base/net_errors.h"
 #include "net/traffic_annotation/network_traffic_annotation.h"
 #include "remoting/base/buffered_socket_writer.h"
@@ -37,8 +36,8 @@ void StreamMessagePipeAdapter::Start(EventHandler* event_handler) {
   writer_ = std::make_unique<BufferedSocketWriter>();
   writer_->Start(
       base::Bind(&P2PStreamSocket::Write, base::Unretained(socket_.get())),
-      base::Bind(&StreamMessagePipeAdapter::CloseOnError,
-                 base::Unretained(this)));
+      base::BindOnce(&StreamMessagePipeAdapter::CloseOnError,
+                     base::Unretained(this)));
 
   reader_ = std::make_unique<MessageReader>();
   reader_->StartReading(socket_.get(),
@@ -90,7 +89,7 @@ void StreamMessagePipeAdapter::CloseOnError(int error) {
   if (error == 0) {
     event_handler_->OnMessagePipeClosed();
   } else if (error_callback_) {
-    base::ResetAndReturn(&error_callback_).Run(error);
+    std::move(error_callback_).Run(error);
   }
 }
 

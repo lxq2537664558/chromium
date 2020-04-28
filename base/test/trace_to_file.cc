@@ -10,6 +10,8 @@
 #include "base/files/file_util.h"
 #include "base/memory/ref_counted_memory.h"
 #include "base/run_loop.h"
+#include "base/test/task_environment.h"
+#include "base/threading/thread_task_runner_handle.h"
 #include "base/trace_event/trace_buffer.h"
 #include "base/trace_event/trace_log.h"
 
@@ -92,11 +94,16 @@ void TraceToFile::EndTracingIfNeeded() {
 
   trace_event::TraceResultBuffer buffer;
   buffer.SetOutputCallback(
-      Bind(&TraceToFile::TraceOutputCallback, Unretained(this)));
+      BindRepeating(&TraceToFile::TraceOutputCallback, Unretained(this)));
+
+  // In tests we might not have a TaskEnvironment, create one if needed.
+  std::unique_ptr<SingleThreadTaskEnvironment> task_environment;
+  if (!ThreadTaskRunnerHandle::IsSet())
+    task_environment = std::make_unique<SingleThreadTaskEnvironment>();
 
   RunLoop run_loop;
-  trace_event::TraceLog::GetInstance()->Flush(
-      Bind(&OnTraceDataCollected, run_loop.QuitClosure(), Unretained(&buffer)));
+  trace_event::TraceLog::GetInstance()->Flush(BindRepeating(
+      &OnTraceDataCollected, run_loop.QuitClosure(), Unretained(&buffer)));
   run_loop.Run();
 
   AppendFileFooter();

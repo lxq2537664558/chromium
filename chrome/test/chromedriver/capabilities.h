@@ -97,15 +97,10 @@ struct Capabilities {
   // Return true if android package is specified.
   bool IsAndroid() const;
 
-  // Accepts all W3C defined capabilities (including those not yet supported by
-  // ChromeDriver) and all ChromeDriver-specific extensions.
+  // Accepts all W3C defined capabilities
+  // and all ChromeDriver-specific extensions.
   Status Parse(const base::DictionaryValue& desired_caps,
                bool w3c_compliant = true);
-
-  // Check if all specified capabilities are supported by ChromeDriver.
-  // The long term goal is to support all standard capabilities, thus making
-  // this method unnecessary.
-  Status CheckSupport() const;
 
   //
   // W3C defined capabilities
@@ -169,10 +164,6 @@ struct Capabilities {
   // Time to wait for extension background page to appear. If 0, no waiting.
   base::TimeDelta extension_load_timeout;
 
-  // True if should always use DevTools for taking screenshots.
-  // This is experimental and may be removed at a later point.
-  bool force_devtools_screenshot;
-
   std::unique_ptr<base::DictionaryValue> local_state;
 
   std::string log_path;
@@ -195,6 +186,14 @@ struct Capabilities {
   std::set<WebViewInfo::Type> window_types;
 
   bool use_automation_extension;
+
+  // Temporary capability to enable LaunchApp command
+  // TODO remove with all LaunchApp code in m84.
+  // see https://crbug.com/chromedriver/1778
+  bool enable_launch_app;
 };
+
+bool GetChromeOptionsDictionary(const base::DictionaryValue& params,
+                                const base::DictionaryValue** out);
 
 #endif  // CHROME_TEST_CHROMEDRIVER_CAPABILITIES_H_

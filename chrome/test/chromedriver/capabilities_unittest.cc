@@ -509,8 +509,8 @@ TEST(ParseCapabilities, ExcludeSwitches) {
   ASSERT_TRUE(status.IsOk());
   ASSERT_EQ(2u, capabilities.exclude_switches.size());
   const std::set<std::string>& switches = capabilities.exclude_switches;
-  ASSERT_TRUE(base::ContainsKey(switches, "switch1"));
-  ASSERT_TRUE(base::ContainsKey(switches, "switch2"));
+  ASSERT_TRUE(base::Contains(switches, "switch1"));
+  ASSERT_TRUE(base::Contains(switches, "switch2"));
 }
 
 TEST(ParseCapabilities, UseRemoteBrowser) {
@@ -623,4 +623,21 @@ TEST(ParseCapabilities, MobileEmulationBadDict) {
                std::move(mobile_emulation));
   Status status = capabilities.Parse(caps);
   ASSERT_FALSE(status.IsOk());
+}
+
+TEST(ParseCapabilities, VirtualAuthenticatorsBool) {
+  Capabilities capabilities;
+  base::DictionaryValue caps;
+  caps.SetBoolKey("webauthn:virtualAuthenticators", true);
+  EXPECT_TRUE(capabilities.Parse(caps).IsOk());
+
+  caps.SetBoolKey("webauthn:virtualAuthenticators", false);
+  EXPECT_TRUE(capabilities.Parse(caps).IsOk());
+}
+
+TEST(ParseCapabilities, VirtualAuthenticatorsNotBool) {
+  Capabilities capabilities;
+  base::DictionaryValue caps;
+  caps.SetStringKey("webauthn:virtualAuthenticators", "not a bool");
+  EXPECT_FALSE(capabilities.Parse(caps).IsOk());
 }

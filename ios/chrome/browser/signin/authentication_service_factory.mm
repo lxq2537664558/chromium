@@ -20,9 +20,24 @@
 #error "This file requires ARC support."
 #endif
 
+namespace {
+
+std::unique_ptr<KeyedService> BuildAuthenticationService(
+    web::BrowserState* context) {
+  ChromeBrowserState* browser_state =
+      ChromeBrowserState::FromBrowserState(context);
+  return std::make_unique<AuthenticationService>(
+      browser_state->GetPrefs(),
+      SyncSetupServiceFactory::GetForBrowserState(browser_state),
+      IdentityManagerFactory::GetForBrowserState(browser_state),
+      ProfileSyncServiceFactory::GetForBrowserState(browser_state));
+}
+
+}  // namespace
+
 // static
 AuthenticationService* AuthenticationServiceFactory::GetForBrowserState(
-    ios::ChromeBrowserState* browser_state) {
+    ChromeBrowserState* browser_state) {
   AuthenticationService* service = static_cast<AuthenticationService*>(
       GetInstance()->GetServiceForBrowserState(browser_state, true));
   CHECK(!service || service->initialized());
@@ -37,12 +52,18 @@ AuthenticationServiceFactory* AuthenticationServiceFactory::GetInstance() {
 
 // static
 void AuthenticationServiceFactory::CreateAndInitializeForBrowserState(
-    ios::ChromeBrowserState* browser_state,
+    ChromeBrowserState* browser_state,
     std::unique_ptr<AuthenticationServiceDelegate> delegate) {
   AuthenticationService* service = static_cast<AuthenticationService*>(
       GetInstance()->GetServiceForBrowserState(browser_state, true));
   CHECK(service && !service->initialized());
   service->Initialize(std::move(delegate));
+}
+
+// static
+AuthenticationServiceFactory::TestingFactory
+AuthenticationServiceFactory::GetDefaultFactory() {
+  return base::BindRepeating(&BuildAuthenticationService);
 }
 
 AuthenticationServiceFactory::AuthenticationServiceFactory()
@@ -59,13 +80,7 @@ AuthenticationServiceFactory::~AuthenticationServiceFactory() {}
 std::unique_ptr<KeyedService>
 AuthenticationServiceFactory::BuildServiceInstanceFor(
     web::BrowserState* context) const {
-  ios::ChromeBrowserState* browser_state =
-      ios::ChromeBrowserState::FromBrowserState(context);
-  return std::make_unique<AuthenticationService>(
-      browser_state->GetPrefs(),
-      SyncSetupServiceFactory::GetForBrowserState(browser_state),
-      IdentityManagerFactory::GetForBrowserState(browser_state),
-      ProfileSyncServiceFactory::GetForBrowserState(browser_state));
+  return BuildAuthenticationService(context);
 }
 
 void AuthenticationServiceFactory::RegisterBrowserStatePrefs(

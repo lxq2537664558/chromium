@@ -7,7 +7,7 @@
 
 #include "cc/animation/transform_operations.h"
 #include "third_party/blink/renderer/platform/platform_export.h"
-#include "third_party/blink/renderer/platform/wtf/allocator.h"
+#include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
 
 class SkMatrix44;
 
@@ -31,7 +31,6 @@ class PLATFORM_EXPORT CompositorTransformOperations {
   void AppendSkew(double x, double y);
   void AppendPerspective(double depth);
   void AppendMatrix(const SkMatrix44&);
-  void AppendIdentity();
 
   bool IsIdentity() const;
 

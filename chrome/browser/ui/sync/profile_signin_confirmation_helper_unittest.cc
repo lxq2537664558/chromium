@@ -11,6 +11,7 @@
 #include "base/bind_helpers.h"
 #include "base/command_line.h"
 #include "base/compiler_specific.h"
+#include "base/files/scoped_temp_dir.h"
 #include "base/memory/ptr_util.h"
 #include "base/run_loop.h"
 #include "base/stl_util.h"
@@ -30,7 +31,7 @@
 #include "components/prefs/pref_service.h"
 #include "components/prefs/testing_pref_service.h"
 #include "components/sync_preferences/testing_pref_service_syncable.h"
-#include "content/public/test/test_browser_thread_bundle.h"
+#include "content/public/test/browser_task_environment.h"
 #include "content/public/test/test_utils.h"
 #include "extensions/buildflags/buildflags.h"
 #include "testing/gmock/include/gmock/gmock.h"
@@ -62,12 +63,13 @@ void GetValueAndQuit(T* result, const base::Closure& quit, T actual) {
   quit.Run();
 }
 
-template<typename T>
+template <typename T>
 T GetCallbackResult(
-    const base::Callback<void(const base::Callback<void(T)>&)>& callback) {
+    const base::Callback<void(base::OnceCallback<void(T)>)>& callback) {
   T result = false;
   base::RunLoop loop;
-  callback.Run(base::Bind(&GetValueAndQuit<T>, &result, loop.QuitClosure()));
+  callback.Run(
+      base::BindOnce(&GetValueAndQuit<T>, &result, loop.QuitClosure()));
   loop.Run();
   return result;
 }
@@ -130,14 +132,19 @@ class ProfileSigninConfirmationHelperTest : public testing::Test {
   }
 
   void SetUp() override {
+    ASSERT_TRUE(profile_dir_.CreateUniqueTempDir());
+
     // Create the profile.
     TestingProfile::Builder builder;
+    builder.SetPath(profile_dir_.GetPath());
     user_prefs_ = new TestingPrefStoreWithCustomReadError;
     sync_preferences::TestingPrefServiceSyncable* pref_service =
         new sync_preferences::TestingPrefServiceSyncable(
-            new TestingPrefStore(), new TestingPrefStore(), user_prefs_,
-            new TestingPrefStore(), new user_prefs::PrefRegistrySyncable(),
-            new PrefNotifierImpl());
+            /*managed_prefs=*/new TestingPrefStore(),
+            /*supervised_user_prefs=*/new TestingPrefStore(),
+            /*extension_prefs=*/new TestingPrefStore(), user_prefs_,
+            /*recommended_prefs=*/new TestingPrefStore(),
+            new user_prefs::PrefRegistrySyncable(), new PrefNotifierImpl());
     RegisterUserProfilePrefs(pref_service->registry());
     builder.SetPrefService(
         base::WrapUnique<sync_preferences::PrefServiceSyncable>(pref_service));
@@ -167,7 +174,8 @@ class ProfileSigninConfirmationHelperTest : public testing::Test {
   }
 
  protected:
-  content::TestBrowserThreadBundle thread_bundle_;
+  base::ScopedTempDir profile_dir_;
+  content::BrowserTaskEnvironment task_environment_;
   std::unique_ptr<TestingProfile> profile_;
   TestingPrefStoreWithCustomReadError* user_prefs_;
   BookmarkModel* model_;
@@ -181,6 +189,7 @@ class ProfileSigninConfirmationHelperTest : public testing::Test {
 // http://crbug.com/393149
 TEST_F(ProfileSigninConfirmationHelperTest, DISABLED_DoNotPromptForNewProfile) {
   // Profile is new and there's no profile data.
+  profile_->SetIsNewProfile(true);
   EXPECT_FALSE(
       GetCallbackResult(
           base::Bind(
@@ -192,6 +201,7 @@ TEST_F(ProfileSigninConfirmationHelperTest, PromptForNewProfile_Bookmarks) {
   ASSERT_TRUE(model_);
 
   // Profile is new but has bookmarks.
+  profile_->SetIsNewProfile(true);
   model_->AddURL(model_->bookmark_bar_node(), 0,
                  base::string16(base::ASCIIToUTF16("foo")),
                  GURL("http://foo.com"));
@@ -208,9 +218,8 @@ TEST_F(ProfileSigninConfirmationHelperTest, PromptForNewProfile_Extensions) {
       extensions::ExtensionSystem::Get(profile_.get())->extension_service();
   ASSERT_TRUE(extensions);
 
-  // Profile is new but has synced extensions.
-
-  // (The web store doesn't count.)
+  // Profile is new but has synced extensions (The web store doesn't count).
+  profile_->SetIsNewProfile(true);
   scoped_refptr<extensions::Extension> webstore =
       CreateExtension("web store",
                       extensions::kWebStoreAppId,
@@ -240,6 +249,7 @@ TEST_F(ProfileSigninConfirmationHelperTest,
 
   // Profile is new but has more than $(kHistoryEntriesBeforeNewProfilePrompt)
   // history items.
+  profile_->SetIsNewProfile(true);
   char buf[18];
   for (int i = 0; i < 10; i++) {
     base::snprintf(buf, base::size(buf), "http://foo.com/%d", i);
@@ -263,6 +273,7 @@ TEST_F(ProfileSigninConfirmationHelperTest,
   ASSERT_TRUE(history);
 
   // Profile is new but has a typed URL.
+  profile_->SetIsNewProfile(true);
   history->AddPage(
       GURL("http://example.com"), base::Time::Now(), NULL, 1,
       GURL(), history::RedirectList(), ui::PAGE_TRANSITION_TYPED,
@@ -276,7 +287,7 @@ TEST_F(ProfileSigninConfirmationHelperTest,
 
 TEST_F(ProfileSigninConfirmationHelperTest, PromptForNewProfile_Restarted) {
   // Browser has been shut down since profile was created.
-  user_prefs_->set_read_error(PersistentPrefStore::PREF_READ_ERROR_NONE);
+  profile_->SetIsNewProfile(false);
   EXPECT_TRUE(
       GetCallbackResult(
           base::Bind(

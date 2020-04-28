@@ -52,6 +52,7 @@ class AudioDiscarder : public media::AudioOutputStream {
   void SetVolume(double volume) override {}
   void GetVolume(double* volume) override { *volume = 0; }
   void Close() override { delete this; }
+  void Flush() override {}
 
  private:
   ~AudioDiscarder() override {}
@@ -92,7 +93,7 @@ class WebContentsAudioMuter::MuteDestination
 
   void QueryForMatches(const std::set<GlobalFrameRoutingId>& candidates,
                        MatchesCallback results_callback) override {
-    base::PostTaskWithTraits(
+    base::PostTask(
         FROM_HERE, {BrowserThread::UI},
         base::BindOnce(&MuteDestination::QueryForMatchesOnUIThread, this,
                        candidates,
@@ -147,7 +148,7 @@ void WebContentsAudioMuter::StartMuting() {
   if (is_muting_)
     return;
   is_muting_ = true;
-  base::PostTaskWithTraits(
+  base::PostTask(
       FROM_HERE, {BrowserThread::IO},
       base::BindOnce(&AudioMirroringManager::StartMirroring,
                      base::Unretained(AudioMirroringManager::GetInstance()),
@@ -159,7 +160,7 @@ void WebContentsAudioMuter::StopMuting() {
   if (!is_muting_)
     return;
   is_muting_ = false;
-  base::PostTaskWithTraits(
+  base::PostTask(
       FROM_HERE, {BrowserThread::IO},
       base::BindOnce(&AudioMirroringManager::StopMirroring,
                      base::Unretained(AudioMirroringManager::GetInstance()),

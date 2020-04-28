@@ -4,10 +4,11 @@
 
 #include "extensions/shell/app/shell_crash_reporter_client.h"
 
+#include "base/check.h"
 #include "base/command_line.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
-#include "base/logging.h"
+#include "build/branding_buildflags.h"
 #include "build/build_config.h"
 #include "components/crash/core/common/crash_keys.h"
 #include "components/upload_list/crash_upload_list.h"
@@ -66,7 +67,7 @@ bool ShellCrashReporterClient::IsRunningUnattended() {
 }
 
 bool ShellCrashReporterClient::GetCollectStatsConsent() {
-#if defined(GOOGLE_CHROME_BUILD)
+#if BUILDFLAG(GOOGLE_CHROME_BRANDING)
   return base::CommandLine::ForCurrentProcess()->HasSwitch(
       switches::kEnableReporting);
 #else

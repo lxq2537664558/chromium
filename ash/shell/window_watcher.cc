@@ -85,10 +85,10 @@ aura::Window* WindowWatcher::GetWindowByID(const ShelfID& id) {
 
 // aura::WindowObserver overrides:
 void WindowWatcher::OnWindowAdded(aura::Window* new_window) {
-  if (!wm::IsWindowUserPositionable(new_window))
+  if (!window_util::IsWindowUserPositionable(new_window))
     return;
 
-  ShelfModel* model = Shell::Get()->shelf_model();
+  ShelfModel* model = ShelfModel::Get();
   ShelfItem item;
   item.type = TYPE_APP;
   static int shelf_id = 0;
@@ -105,14 +105,14 @@ void WindowWatcher::OnWindowAdded(aura::Window* new_window) {
 
   model->SetShelfItemDelegate(
       item.id, std::make_unique<WindowWatcherShelfItemDelegate>(item.id, this));
-  new_window->SetProperty(kShelfIDKey, new std::string(item.id.Serialize()));
+  new_window->SetProperty(kShelfIDKey, item.id.Serialize());
 }
 
 void WindowWatcher::OnWillRemoveWindow(aura::Window* window) {
   for (IDToWindow::iterator i = id_to_window_.begin(); i != id_to_window_.end();
        ++i) {
     if (i->second == window) {
-      ShelfModel* model = Shell::Get()->shelf_model();
+      ShelfModel* model = ShelfModel::Get();
       int index = model->ItemIndexByID(i->first);
       DCHECK_NE(-1, index);
       model->RemoveItemAt(index);

@@ -10,9 +10,9 @@
 #include "base/android/jni_string.h"
 #include "base/bind.h"
 #include "base/callback.h"
+#include "base/check_op.h"
 #include "base/compiler_specific.h"
 #include "base/location.h"
-#include "base/logging.h"
 #include "base/macros.h"
 #include "base/memory/ref_counted.h"
 #include "base/observer_list.h"
@@ -20,8 +20,8 @@
 #include "base/strings/string_tokenizer.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
-#include "jni/ProxyChangeListener_jni.h"
 #include "net/base/host_port_pair.h"
+#include "net/net_jni_headers/ProxyChangeListener_jni.h"
 #include "net/proxy_resolution/proxy_config_with_annotation.h"
 #include "url/third_party/mozilla/url_parse.h"
 
@@ -113,7 +113,7 @@ void AddBypassRules(const std::string& scheme,
       continue;
     // '?' is not one of the specified pattern characters above.
     DCHECK_EQ(std::string::npos, pattern.find('?'));
-    bypass_rules->AddRuleForHostname(scheme, pattern, -1);
+    bypass_rules->AddRuleFromString(scheme + "://" + pattern);
   }
 }
 
@@ -189,8 +189,7 @@ void CreateStaticProxyConfig(const std::string& host,
       base::TrimWhitespaceASCII(*it, base::TRIM_ALL, &pattern);
       if (pattern.empty())
           continue;
-      proxy_config.proxy_rules().bypass_rules.AddRuleForHostname("", pattern,
-                                                                 -1);
+      proxy_config.proxy_rules().bypass_rules.AddRuleFromString(pattern);
     }
     *config =
         ProxyConfigWithAnnotation(proxy_config, NO_TRAFFIC_ANNOTATION_YET);

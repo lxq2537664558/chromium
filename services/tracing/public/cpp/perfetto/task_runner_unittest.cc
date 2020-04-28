@@ -10,7 +10,8 @@
 
 #include "base/memory/weak_ptr.h"
 #include "base/task/post_task.h"
-#include "base/test/scoped_task_environment.h"
+#include "base/task/thread_pool.h"
+#include "base/test/task_environment.h"
 #include "base/threading/simple_thread.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -25,8 +26,7 @@ class TaskDestination {
                   base::OnceClosure on_complete)
       : expected_tasks_(expected_tasks),
         on_complete_(std::move(on_complete)),
-        last_task_id_(number_of_sequences),
-        weak_ptr_factory_(this) {}
+        last_task_id_(number_of_sequences) {}
 
   size_t tasks_run() const { return tasks_run_; }
 
@@ -51,7 +51,7 @@ class TaskDestination {
   std::vector<int> last_task_id_;
   size_t tasks_run_ = 0;
 
-  base::WeakPtrFactory<TaskDestination> weak_ptr_factory_;
+  base::WeakPtrFactory<TaskDestination> weak_ptr_factory_{this};
 };
 
 class PosterThread : public base::SimpleThread {
@@ -72,8 +72,6 @@ class PosterThread : public base::SimpleThread {
   void BeforeJoin() override {}
 
   void Run() override {
-    task_runner_->BlockPostTaskForThread();
-
     for (int i = 0; i < n_; ++i) {
       auto weak_ptr = weak_ptr_;
       auto sequence_number = sequence_number_;
@@ -81,8 +79,6 @@ class PosterThread : public base::SimpleThread {
         weak_ptr->TestTask(i, sequence_number);
       });
     }
-
-    task_runner_->UnblockPostTaskForThread();
   }
 
  private:
@@ -95,11 +91,12 @@ class PosterThread : public base::SimpleThread {
 class PerfettoTaskRunnerTest : public testing::Test {
  public:
   void SetUp() override {
-    task_runner_ = std::make_unique<PerfettoTaskRunner>(CreateNewTaskrunner());
+    sequenced_task_runner_ = CreateNewTaskrunner();
+    task_runner_ = std::make_unique<PerfettoTaskRunner>(sequenced_task_runner_);
   }
 
   scoped_refptr<base::SequencedTaskRunner> CreateNewTaskrunner() {
-    return base::CreateSingleThreadTaskRunnerWithTraits(
+    return base::ThreadPool::CreateSingleThreadTaskRunner(
         {base::MayBlock()}, base::SingleThreadTaskRunnerThreadMode::DEDICATED);
   }
   void SetTaskExpectations(base::OnceClosure on_complete,
@@ -109,15 +106,18 @@ class PerfettoTaskRunnerTest : public testing::Test {
         number_of_sequences, expected_tasks, std::move(on_complete));
   }
 
-  void TearDown() override {}
+  void TearDown() override {
+    sequenced_task_runner_->DeleteSoon(FROM_HERE, std::move(task_runner_));
+  }
 
   PerfettoTaskRunner* task_runner() { return task_runner_.get(); }
   TaskDestination* destination() { return task_destination_.get(); }
 
  private:
+  base::test::TaskEnvironment task_environment_;
+  scoped_refptr<base::SequencedTaskRunner> sequenced_task_runner_;
   std::unique_ptr<PerfettoTaskRunner> task_runner_;
   std::unique_ptr<TaskDestination> task_destination_;
-  base::test::ScopedTaskEnvironment scoped_task_environment_;
 };
 
 TEST_F(PerfettoTaskRunnerTest, SequentialTasks) {
@@ -125,74 +125,17 @@ TEST_F(PerfettoTaskRunnerTest, SequentialTasks) {
   SetTaskExpectations(wait_for_tasks.QuitClosure(), 3);
 
   auto weak_ptr = destination()->GetWeakPtr();
-  task_runner()->PostTask([weak_ptr]() { weak_ptr->TestTask(1); });
-  task_runner()->PostTask([weak_ptr]() { weak_ptr->TestTask(2); });
-  task_runner()->PostTask([weak_ptr]() { weak_ptr->TestTask(3); });
+  for (int i = 1; i <= 3; ++i) {
+    task_runner()->PostTask([=]() mutable {
+      auto* dest = weak_ptr.get();
+      // The weak pointer must be reset before TestTask() is called, otherwise
+      // there will be a race where the factory could be destructed on main
+      // thread while still bound to the task runner sequence.
+      weak_ptr.reset();
+      dest->TestTask(i);
+    });
+  }
 
-  wait_for_tasks.Run();
-}
-
-TEST_F(PerfettoTaskRunnerTest, SequentialDeferredTasks) {
-  base::RunLoop wait_for_tasks;
-  SetTaskExpectations(wait_for_tasks.QuitClosure(), 3);
-
-  task_runner()->BlockPostTaskForThread();
-  auto weak_ptr = destination()->GetWeakPtr();
-  task_runner()->PostTask([weak_ptr]() { weak_ptr->TestTask(1); });
-  task_runner()->PostTask([weak_ptr]() { weak_ptr->TestTask(2); });
-  base::RunLoop().RunUntilIdle();
-  EXPECT_EQ(0u, destination()->tasks_run());
-  task_runner()->UnblockPostTaskForThread();
-  // Posting an unblocked task should post the earlier deferred ones,
-  // in the right order.
-  task_runner()->PostTask([weak_ptr]() { weak_ptr->TestTask(3); });
-
-  wait_for_tasks.Run();
-}
-
-TEST_F(PerfettoTaskRunnerTest, SequentialDeferredTasksByTimer) {
-  base::RunLoop wait_for_tasks;
-  SetTaskExpectations(wait_for_tasks.QuitClosure(), 3);
-
-  task_runner()->BlockPostTaskForThread();
-  auto weak_ptr = destination()->GetWeakPtr();
-  task_runner()->PostTask([weak_ptr]() { weak_ptr->TestTask(1); });
-  task_runner()->PostTask([weak_ptr]() { weak_ptr->TestTask(2); });
-  task_runner()->PostTask([weak_ptr]() { weak_ptr->TestTask(3); });
-  base::RunLoop().RunUntilIdle();
-  EXPECT_EQ(0u, destination()->tasks_run());
-
-  // Start the timer which eventually will tick and post the previously
-  // deferred tasks. Note that this is posted directly to the taskqueue
-  // rather than the Perfetto wrapper, so it won't be deferred.
-  task_runner()->task_runner()->PostTask(
-      FROM_HERE,
-      base::BindOnce(&PerfettoTaskRunner::StartDeferredTasksDrainTimer,
-                     base::Unretained(task_runner())));
-
-  wait_for_tasks.Run();
-}
-
-TEST_F(PerfettoTaskRunnerTest, SequentialByMultipleSequences) {
-  base::RunLoop wait_for_tasks;
-  SetTaskExpectations(wait_for_tasks.QuitClosure(), 2001, 3);
-
-  auto weak_ptr = destination()->GetWeakPtr();
-
-  PosterThread first_thread(task_runner(), weak_ptr, 1000, 1);
-  PosterThread second_thread(task_runner(), weak_ptr, 1000, 2);
-  first_thread.Start();
-  second_thread.Start();
-  first_thread.Join();
-  second_thread.Join();
-
-  // Both threads set the taskrunner to defer new tasks, so none
-  // should have run at this point.
-  EXPECT_EQ(0u, destination()->tasks_run());
-
-  // Posting an unblocked task should post the earlier deferred ones,
-  // in the right order.
-  task_runner()->PostTask([weak_ptr]() { weak_ptr->TestTask(1, 0); });
   wait_for_tasks.Run();
 }
 

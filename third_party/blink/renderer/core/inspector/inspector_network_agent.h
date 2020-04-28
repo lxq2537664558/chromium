@@ -31,6 +31,7 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_INSPECTOR_INSPECTOR_NETWORK_AGENT_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_INSPECTOR_INSPECTOR_NETWORK_AGENT_H_
 
+#include "base/containers/span.h"
 #include "base/optional.h"
 #include "base/unguessable_token.h"
 #include "third_party/blink/renderer/core/core_export.h"
@@ -38,6 +39,7 @@
 #include "third_party/blink/renderer/core/inspector/inspector_base_agent.h"
 #include "third_party/blink/renderer/core/inspector/inspector_page_agent.h"
 #include "third_party/blink/renderer/core/inspector/protocol/Network.h"
+#include "third_party/blink/renderer/platform/blob/blob_data.h"
 #include "third_party/blink/renderer/platform/heap/handle.h"
 #include "third_party/blink/renderer/platform/loader/fetch/resource_load_priority.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
@@ -53,7 +55,6 @@ class WebSocketHandshakeRequest;
 
 namespace blink {
 
-class BlobDataHandle;
 class Document;
 class DocumentLoader;
 class ExecutionContext;
@@ -80,7 +81,7 @@ class CORE_EXPORT InspectorNetworkAgent final
                         WorkerGlobalScope*,
                         v8_inspector::V8InspectorSession*);
   ~InspectorNetworkAgent() override;
-  void Trace(blink::Visitor*) override;
+  void Trace(Visitor*) override;
 
   void Restore() override;
 
@@ -127,7 +128,7 @@ class CORE_EXPORT InspectorNetworkAgent final
                                    size_t encoded_data_length);
   void DidFinishLoading(uint64_t identifier,
                         DocumentLoader*,
-                        TimeTicks monotonic_finish_time,
+                        base::TimeTicks monotonic_finish_time,
                         int64_t encoded_data_length,
                         int64_t decoded_body_length,
                         bool should_report_corb_blocking);
@@ -149,7 +150,6 @@ class CORE_EXPORT InspectorNetworkAgent final
                    const AtomicString& method,
                    const KURL&,
                    bool async,
-                   EncodedFormData* form_data,
                    const HTTPHeaderMap& headers,
                    bool include_crendentials);
   void DidFinishXHR(XMLHttpRequest*);
@@ -164,7 +164,7 @@ class CORE_EXPORT InspectorNetworkAgent final
 
   void FrameScheduledNavigation(LocalFrame*,
                                 const KURL&,
-                                double delay,
+                                base::TimeDelta delay,
                                 ClientNavigationReason);
   void FrameClearedScheduledNavigation(LocalFrame*);
 
@@ -185,14 +185,14 @@ class CORE_EXPORT InspectorNetworkAgent final
   void DidReceiveWebSocketMessage(uint64_t identifier,
                                   int op_code,
                                   bool masked,
-                                  const char* payload,
-                                  size_t payload_length);
+                                  const Vector<base::span<const char>>& data);
   void DidSendWebSocketMessage(uint64_t identifier,
                                int op_code,
                                bool masked,
                                const char* payload,
                                size_t payload_length);
   void DidReceiveWebSocketMessageError(uint64_t identifier, const String&);
+  void SetDevToolsIds(ResourceRequest& request);
 
   // Called from frontend
   protocol::Response enable(Maybe<int> total_buffer_size,
@@ -257,10 +257,12 @@ class CORE_EXPORT InspectorNetworkAgent final
   bool CanGetResponseBodyBlob(const String& request_id);
   void GetResponseBodyBlob(const String& request_id,
                            std::unique_ptr<GetResponseBodyCallback>);
+  ExecutionContext* GetTargetExecutionContext() const;
 
   static std::unique_ptr<protocol::Network::Initiator> BuildInitiatorObject(
       Document*,
-      const FetchInitiatorInfo&);
+      const FetchInitiatorInfo&,
+      int max_async_depth);
   static bool IsNavigation(DocumentLoader*, uint64_t identifier);
 
   // This is null while inspecting workers.
@@ -277,6 +279,7 @@ class CORE_EXPORT InspectorNetworkAgent final
   base::Optional<InspectorPageAgent::ResourceType> pending_request_type_;
 
   Member<XHRReplayData> pending_xhr_replay_data_;
+  bool is_handling_sync_xhr_ = false;
 
   HashMap<String, std::unique_ptr<protocol::Network::Initiator>>
       frame_navigation_initiator_map_;

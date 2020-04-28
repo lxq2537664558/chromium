@@ -30,16 +30,19 @@
 
 #include <memory>
 #include "base/memory/scoped_refptr.h"
-#include "services/network/public/mojom/fetch_api.mojom-blink.h"
-#include "third_party/blink/public/mojom/net/ip_address_space.mojom-blink.h"
+#include "mojo/public/cpp/bindings/pending_remote.h"
+#include "services/network/public/mojom/fetch_api.mojom-blink-forward.h"
+#include "services/network/public/mojom/ip_address_space.mojom-blink-forward.h"
+#include "services/network/public/mojom/url_loader_factory.mojom-blink.h"
 #include "third_party/blink/public/platform/web_url_request.h"
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/loader/threadable_loader.h"
 #include "third_party/blink/renderer/core/loader/threadable_loader_client.h"
 #include "third_party/blink/renderer/platform/loader/allowed_by_nosniff.h"
+#include "third_party/blink/renderer/platform/loader/fetch/resource_loader_options.h"
 #include "third_party/blink/renderer/platform/loader/fetch/resource_request.h"
 #include "third_party/blink/renderer/platform/weborigin/kurl.h"
-#include "third_party/blink/renderer/platform/wtf/allocator.h"
+#include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
 #include "third_party/blink/renderer/platform/wtf/functional.h"
 #include "third_party/blink/renderer/platform/wtf/ref_counted.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_builder.h"
@@ -53,7 +56,7 @@ class ExecutionContext;
 class TextResourceDecoder;
 
 class CORE_EXPORT WorkerClassicScriptLoader final
-    : public GarbageCollectedFinalized<WorkerClassicScriptLoader>,
+    : public GarbageCollected<WorkerClassicScriptLoader>,
       public ThreadableLoaderClient {
   USING_GARBAGE_COLLECTED_MIXIN(WorkerClassicScriptLoader);
 
@@ -65,23 +68,29 @@ class CORE_EXPORT WorkerClassicScriptLoader final
                          ResourceFetcher* fetch_client_settings_object_fetcher,
                          const KURL&,
                          mojom::RequestContextType,
-                         mojom::IPAddressSpace);
+                         network::mojom::RequestDestination);
 
   // Note that callbacks could be invoked before
   // LoadTopLevelScriptAsynchronously() returns.
   //
   // |fetch_client_settings_object_fetcher| is different from
   // ExecutionContext::Fetcher() in off-the-main-thread fetch.
+  // TODO(crbug.com/1064920): Remove |reject_coep_unsafe_none| and
+  // |blob_url_loader_factory| when PlzDedicatedWorker ships.
   void LoadTopLevelScriptAsynchronously(
       ExecutionContext&,
       ResourceFetcher* fetch_client_settings_object_fetcher,
       const KURL&,
       mojom::RequestContextType,
-      network::mojom::FetchRequestMode,
-      network::mojom::FetchCredentialsMode,
-      mojom::IPAddressSpace,
+      network::mojom::RequestDestination,
+      network::mojom::RequestMode,
+      network::mojom::CredentialsMode,
       base::OnceClosure response_callback,
-      base::OnceClosure finished_callback);
+      base::OnceClosure finished_callback,
+      RejectCoepUnsafeNone reject_coep_unsafe_none =
+          RejectCoepUnsafeNone(false),
+      mojo::PendingRemote<network::mojom::blink::URLLoaderFactory>
+          blob_url_loader_factory = {});
 
   // This will immediately invoke |finishedCallback| if
   // LoadTopLevelScriptAsynchronously() is in progress.
@@ -105,7 +114,7 @@ class CORE_EXPORT WorkerClassicScriptLoader final
 
   const String& GetReferrerPolicy() const { return referrer_policy_; }
 
-  mojom::IPAddressSpace ResponseAddressSpace() const {
+  network::mojom::IPAddressSpace ResponseAddressSpace() const {
     return response_address_space_;
   }
 
@@ -154,11 +163,10 @@ class CORE_EXPORT WorkerClassicScriptLoader final
   int64_t app_cache_id_ = 0;
   std::unique_ptr<Vector<uint8_t>> cached_metadata_;
   Member<ContentSecurityPolicy> content_security_policy_;
-  mojom::IPAddressSpace response_address_space_;
+  network::mojom::IPAddressSpace response_address_space_;
   std::unique_ptr<Vector<String>> origin_trial_tokens_;
   String referrer_policy_;
 
-  bool is_worker_global_scope_ = false;
   Member<ResourceFetcher> fetch_client_settings_object_fetcher_;
 };
 

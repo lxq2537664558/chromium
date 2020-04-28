@@ -28,17 +28,17 @@
 #include <memory>
 
 #include "base/optional.h"
-#include "media/mojo/interfaces/display_media_information.mojom-shared.h"
+#include "media/mojo/mojom/display_media_information.mojom-shared.h"
 #include "third_party/blink/public/platform/web_common.h"
 #include "third_party/blink/public/platform/web_private_ptr.h"
 #include "third_party/blink/public/platform/web_string.h"
 
 namespace blink {
 
+class MediaConstraints;
 class MediaStreamComponent;
 class MediaStreamTrack;
 class WebAudioSourceProvider;
-class WebMediaConstraints;
 class WebMediaStreamSource;
 class WebPlatformMediaStreamTrack;
 class WebString;
@@ -60,7 +60,6 @@ class WebMediaStreamTrack {
     bool HasSampleSize() const { return sample_size >= 0; }
     bool HasChannelCount() const { return channel_count >= 0; }
     bool HasLatency() const { return latency >= 0; }
-    bool HasVolume() const { return volume >= 0; }
     bool HasVideoKind() const { return !video_kind.IsNull(); }
     // The variables are read from
     // MediaStreamTrack::GetSettings only.
@@ -80,7 +79,6 @@ class WebMediaStreamTrack {
     int32_t sample_size = -1;
     int32_t channel_count = -1;
     double latency = -1.0;
-    double volume = -1.0;
 
     // Media Capture Depth Stream Extensions.
     WebString video_kind;
@@ -124,8 +122,8 @@ class WebMediaStreamTrack {
   BLINK_PLATFORM_EXPORT bool IsEnabled() const;
   BLINK_PLATFORM_EXPORT bool IsMuted() const;
   BLINK_PLATFORM_EXPORT ContentHintType ContentHint() const;
-  BLINK_PLATFORM_EXPORT WebMediaConstraints Constraints() const;
-  BLINK_PLATFORM_EXPORT void SetConstraints(const WebMediaConstraints&);
+  BLINK_PLATFORM_EXPORT MediaConstraints Constraints() const;
+  BLINK_PLATFORM_EXPORT void SetConstraints(const MediaConstraints&);
 
   BLINK_PLATFORM_EXPORT WebPlatformMediaStreamTrack* GetPlatformTrack() const;
   BLINK_PLATFORM_EXPORT void SetPlatformTrack(

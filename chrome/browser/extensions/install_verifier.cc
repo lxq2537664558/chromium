@@ -16,6 +16,7 @@
 #include "base/one_shot_event.h"
 #include "base/stl_util.h"
 #include "base/trace_event/trace_event.h"
+#include "build/branding_buildflags.h"
 #include "build/build_config.h"
 #include "chrome/browser/extensions/extension_management.h"
 #include "chrome/browser/extensions/extension_service.h"
@@ -31,6 +32,8 @@
 #include "extensions/browser/extension_registry.h"
 #include "extensions/browser/extension_system.h"
 #include "extensions/browser/pref_names.h"
+#include "extensions/common/extension.h"
+#include "extensions/common/extension_id.h"
 #include "extensions/common/extension_set.h"
 #include "extensions/common/manifest.h"
 #include "extensions/common/manifest_url_handlers.h"
@@ -71,11 +74,11 @@ VerifyStatus GetExperimentStatus() {
     return VerifyStatus::ENFORCE_STRICT;
   }
 
-#if defined(GOOGLE_CHROME_BUILD) && (defined(OS_WIN) || defined(OS_MACOSX))
+#if BUILDFLAG(GOOGLE_CHROME_BRANDING) && (defined(OS_WIN) || defined(OS_MACOSX))
   VerifyStatus default_status = VerifyStatus::ENFORCE;
 #else
   VerifyStatus default_status = VerifyStatus::NONE;
-#endif  // defined(GOOGLE_CHROME_BUILD)
+#endif  // BUILDFLAG(GOOGLE_CHROME_BRANDING)
 
   if (group == "EnforceStrict")
     return VerifyStatus::ENFORCE_STRICT;
@@ -187,11 +190,7 @@ void LogAddVerifiedSuccess(bool success) {
 
 InstallVerifier::InstallVerifier(ExtensionPrefs* prefs,
                                  content::BrowserContext* context)
-    : prefs_(prefs),
-      context_(context),
-      bootstrap_check_complete_(false),
-      weak_factory_(this) {
-}
+    : prefs_(prefs), context_(context), bootstrap_check_complete_(false) {}
 
 InstallVerifier::~InstallVerifier() {}
 
@@ -219,11 +218,6 @@ bool InstallVerifier::IsFromStore(const Extension& extension) {
 
 void InstallVerifier::Init() {
   TRACE_EVENT0("browser,startup", "extensions::InstallVerifier::Init");
-  UMA_HISTOGRAM_ENUMERATION("ExtensionInstallVerifier.ExperimentStatus",
-                            GetExperimentStatus(),
-                            VerifyStatus::VERIFY_STATUS_MAX);
-  UMA_HISTOGRAM_ENUMERATION("ExtensionInstallVerifier.ActualStatus",
-                            GetStatus(), VerifyStatus::VERIFY_STATUS_MAX);
 
   const base::DictionaryValue* pref = prefs_->GetInstallSignature();
   if (pref) {
@@ -262,12 +256,12 @@ base::Time InstallVerifier::SignatureTimestamp() {
 }
 
 bool InstallVerifier::IsKnownId(const std::string& id) const {
-  return signature_.get() && (base::ContainsKey(signature_->ids, id) ||
-                              base::ContainsKey(signature_->invalid_ids, id));
+  return signature_.get() && (base::Contains(signature_->ids, id) ||
+                              base::Contains(signature_->invalid_ids, id));
 }
 
 bool InstallVerifier::IsInvalid(const std::string& id) const {
-  return ((signature_.get() && base::ContainsKey(signature_->invalid_ids, id)));
+  return ((signature_.get() && base::Contains(signature_->invalid_ids, id)));
 }
 
 void InstallVerifier::VerifyExtension(const std::string& extension_id) {
@@ -319,8 +313,8 @@ void InstallVerifier::RemoveMany(const ExtensionIdSet& ids) {
 
   bool found_any = false;
   for (auto i = ids.begin(); i != ids.end(); ++i) {
-    if (base::ContainsKey(signature_->ids, *i) ||
-        base::ContainsKey(signature_->invalid_ids, *i)) {
+    if (base::Contains(signature_->ids, *i) ||
+        base::Contains(signature_->invalid_ids, *i)) {
       found_any = true;
       break;
     }
@@ -346,92 +340,46 @@ std::string InstallVerifier::GetDebugPolicyProviderName() const {
   return std::string("InstallVerifier");
 }
 
-namespace {
-
-enum MustRemainDisabledOutcome {
-  VERIFIED = 0,
-  NOT_EXTENSION,
-  UNPACKED,
-  ENTERPRISE_POLICY_ALLOWED,
-  FORCED_NOT_VERIFIED,
-  NOT_FROM_STORE,
-  NO_SIGNATURE,
-  NOT_VERIFIED_BUT_NOT_ENFORCING,
-  NOT_VERIFIED,
-  NOT_VERIFIED_BUT_INSTALL_TIME_NEWER_THAN_SIGNATURE,
-  NOT_VERIFIED_BUT_UNKNOWN_ID,
-  COMPONENT,
-
-  // This is used in histograms - do not remove or reorder entries above! Also
-  // the "MAX" item below should always be the last element.
-  MUST_REMAIN_DISABLED_OUTCOME_MAX
-};
-
-void MustRemainDisabledHistogram(MustRemainDisabledOutcome outcome) {
-  UMA_HISTOGRAM_ENUMERATION("ExtensionInstallVerifier.MustRemainDisabled",
-                            outcome, MUST_REMAIN_DISABLED_OUTCOME_MAX);
-}
-
-}  // namespace
-
 bool InstallVerifier::MustRemainDisabled(const Extension* extension,
                                          disable_reason::DisableReason* reason,
                                          base::string16* error) const {
   CHECK(extension);
-  if (!CanUseExtensionApis(*extension)) {
-    MustRemainDisabledHistogram(NOT_EXTENSION);
+  if (!CanUseExtensionApis(*extension))
     return false;
-  }
-  if (Manifest::IsUnpackedLocation(extension->location())) {
-    MustRemainDisabledHistogram(UNPACKED);
+  if (Manifest::IsUnpackedLocation(extension->location()))
     return false;
-  }
-  if (extension->location() == Manifest::COMPONENT) {
-    MustRemainDisabledHistogram(COMPONENT);
+  if (extension->location() == Manifest::COMPONENT)
     return false;
-  }
-  if (AllowedByEnterprisePolicy(extension->id())) {
-    MustRemainDisabledHistogram(ENTERPRISE_POLICY_ALLOWED);
+  if (AllowedByEnterprisePolicy(extension->id()))
     return false;
-  }
 
   bool verified = true;
-  MustRemainDisabledOutcome outcome = VERIFIED;
-  if (base::ContainsKey(InstallSigner::GetForcedNotFromWebstore(),
-                        extension->id())) {
+  if (base::Contains(InstallSigner::GetForcedNotFromWebstore(),
+                     extension->id())) {
     verified = false;
-    outcome = FORCED_NOT_VERIFIED;
   } else if (!IsFromStore(*extension)) {
     verified = false;
-    outcome = NOT_FROM_STORE;
-  } else if (signature_.get() == NULL &&
-             (!bootstrap_check_complete_ ||
-              GetStatus() < VerifyStatus::ENFORCE_STRICT)) {
+  } else if (!signature_ && (!bootstrap_check_complete_ ||
+                             GetStatus() < VerifyStatus::ENFORCE_STRICT)) {
     // If we don't have a signature yet, we'll temporarily consider every
     // extension from the webstore verified to avoid false positives on existing
     // profiles hitting this code for the first time. The InstallVerifier
     // will bootstrap itself once the ExtensionsSystem is ready.
-    outcome = NO_SIGNATURE;
+    // |verified| is already set to true.
   } else if (!IsVerified(extension->id())) {
     // Transient network failures can create a stale signature missing recently
     // added extension ids. To avoid false positives, consider all extensions to
     // be from the webstore unless the signature explicitly lists the extension
     // as invalid.
-    if (signature_.get() &&
-        !base::ContainsKey(signature_->invalid_ids, extension->id()) &&
-        GetStatus() < VerifyStatus::ENFORCE_STRICT) {
-      outcome = NOT_VERIFIED_BUT_UNKNOWN_ID;
-    } else {
+    if (!signature_ ||
+        base::Contains(signature_->invalid_ids, extension->id()) ||
+        GetStatus() >= VerifyStatus::ENFORCE_STRICT) {
       verified = false;
-      outcome = NOT_VERIFIED;
     }
   }
 
-  if (!verified && !ShouldEnforce()) {
+  if (!verified && !ShouldEnforce())
     verified = true;
-    outcome = NOT_VERIFIED_BUT_NOT_ENFORCING;
-  }
-  MustRemainDisabledHistogram(outcome);
 
   if (!verified) {
     DLOG(WARNING) << "Disabling extension " << extension->id() << " ('"
@@ -552,8 +500,8 @@ void InstallVerifier::GarbageCollect() {
 }
 
 bool InstallVerifier::IsVerified(const std::string& id) const {
-  return ((signature_.get() && base::ContainsKey(signature_->ids, id)) ||
-          base::ContainsKey(provisional_, id));
+  return ((signature_.get() && base::Contains(signature_->ids, id)) ||
+          base::Contains(provisional_, id));
 }
 
 void InstallVerifier::BeginFetch() {
@@ -571,7 +519,7 @@ void InstallVerifier::BeginFetch() {
   }
   if (operation.type == InstallVerifier::REMOVE) {
     for (auto i = operation.ids.begin(); i != operation.ids.end(); ++i) {
-      if (base::ContainsKey(ids_to_sign, *i))
+      if (base::Contains(ids_to_sign, *i))
         ids_to_sign.erase(*i);
     }
   } else {  // All other operation types are some form of "ADD".

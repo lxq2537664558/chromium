@@ -64,6 +64,13 @@ chrome.bookmarkManagerPrivate.cut = function(idList, callback) {};
 chrome.bookmarkManagerPrivate.paste = function(parentId, selectedIdList, callback) {};
 
 /**
+ * Whether there are any bookmarks that can be pasted.
+ * @param {string} parentId The ID of the folder to paste into.
+ * @param {function(boolean):void} callback
+ */
+chrome.bookmarkManagerPrivate.canPaste = function(parentId, callback) {};
+
+/**
  * Sorts the children of a given folder.
  * @param {string} parentId The ID of the folder to sort the children of.
  */
@@ -74,8 +81,10 @@ chrome.bookmarkManagerPrivate.sortChildren = function(parentId) {};
  * @param {!Array<string>} idList An array of string-valued ids.
  * @param {number} dragNodeIndex The index of the dragged node in |idList|
  * @param {boolean} isFromTouch True if the drag was initiated from touch.
+ * @param {number} offsetX The offset X of the event
+ * @param {number} offsetY The offset Y of the event
  */
-chrome.bookmarkManagerPrivate.startDrag = function(idList, dragNodeIndex, isFromTouch) {};
+chrome.bookmarkManagerPrivate.startDrag = function(idList, dragNodeIndex, isFromTouch, offsetX, offsetY) {};
 
 /**
  * Performs the drop action of the drag and drop session.

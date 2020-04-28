@@ -27,7 +27,7 @@
 
 namespace blink {
 
-inline SVGStopElement::SVGStopElement(Document& document)
+SVGStopElement::SVGStopElement(Document& document)
     : SVGElement(svg_names::kStopTag, document),
       offset_(MakeGarbageCollected<SVGAnimatedNumber>(
           this,
@@ -40,12 +40,10 @@ inline SVGStopElement::SVGStopElement(Document& document)
   DCHECK(HasCustomStyleCallbacks());
 }
 
-void SVGStopElement::Trace(blink::Visitor* visitor) {
+void SVGStopElement::Trace(Visitor* visitor) {
   visitor->Trace(offset_);
   SVGElement::Trace(visitor);
 }
-
-DEFINE_NODE_FACTORY(SVGStopElement)
 
 namespace {
 
@@ -53,7 +51,7 @@ void InvalidateInstancesAndAncestorResources(SVGStopElement* stop_element) {
   SVGElement::InvalidationGuard invalidation_guard(stop_element);
 
   Element* parent = stop_element->parentElement();
-  if (auto* gradient = ToSVGGradientElementOrNull(parent))
+  if (auto* gradient = DynamicTo<SVGGradientElement>(parent))
     gradient->InvalidateGradient(layout_invalidation_reason::kChildChanged);
 }
 

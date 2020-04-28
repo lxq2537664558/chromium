@@ -20,11 +20,6 @@
 #include "components/viz/common/frame_sinks/copy_output_request.h"
 #include "components/viz/common/quads/compositor_frame.h"
 #include "components/viz/common/resources/single_release_callback.h"
-#include "components/viz/common/switches.h"
-#include "components/viz/host/host_frame_sink_manager.h"
-#include "components/viz/service/frame_sinks/compositor_frame_sink_support.h"
-#include "components/viz/service/frame_sinks/frame_sink_manager_impl.h"
-#include "components/viz/service/surfaces/surface_hittest.h"
 #include "content/browser/compositor/surface_utils.h"
 #include "content/browser/gpu/compositor_util.h"
 #include "content/public/common/content_switches.h"
@@ -50,27 +45,14 @@ DelegatedFrameHost::DelegatedFrameHost(const viz::FrameSinkId& frame_sink_id,
                                        bool should_register_frame_sink_id)
     : frame_sink_id_(frame_sink_id),
       client_(client),
-      enable_viz_(features::IsVizDisplayCompositorEnabled()),
       should_register_frame_sink_id_(should_register_frame_sink_id),
       host_frame_sink_manager_(GetHostFrameSinkManager()),
-      frame_evictor_(std::make_unique<viz::FrameEvictor>(this)),
-      weak_factory_(this) {
-  ImageTransportFactory* factory = ImageTransportFactory::GetInstance();
-  factory->GetContextFactory()->AddObserver(this);
+      frame_evictor_(std::make_unique<viz::FrameEvictor>(this)) {
   DCHECK(host_frame_sink_manager_);
-  viz::ReportFirstSurfaceActivation should_report_first_surface_activation =
-      viz::ReportFirstSurfaceActivation::kNo;
-#ifdef OS_CHROMEOS
-  should_report_first_surface_activation =
-      viz::ReportFirstSurfaceActivation::kYes;
-#endif
   host_frame_sink_manager_->RegisterFrameSinkId(
-      frame_sink_id_, this, should_report_first_surface_activation);
-  host_frame_sink_manager_->EnableSynchronizationReporting(
-      frame_sink_id_, "Compositing.MainFrameSynchronization.Duration");
+      frame_sink_id_, this, viz::ReportFirstSurfaceActivation::kNo);
   host_frame_sink_manager_->SetFrameSinkDebugLabel(frame_sink_id_,
                                                    "DelegatedFrameHost");
-  CreateCompositorFrameSinkSupport();
   frame_evictor_->SetVisible(client_->DelegatedFrameHostIsVisible());
 
   stale_content_layer_ =
@@ -81,28 +63,32 @@ DelegatedFrameHost::DelegatedFrameHost(const viz::FrameSinkId& frame_sink_id,
 
 DelegatedFrameHost::~DelegatedFrameHost() {
   DCHECK(!compositor_);
-  ImageTransportFactory* factory = ImageTransportFactory::GetInstance();
-  factory->GetContextFactory()->RemoveObserver(this);
 
-  ResetCompositorFrameSinkSupport();
   DCHECK(host_frame_sink_manager_);
   host_frame_sink_manager_->InvalidateFrameSinkId(frame_sink_id_);
+}
+
+void DelegatedFrameHost::AddObserverForTesting(Observer* observer) {
+  observers_.AddObserver(observer);
+}
+
+void DelegatedFrameHost::RemoveObserverForTesting(Observer* observer) {
+  observers_.RemoveObserver(observer);
 }
 
 void DelegatedFrameHost::WasShown(
     const viz::LocalSurfaceId& new_local_surface_id,
     const gfx::Size& new_dip_size,
-    bool record_presentation_time,
-    base::TimeTicks tab_switch_start_time) {
+    const base::Optional<RecordContentToVisibleTimeRequest>&
+        record_tab_switch_time_request) {
   // Cancel any pending frame eviction and unpause it if paused.
-  frame_eviction_state_ = FrameEvictionState::kNotStarted;
+  SetFrameEvictionStateAndNotifyObservers(FrameEvictionState::kNotStarted);
 
   frame_evictor_->SetVisible(true);
-  if (record_presentation_time && compositor_ &&
-      !tab_switch_start_time.is_null()) {
+  if (record_tab_switch_time_request && compositor_) {
     compositor_->RequestPresentationTimeForNextFrame(
-        tab_switch_time_recorder_.BeginTimeRecording(
-            tab_switch_start_time, true /* has_saved_frames */,
+        tab_switch_time_recorder_.TabWasShown(
+            true /* has_saved_frames */, record_tab_switch_time_request.value(),
             base::TimeTicks::Now()));
   }
 
@@ -122,7 +108,14 @@ bool DelegatedFrameHost::HasSavedFrame() const {
   return frame_evictor_->has_surface();
 }
 
-void DelegatedFrameHost::WasHidden() {
+void DelegatedFrameHost::WasHidden(HiddenCause cause) {
+  tab_switch_time_recorder_.TabWasHidden();
+#if defined(OS_WIN)
+  // Ignore if the native window was occluded.
+  // Windows needs the frame host to display tab previews.
+  if (cause == HiddenCause::kOccluded)
+    return;
+#endif
   frame_evictor_->SetVisible(false);
 }
 
@@ -189,54 +182,18 @@ void DelegatedFrameHost::CopyFromCompositingSurfaceInternal(
       viz::SurfaceId(frame_sink_id_, local_surface_id_), std::move(request));
 }
 
+void DelegatedFrameHost::SetFrameEvictionStateAndNotifyObservers(
+    FrameEvictionState frame_eviction_state) {
+  if (frame_eviction_state_ == frame_eviction_state)
+    return;
+
+  frame_eviction_state_ = frame_eviction_state;
+  for (auto& obs : observers_)
+    obs.OnFrameEvictionStateChanged(frame_eviction_state_);
+}
+
 bool DelegatedFrameHost::CanCopyFromCompositingSurface() const {
   return local_surface_id_.is_valid();
-}
-
-bool DelegatedFrameHost::TransformPointToLocalCoordSpaceLegacy(
-    const gfx::PointF& point,
-    const viz::SurfaceId& original_surface,
-    gfx::PointF* transformed_point) {
-  viz::SurfaceId surface_id(frame_sink_id_, local_surface_id_);
-  if (!surface_id.is_valid() || enable_viz_)
-    return false;
-  *transformed_point = point;
-  if (original_surface == surface_id)
-    return true;
-
-  viz::SurfaceHittest hittest(nullptr,
-                              GetFrameSinkManager()->surface_manager());
-  return hittest.TransformPointToTargetSurface(original_surface, surface_id,
-                                               transformed_point);
-}
-
-void DelegatedFrameHost::SetNeedsBeginFrames(bool needs_begin_frames) {
-  if (enable_viz_) {
-    NOTIMPLEMENTED();
-    return;
-  }
-
-  needs_begin_frame_ = needs_begin_frames;
-  support_->SetNeedsBeginFrame(needs_begin_frames);
-}
-
-void DelegatedFrameHost::SetWantsAnimateOnlyBeginFrames() {
-  if (enable_viz_) {
-    NOTIMPLEMENTED();
-    return;
-  }
-
-  support_->SetWantsAnimateOnlyBeginFrames();
-}
-
-void DelegatedFrameHost::DidNotProduceFrame(const viz::BeginFrameAck& ack) {
-  if (enable_viz_) {
-    NOTIMPLEMENTED();
-    return;
-  }
-
-  DCHECK(!ack.has_damage);
-  support_->DidNotProduceFrame(ack);
 }
 
 bool DelegatedFrameHost::HasPrimarySurface() const {
@@ -278,12 +235,10 @@ void DelegatedFrameHost::EmbedSurface(
     return;
   }
 
-#ifdef OS_CHROMEOS
-  if (seen_first_activation_)
+  // Ignore empty frames. Extensions often create empty background page frames
+  // which shouldn't count against the saved frames.
+  if (!new_dip_size.IsEmpty())
     frame_evictor_->OnNewSurfaceEmbedded();
-#else
-  frame_evictor_->OnNewSurfaceEmbedded();
-#endif
 
   if (!primary_surface_id ||
       primary_surface_id->local_surface_id() != local_surface_id_) {
@@ -317,57 +272,13 @@ SkColor DelegatedFrameHost::GetGutterColor() const {
   return client_->DelegatedFrameHostGetGutterColor();
 }
 
-void DelegatedFrameHost::DidCreateNewRendererCompositorFrameSink(
-    viz::mojom::CompositorFrameSinkClient* renderer_compositor_frame_sink) {
-  ResetCompositorFrameSinkSupport();
-  renderer_compositor_frame_sink_ = renderer_compositor_frame_sink;
-  CreateCompositorFrameSinkSupport();
-}
-
-void DelegatedFrameHost::SubmitCompositorFrame(
-    const viz::LocalSurfaceId& local_surface_id,
-    viz::CompositorFrame frame,
-    base::Optional<viz::HitTestRegionList> hit_test_region_list) {
-  support_->SubmitCompositorFrame(local_surface_id, std::move(frame),
-                                  std::move(hit_test_region_list));
-}
-
-void DelegatedFrameHost::DidReceiveCompositorFrameAck(
-    const std::vector<viz::ReturnedResource>& resources) {
-  renderer_compositor_frame_sink_->DidReceiveCompositorFrameAck(resources);
-}
-
-void DelegatedFrameHost::ReclaimResources(
-    const std::vector<viz::ReturnedResource>& resources) {
-  renderer_compositor_frame_sink_->ReclaimResources(resources);
-}
-
-void DelegatedFrameHost::OnBeginFramePausedChanged(bool paused) {
-  if (renderer_compositor_frame_sink_)
-    renderer_compositor_frame_sink_->OnBeginFramePausedChanged(paused);
-}
-
 void DelegatedFrameHost::OnFirstSurfaceActivation(
     const viz::SurfaceInfo& surface_info) {
-#ifdef OS_CHROMEOS
-  if (!seen_first_activation_)
-    frame_evictor_->OnNewSurfaceEmbedded();
-  seen_first_activation_ = true;
-#else
   NOTREACHED();
-#endif
 }
 
 void DelegatedFrameHost::OnFrameTokenChanged(uint32_t frame_token) {
   client_->OnFrameTokenChanged(frame_token);
-}
-
-void DelegatedFrameHost::OnBeginFrame(
-    const viz::BeginFrameArgs& args,
-    const viz::PresentationFeedbackMap& feedbacks) {
-  if (renderer_compositor_frame_sink_)
-    renderer_compositor_frame_sink_->OnBeginFrame(args, feedbacks);
-  client_->OnBeginFrame(args.frame_time);
 }
 
 void DelegatedFrameHost::ResetFallbackToFirstNavigationSurface() {
@@ -406,7 +317,8 @@ void DelegatedFrameHost::EvictDelegatedFrame() {
   // CrOS overview mode.
   if (client_->ShouldShowStaleContentOnEviction() &&
       !stale_content_layer_->has_external_content()) {
-    frame_eviction_state_ = FrameEvictionState::kPendingEvictionRequests;
+    SetFrameEvictionStateAndNotifyObservers(
+        FrameEvictionState::kPendingEvictionRequests);
     auto callback =
         base::BindOnce(&DelegatedFrameHost::DidCopyStaleContent, GetWeakPtr());
 
@@ -432,12 +344,13 @@ void DelegatedFrameHost::DidCopyStaleContent(
   DCHECK_EQ(result->format(), viz::CopyOutputResult::Format::RGBA_TEXTURE);
 
   DCHECK_NE(frame_eviction_state_, FrameEvictionState::kNotStarted);
-  frame_eviction_state_ = FrameEvictionState::kNotStarted;
+  SetFrameEvictionStateAndNotifyObservers(FrameEvictionState::kNotStarted);
   ContinueDelegatedFrameEviction();
 
   auto transfer_resource = viz::TransferableResource::MakeGL(
       result->GetTextureResult()->mailbox, GL_LINEAR, GL_TEXTURE_2D,
-      result->GetTextureResult()->sync_token);
+      result->GetTextureResult()->sync_token, result->size(),
+      false /* is_overlay_candidate */);
   std::unique_ptr<viz::SingleReleaseCallback> release_callback =
       result->TakeTextureOwnership();
 
@@ -486,11 +399,6 @@ void DelegatedFrameHost::OnCompositingShuttingDown(ui::Compositor* compositor) {
 }
 
 ////////////////////////////////////////////////////////////////////////////////
-// DelegatedFrameHost, ContextFactoryObserver implementation:
-
-void DelegatedFrameHost::OnLostSharedContext() {}
-
-////////////////////////////////////////////////////////////////////////////////
 // DelegatedFrameHost, private:
 
 void DelegatedFrameHost::AttachToCompositor(ui::Compositor* compositor) {
@@ -511,30 +419,6 @@ void DelegatedFrameHost::DetachFromCompositor() {
   if (should_register_frame_sink_id_)
     compositor_->RemoveChildFrameSink(frame_sink_id_);
   compositor_ = nullptr;
-}
-
-void DelegatedFrameHost::CreateCompositorFrameSinkSupport() {
-  if (enable_viz_)
-    return;
-
-  DCHECK(!support_);
-  constexpr bool is_root = false;
-  constexpr bool needs_sync_points = true;
-  DCHECK(host_frame_sink_manager_);
-  support_ = host_frame_sink_manager_->CreateCompositorFrameSinkSupport(
-      this, frame_sink_id_, is_root, needs_sync_points);
-  if (compositor_ && should_register_frame_sink_id_)
-    compositor_->AddChildFrameSink(frame_sink_id_);
-  if (needs_begin_frame_)
-    support_->SetNeedsBeginFrame(true);
-}
-
-void DelegatedFrameHost::ResetCompositorFrameSinkSupport() {
-  if (!support_)
-    return;
-  if (compositor_ && should_register_frame_sink_id_)
-    compositor_->RemoveChildFrameSink(frame_sink_id_);
-  support_.reset();
 }
 
 void DelegatedFrameHost::DidNavigate() {

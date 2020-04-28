@@ -8,7 +8,8 @@
 #include <utility>
 
 #include "base/guid.h"
-#include "mojo/public/cpp/bindings/strong_binding.h"
+#include "mojo/public/cpp/bindings/pending_remote.h"
+#include "mojo/public/cpp/bindings/self_owned_receiver.h"
 
 namespace device {
 
@@ -94,54 +95,90 @@ void FakeHidConnection::SendFeatureReport(uint8_t report_id,
 FakeHidManager::FakeHidManager() {}
 FakeHidManager::~FakeHidManager() = default;
 
-void FakeHidManager::Bind(mojom::HidManagerRequest request) {
-  bindings_.AddBinding(this, std::move(request));
+void FakeHidManager::Bind(mojo::PendingReceiver<mojom::HidManager> receiver) {
+  receivers_.Add(this, std::move(receiver));
 }
 
 // mojom::HidManager implementation:
 void FakeHidManager::GetDevicesAndSetClient(
-    mojom::HidManagerClientAssociatedPtrInfo client,
+    mojo::PendingAssociatedRemote<mojom::HidManagerClient> client,
     GetDevicesCallback callback) {
+  GetDevices(std::move(callback));
+
+  clients_.Add(std::move(client));
+}
+
+void FakeHidManager::GetDevices(GetDevicesCallback callback) {
   std::vector<mojom::HidDeviceInfoPtr> device_list;
   for (auto& map_entry : devices_)
     device_list.push_back(map_entry.second->Clone());
 
   std::move(callback).Run(std::move(device_list));
-
-  mojom::HidManagerClientAssociatedPtr client_ptr;
-  client_ptr.Bind(std::move(client));
-  clients_.AddPtr(std::move(client_ptr));
 }
 
-void FakeHidManager::GetDevices(GetDevicesCallback callback) {
-  // Clients of HidManager in extensions only use GetDevicesAndSetClient().
-  NOTREACHED();
-}
-
-void FakeHidManager::Connect(const std::string& device_guid,
-                             mojom::HidConnectionClientPtr connection_client,
-                             ConnectCallback callback) {
-  if (!base::ContainsKey(devices_, device_guid)) {
-    std::move(callback).Run(nullptr);
+void FakeHidManager::Connect(
+    const std::string& device_guid,
+    mojo::PendingRemote<mojom::HidConnectionClient> connection_client,
+    mojo::PendingRemote<mojom::HidConnectionWatcher> watcher,
+    ConnectCallback callback) {
+  if (!base::Contains(devices_, device_guid)) {
+    std::move(callback).Run(mojo::NullRemote());
     return;
   }
 
-  mojom::HidConnectionPtr connection;
-  mojo::MakeStrongBinding(
+  mojo::PendingRemote<mojom::HidConnection> connection;
+  mojo::MakeSelfOwnedReceiver(
       std::make_unique<FakeHidConnection>(devices_[device_guid]->Clone()),
-      mojo::MakeRequest(&connection));
+      connection.InitWithNewPipeAndPassReceiver());
   std::move(callback).Run(std::move(connection));
 }
 
 mojom::HidDeviceInfoPtr FakeHidManager::CreateAndAddDevice(
+    const std::string& physical_device_id,
+    uint16_t vendor_id,
+    uint16_t product_id,
     const std::string& product_name,
     const std::string& serial_number,
     mojom::HidBusType bus_type) {
-  mojom::HidDeviceInfoPtr device = device::mojom::HidDeviceInfo::New();
+  mojom::HidDeviceInfoPtr device = mojom::HidDeviceInfo::New();
   device->guid = base::GenerateGUID();
+  device->physical_device_id = physical_device_id;
+  device->vendor_id = vendor_id;
+  device->product_id = product_id;
   device->product_name = product_name;
   device->serial_number = serial_number;
   device->bus_type = bus_type;
+  AddDevice(device.Clone());
+  return device;
+}
+
+mojom::HidDeviceInfoPtr FakeHidManager::CreateAndAddDeviceWithTopLevelUsage(
+    const std::string& physical_device_id,
+    uint16_t vendor_id,
+    uint16_t product_id,
+    const std::string& product_name,
+    const std::string& serial_number,
+    mojom::HidBusType bus_type,
+    uint16_t usage_page,
+    uint16_t usage) {
+  mojom::HidDeviceInfoPtr device = mojom::HidDeviceInfo::New();
+  device->guid = base::GenerateGUID();
+  device->physical_device_id = physical_device_id;
+  device->vendor_id = vendor_id;
+  device->product_id = product_id;
+  device->product_name = product_name;
+  device->serial_number = serial_number;
+  device->bus_type = bus_type;
+
+  std::vector<mojom::HidReportDescriptionPtr> input_reports;
+  std::vector<mojom::HidReportDescriptionPtr> output_reports;
+  std::vector<mojom::HidReportDescriptionPtr> feature_reports;
+  std::vector<mojom::HidCollectionInfoPtr> children;
+  device->collections.push_back(mojom::HidCollectionInfo::New(
+      mojom::HidUsageAndPage::New(usage, usage_page), std::vector<uint8_t>(),
+      mojom::kHIDCollectionTypeApplication, std::move(input_reports),
+      std::move(output_reports), std::move(feature_reports),
+      std::move(children)));
   AddDevice(device.Clone());
   return device;
 }
@@ -151,17 +188,15 @@ void FakeHidManager::AddDevice(mojom::HidDeviceInfoPtr device) {
   devices_[guid] = std::move(device);
 
   mojom::HidDeviceInfo* device_info = devices_[guid].get();
-  clients_.ForAllPtrs([device_info](mojom::HidManagerClient* client) {
+  for (auto& client : clients_)
     client->DeviceAdded(device_info->Clone());
-  });
 }
 
 void FakeHidManager::RemoveDevice(const std::string& guid) {
-  if (base::ContainsKey(devices_, guid)) {
+  if (base::Contains(devices_, guid)) {
     mojom::HidDeviceInfo* device_info = devices_[guid].get();
-    clients_.ForAllPtrs([device_info](mojom::HidManagerClient* client) {
+    for (auto& client : clients_)
       client->DeviceRemoved(device_info->Clone());
-    });
     devices_.erase(guid);
   }
 }

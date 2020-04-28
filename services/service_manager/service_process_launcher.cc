@@ -7,8 +7,10 @@
 #include <utility>
 
 #include "base/base_paths.h"
+#include "base/base_switches.h"
 #include "base/bind.h"
 #include "base/command_line.h"
+#include "base/feature_list.h"
 #include "base/location.h"
 #include "base/logging.h"
 #include "base/memory/ptr_util.h"
@@ -21,11 +23,11 @@
 #include "base/strings/string_number_conversions.h"
 #include "base/synchronization/lock.h"
 #include "base/task/post_task.h"
+#include "base/task/thread_pool.h"
 #include "base/task_runner_util.h"
 #include "base/threading/thread.h"
 #include "build/build_config.h"
 #include "mojo/public/cpp/bindings/interface_ptr_info.h"
-#include "mojo/public/cpp/platform/features.h"
 #include "mojo/public/cpp/platform/platform_channel.h"
 #include "mojo/public/cpp/system/core.h"
 #include "mojo/public/cpp/system/invitation.h"
@@ -40,10 +42,6 @@
 
 #if defined(OS_WIN)
 #include "base/win/windows_version.h"
-#endif
-
-#if defined(OS_MACOSX)
-#include "mojo/core/embedder/default_mach_broker.h"
 #endif
 
 namespace service_manager {
@@ -84,7 +82,7 @@ ServiceProcessLauncher::ServiceProcessLauncher(
       service_path_(service_path.empty()
                         ? base::CommandLine::ForCurrentProcess()->GetProgram()
                         : service_path),
-      background_task_runner_(base::CreateSequencedTaskRunnerWithTraits(
+      background_task_runner_(base::ThreadPool::CreateSequencedTaskRunner(
           {base::TaskPriority::USER_VISIBLE, base::WithBaseSyncPrimitives(),
            base::MayBlock()})) {}
 
@@ -107,6 +105,23 @@ mojom::ServicePtr ServiceProcessLauncher::Start(const Identity& target,
       new base::CommandLine(service_path_));
 
   child_command_line->AppendArguments(parent_command_line, false);
+
+  // Add enabled/disabled features from base::FeatureList. These will take
+  // precedence over existing ones (if there is any copied from the
+  // |parent_command_line| above) as they appear later in the arguments list.
+  std::string enabled_features;
+  std::string disabled_features;
+  base::FeatureList::GetInstance()->GetFeatureOverrides(&enabled_features,
+                                                        &disabled_features);
+  if (!enabled_features.empty()) {
+    child_command_line->AppendSwitchASCII(::switches::kEnableFeatures,
+                                          enabled_features);
+  }
+  if (!disabled_features.empty()) {
+    child_command_line->AppendSwitchASCII(::switches::kDisableFeatures,
+                                          disabled_features);
+  }
+
   child_command_line->AppendSwitchASCII(switches::kServiceName, target.name());
 #ifndef NDEBUG
   child_command_line->AppendSwitchASCII("g",
@@ -201,14 +216,8 @@ base::ProcessId ServiceProcessLauncher::ProcessState::LaunchInBackground(
       {STDERR_FILENO, STDERR_FILENO},
   };
 #if defined(OS_MACOSX)
-  if (base::FeatureList::IsEnabled(mojo::features::kMojoChannelMac)) {
-    options.fds_to_remap = fd_mapping;
-    options.mach_ports_for_rendezvous = handle_passing_info;
-  } else {
-    options.fds_to_remap = handle_passing_info;
-    options.fds_to_remap.insert(options.fds_to_remap.end(), fd_mapping.begin(),
-                                fd_mapping.end());
-  }
+  options.fds_to_remap = fd_mapping;
+  options.mach_ports_for_rendezvous = handle_passing_info;
 #else
   handle_passing_info.insert(handle_passing_info.end(), fd_mapping.begin(),
                              fd_mapping.end());
@@ -226,15 +235,7 @@ base::ProcessId ServiceProcessLauncher::ProcessState::LaunchInBackground(
   } else
 #endif
   {
-#if defined(OS_MACOSX)
-    mojo::core::DefaultMachBroker* mach_broker =
-        mojo::core::DefaultMachBroker::Get();
-    base::AutoLock locker(mach_broker->GetLock());
-#endif
     child_process_ = base::LaunchProcess(*child_command_line, options);
-#if defined(OS_MACOSX)
-    mach_broker->ExpectPid(child_process_.Handle());
-#endif
   }
 
   channel.RemoteProcessLaunchAttempted();

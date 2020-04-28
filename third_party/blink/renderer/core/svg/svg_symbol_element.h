@@ -31,11 +31,9 @@ class SVGSymbolElement final : public SVGElement, public SVGFitToViewBox {
   USING_GARBAGE_COLLECTED_MIXIN(SVGSymbolElement);
 
  public:
-  DECLARE_NODE_FACTORY(SVGSymbolElement);
-
   explicit SVGSymbolElement(Document&);
 
-  void Trace(blink::Visitor*) override;
+  void Trace(Visitor*) override;
 
  private:
   void SvgAttributeChanged(const QualifiedName&) override;

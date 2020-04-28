@@ -24,13 +24,13 @@ OriginPolicyInterstitialPage::OriginPolicyInterstitialPage(
     content::WebContents* web_contents,
     const GURL& request_url,
     std::unique_ptr<SecurityInterstitialControllerClient> controller,
-    content::OriginPolicyErrorReason error_reason)
+    network::OriginPolicyState error_reason)
     : SecurityInterstitialPage(web_contents,
                                request_url,
                                std::move(controller)),
       error_reason_(error_reason) {}
 
-OriginPolicyInterstitialPage::~OriginPolicyInterstitialPage() {}
+OriginPolicyInterstitialPage::~OriginPolicyInterstitialPage() = default;
 
 void OriginPolicyInterstitialPage::OnInterstitialClosing() {}
 
@@ -45,18 +45,18 @@ void OriginPolicyInterstitialPage::PopulateInterstitialStrings(
   // User may choose to ignore the warning & proceed to the site.
   load_time_data->SetBoolean("overridable", true);
 
-  // Custom messages depending on the OriginPolicyErrorReason:
-  int explanation_paragraph_id = IDS_ORIGIN_POLICY_EXPLANATION_OTHER;
+  // Custom messages depending on the OriginPolicyState:
+  int explanation_paragraph_id = 0;
   switch (error_reason_) {
-    case content::OriginPolicyErrorReason::kCannotLoadPolicy:
+    case network::OriginPolicyState::kCannotLoadPolicy:
       explanation_paragraph_id = IDS_ORIGIN_POLICY_EXPLANATION_CANNOT_LOAD;
       break;
-    case content::OriginPolicyErrorReason::kPolicyShouldNotRedirect:
+    case network::OriginPolicyState::kCannotParseHeader:
       explanation_paragraph_id =
-          IDS_ORIGIN_POLICY_EXPLANATION_SHOULD_NOT_REDIRECT;
+          IDS_ORIGIN_POLICY_EXPLANATION_CANNOT_PARSE_HEADER;
       break;
-    case content::OriginPolicyErrorReason::kOther:
-      explanation_paragraph_id = IDS_ORIGIN_POLICY_EXPLANATION_OTHER;
+    default:
+      NOTREACHED();
       break;
   }
 
@@ -117,7 +117,8 @@ void OriginPolicyInterstitialPage::CommandReceived(const std::string& command) {
 }
 
 void OriginPolicyInterstitialPage::OnProceed() {
-  content::OriginPolicyAddExceptionFor(request_url());
+  content::OriginPolicyAddExceptionFor(web_contents()->GetBrowserContext(),
+                                       request_url());
   web_contents()->GetController().Reload(content::ReloadType::NORMAL, true);
 }
 

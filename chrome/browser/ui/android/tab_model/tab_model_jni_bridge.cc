@@ -11,6 +11,7 @@
 #include "base/android/jni_weak_ref.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/time/time.h"
+#include "chrome/android/chrome_jni_headers/TabModelJniBridge_jni.h"
 #include "chrome/browser/android/tab_android.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/profiles/profile.h"
@@ -22,7 +23,6 @@
 #include "chrome/browser/ui/browser_navigator_params.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/resource_request_body_android.h"
-#include "jni/TabModelJniBridge_jni.h"
 #include "ui/base/window_open_disposition.h"
 
 using base::android::AttachCurrentThread;
@@ -34,11 +34,6 @@ using content::WebContents;
 namespace {
 
 static Profile* FindProfile(jboolean is_incognito) {
-  if (g_browser_process == NULL ||
-      g_browser_process->profile_manager() == NULL) {
-    LOG(ERROR) << "Browser process or profile manager not initialized";
-    return NULL;
-  }
   Profile* profile = ProfileManager::GetActiveUserProfile();
   if (is_incognito)
     return profile->GetOffTheRecordProfile();
@@ -77,6 +72,9 @@ void TabModelJniBridge::TabAddedToModel(JNIEnv* env,
   TabAndroid* tab = TabAndroid::GetNativeTab(env, jtab);
   if (tab)
     tab->SetWindowSessionID(GetSessionId());
+
+  if (IsOffTheRecord())
+    UMA_HISTOGRAM_COUNTS_100("Tab.Count.Incognito", GetTabCount());
 }
 
 int TabModelJniBridge::GetTabCount() const {
@@ -126,11 +124,8 @@ void TabModelJniBridge::HandlePopupNavigation(TabAndroid* parent,
     jinitiator_origin =
         ConvertUTF8ToJavaString(env, params->initiator_origin->Serialize());
   }
-  ScopedJavaLocalRef<jobject> jpost_data;
-  if (params->uses_post && params->post_data) {
-    jpost_data =
-        content::ConvertResourceRequestBodyToJavaObject(env, params->post_data);
-  }
+  ScopedJavaLocalRef<jobject> jpost_data =
+      content::ConvertResourceRequestBodyToJavaObject(env, params->post_data);
   Java_TabModelJniBridge_openNewTab(
       env, jobj, parent->GetJavaObject(), jurl, jinitiator_origin, jheaders,
       jpost_data, static_cast<int>(disposition), params->created_with_opener,

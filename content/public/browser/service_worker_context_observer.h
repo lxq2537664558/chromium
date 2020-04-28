@@ -8,8 +8,9 @@
 #include "url/gurl.h"
 
 namespace content {
-struct ConsoleMessage;
 class ServiceWorkerContext;
+struct ConsoleMessage;
+struct ServiceWorkerRunningInfo;
 
 class ServiceWorkerContextObserver {
  public:
@@ -19,6 +20,13 @@ class ServiceWorkerContextObserver {
   // resolved, which happens before the service worker registration is persisted
   // to disk.
   virtual void OnRegistrationCompleted(const GURL& scope) {}
+
+  // Called after a service worker registration is persisted to storage with
+  // registration ID |registration_id| and scope |scope|.
+  //
+  // This happens after OnRegistrationCompleted().
+  virtual void OnRegistrationStored(int64_t registration_id,
+                                    const GURL& scope) {}
 
   // Called when the service worker with id |version_id| changes status to
   // activated.
@@ -31,15 +39,18 @@ class ServiceWorkerContextObserver {
   // Called when the service worker with id |version_id| starts or stops
   // running.
   //
-  // This function is currently only called after a worker finishes
+  // These functions are currently only called after a worker finishes
   // starting/stopping or the version is destroyed before finishing
   // stopping. That is, a worker in the process of starting is not yet
-  // considered running, even if it's executing JavaScript. See TODO in
-  // ServiceWorkerContextWrapper::OnRunningStateChanged.
-  virtual void OnVersionRunningStatusChanged(
-      content::ServiceWorkerContext* context,
+  // considered running, even if it's executing JavaScript.
+  //
+  // TODO(minggang): Create a new observer to listen to the events when the
+  // process of the service worker is allocated/released, instead of using the
+  // running status of the embedded worker.
+  virtual void OnVersionStartedRunning(
       int64_t version_id,
-      bool is_running) {}
+      const ServiceWorkerRunningInfo& running_info) {}
+  virtual void OnVersionStoppedRunning(int64_t version_id) {}
 
   // Called when there are no more controllees for the service worker with id
   // |version_id|.
@@ -51,7 +62,7 @@ class ServiceWorkerContextObserver {
                                       const ConsoleMessage& message) {}
 
   // Called when |context| is destroyed. Observers must no longer use |context|.
-  virtual void OnDestruct(content::ServiceWorkerContext* context) {}
+  virtual void OnDestruct(ServiceWorkerContext* context) {}
 
  protected:
   virtual ~ServiceWorkerContextObserver() {}

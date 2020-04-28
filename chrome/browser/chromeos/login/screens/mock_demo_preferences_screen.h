@@ -9,7 +9,7 @@
 
 #include "base/macros.h"
 #include "chrome/browser/chromeos/login/screens/demo_preferences_screen.h"
-#include "chrome/browser/chromeos/login/screens/demo_preferences_screen_view.h"
+#include "chrome/browser/ui/webui/chromeos/login/demo_preferences_screen_handler.h"
 #include "testing/gmock/include/gmock/gmock.h"
 
 namespace chromeos {
@@ -20,8 +20,8 @@ class MockDemoPreferencesScreen : public DemoPreferencesScreen {
                             const ScreenExitCallback& exit_callback);
   ~MockDemoPreferencesScreen() override;
 
-  MOCK_METHOD0(Show, void());
-  MOCK_METHOD0(Hide, void());
+  MOCK_METHOD0(ShowImpl, void());
+  MOCK_METHOD0(HideImpl, void());
 
   void ExitScreen(Result result);
 

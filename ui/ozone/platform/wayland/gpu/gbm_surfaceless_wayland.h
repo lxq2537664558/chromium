@@ -11,25 +11,25 @@
 #include "base/memory/weak_ptr.h"
 #include "ui/gfx/native_widget_types.h"
 #include "ui/gl/gl_surface_egl.h"
+#include "ui/ozone/platform/wayland/gpu/wayland_surface_gpu.h"
 #include "ui/ozone/public/overlay_plane.h"
 #include "ui/ozone/public/swap_completion_callback.h"
 
 namespace ui {
 
-class WaylandConnectionProxy;
-class WaylandSurfaceFactory;
+class WaylandBufferManagerGpu;
 
 // A GLSurface for Wayland Ozone platform that uses surfaceless drawing. Drawing
 // and displaying happens directly through NativePixmap buffers. CC would call
 // into SurfaceFactoryOzone to allocate the buffers and then call
 // ScheduleOverlayPlane(..) to schedule the buffer for presentation.
-class GbmSurfacelessWayland : public gl::SurfacelessEGL {
+class GbmSurfacelessWayland : public gl::SurfacelessEGL,
+                              public WaylandSurfaceGpu {
  public:
-  GbmSurfacelessWayland(WaylandSurfaceFactory* surface_factory,
-                        WaylandConnectionProxy* connection,
+  GbmSurfacelessWayland(WaylandBufferManagerGpu* buffer_manager,
                         gfx::AcceleratedWidget widget);
 
-  void QueueOverlayPlane(OverlayPlane plane);
+  void QueueOverlayPlane(OverlayPlane plane, uint32_t buffer_id);
 
   // gl::GLSurface:
   bool ScheduleOverlayPlane(int z_order,
@@ -40,7 +40,6 @@ class GbmSurfacelessWayland : public gl::SurfacelessEGL {
                             bool enable_blend,
                             std::unique_ptr<gfx::GpuFence> gpu_fence) override;
   bool IsOffscreen() override;
-  bool SupportsPresentationCallback() override;
   bool SupportsAsyncSwap() override;
   bool SupportsPostSubBuffer() override;
   gfx::SwapResult PostSubBuffer(int x,
@@ -58,13 +57,19 @@ class GbmSurfacelessWayland : public gl::SurfacelessEGL {
                           PresentationCallback presentation_callback) override;
   EGLConfig GetConfig() override;
   void SetRelyOnImplicitSync() override;
-
-  void OnSubmission(uint32_t buffer_id, const gfx::SwapResult& swap_result);
-  void OnPresentation(uint32_t buffer_id,
-                      const gfx::PresentationFeedback& feedback);
+  gfx::SurfaceOrigin GetOrigin() const override;
 
  private:
+  FRIEND_TEST_ALL_PREFIXES(WaylandSurfaceFactoryTest,
+                           GbmSurfacelessWaylandCheckOrderOfCallbacksTest);
+
   ~GbmSurfacelessWayland() override;
+
+  // WaylandSurfaceGpu overrides:
+  void OnSubmission(uint32_t buffer_id,
+                    const gfx::SwapResult& swap_result) override;
+  void OnPresentation(uint32_t buffer_id,
+                      const gfx::PresentationFeedback& feedback) override;
 
   struct PendingFrame {
     PendingFrame();
@@ -87,14 +92,21 @@ class GbmSurfacelessWayland : public gl::SurfacelessEGL {
     PresentationCallback presentation_callback;
   };
 
+  struct PlaneData {
+    OverlayPlane plane;
+    const uint32_t buffer_id;
+  };
+
   void SubmitFrame();
 
   EGLSyncKHR InsertFence(bool implicit);
   void FenceRetired(PendingFrame* frame);
 
-  WaylandSurfaceFactory* const surface_factory_;
-  WaylandConnectionProxy* const connection_;
-  std::vector<OverlayPlane> planes_;
+  // Sets a flag that skips glFlush step in unittests.
+  void SetNoGLFlushForTests();
+
+  WaylandBufferManagerGpu* const buffer_manager_;
+  std::vector<PlaneData> planes_;
 
   // The native surface. Deleting this is allowed to free the EGLNativeWindow.
   gfx::AcceleratedWidget widget_;
@@ -104,6 +116,8 @@ class GbmSurfacelessWayland : public gl::SurfacelessEGL {
   bool has_implicit_external_sync_;
   bool last_swap_buffers_result_ = true;
   bool use_egl_fence_sync_ = true;
+
+  bool no_gl_flush_for_tests_ = false;
 
   base::WeakPtrFactory<GbmSurfacelessWayland> weak_factory_;
 

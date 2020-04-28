@@ -9,7 +9,8 @@
 
 #include "ash/host/ash_window_tree_host_mirroring_delegate.h"
 #include "ash/host/root_window_transformer.h"
-#include "base/logging.h"
+#include "base/check.h"
+#include "base/notreached.h"
 #include "base/stl_util.h"
 #include "ui/aura/window.h"
 #include "ui/aura/window_event_dispatcher.h"
@@ -87,17 +88,9 @@ void AshWindowTreeHostUnified::RegisterMirroringHost(
   aura::Window* src_root = mirroring_ash_host->AsWindowTreeHost()->window();
   src_root->SetEventTargeter(
       std::make_unique<UnifiedEventTargeter>(src_root, window(), delegate_));
-  DCHECK(!base::ContainsValue(mirroring_hosts_, mirroring_ash_host));
+  DCHECK(!base::Contains(mirroring_hosts_, mirroring_ash_host));
   mirroring_hosts_.push_back(mirroring_ash_host);
   mirroring_ash_host->AsWindowTreeHost()->window()->AddObserver(this);
-}
-
-void AshWindowTreeHostUnified::SetBoundsInPixels(
-    const gfx::Rect& bounds,
-    const viz::LocalSurfaceIdAllocation& local_surface_id_allocation) {
-  AshWindowTreeHostPlatform::SetBoundsInPixels(bounds,
-                                               local_surface_id_allocation);
-  OnHostResizedInPixels(bounds.size());
 }
 
 void AshWindowTreeHostUnified::SetCursorNative(gfx::NativeCursor cursor) {

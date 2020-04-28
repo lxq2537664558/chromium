@@ -4,7 +4,7 @@
 
 #include "chrome/browser/ui/translate/translate_bubble_test_utils.h"
 
-#include "base/logging.h"
+#include "base/check_op.h"
 #include "chrome/browser/ui/translate/translate_bubble_model.h"
 #include "chrome/browser/ui/views/translate/translate_bubble_view.h"
 #include "ui/events/keycodes/dom/dom_code.h"
@@ -27,7 +27,7 @@ void PressTranslate(Browser* browser) {
   DCHECK(bubble);
 
   views::LabelButton button(nullptr, base::string16());
-  button.set_id(TranslateBubbleView::BUTTON_ID_TRANSLATE);
+  button.SetID(TranslateBubbleView::BUTTON_ID_TRANSLATE);
 
   bubble->ButtonPressed(&button,
                         ui::KeyEvent(ui::ET_KEY_PRESSED, ui::VKEY_RETURN,
@@ -40,7 +40,7 @@ void PressRevert(Browser* browser) {
   DCHECK(bubble);
 
   views::LabelButton button(nullptr, base::string16());
-  button.set_id(TranslateBubbleView::BUTTON_ID_SHOW_ORIGINAL);
+  button.SetID(TranslateBubbleView::BUTTON_ID_SHOW_ORIGINAL);
 
   bubble->ButtonPressed(&button,
                         ui::KeyEvent(ui::ET_KEY_PRESSED, ui::VKEY_RETURN,

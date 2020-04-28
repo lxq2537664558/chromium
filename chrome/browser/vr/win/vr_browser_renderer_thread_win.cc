@@ -29,7 +29,15 @@ constexpr base::TimeDelta kWebVrInitialFrameTimeout =
 constexpr base::TimeDelta kWebVrSpinnerTimeout =
     base::TimeDelta::FromSeconds(2);
 
+constexpr float kEpsilon = 0.1f;
+constexpr float kMaxPosition = 1000000;
+constexpr float kMinPosition = -kMaxPosition;
 bool g_frame_timeout_ui_disabled_for_testing_ = false;
+
+bool InRange(float val, float min = kMinPosition, float max = kMaxPosition) {
+  return val > min && val < max;
+}
+
 }  // namespace
 
 namespace vr {
@@ -79,7 +87,7 @@ void VRBrowserRendererThreadWin::SetWebXrPresenting(bool presenting) {
     return;
 
   if (presenting) {
-    compositor_->CreateImmersiveOverlay(mojo::MakeRequest(&overlay_));
+    compositor_->CreateImmersiveOverlay(overlay_.BindNewPipeAndPassReceiver());
     StartWebXrTimeout();
   } else {
     StopWebXrTimeout();
@@ -87,12 +95,15 @@ void VRBrowserRendererThreadWin::SetWebXrPresenting(bool presenting) {
 }
 
 void VRBrowserRendererThreadWin::StartWebXrTimeout() {
-  waiting_for_first_frame_ = true;
+  frame_timeout_running_ = true;
   overlay_->SetOverlayAndWebXRVisibility(draw_state_.ShouldDrawUI(),
                                          draw_state_.ShouldDrawWebXR());
 
-  overlay_->RequestNotificationOnWebXrSubmitted(base::BindOnce(
-      &VRBrowserRendererThreadWin::OnWebXRSubmitted, base::Unretained(this)));
+  if (!waiting_for_webxr_frame_) {
+    waiting_for_webxr_frame_ = true;
+    overlay_->RequestNotificationOnWebXrSubmitted(base::BindOnce(
+        &VRBrowserRendererThreadWin::OnWebXRSubmitted, base::Unretained(this)));
+  }
 
   webxr_spinner_timeout_closure_.Reset(base::BindOnce(
       &VRBrowserRendererThreadWin::OnWebXrTimeoutImminent,
@@ -116,7 +127,7 @@ void VRBrowserRendererThreadWin::StopWebXrTimeout() {
   if (!webxr_frame_timeout_closure_.IsCancelled())
     webxr_frame_timeout_closure_.Cancel();
   OnSpinnerVisibilityChanged(false);
-  waiting_for_first_frame_ = false;
+  frame_timeout_running_ = false;
 }
 
 int VRBrowserRendererThreadWin::GetNextRequestId() {
@@ -136,15 +147,9 @@ void VRBrowserRendererThreadWin::OnWebXrTimedOut() {
   scheduler_ui_->OnWebXrTimedOut();
 }
 
-void VRBrowserRendererThreadWin::SetVisibleExternalPromptNotification(
-    ExternalPromptNotificationType prompt) {
-  if (!draw_state_.SetPrompt(prompt))
-    return;
-
+void VRBrowserRendererThreadWin::UpdateOverlayState() {
   if (draw_state_.ShouldDrawUI())
     StartOverlay();
-
-  ui_->SetVisibleExternalPromptNotification(prompt);
 
   if (overlay_)
     overlay_->SetOverlayAndWebXRVisibility(draw_state_.ShouldDrawUI(),
@@ -159,24 +164,59 @@ void VRBrowserRendererThreadWin::SetVisibleExternalPromptNotification(
   }
 }
 
-void VRBrowserRendererThreadWin::SetIndicatorsVisible(bool visible) {
-  if (!draw_state_.SetIndicatorsVisible(visible))
+void VRBrowserRendererThreadWin::SetFramesThrottled(bool throttled) {
+  if (frames_throttled_ == throttled)
     return;
 
-  if (draw_state_.ShouldDrawUI())
-    StartOverlay();
+  frames_throttled_ = throttled;
 
-  if (overlay_)
-    overlay_->SetOverlayAndWebXRVisibility(draw_state_.ShouldDrawUI(),
-                                           draw_state_.ShouldDrawWebXR());
-  if (draw_state_.ShouldDrawUI()) {
-    if (overlay_)  // False only while testing
-      overlay_->RequestNextOverlayPose(
-          base::BindOnce(&VRBrowserRendererThreadWin::OnPose,
-                         base::Unretained(this), GetNextRequestId()));
+  if (g_frame_timeout_ui_disabled_for_testing_)
+    return;
+
+  // TODO(crbug.com/1014764): If we try to re-start the timeouts after UI has
+  // already been shown (e.g. a user takes their headset off for a permissions
+  // prompt). Then the prompt UI doesn't seem to be dismissed immediately.
+  if (!waiting_for_webxr_frame_)
+    return;
+
+  if (frames_throttled_) {
+    StopWebXrTimeout();
+
+    // TODO(alcooper): This is not necessarily the best thing to show, but it's
+    // the best that we have right now.  It ensures that we submit *something*
+    // rather than letting the default system "Stalled" UI take over, without
+    // showing a message that the page is behaving badly.
+    OnWebXrTimeoutImminent();
   } else {
-    StopOverlay();
+    StartWebXrTimeout();
   }
+}
+
+void VRBrowserRendererThreadWin::SetVisibleExternalPromptNotification(
+    ExternalPromptNotificationType prompt) {
+  if (!draw_state_.SetPrompt(prompt))
+    return;
+
+  UpdateOverlayState();
+
+  if (!ui_) {
+    // If the ui is dismissed, make sure that we don't *actually* have a prompt
+    // state that we needed to set.
+    DCHECK(prompt == ExternalPromptNotificationType::kPromptNone);
+    return;
+  }
+
+  ui_->SetVisibleExternalPromptNotification(prompt);
+}
+
+void VRBrowserRendererThreadWin::SetIndicatorsVisible(bool visible) {
+  if (draw_state_.SetIndicatorsVisible(visible))
+    UpdateOverlayState();
+}
+
+void VRBrowserRendererThreadWin::OnSpinnerVisibilityChanged(bool visible) {
+  if (draw_state_.SetSpinnerVisible(visible))
+    UpdateOverlayState();
 }
 
 void VRBrowserRendererThreadWin::SetCapturingState(
@@ -305,31 +345,11 @@ void VRBrowserRendererThreadWin::StartOverlay() {
   started_ = true;
 }
 
-void VRBrowserRendererThreadWin::OnSpinnerVisibilityChanged(bool visible) {
-  if (!draw_state_.SetSpinnerVisible(visible))
-    return;
-  if (draw_state_.ShouldDrawUI()) {
-    StartOverlay();
-  }
-
-  if (overlay_) {
-    overlay_->SetOverlayAndWebXRVisibility(draw_state_.ShouldDrawUI(),
-                                           draw_state_.ShouldDrawWebXR());
-  }
-
-  if (draw_state_.ShouldDrawUI()) {
-    if (overlay_)  // False only while testing.
-      overlay_->RequestNextOverlayPose(
-          base::BindOnce(&VRBrowserRendererThreadWin::OnPose,
-                         base::Unretained(this), GetNextRequestId()));
-  } else {
-    StopOverlay();
-  }
-}
-
 void VRBrowserRendererThreadWin::OnWebXRSubmitted() {
+  waiting_for_webxr_frame_ = false;
   if (scheduler_ui_)
     scheduler_ui_->OnWebXrFrameAvailable();
+
   StopWebXrTimeout();
 }
 
@@ -339,53 +359,40 @@ device::mojom::XRFrameDataPtr ValidateFrameData(
   ret->pose = device::mojom::VRPose::New();
 
   if (data->pose) {
-    if (data->pose->orientation && data->pose->orientation->size() == 4) {
-      float length = 0;
-      for (int i = 0; i < 4; ++i) {
-        length += (*data->pose->orientation)[i] * (*data->pose->orientation)[i];
-      }
-
-      float kEpsilson = 0.1f;
-      if (abs(length - 1) < kEpsilson) {
-        ret->pose->orientation = std::vector<float>{0, 0, 0, 1};
-        for (int i = 0; i < 4; ++i) {
-          (*ret->pose->orientation)[i] = (*data->pose->orientation)[i] / length;
-        }
+    if (data->pose->orientation) {
+      if (abs(data->pose->orientation->Length() - 1) < kEpsilon) {
+        ret->pose->orientation = data->pose->orientation->Normalized();
       }
     }
 
-    if (data->pose->position && data->pose->position->size() == 3) {
+    if (data->pose->position) {
       ret->pose->position = data->pose->position;
-      // We'll never give position values outside this range.
-      float kMaxPosition = 1000000;
-      float kMinPosition = -kMaxPosition;
-      for (int i = 0; i < 3; ++i) {
-        if (!((*ret->pose->position)[i] < kMaxPosition) ||
-            !((*ret->pose->position)[i] > kMinPosition)) {
-          ret->pose->position = base::nullopt;
-          // If testing with unexpectedly high values, catch on debug builds
-          // rather than silently change data.  On release builds its better to
-          // be safe and validate.
-          DCHECK(false);
-          break;
-        }
+
+      bool any_out_of_range = !(InRange(ret->pose->position->x()) &&
+                                InRange(ret->pose->position->y()) &&
+                                InRange(ret->pose->position->z()));
+      if (any_out_of_range) {
+        ret->pose->position = base::nullopt;
+        // If testing with unexpectedly high values, catch on debug builds
+        // rather than silently change data.  On release builds its better to
+        // be safe and validate.
+        DCHECK(false);
       }
     }
+  }  // if (data->pose)
 
-    if (!ret->pose->orientation) {
-      ret->pose->orientation = std::vector<float>{0, 0, 0, 1};
-    }
-
-    if (!ret->pose->position) {
-      ret->pose->position = std::vector<float>{0, 0, 0};
-    }
-
-    ret->frame_id = data->frame_id;
-
-    // Frame data has several other fields that we are ignoring.  If they are
-    // used, validate them before use.
+  if (!ret->pose->orientation) {
+    ret->pose->orientation = gfx::Quaternion();
   }
 
+  if (!ret->pose->position) {
+    ret->pose->position = gfx::Point3F();
+  }
+
+  ret->frame_id = data->frame_id;
+
+  // Frame data has several other fields that we are ignoring.  If they are
+  // used, validate them before use.
   return ret;
 }
 
@@ -412,19 +419,15 @@ void VRBrowserRendererThreadWin::OnPose(int request_id,
   DCHECK(data->pose);
   DCHECK(data->pose->orientation);
   DCHECK(data->pose->position);
-  const std::vector<float>& quat = *data->pose->orientation;
-  const std::vector<float>& pos = *data->pose->position;
+  const gfx::Point3F& pos = *data->pose->position;
 
   // The incoming pose represents where the headset is in "world space".  So
   // we'll need to invert to get the view transform.
-
-  // Negating the w component will invert the rotation.
-  gfx::Transform head_from_unoriented_head(
-      gfx::Quaternion(quat[0], quat[1], quat[2], -quat[3]));
+  gfx::Transform head_from_unoriented_head(data->pose->orientation->inverse());
 
   // Negating all components will invert the translation.
   gfx::Transform unoriented_head_from_world;
-  unoriented_head_from_world.Translate3d(-pos[0], -pos[1], -pos[2]);
+  unoriented_head_from_world.Translate3d(-pos.x(), -pos.y(), -pos.z());
 
   // Compose these to get the base "view" matrix (before accounting for per-eye
   // transforms).
@@ -457,8 +460,12 @@ void VRBrowserRendererThreadWin::SubmitResult(bool success) {
   if (!success && graphics_) {
     graphics_->ResetMemoryBuffer();
   }
-  if (scheduler_ui_ && success && !waiting_for_first_frame_)
+
+  // Make sure that we only notify that a WebXr frame is now
+  if (scheduler_ui_ && success && !frame_timeout_running_) {
     scheduler_ui_->OnWebXrFrameAvailable();
+  }
+
   if (draw_state_.ShouldDrawUI() && started_) {
     overlay_->RequestNextOverlayPose(
         base::BindOnce(&VRBrowserRendererThreadWin::OnPose,

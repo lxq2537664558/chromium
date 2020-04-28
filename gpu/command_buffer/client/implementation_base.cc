@@ -30,8 +30,7 @@ ImplementationBase::ImplementationBase(CommandBufferHelper* helper,
     : transfer_buffer_(transfer_buffer),
       gpu_control_(gpu_control),
       capabilities_(gpu_control->GetCapabilities()),
-      helper_(helper),
-      weak_ptr_factory_(this) {}
+      helper_(helper) {}
 
 ImplementationBase::~ImplementationBase() {
   // The gpu_control_ outlives this class, so clear the client on it before we
@@ -414,6 +413,11 @@ void ImplementationBase::WillCallGLFromSkia() {
 void ImplementationBase::DidCallGLFromSkia() {
   // Should only be called on subclasses that have GrContextSupport
   NOTREACHED();
+}
+
+void ImplementationBase::SetDisplayTransform(gfx::OverlayTransform transform) {
+  helper_->Flush();
+  gpu_control_->SetDisplayTransform(transform);
 }
 
 }  // namespace gpu

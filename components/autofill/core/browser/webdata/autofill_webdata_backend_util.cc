@@ -9,11 +9,11 @@
 #include "base/logging.h"
 #include "base/single_thread_task_runner.h"
 #include "base/strings/utf_string_conversions.h"
-#include "components/autofill/core/browser/autofill_country.h"
 #include "components/autofill/core/browser/autofill_metrics.h"
-#include "components/autofill/core/browser/autofill_profile.h"
-#include "components/autofill/core/browser/autofill_profile_comparator.h"
-#include "components/autofill/core/browser/credit_card.h"
+#include "components/autofill/core/browser/data_model/autofill_profile.h"
+#include "components/autofill/core/browser/data_model/autofill_profile_comparator.h"
+#include "components/autofill/core/browser/data_model/credit_card.h"
+#include "components/autofill/core/browser/geo/autofill_country.h"
 #include "components/autofill/core/browser/payments/payments_customer_data.h"
 #include "components/autofill/core/browser/webdata/autofill_change.h"
 #include "components/autofill/core/browser/webdata/autofill_entry.h"
@@ -31,8 +31,7 @@ namespace {
 const int LOCAL_GUID_LENGTH = 36;
 
 // TODO(crbug.com/687975): Reuse MergeProfile in this function.
-// static
-std::string MergeServerAddressesIntoProfiles(
+std::string MergeServerAddressesIntoProfilesAndUpdateDb(
     const AutofillProfile& server_address,
     std::vector<std::unique_ptr<AutofillProfile>>* existing_profiles,
     const std::string& app_locale,
@@ -94,7 +93,7 @@ bool ConvertWalletAddressesToLocalProfiles(
     if (!wallet_address->has_converted()) {
       // Try to merge the server address into a similar local profile, or create
       // a new local profile if no similar profile is found.
-      std::string address_guid = MergeServerAddressesIntoProfiles(
+      std::string address_guid = MergeServerAddressesIntoProfilesAndUpdateDb(
           *wallet_address, local_profiles, app_locale, primary_account_email,
           backend, db);
 

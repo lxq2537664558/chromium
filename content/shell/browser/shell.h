@@ -118,13 +118,12 @@ class Shell : public WebContentsDelegate,
   static void SetMainMessageLoopQuitClosure(base::OnceClosure quit_closure);
 
   // Used by the BlinkTestController to stop the message loop before closing all
-  // windows, for specific tests. Fails if called after the message loop has
-  // already been signalled to quit.
+  // windows, for specific tests. Has no effect if the loop is already quitting.
   static void QuitMainMessageLoopForTesting();
 
   // Used for content_browsertests. Called once.
   static void SetShellCreatedCallback(
-      base::Callback<void(Shell*)> shell_created_callback);
+      base::OnceCallback<void(Shell*)> shell_created_callback);
 
   WebContents* web_contents() const { return web_contents_.get(); }
   gfx::NativeWindow window() { return window_; }
@@ -147,35 +146,37 @@ class Shell : public WebContentsDelegate,
   void LoadingStateChanged(WebContents* source,
                            bool to_different_document) override;
 #if defined(OS_ANDROID)
-  void LoadProgressChanged(WebContents* source, double progress) override;
   void SetOverlayMode(bool use_overlay_mode) override;
 #endif
   void EnterFullscreenModeForTab(
       WebContents* web_contents,
       const GURL& origin,
-      const blink::WebFullscreenOptions& options) override;
+      const blink::mojom::FullscreenOptions& options) override;
   void ExitFullscreenModeForTab(WebContents* web_contents) override;
-  bool IsFullscreenForTabOrPending(
-      const WebContents* web_contents) const override;
-  blink::WebDisplayMode GetDisplayMode(
-     const WebContents* web_contents) const override;
+  bool IsFullscreenForTabOrPending(const WebContents* web_contents) override;
+  blink::mojom::DisplayMode GetDisplayMode(
+      const WebContents* web_contents) override;
   void RequestToLockMouse(WebContents* web_contents,
                           bool user_gesture,
                           bool last_unlocked_by_target) override;
   void CloseContents(WebContents* source) override;
-  bool CanOverscrollContent() const override;
-  void DidNavigateMainFramePostCommit(WebContents* web_contents) override;
+  bool CanOverscrollContent() override;
+  void NavigationStateChanged(WebContents* source,
+                              InvalidateTypes changed_flags) override;
   JavaScriptDialogManager* GetJavaScriptDialogManager(
       WebContents* source) override;
   std::unique_ptr<BluetoothChooser> RunBluetoothChooser(
       RenderFrameHost* frame,
       const BluetoothChooser::EventHandler& event_handler) override;
+  std::unique_ptr<BluetoothScanningPrompt> ShowBluetoothScanningPrompt(
+      RenderFrameHost* frame,
+      const BluetoothScanningPrompt::EventHandler& event_handler) override;
 #if defined(OS_MACOSX)
   bool HandleKeyboardEvent(WebContents* source,
                            const NativeWebKeyboardEvent& event) override;
 #endif
   bool DidAddMessageToConsole(WebContents* source,
-                              int32_t level,
+                              blink::mojom::ConsoleMessageLevel log_level,
                               const base::string16& message,
                               int32_t line_no,
                               const base::string16& source_id) override;
@@ -185,18 +186,17 @@ class Shell : public WebContentsDelegate,
       RenderWidgetHost* render_widget_host,
       base::RepeatingClosure hang_monitor_restarter) override;
   void ActivateContents(WebContents* contents) override;
-  std::unique_ptr<content::WebContents> SwapWebContents(
-      content::WebContents* old_contents,
-      std::unique_ptr<content::WebContents> new_contents,
-      bool did_start_load,
-      bool did_finish_load) override;
+  std::unique_ptr<content::WebContents> ActivatePortalWebContents(
+      content::WebContents* predecessor_contents,
+      std::unique_ptr<content::WebContents> portal_contents) override;
   bool ShouldAllowRunningInsecureContent(content::WebContents* web_contents,
                                          bool allowed_per_prefs,
                                          const url::Origin& origin,
                                          const GURL& resource_url) override;
-  gfx::Size EnterPictureInPicture(content::WebContents* web_contents,
-                                  const viz::SurfaceId&,
-                                  const gfx::Size& natural_size) override;
+  PictureInPictureResult EnterPictureInPicture(
+      content::WebContents* web_contents,
+      const viz::SurfaceId&,
+      const gfx::Size& natural_size) override;
   bool ShouldResumeRequestsForCreatedWindow() override;
 
   static gfx::Size GetShellDefaultSize();
@@ -266,6 +266,9 @@ class Shell : public WebContentsDelegate,
   void ToggleFullscreenModeForTab(WebContents* web_contents,
                                   bool enter_fullscreen);
   // WebContentsObserver
+#if defined(OS_ANDROID)
+  void LoadProgressChanged(double progress) override;
+#endif
   void TitleWasSet(NavigationEntry* entry) override;
 
   void OnDevToolsWebContentsDestroyed();
@@ -310,7 +313,7 @@ class Shell : public WebContentsDelegate,
   // of ordering.
   static std::vector<Shell*> windows_;
 
-  static base::Callback<void(Shell*)> shell_created_callback_;
+  static base::OnceCallback<void(Shell*)> shell_created_callback_;
 };
 
 }  // namespace content

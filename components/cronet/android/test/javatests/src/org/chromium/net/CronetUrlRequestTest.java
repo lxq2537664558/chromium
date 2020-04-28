@@ -19,6 +19,7 @@ import android.os.ConditionVariable;
 import android.os.Process;
 import android.os.StrictMode;
 import android.support.test.filters.SmallTest;
+import android.support.test.runner.AndroidJUnit4;
 
 import org.junit.After;
 import org.junit.Before;
@@ -27,7 +28,6 @@ import org.junit.Test;
 import org.junit.runner.RunWith;
 
 import org.chromium.base.Log;
-import org.chromium.base.test.BaseJUnit4ClassRunner;
 import org.chromium.base.test.util.DisabledTest;
 import org.chromium.base.test.util.Feature;
 import org.chromium.net.CronetTestRule.CronetTestFramework;
@@ -59,7 +59,7 @@ import java.util.regex.Pattern;
 /**
  * Test functionality of CronetUrlRequest.
  */
-@RunWith(BaseJUnit4ClassRunner.class)
+@RunWith(AndroidJUnit4.class)
 public class CronetUrlRequestTest {
     private static final String TAG = CronetUrlRequestTest.class.getSimpleName();
 
@@ -309,6 +309,30 @@ public class CronetUrlRequestTest {
         // Make sure there are no other pending messages, which would trigger
         // asserts in TestUrlRequestCallback.
         testSimpleGet();
+    }
+
+    /**
+     * Tests redirect without location header doesn't cause a crash.
+     */
+    @Test
+    @SmallTest
+    @Feature({"Cronet"})
+    public void testRedirectWithNullLocationHeader() throws Exception {
+        String url = NativeTestServer.getFileURL("/redirect_broken_header.html");
+        TestUrlRequestCallback callback = new TestUrlRequestCallback();
+
+        UrlRequest.Builder builder = mTestFramework.mCronetEngine.newUrlRequestBuilder(
+                url, callback, callback.getExecutor());
+        final UrlRequest urlRequest = builder.build();
+        urlRequest.start();
+        callback.blockForDone();
+        assertEquals("<!DOCTYPE html>\n<html>\n<head>\n<title>Redirect</title>\n"
+                        + "<p>Redirecting...</p>\n</head>\n</html>\n",
+                callback.mResponseAsString);
+        assertEquals(ResponseStep.ON_SUCCEEDED, callback.mResponseStep);
+        assertEquals(302, callback.mResponseInfo.getHttpStatusCode());
+        assertNull(callback.mError);
+        assertFalse(callback.mOnErrorCalled);
     }
 
     /**
@@ -1391,7 +1415,6 @@ public class CronetUrlRequestTest {
                 uploadDataSink.onReadSucceeded(false);
             }
         };
-        dataProvider.addRead("test".getBytes());
         builder.setUploadDataProvider(dataProvider, callback.getExecutor());
         builder.addHeader("Content-Type", "useless/string");
         builder.build().start();
@@ -1575,7 +1598,7 @@ public class CronetUrlRequestTest {
         };
         UrlRequest.Builder builder = mTestFramework.mCronetEngine.newUrlRequestBuilder(
                 NativeTestServer.getEchoBodyURL(), callback, myExecutor);
-        UploadDataProvider dataProvider = UploadDataProviders.create("test".getBytes("UTF-8"));
+        UploadDataProvider dataProvider = UploadDataProviders.create("test".getBytes());
         builder.setUploadDataProvider(dataProvider, myExecutor);
         builder.addHeader("Content-Type", "useless/string");
         builder.allowDirectExecutor();

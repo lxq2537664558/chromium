@@ -9,10 +9,10 @@
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/values.h"
-#include "components/sync/base/cryptographer.h"
-#include "components/sync/base/hash_util.h"
+#include "components/sync/base/client_tag_hash.h"
 #include "components/sync/base/passphrase_enums.h"
 #include "components/sync/engine/engine_util.h"
+#include "components/sync/nigori/cryptographer.h"
 #include "components/sync/protocol/bookmark_specifics.pb.h"
 #include "components/sync/protocol/typed_url_specifics.pb.h"
 #include "components/sync/syncable/base_transaction.h"
@@ -62,7 +62,7 @@ void WriteNode::SetTitle(const std::string& title) {
   std::string current_legal_title;
   if (BOOKMARKS == type && entry_->GetSpecifics().has_encrypted()) {
     // Encrypted bookmarks only have their title in the unencrypted specifics.
-    current_legal_title = GetBookmarkSpecifics().title();
+    current_legal_title = GetBookmarkSpecifics().legacy_canonicalized_title();
   } else {
     // Non-bookmarks and legacy bookmarks (those with no title in their
     // specifics) store their title in NON_UNIQUE_NAME. Non-legacy bookmarks
@@ -78,8 +78,9 @@ void WriteNode::SetTitle(const std::string& title) {
   // TODO(zea): refactor bookmarks to not need this functionality.
   sync_pb::EntitySpecifics specifics = GetEntitySpecifics();
   if (GetModelType() == BOOKMARKS &&
-      specifics.bookmark().title() != new_legal_title) {
-    specifics.mutable_bookmark()->set_title(new_legal_title);
+      specifics.bookmark().legacy_canonicalized_title() != new_legal_title) {
+    specifics.mutable_bookmark()->set_legacy_canonicalized_title(
+        new_legal_title);
     SetEntitySpecifics(specifics);  // Does it's own encryption checking.
     title_matches = false;
   }
@@ -122,7 +123,7 @@ void WriteNode::SetPasswordSpecifics(
     const sync_pb::PasswordSpecificsData& data) {
   DCHECK_EQ(GetModelType(), PASSWORDS);
 
-  Cryptographer* cryptographer = GetTransaction()->GetCryptographer();
+  const Cryptographer* cryptographer = GetTransaction()->GetCryptographer();
 
   // We have to do the idempotency check here (vs in UpdateEntryWithEncryption)
   // because Passwords have their encrypted data within the PasswordSpecifics,
@@ -239,7 +240,7 @@ BaseNode::InitByLookupResult WriteNode::InitByClientTagLookup(
   if (tag.empty())
     return INIT_FAILED_PRECONDITION;
 
-  const std::string hash = GenerateSyncableHash(model_type, tag);
+  const std::string hash = ClientTagHash::FromUnhashed(model_type, tag).value();
 
   entry_ = new syncable::MutableEntry(transaction_->GetWrappedWriteTrans(),
                                       syncable::GET_BY_CLIENT_TAG, hash);
@@ -330,7 +331,7 @@ WriteNode::InitUniqueByCreationResult WriteNode::InitUniqueByCreationImpl(
     return INIT_FAILED_EMPTY_TAG;
   }
 
-  const std::string hash = GenerateSyncableHash(model_type, tag);
+  const std::string hash = ClientTagHash::FromUnhashed(model_type, tag).value();
 
   // Start out with a dummy name.  We expect
   // the caller to set a meaningful name after creation.

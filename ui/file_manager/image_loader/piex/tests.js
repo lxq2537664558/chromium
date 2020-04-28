@@ -47,7 +47,7 @@ const puppeteer = require('puppeteer');
     headless: !program.debug
   });
 
-  let page = await browser.newPage();
+  const page = await browser.newPage();
 
   await page.setViewport({
     width: 1200, height: 800
@@ -118,11 +118,10 @@ const puppeteer = require('puppeteer');
     }
   }
 
-  const testTime = await page.evaluate(() => {
-    return window.testTime;
+  await page.evaluate(() => {
+    console.log('test: done total time', window.testTime.toFixed(3));
   });
 
-  console.log('test: done total time', testTime.toFixed(3));
   browser.close();
   server.close();
 

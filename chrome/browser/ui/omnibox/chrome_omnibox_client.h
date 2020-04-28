@@ -10,6 +10,7 @@
 
 #include "base/compiler_specific.h"
 #include "base/macros.h"
+#include "base/memory/weak_ptr.h"
 #include "chrome/browser/autocomplete/chrome_autocomplete_scheme_classifier.h"
 #include "chrome/browser/bitmap_fetcher/bitmap_fetcher_service.h"
 #include "chrome/common/search/instant_types.h"
@@ -37,12 +38,8 @@ class ChromeOmniboxClient : public OmniboxClient {
   const GURL& GetURL() const override;
   const base::string16& GetTitle() const override;
   gfx::Image GetFavicon() const override;
-  bool IsInstantNTP() const override;
-  bool IsSearchResultsPage() const override;
   bool IsLoading() const override;
   bool IsPasteAndGoEnabled() const override;
-  bool IsNewTabPage(const GURL& url) const override;
-  bool IsHomePage(const GURL& url) const override;
   bool IsDefaultSearchProviderEnabled() const override;
   const SessionID& GetSessionID() const override;
   bookmarks::BookmarkModel* GetBookmarkModel() override;
@@ -103,6 +100,8 @@ class ChromeOmniboxClient : public OmniboxClient {
   ChromeAutocompleteSchemeClassifier scheme_classifier_;
   std::vector<BitmapFetcherService::RequestId> request_ids_;
   FaviconCache favicon_cache_;
+
+  base::WeakPtrFactory<ChromeOmniboxClient> weak_factory_{this};
 
   DISALLOW_COPY_AND_ASSIGN(ChromeOmniboxClient);
 };

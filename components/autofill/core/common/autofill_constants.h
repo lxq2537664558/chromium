@@ -22,6 +22,22 @@ size_t MinRequiredFieldsForHeuristics();
 size_t MinRequiredFieldsForQuery();
 size_t MinRequiredFieldsForUpload();
 
+// The maximum number of form fields we are willing to parse, due to
+// computational costs.  Several examples of forms with lots of fields that are
+// not relevant to Autofill: (1) the Netflix queue; (2) the Amazon wishlist;
+// (3) router configuration pages; and (4) other configuration pages, e.g. for
+// Google code project settings.
+// Copied to components/autofill/ios/form_util/resources/fill.js.
+const size_t kMaxParseableFields = 200;
+
+// The maximum number of allowed calls to CreditCard::GetMatchingTypes() and
+// AutofillProfile::GetMatchingTypeAndValidities().
+// If #fields * (#profiles + #credit-cards) exceeds this number, type matching
+// and voting is omitted.
+// The rationale is that for a form with |kMaxParseableFields| = 200 fields,
+// this still allows for 25 profiles plus credit cars.
+const size_t kMaxTypeMatchingCalls = 5000;
+
 // The minimum number of fields in a form that contains only password fields to
 // upload the form to and request predictions from the Autofill servers.
 const size_t kRequiredFieldsForFormsWithOnlyPasswordFields = 2;
@@ -35,14 +51,6 @@ enum ShowPasswordSuggestionsOptions {
   SHOW_ALL = 1 << 0 /* show all credentials, not just ones matching username */,
   IS_PASSWORD_FIELD = 1 << 1 /* input field is a password field */
 };
-
-// Autofill LegacyStrikeDatabase: Maximum strikes allowed for the credit card
-// save project. If the LegacyStrikeDatabase returns this many strikes for a
-// given card, it will not show the offer-to-save bubble on Desktop or infobar
-// on Android. On Desktop, however, the omnibox icon will still be available.
-// TODO(crbug.com/884817): Remove once StrikeDatabase v2 moves this constant to
-// its own credit card save policy.
-const int kMaxStrikesToPreventPoppingUpOfferToSavePrompt = 3;
 
 // Constants for the soft/hard deletion of Autofill data.
 constexpr base::TimeDelta kDisusedDataModelTimeDelta =

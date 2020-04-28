@@ -8,16 +8,16 @@
 #include <utility>
 
 #include "base/task/post_task.h"
+#include "base/values.h"
 #include "base/win/windows_version.h"
-#include "chrome/browser/conflicts/module_database_win.h"
+#include "chrome/browser/win/conflicts/module_database.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 
 #if defined(GOOGLE_CHROME_BUILD)
-#include "base/enterprise_util.h"
 #include "base/win/win_util.h"
-#include "chrome/browser/conflicts/incompatible_applications_updater_win.h"
-#include "chrome/browser/conflicts/module_blacklist_cache_updater_win.h"
+#include "chrome/browser/win/conflicts/incompatible_applications_updater.h"
+#include "chrome/browser/win/conflicts/module_blacklist_cache_updater.h"
 #endif
 
 namespace {
@@ -68,7 +68,7 @@ constexpr char kAllowedSameDirectory[] =
 void AppendString(base::StringPiece input, std::string* output) {
   if (!output->empty())
     *output += ", ";
-  input.AppendToString(output);
+  output->append(input.data(), input.size());
 }
 
 // Returns a string describing the current module blocking status: loaded or
@@ -223,12 +223,6 @@ enum ThirdPartyFeaturesStatus {
   kNonGoogleChromeBuild,
   // The third-party features are not available on Windows 7.
   kNotAvailableWin7,
-  // The third-party features are temporarily disabled on domain-joined
-  // machines because of a known issue with third-party blocking and the
-  // IAttachmentExecute::Save() API (https://crbug.com/870998).
-  // TODO(pmonette): Move IAttachmentExecute::Save() to a utility process and
-  //                 remove this.
-  kEnterpriseManaged,
   // The ThirdPartyBlockingEnabled group policy is disabled.
   kPolicyDisabled,
   // Both the IncompatibleApplicationsWarning and the
@@ -272,7 +266,7 @@ ThirdPartyFeaturesStatus GetThirdPartyFeaturesStatus(
   }
 
   // Figure out why the manager instance doesn't exist.
-  if (base::win::GetVersion() <= base::win::VERSION_WIN7)
+  if (base::win::GetVersion() <= base::win::Version::WIN7)
     return kNotAvailableWin7;
 
   if (!ModuleDatabase::IsThirdPartyBlockingPolicyEnabled())
@@ -282,9 +276,6 @@ ThirdPartyFeaturesStatus GetThirdPartyFeaturesStatus(
       !ModuleBlacklistCacheUpdater::IsBlockingEnabled()) {
     return kFeatureDisabled;
   }
-
-  if (base::IsMachineExternallyManaged())
-    return kEnterpriseManaged;
 
   // The above 3 cases are the only possible reasons why the manager wouldn't
   // exist.
@@ -305,13 +296,10 @@ std::string GetThirdPartyFeaturesStatusString(ThirdPartyFeaturesStatus status) {
              "builds.";
     case ThirdPartyFeaturesStatus::kNotAvailableWin7:
       return "The third-party features are not available on Windows 7.";
-    case ThirdPartyFeaturesStatus::kEnterpriseManaged:
-      return "The third-party features are temporarily disabled for clients on "
-             "domain-joined machines.";
     case ThirdPartyFeaturesStatus::kPolicyDisabled:
       return "The ThirdPartyBlockingEnabled group policy is disabled.";
     case ThirdPartyFeaturesStatus::kFeatureDisabled:
-      if (base::win::GetVersion() < base::win::VERSION_WIN10)
+      if (base::win::GetVersion() < base::win::Version::WIN10)
         return "The ThirdPartyModulesBlocking feature is disabled.";
 
       return "Both the IncompatibleApplicationsWarning and "
@@ -321,17 +309,17 @@ std::string GetThirdPartyFeaturesStatusString(ThirdPartyFeaturesStatus status) {
     case ThirdPartyFeaturesStatus::kNoModuleListAvailable:
       return "Disabled - There is no Module List version available.";
     case ThirdPartyFeaturesStatus::kWarningInitialized:
-      DCHECK_GE(base::win::GetVersion(), base::win::VERSION_WIN10);
+      DCHECK_GE(base::win::GetVersion(), base::win::Version::WIN10);
       return "The IncompatibleApplicationsWarning feature is enabled, while "
              "the ThirdPartyModulesBlocking feature is disabled.";
     case ThirdPartyFeaturesStatus::kBlockingInitialized:
-      if (base::win::GetVersion() < base::win::VERSION_WIN10)
+      if (base::win::GetVersion() < base::win::Version::WIN10)
         return "The ThirdPartyModulesBlocking feature is enabled.";
 
       return "The ThirdPartyModulesBlocking feature is enabled, while the "
              "IncompatibleApplicationsWarning feature is disabled.";
     case ThirdPartyFeaturesStatus::kWarningAndBlockingInitialized:
-      DCHECK_GE(base::win::GetVersion(), base::win::VERSION_WIN10);
+      DCHECK_GE(base::win::GetVersion(), base::win::Version::WIN10);
       return "Both the IncompatibleApplicationsWarning and "
              "ThirdPartyModulesBlocking features are enabled";
   }
@@ -495,17 +483,16 @@ void ConflictsDataFetcher::OnModuleDatabaseIdle() {
 
 #if defined(GOOGLE_CHROME_BUILD)
   // The state of third-party features must be determined on the UI thread.
-  base::PostTaskWithTraits(
+  base::PostTask(
       FROM_HERE, {content::BrowserThread::UI},
       base::BindOnce(
           OnModuleDataFetched, std::move(on_conflicts_data_fetched_callback_),
           std::move(results), std::move(third_party_conflicts_manager_state_)));
 #else
   // The third-party features are always disabled on Chromium builds.
-  base::PostTaskWithTraits(
-      FROM_HERE, {content::BrowserThread::UI},
-      base::BindOnce(OnConflictsDataFetched,
-                     std::move(on_conflicts_data_fetched_callback_),
-                     std::move(results), kNonGoogleChromeBuild));
+  base::PostTask(FROM_HERE, {content::BrowserThread::UI},
+                 base::BindOnce(OnConflictsDataFetched,
+                                std::move(on_conflicts_data_fetched_callback_),
+                                std::move(results), kNonGoogleChromeBuild));
 #endif
 }

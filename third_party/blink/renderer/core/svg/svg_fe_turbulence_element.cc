@@ -45,7 +45,7 @@ const SVGEnumerationMap& GetEnumerationMap<TurbulenceType>() {
   return entries;
 }
 
-inline SVGFETurbulenceElement::SVGFETurbulenceElement(Document& document)
+SVGFETurbulenceElement::SVGFETurbulenceElement(Document& document)
     : SVGFilterPrimitiveStandardAttributes(svg_names::kFETurbulenceTag,
                                            document),
       base_frequency_(MakeGarbageCollected<SVGAnimatedNumberOptionalNumber>(
@@ -75,7 +75,7 @@ inline SVGFETurbulenceElement::SVGFETurbulenceElement(Document& document)
   AddToPropertyMap(num_octaves_);
 }
 
-void SVGFETurbulenceElement::Trace(blink::Visitor* visitor) {
+void SVGFETurbulenceElement::Trace(Visitor* visitor) {
   visitor->Trace(base_frequency_);
   visitor->Trace(seed_);
   visitor->Trace(stitch_tiles_);
@@ -83,8 +83,6 @@ void SVGFETurbulenceElement::Trace(blink::Visitor* visitor) {
   visitor->Trace(num_octaves_);
   SVGFilterPrimitiveStandardAttributes::Trace(visitor);
 }
-
-DEFINE_NODE_FACTORY(SVGFETurbulenceElement)
 
 bool SVGFETurbulenceElement::SetFilterEffectAttribute(
     FilterEffect* effect,

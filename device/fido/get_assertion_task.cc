@@ -22,10 +22,9 @@ bool MayFallbackToU2fWithAppIdExtension(
     const CtapGetAssertionRequest& request) {
   bool ctap2_device_supports_u2f =
       device.device_info() &&
-      base::ContainsKey(device.device_info()->versions(),
-                        ProtocolVersion::kU2f);
-  return request.alternative_application_parameter() &&
-         ctap2_device_supports_u2f;
+      base::Contains(device.device_info()->versions, ProtocolVersion::kU2f);
+  return request.alternative_application_parameter &&
+         ctap2_device_supports_u2f && !request.allow_list.empty();
 }
 
 }  // namespace
@@ -35,15 +34,14 @@ GetAssertionTask::GetAssertionTask(FidoDevice* device,
                                    GetAssertionTaskCallback callback)
     : FidoTask(device),
       request_(std::move(request)),
-      callback_(std::move(callback)),
-      weak_factory_(this) {
+      callback_(std::move(callback)) {
   // This code assumes that user-presence is requested in order to implement
   // possible U2F-fallback.
-  DCHECK(request_.user_presence_required());
+  DCHECK(request_.user_presence_required);
 
   // The UV parameter should have been made binary by this point because CTAP2
   // only takes a binary value.
-  DCHECK_NE(request_.user_verification(),
+  DCHECK_NE(request_.user_verification,
             UserVerificationRequirement::kPreferred);
 }
 
@@ -60,8 +58,20 @@ void GetAssertionTask::Cancel() {
   }
 }
 
+// static
+bool GetAssertionTask::StringFixupPredicate(
+    const std::vector<const cbor::Value*>& path) {
+  if (path.size() != 2 || !path[0]->is_unsigned() ||
+      path[0]->GetUnsigned() != 4 || !path[1]->is_string()) {
+    return false;
+  }
+
+  const std::string& user_key = path[1]->GetString();
+  return user_key == "name" || user_key == "displayName";
+}
+
 void GetAssertionTask::StartTask() {
-  if (device()->supported_protocol() == ProtocolVersion::kCtap) {
+  if (device()->supported_protocol() == ProtocolVersion::kCtap2) {
     GetAssertion();
   } else {
     U2fSign();
@@ -69,39 +79,74 @@ void GetAssertionTask::StartTask() {
 }
 
 CtapGetAssertionRequest GetAssertionTask::NextSilentRequest() {
-  DCHECK(request_.allow_list() &&
-         current_credential_ < request_.allow_list()->size());
+  DCHECK(current_allow_list_batch_ < allow_list_batches_.size());
   CtapGetAssertionRequest request = request_;
-  request.SetAllowList({{request_.allow_list()->at(current_credential_)}});
-  request.SetUserPresenceRequired(false);
-  request.SetUserVerification(UserVerificationRequirement::kDiscouraged);
+  request.allow_list = allow_list_batches_.at(current_allow_list_batch_++);
+  request.user_presence_required = false;
+  request.user_verification = UserVerificationRequirement::kDiscouraged;
   return request;
 }
 
 void GetAssertionTask::GetAssertion() {
-  // Silently probe each credential in the allow list to work around
-  // authenticators rejecting lists over a certain size. Also probe silently if
-  // the request may fall back to U2F and the authenticator doesn't recognize
-  // any of the provided credential IDs.
-  if ((request_.allow_list() && request_.allow_list()->size() > 1) ||
-      MayFallbackToU2fWithAppIdExtension(*device(), request_)) {
+  if (request_.allow_list.empty()) {
     sign_operation_ = std::make_unique<Ctap2DeviceOperation<
         CtapGetAssertionRequest, AuthenticatorGetAssertionResponse>>(
-        device(), NextSilentRequest(),
-        base::BindOnce(&GetAssertionTask::HandleResponseToSilentRequest,
+        device(), request_,
+        base::BindOnce(&GetAssertionTask::HandleResponse,
                        weak_factory_.GetWeakPtr()),
-        base::BindOnce(&ReadCTAPGetAssertionResponse));
+        base::BindOnce(&ReadCTAPGetAssertionResponse), StringFixupPredicate);
     sign_operation_->Start();
     return;
   }
 
+  // Most authenticators can only process allowList parameters up to a certain
+  // size. Batch the list into chunks according to what the device can handle
+  // and filter out IDs that are too large to originate from this device.
+  allow_list_batches_ =
+      FilterAndBatchCredentialDescriptors(request_.allow_list, *device());
+
+  // If filtering eliminated all entries from the allowList, just collect a
+  // dummy touch, then fail the request.
+  if (allow_list_batches_.empty()) {
+    dummy_register_operation_ = std::make_unique<Ctap2DeviceOperation<
+        CtapMakeCredentialRequest, AuthenticatorMakeCredentialResponse>>(
+        device(), MakeCredentialTask::GetTouchRequest(device()),
+        base::BindOnce(&GetAssertionTask::HandleDummyMakeCredentialComplete,
+                       weak_factory_.GetWeakPtr()),
+        base::BindOnce(&ReadCTAPMakeCredentialResponse,
+                       device()->DeviceTransport()),
+        /*string_fixup_predicate=*/nullptr);
+    dummy_register_operation_->Start();
+    return;
+  }
+
+  // If the filtered allowList is small enough to be sent in a single request,
+  // do so.
+  if (allow_list_batches_.size() == 1 &&
+      !MayFallbackToU2fWithAppIdExtension(*device(), request_)) {
+    CtapGetAssertionRequest request = request_;
+    request.allow_list = allow_list_batches_.front();
+    sign_operation_ = std::make_unique<Ctap2DeviceOperation<
+        CtapGetAssertionRequest, AuthenticatorGetAssertionResponse>>(
+        device(), std::move(request),
+        base::BindOnce(&GetAssertionTask::HandleResponse,
+                       weak_factory_.GetWeakPtr()),
+        base::BindOnce(&ReadCTAPGetAssertionResponse), StringFixupPredicate);
+    sign_operation_->Start();
+    return;
+  }
+
+  // If the filtered list is too large to be sent at once, or if an App ID might
+  // need to be tested because the site used the appid extension, probe the
+  // credential IDs silently.
   sign_operation_ =
       std::make_unique<Ctap2DeviceOperation<CtapGetAssertionRequest,
                                             AuthenticatorGetAssertionResponse>>(
-          device(), request_,
-          base::BindOnce(&GetAssertionTask::HandleResponse,
+          device(), NextSilentRequest(),
+          base::BindOnce(&GetAssertionTask::HandleResponseToSilentRequest,
                          weak_factory_.GetWeakPtr()),
-          base::BindOnce(&ReadCTAPGetAssertionResponse));
+          base::BindOnce(&ReadCTAPGetAssertionResponse),
+          /*string_fixup_predicate=*/nullptr);
   sign_operation_->Start();
 }
 
@@ -135,45 +180,53 @@ void GetAssertionTask::HandleResponse(
       base::BindOnce(&GetAssertionTask::HandleDummyMakeCredentialComplete,
                      weak_factory_.GetWeakPtr()),
       base::BindOnce(&ReadCTAPMakeCredentialResponse,
-                     device()->DeviceTransport()));
+                     device()->DeviceTransport()),
+      /*string_fixup_predicate=*/nullptr);
   dummy_register_operation_->Start();
 }
 
 void GetAssertionTask::HandleResponseToSilentRequest(
     CtapDeviceResponseCode response_code,
     base::Optional<AuthenticatorGetAssertionResponse> response_data) {
-  DCHECK(request_.allow_list() && request_.allow_list()->size() > 0);
+  DCHECK(request_.allow_list.size() > 0);
+  DCHECK(allow_list_batches_.size() > 0);
+  DCHECK(0 < current_allow_list_batch_ &&
+         current_allow_list_batch_ <= allow_list_batches_.size());
 
   if (canceled_) {
     return;
   }
 
-  // Credential was recognized by the device. As this authentication was a
-  // silent authentication (i.e. user touch was not provided), try again with
-  // only the matching credential, user presence enforced and with the original
-  // user verification configuration.
+  // One credential from the previous batch was recognized by the device. As
+  // this authentication was a silent authentication (i.e. user touch was not
+  // provided), try again with only that batch, user presence enforced and with
+  // the original user verification configuration.
+  // TODO(martinkr): We could get the exact credential ID that was recognized
+  // from |response_data| and send only that.
   if (response_code == CtapDeviceResponseCode::kSuccess) {
     CtapGetAssertionRequest request = request_;
-    request.SetAllowList({{request_.allow_list()->at(current_credential_)}});
+    request.allow_list = allow_list_batches_.at(current_allow_list_batch_ - 1);
     sign_operation_ = std::make_unique<Ctap2DeviceOperation<
         CtapGetAssertionRequest, AuthenticatorGetAssertionResponse>>(
         device(), std::move(request),
         base::BindOnce(&GetAssertionTask::HandleResponse,
                        weak_factory_.GetWeakPtr()),
-        base::BindOnce(&ReadCTAPGetAssertionResponse));
+        base::BindOnce(&ReadCTAPGetAssertionResponse),
+        /*string_fixup_predicate=*/nullptr);
     sign_operation_->Start();
     return;
   }
 
   // Credential was not recognized or an error occurred. Probe the next
   // credential.
-  if (++current_credential_ < request_.allow_list()->size()) {
+  if (current_allow_list_batch_ < allow_list_batches_.size()) {
     sign_operation_ = std::make_unique<Ctap2DeviceOperation<
         CtapGetAssertionRequest, AuthenticatorGetAssertionResponse>>(
         device(), NextSilentRequest(),
         base::BindOnce(&GetAssertionTask::HandleResponseToSilentRequest,
                        weak_factory_.GetWeakPtr()),
-        base::BindOnce(&ReadCTAPGetAssertionResponse));
+        base::BindOnce(&ReadCTAPGetAssertionResponse),
+        /*string_fixup_predicate=*/nullptr);
     sign_operation_->Start();
     return;
   }
@@ -191,7 +244,8 @@ void GetAssertionTask::HandleResponseToSilentRequest(
       base::BindOnce(&GetAssertionTask::HandleDummyMakeCredentialComplete,
                      weak_factory_.GetWeakPtr()),
       base::BindOnce(&ReadCTAPMakeCredentialResponse,
-                     device()->DeviceTransport()));
+                     device()->DeviceTransport()),
+      /*string_fixup_predicate=*/nullptr);
   dummy_register_operation_->Start();
 }
 

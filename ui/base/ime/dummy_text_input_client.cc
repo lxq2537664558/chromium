@@ -35,8 +35,7 @@ void DummyTextInputClient::SetCompositionText(
   composition_history_.push_back(composition);
 }
 
-void DummyTextInputClient::ConfirmCompositionText() {
-}
+void DummyTextInputClient::ConfirmCompositionText(bool keep_selection) {}
 
 void DummyTextInputClient::ClearCompositionText() {
   SetCompositionText(CompositionText());
@@ -145,13 +144,23 @@ bool DummyTextInputClient::ShouldDoLearning() {
   return false;
 }
 
-#if defined(OS_WIN)
-void DummyTextInputClient::SetCompositionFromExistingText(
+#if defined(OS_WIN) || defined(OS_CHROMEOS)
+bool DummyTextInputClient::SetCompositionFromExistingText(
     const gfx::Range& range,
-    const std::vector<ui::ImeTextSpan>& ui_ime_text_spans) {}
+    const std::vector<ui::ImeTextSpan>& ui_ime_text_spans) {
+  return false;
+}
+#endif
+
+#if defined(OS_WIN)
+void DummyTextInputClient::GetActiveTextInputControlLayoutBounds(
+    base::Optional<gfx::Rect>* control_bounds,
+    base::Optional<gfx::Rect>* selection_bounds) {}
 
 void DummyTextInputClient::SetActiveCompositionForAccessibility(
-    const gfx::Range& range) {}
+    const gfx::Range& range,
+    const base::string16& active_composition_text,
+    bool is_composition_committed) {}
 #endif
 
 }  // namespace ui

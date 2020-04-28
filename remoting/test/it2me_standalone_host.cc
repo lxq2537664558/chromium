@@ -10,7 +10,6 @@
 
 #include "base/bind.h"
 #include "base/location.h"
-#include "base/logging.h"
 #include "base/memory/ptr_util.h"
 #include "base/memory/ref_counted.h"
 #include "base/threading/thread_task_runner_handle.h"
@@ -38,8 +37,8 @@ constexpr char kSessionJid[] = "user@domain/rest-of-jid";
 using ::remoting::protocol::MockSession;
 
 It2MeStandaloneHost::It2MeStandaloneHost()
-    : scoped_task_environment_(
-          base::test::ScopedTaskEnvironment::MainThreadType::UI),
+    : task_environment_(
+          base::test::SingleThreadTaskEnvironment::MainThreadType::UI),
       context_(ChromotingHostContext::Create(
           new AutoThreadTaskRunner(base::ThreadTaskRunnerHandle::Get(),
                                    run_loop_.QuitClosure()))),
@@ -47,8 +46,7 @@ It2MeStandaloneHost::It2MeStandaloneHost()
       factory_(main_task_runner_,
                context_->video_capture_task_runner(),
                context_->input_task_runner(),
-               context_->ui_task_runner(),
-               nullptr),
+               context_->ui_task_runner()),
       connection_(base::WrapUnique(new testing::NiceMock<MockSession>())),
       session_jid_(kSessionJid),
 #if defined(OS_LINUX)
@@ -80,9 +78,9 @@ void It2MeStandaloneHost::Run() {
 }
 
 void It2MeStandaloneHost::StartOutputTimer() {
-  timer_.Start(
-      FROM_HERE, base::TimeDelta::FromSeconds(1),
-      base::Bind(&OutputFakeConnectionEventLogger, std::cref(event_logger_)));
+  timer_.Start(FROM_HERE, base::TimeDelta::FromSeconds(1),
+               base::BindRepeating(&OutputFakeConnectionEventLogger,
+                                   std::cref(event_logger_)));
 }
 
 void It2MeStandaloneHost::Connect() {

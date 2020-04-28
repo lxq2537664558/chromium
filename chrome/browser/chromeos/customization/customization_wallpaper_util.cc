@@ -9,6 +9,7 @@
 #include "base/location.h"
 #include "base/sequenced_task_runner.h"
 #include "base/task/post_task.h"
+#include "base/task/thread_pool.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/chromeos/customization/customization_document.h"
 #include "chrome/browser/chromeos/login/users/avatar/user_image_loader.h"
@@ -53,14 +54,14 @@ bool CheckCustomizedWallpaperFilesExist(
 
 // Resizes and saves the customized default wallpapers.
 bool ResizeAndSaveCustomizedDefaultWallpaper(
-    std::unique_ptr<gfx::ImageSkia> image,
+    gfx::ImageSkia image,
     const base::FilePath& resized_small_path,
     const base::FilePath& resized_large_path) {
-  return SaveResizedWallpaper(*image,
+  return SaveResizedWallpaper(image,
                               gfx::Size(ash::kSmallWallpaperMaxWidth,
                                         ash::kSmallWallpaperMaxHeight),
                               resized_small_path) &&
-         SaveResizedWallpaper(*image,
+         SaveResizedWallpaper(image,
                               gfx::Size(ash::kLargeWallpaperMaxWidth,
                                         ash::kLargeWallpaperMaxHeight),
                               resized_large_path);
@@ -102,16 +103,16 @@ void OnCustomizedDefaultWallpaperDecoded(
   wallpaper->image().EnsureRepsForSupportedScales();
 
   scoped_refptr<base::SequencedTaskRunner> task_runner =
-      base::CreateSequencedTaskRunnerWithTraits(
+      base::ThreadPool::CreateSequencedTaskRunner(
           {base::MayBlock(), base::TaskPriority::USER_BLOCKING,
            base::TaskShutdownBehavior::CONTINUE_ON_SHUTDOWN});
   base::PostTaskAndReplyWithResult(
       task_runner.get(), FROM_HERE,
-      base::Bind(&ResizeAndSaveCustomizedDefaultWallpaper,
-                 base::Passed(wallpaper->image().DeepCopy()),
-                 resized_small_path, resized_large_path),
-      base::Bind(&OnCustomizedDefaultWallpaperResizedAndSaved, wallpaper_url,
-                 resized_small_path, resized_large_path));
+      base::BindOnce(&ResizeAndSaveCustomizedDefaultWallpaper,
+                     wallpaper->image().DeepCopy(), resized_small_path,
+                     resized_large_path),
+      base::BindOnce(&OnCustomizedDefaultWallpaperResizedAndSaved,
+                     wallpaper_url, resized_small_path, resized_large_path));
 }
 
 // If |both_sizes_exist| is false or the url doesn't match the current value,
@@ -131,14 +132,14 @@ void SetCustomizedDefaultWallpaperAfterCheck(
     // Either resized images do not exist or cached version is incorrect.
     // Need to start decoding again.
     scoped_refptr<base::SequencedTaskRunner> task_runner =
-        base::CreateSequencedTaskRunnerWithTraits(
+        base::ThreadPool::CreateSequencedTaskRunner(
             {base::MayBlock(), base::TaskPriority::USER_BLOCKING,
              base::TaskShutdownBehavior::CONTINUE_ON_SHUTDOWN});
     user_image_loader::StartWithFilePath(
-        task_runner, file_path, ImageDecoder::ROBUST_JPEG_CODEC,
+        task_runner, file_path, ImageDecoder::DEFAULT_CODEC,
         0,  // Do not crop.
-        base::Bind(&OnCustomizedDefaultWallpaperDecoded, wallpaper_url,
-                   resized_small_path, resized_large_path));
+        base::BindOnce(&OnCustomizedDefaultWallpaperDecoded, wallpaper_url,
+                       resized_small_path, resized_large_path));
   }
 }
 
@@ -167,15 +168,15 @@ void StartSettingCustomizedDefaultWallpaper(const GURL& wallpaper_url,
   }
 
   scoped_refptr<base::SequencedTaskRunner> task_runner =
-      base::CreateSequencedTaskRunnerWithTraits(
+      base::ThreadPool::CreateSequencedTaskRunner(
           {base::MayBlock(), base::TaskPriority::USER_BLOCKING,
            base::TaskShutdownBehavior::CONTINUE_ON_SHUTDOWN});
   base::PostTaskAndReplyWithResult(
       task_runner.get(), FROM_HERE,
-      base::Bind(&CheckCustomizedWallpaperFilesExist, resized_small_path,
-                 resized_large_path),
-      base::Bind(&SetCustomizedDefaultWallpaperAfterCheck, wallpaper_url,
-                 file_path, resized_small_path, resized_large_path));
+      base::BindOnce(&CheckCustomizedWallpaperFilesExist, resized_small_path,
+                     resized_large_path),
+      base::BindOnce(&SetCustomizedDefaultWallpaperAfterCheck, wallpaper_url,
+                     file_path, resized_small_path, resized_large_path));
 }
 
 bool GetCustomizedDefaultWallpaperPaths(base::FilePath* small_path_out,

@@ -17,35 +17,20 @@ CastWebViewFactory::CastWebViewFactory(content::BrowserContext* browser_context)
 CastWebViewFactory::~CastWebViewFactory() = default;
 
 void CastWebViewFactory::OnPageDestroyed(CastWebView* web_view) {
-  for (auto& observer : observer_list_) {
-    observer.OnCastWebViewDestroyed(web_view);
-  }
   web_view->RemoveObserver(this);
 }
 
 std::unique_ptr<CastWebView> CastWebViewFactory::CreateWebView(
     const CastWebView::CreateParams& params,
-    CastWebContentsManager* web_contents_manager,
-    scoped_refptr<content::SiteInstance> site_instance,
+    CastWebService* web_service,
     const GURL& initial_url) {
   std::unique_ptr<CastWebView> webview;
-  webview = std::make_unique<CastWebViewDefault>(
-      params, web_contents_manager, browser_context_, site_instance);
+  webview = std::make_unique<CastWebViewDefault>(params, web_service,
+                                                 browser_context_);
   if (webview) {
     webview->AddObserver(this);
   }
-  for (auto& observer : observer_list_) {
-    observer.OnCastWebViewCreated(webview.get());
-  }
   return webview;
-}
-
-void CastWebViewFactory::AddObserver(Observer* observer) {
-  observer_list_.AddObserver(observer);
-}
-
-void CastWebViewFactory::RemoveObserver(Observer* observer) {
-  observer_list_.RemoveObserver(observer);
 }
 
 }  // namespace chromecast

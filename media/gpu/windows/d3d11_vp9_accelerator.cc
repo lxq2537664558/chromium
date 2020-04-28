@@ -9,7 +9,6 @@
 #include <utility>
 
 #include "base/memory/ptr_util.h"
-#include "media/cdm/cdm_proxy_context.h"
 #include "media/gpu/windows/d3d11_vp9_picture.h"
 
 namespace media {
@@ -37,30 +36,25 @@ CreateSubsampleMappingBlock(const std::vector<SubsampleEntry>& from) {
 D3D11VP9Accelerator::D3D11VP9Accelerator(
     D3D11VideoDecoderClient* client,
     MediaLog* media_log,
-    CdmProxyContext* cdm_proxy_context,
-    Microsoft::WRL::ComPtr<ID3D11VideoDecoder> video_decoder,
-    Microsoft::WRL::ComPtr<ID3D11VideoDevice> video_device,
+    ComD3D11VideoDecoder video_decoder,
+    ComD3D11VideoDevice video_device,
     std::unique_ptr<VideoContextWrapper> video_context)
     : client_(client),
       media_log_(media_log),
-      cdm_proxy_context_(cdm_proxy_context),
       status_feedback_(0),
       video_decoder_(std::move(video_decoder)),
       video_device_(std::move(video_device)),
       video_context_(std::move(video_context)) {
   DCHECK(client);
   DCHECK(media_log_);
-  // |cdm_proxy_context_| is non-null for encrypted content but can be null for
-  // clear content.
 }
 
 D3D11VP9Accelerator::~D3D11VP9Accelerator() {}
 
 void D3D11VP9Accelerator::RecordFailure(const std::string& fail_type,
                                         const std::string& reason) {
-  media_log_->AddEvent(media_log_->CreateStringEvent(
-      MediaLogEvent::MEDIA_ERROR_LOG_ENTRY, "error",
-      std::string("DX11VP9Failure(") + fail_type + ")=" + reason));
+  MEDIA_LOG(ERROR, media_log_)
+      << "DX11VP9Failure(" << fail_type << ")=" << reason;
 }
 
 scoped_refptr<VP9Picture> D3D11VP9Accelerator::CreateVP9Picture() {
@@ -70,34 +64,19 @@ scoped_refptr<VP9Picture> D3D11VP9Accelerator::CreateVP9Picture() {
   return base::MakeRefCounted<D3D11VP9Picture>(picture_buffer);
 }
 
-bool D3D11VP9Accelerator::BeginFrame(D3D11VP9Picture* pic) {
-  // This |decrypt_context| has to be outside the if block because pKeyInfo in
-  // D3D11_VIDEO_DECODER_BEGIN_FRAME_CRYPTO_SESSION is a pointer (to a GUID).
-  base::Optional<CdmProxyContext::D3D11DecryptContext> decrypt_context;
-  std::unique_ptr<D3D11_VIDEO_DECODER_BEGIN_FRAME_CRYPTO_SESSION> content_key;
-  if (const DecryptConfig* config = pic->decrypt_config()) {
-    DCHECK(cdm_proxy_context_) << "No CdmProxyContext but picture is encrypted";
-    decrypt_context = cdm_proxy_context_->GetD3D11DecryptContext(
-        CdmProxy::KeyType::kDecryptAndDecode, config->key_id());
-    if (!decrypt_context) {
-      RecordFailure("crypto_config",
-                    "Cannot find the decrypt context for the frame.");
-      return false;  // TODO(crbug.com/894573): support kTryAgain.
-    }
-
-    content_key =
-        std::make_unique<D3D11_VIDEO_DECODER_BEGIN_FRAME_CRYPTO_SESSION>();
-    content_key->pCryptoSession = decrypt_context->crypto_session;
-    content_key->pBlob = const_cast<void*>(decrypt_context->key_blob);
-    content_key->BlobSize = decrypt_context->key_blob_size;
-    content_key->pKeyInfoId = &decrypt_context->key_info_guid;
+bool D3D11VP9Accelerator::BeginFrame(const D3D11VP9Picture& pic) {
+  const bool is_encrypted = pic.decrypt_config();
+  if (is_encrypted) {
+    RecordFailure("crypto_config",
+                  "Cannot find the decrypt context for the frame.");
+    return false;
   }
 
   HRESULT hr;
   do {
     hr = video_context_->DecoderBeginFrame(
-        video_decoder_.Get(), pic->picture_buffer()->output_view().Get(),
-        content_key ? sizeof(*content_key) : 0, content_key.get());
+        video_decoder_.Get(), pic.picture_buffer()->output_view().Get(), 0,
+        nullptr);
   } while (hr == E_PENDING || hr == D3DERR_WASSTILLDRAWING);
 
   if (FAILED(hr)) {
@@ -108,10 +87,9 @@ bool D3D11VP9Accelerator::BeginFrame(D3D11VP9Picture* pic) {
   return true;
 }
 
-void D3D11VP9Accelerator::CopyFrameParams(
-    const scoped_refptr<D3D11VP9Picture>& pic,
-    DXVA_PicParams_VP9* pic_params) {
-#define SET_PARAM(a, b) pic_params->a = pic->frame_hdr->b
+void D3D11VP9Accelerator::CopyFrameParams(const D3D11VP9Picture& pic,
+                                          DXVA_PicParams_VP9* pic_params) {
+#define SET_PARAM(a, b) pic_params->a = pic.frame_hdr->b
 #define COPY_PARAM(a) SET_PARAM(a, a)
 
   COPY_PARAM(profile);
@@ -129,13 +107,16 @@ void D3D11VP9Accelerator::CopyFrameParams(
   COPY_PARAM(frame_context_idx);
   COPY_PARAM(allow_high_precision_mv);
 
-  // extra_plane, BitDepthMinus8Luma, and BitDepthMinus8Chroma are initialized
-  // at 0 already.
+  // extra_plane is initialized to zero.
 
-  pic_params->CurrPic.Index7Bits = pic->level();
-  pic_params->frame_type = !pic->frame_hdr->IsKeyframe();
-  pic_params->subsampling_x = pic->frame_hdr->subsampling_x;
-  pic_params->subsampling_y = pic->frame_hdr->subsampling_y;
+  pic_params->BitDepthMinus8Luma = pic_params->BitDepthMinus8Chroma =
+      pic.frame_hdr->bit_depth - 8;
+
+  pic_params->CurrPic.Index7Bits = pic.level();
+  pic_params->frame_type = !pic.frame_hdr->IsKeyframe();
+
+  COPY_PARAM(subsampling_x);
+  COPY_PARAM(subsampling_y);
 
   SET_PARAM(width, frame_width);
   SET_PARAM(height, frame_height);
@@ -147,11 +128,11 @@ void D3D11VP9Accelerator::CopyFrameParams(
 }
 
 void D3D11VP9Accelerator::CopyReferenceFrames(
-    const scoped_refptr<D3D11VP9Picture>& pic,
+    const D3D11VP9Picture& pic,
     DXVA_PicParams_VP9* pic_params,
     const Vp9ReferenceFrameVector& ref_frames) {
   D3D11_TEXTURE2D_DESC texture_descriptor;
-  pic->picture_buffer()->texture()->GetDesc(&texture_descriptor);
+  pic.picture_buffer()->Texture()->GetDesc(&texture_descriptor);
 
   for (size_t i = 0; i < base::size(pic_params->ref_frame_map); i++) {
     auto ref_pic = ref_frames.GetFrame(i);
@@ -169,16 +150,15 @@ void D3D11VP9Accelerator::CopyReferenceFrames(
   }
 }
 
-void D3D11VP9Accelerator::CopyFrameRefs(
-    DXVA_PicParams_VP9* pic_params,
-    const scoped_refptr<D3D11VP9Picture>& pic) {
+void D3D11VP9Accelerator::CopyFrameRefs(DXVA_PicParams_VP9* pic_params,
+                                        const D3D11VP9Picture& pic) {
   for (size_t i = 0; i < base::size(pic_params->frame_refs); i++) {
     pic_params->frame_refs[i] =
-        pic_params->ref_frame_map[pic->frame_hdr->ref_frame_idx[i]];
+        pic_params->ref_frame_map[pic.frame_hdr->ref_frame_idx[i]];
   }
 
   for (size_t i = 0; i < base::size(pic_params->ref_frame_sign_bias); i++) {
-    pic_params->ref_frame_sign_bias[i] = pic->frame_hdr->ref_frame_sign_bias[i];
+    pic_params->ref_frame_sign_bias[i] = pic.frame_hdr->ref_frame_sign_bias[i];
   }
 }
 
@@ -210,10 +190,9 @@ void D3D11VP9Accelerator::CopyLoopFilterParams(
   }
 }
 
-void D3D11VP9Accelerator::CopyQuantParams(
-    DXVA_PicParams_VP9* pic_params,
-    const scoped_refptr<D3D11VP9Picture>& pic) {
-#define SET_PARAM(a, b) pic_params->a = pic->frame_hdr->quant_params.b
+void D3D11VP9Accelerator::CopyQuantParams(DXVA_PicParams_VP9* pic_params,
+                                          const D3D11VP9Picture& pic) {
+#define SET_PARAM(a, b) pic_params->a = pic.frame_hdr->quant_params.b
   SET_PARAM(base_qindex, base_q_idx);
   SET_PARAM(y_dc_delta_q, delta_q_y_dc);
   SET_PARAM(uv_dc_delta_q, delta_q_uv_dc);
@@ -250,13 +229,12 @@ void D3D11VP9Accelerator::CopySegmentationParams(
 #undef SET_PARAM
 }
 
-void D3D11VP9Accelerator::CopyHeaderSizeAndID(
-    DXVA_PicParams_VP9* pic_params,
-    const scoped_refptr<D3D11VP9Picture>& pic) {
+void D3D11VP9Accelerator::CopyHeaderSizeAndID(DXVA_PicParams_VP9* pic_params,
+                                              const D3D11VP9Picture& pic) {
   pic_params->uncompressed_header_size_byte_aligned =
-      static_cast<USHORT>(pic->frame_hdr->uncompressed_header_size);
+      static_cast<USHORT>(pic.frame_hdr->uncompressed_header_size);
   pic_params->first_partition_size =
-      static_cast<USHORT>(pic->frame_hdr->header_size_in_bytes);
+      static_cast<USHORT>(pic.frame_hdr->header_size_in_bytes);
 
   // StatusReportFeedbackNumber "should not be equal to 0".
   pic_params->StatusReportFeedbackNumber = ++status_feedback_;
@@ -264,7 +242,7 @@ void D3D11VP9Accelerator::CopyHeaderSizeAndID(
 
 bool D3D11VP9Accelerator::SubmitDecoderBuffer(
     const DXVA_PicParams_VP9& pic_params,
-    const scoped_refptr<D3D11VP9Picture>& pic) {
+    const D3D11VP9Picture& pic) {
 #define GET_BUFFER(type)                                 \
   RETURN_ON_HR_FAILURE(GetDecoderBuffer,                 \
                        video_context_->GetDecoderBuffer( \
@@ -282,15 +260,15 @@ bool D3D11VP9Accelerator::SubmitDecoderBuffer(
   RELEASE_BUFFER(D3D11_VIDEO_DECODER_BUFFER_PICTURE_PARAMETERS);
 
   size_t buffer_offset = 0;
-  while (buffer_offset < pic->frame_hdr->frame_size) {
+  while (buffer_offset < pic.frame_hdr->frame_size) {
     GET_BUFFER(D3D11_VIDEO_DECODER_BUFFER_BITSTREAM);
-    size_t copy_size = pic->frame_hdr->frame_size - buffer_offset;
+    size_t copy_size = pic.frame_hdr->frame_size - buffer_offset;
     bool contains_end = true;
     if (copy_size > buffer_size) {
       copy_size = buffer_size;
       contains_end = false;
     }
-    memcpy(buffer, pic->frame_hdr->data + buffer_offset, copy_size);
+    memcpy(buffer, pic.frame_hdr->data + buffer_offset, copy_size);
     RELEASE_BUFFER(D3D11_VIDEO_DECODER_BUFFER_BITSTREAM);
 
     DXVA_Slice_VPx_Short slice_info;
@@ -325,7 +303,7 @@ bool D3D11VP9Accelerator::SubmitDecoderBuffer(
     buffers[2].DataOffset = 0;
     buffers[2].DataSize = copy_size;
 
-    const DecryptConfig* config = pic->decrypt_config();
+    const DecryptConfig* config = pic.decrypt_config();
     if (config) {
       buffers[2].pIV = const_cast<char*>(config->iv().data());
       buffers[2].IVSize = config->iv().size();
@@ -349,50 +327,46 @@ bool D3D11VP9Accelerator::SubmitDecoderBuffer(
 }
 
 bool D3D11VP9Accelerator::SubmitDecode(
-    const scoped_refptr<VP9Picture>& picture,
+    scoped_refptr<VP9Picture> picture,
     const Vp9SegmentationParams& segmentation_params,
     const Vp9LoopFilterParams& loop_filter_params,
     const Vp9ReferenceFrameVector& reference_frames,
-    const base::Closure& on_finished_cb) {
-  scoped_refptr<D3D11VP9Picture> pic(
-      static_cast<D3D11VP9Picture*>(picture.get()));
+    base::OnceClosure on_finished_cb) {
+  D3D11VP9Picture* pic = static_cast<D3D11VP9Picture*>(picture.get());
 
-  if (!BeginFrame(pic.get()))
+  if (!BeginFrame(*pic))
     return false;
 
   DXVA_PicParams_VP9 pic_params = {};
-  CopyFrameParams(pic, &pic_params);
-  CopyReferenceFrames(pic, &pic_params, reference_frames);
-  CopyFrameRefs(&pic_params, pic);
+  CopyFrameParams(*pic, &pic_params);
+  CopyReferenceFrames(*pic, &pic_params, reference_frames);
+  CopyFrameRefs(&pic_params, *pic);
   CopyLoopFilterParams(&pic_params, loop_filter_params);
-  CopyQuantParams(&pic_params, pic);
+  CopyQuantParams(&pic_params, *pic);
   CopySegmentationParams(&pic_params, segmentation_params);
-  CopyHeaderSizeAndID(&pic_params, pic);
+  CopyHeaderSizeAndID(&pic_params, *pic);
 
-  if (!SubmitDecoderBuffer(pic_params, pic))
+  if (!SubmitDecoderBuffer(pic_params, *pic))
     return false;
 
   RETURN_ON_HR_FAILURE(DecoderEndFrame,
                        video_context_->DecoderEndFrame(video_decoder_.Get()));
   if (on_finished_cb)
-    on_finished_cb.Run();
+    std::move(on_finished_cb).Run();
   return true;
 }
 
-bool D3D11VP9Accelerator::OutputPicture(
-    const scoped_refptr<VP9Picture>& picture) {
+bool D3D11VP9Accelerator::OutputPicture(scoped_refptr<VP9Picture> picture) {
   D3D11VP9Picture* pic = static_cast<D3D11VP9Picture*>(picture.get());
-  client_->OutputResult(picture.get(), pic->picture_buffer());
-  return true;
+  return client_->OutputResult(picture.get(), pic->picture_buffer());
 }
 
 bool D3D11VP9Accelerator::IsFrameContextRequired() const {
   return false;
 }
 
-bool D3D11VP9Accelerator::GetFrameContext(
-    const scoped_refptr<VP9Picture>& picture,
-    Vp9FrameContext* frame_context) {
+bool D3D11VP9Accelerator::GetFrameContext(scoped_refptr<VP9Picture> picture,
+                                          Vp9FrameContext* frame_context) {
   return false;
 }
 

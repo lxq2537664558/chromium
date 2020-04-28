@@ -10,20 +10,21 @@
 
 namespace blink {
 
-XRViewerPose::XRViewerPose(
-    XRSession* session,
-    std::unique_ptr<TransformationMatrix> pose_model_matrix)
-    : XRPose(std::move(pose_model_matrix), session->EmulatedPosition()) {
-  // session will update views if required
-  // views array gets copied to views_
-  views_ = session->views();
+XRViewerPose::XRViewerPose(XRSession* session,
+                           const TransformationMatrix& pose_model_matrix)
+    : XRPose(pose_model_matrix, session->EmulatedPosition()) {
+  DVLOG(3) << __func__ << ": emulatedPosition()=" << emulatedPosition();
 
-  for (Member<XRView>& view : views_) {
-    view->UpdatePoseMatrix(transform_->TransformMatrix());
+  Vector<XRViewData>& view_data = session->views();
+
+  // Snapshot the session's current views.
+  for (XRViewData& view : view_data) {
+    view.UpdatePoseMatrix(transform_->TransformMatrix());
+    views_.push_back(MakeGarbageCollected<XRView>(session, view));
   }
 }
 
-void XRViewerPose::Trace(blink::Visitor* visitor) {
+void XRViewerPose::Trace(Visitor* visitor) {
   visitor->Trace(views_);
   XRPose::Trace(visitor);
 }

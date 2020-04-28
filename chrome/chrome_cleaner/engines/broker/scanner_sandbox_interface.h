@@ -16,7 +16,7 @@
 #include "base/process/process_handle.h"
 #include "base/strings/string16.h"
 #include "base/win/scoped_handle.h"
-#include "chrome/chrome_cleaner/interfaces/engine_requests.mojom.h"
+#include "chrome/chrome_cleaner/mojom/engine_requests.mojom.h"
 #include "chrome/chrome_cleaner/os/task_scheduler.h"
 #include "chrome/chrome_cleaner/strings/string16_embedded_nulls.h"
 
@@ -34,6 +34,9 @@ uint32_t SandboxFindNextFile(HANDLE hFindFile,
 // This function can't just be called FindClose or the compiler thinks it is
 // overloading the Windows version and gets unhappy.
 uint32_t SandboxFindClose(HANDLE hFindFile);
+
+uint32_t SandboxGetFileAttributes(const base::FilePath& file_name,
+                                  uint32_t* attributes);
 
 bool SandboxGetKnownFolderPath(chrome_cleaner::mojom::KnownFolder folder_id,
                                base::FilePath* folder_path);

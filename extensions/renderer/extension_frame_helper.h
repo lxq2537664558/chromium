@@ -125,9 +125,12 @@ class ExtensionFrameHelper
   void DidCreateNewDocument() override;
   void ReadyToCommitNavigation(
       blink::WebDocumentLoader* document_loader) override;
+  void DidCommitProvisionalLoad(bool is_same_document_navigation,
+                                ui::PageTransition transition) override;
   void DidCreateScriptContext(v8::Local<v8::Context>,
-                              int world_id) override;
-  void WillReleaseScriptContext(v8::Local<v8::Context>, int world_id) override;
+                              int32_t world_id) override;
+  void WillReleaseScriptContext(v8::Local<v8::Context>,
+                                int32_t world_id) override;
   bool OnMessageReceived(const IPC::Message& message) override;
   void OnDestruct() override;
   void DraggableRegionsChanged() override;
@@ -192,7 +195,7 @@ class ExtensionFrameHelper
   // navigation happens, it is either the initial one or a reload.
   bool has_started_first_navigation_ = false;
 
-  base::WeakPtrFactory<ExtensionFrameHelper> weak_ptr_factory_;
+  base::WeakPtrFactory<ExtensionFrameHelper> weak_ptr_factory_{this};
 
   DISALLOW_COPY_AND_ASSIGN(ExtensionFrameHelper);
 };

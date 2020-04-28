@@ -14,8 +14,8 @@
 #include "chrome/browser/sync/test/integration/sync_test.h"
 #include "chrome/browser/web_data_service_factory.h"
 #include "components/autofill/core/browser/autofill_data_util.h"
-#include "components/autofill/core/browser/autofill_metadata.h"
-#include "components/autofill/core/browser/autofill_profile.h"
+#include "components/autofill/core/browser/data_model/autofill_metadata.h"
+#include "components/autofill/core/browser/data_model/autofill_profile.h"
 #include "components/autofill/core/browser/payments/payments_customer_data.h"
 #include "components/autofill/core/browser/personal_data_manager.h"
 #include "components/autofill/core/browser/webdata/autofill_table.h"
@@ -28,6 +28,7 @@ using autofill::AutofillProfile;
 using autofill::AutofillTable;
 using autofill::AutofillWebDataService;
 using autofill::CreditCard;
+using autofill::CreditCardCloudTokenData;
 using autofill::PaymentsCustomerData;
 using autofill::PersonalDataManager;
 using autofill::data_util::TruncateUTF8;
@@ -113,7 +114,7 @@ void LogLists(const std::vector<Item*>& list_a,
   }
 }
 
-bool WalletDataAndMetadataMatchAndAddressesHaveConverted(
+bool WalletDataAndMetadataMatch(
     int profile_a,
     const std::vector<CreditCard*>& server_cards_a,
     const std::vector<AutofillProfile*>& server_profiles_a,
@@ -128,11 +129,15 @@ bool WalletDataAndMetadataMatchAndAddressesHaveConverted(
     LogLists(server_profiles_a, server_profiles_b);
     return false;
   }
-  // Check that all server profiles have converted to local ones.
-  for (AutofillProfile* profile : server_profiles_a) {
+  return true;
+}
+
+bool AddressesHaveConverted(
+    const std::vector<AutofillProfile*>& server_profiles) {
+  for (AutofillProfile* profile : server_profiles) {
     if (!profile->has_converted()) {
       DVLOG(1) << "Not all profiles are converted";
-      LogLists(server_profiles_a, server_profiles_b);
+      LogLists(server_profiles, std::vector<AutofillProfile*>());
       return false;
     }
   }
@@ -140,10 +145,14 @@ bool WalletDataAndMetadataMatchAndAddressesHaveConverted(
 }
 
 void WaitForCurrentTasksToComplete(base::SequencedTaskRunner* task_runner) {
-  base::RunLoop loop;
-  task_runner->PostTask(
-      FROM_HERE, base::BindOnce(&base::RunLoop::Quit, base::Unretained(&loop)));
-  loop.Run();
+  // We are fine with the UI thread getting blocked. If using RunLoop here, in
+  // some uses of this functions, we would get nested RunLoops that tend to
+  // cause troubles. This is a more robust solution.
+  base::WaitableEvent event(base::WaitableEvent::ResetPolicy::MANUAL,
+                            base::WaitableEvent::InitialState::NOT_SIGNALED);
+  task_runner->PostTask(FROM_HERE, base::BindOnce(&base::WaitableEvent::Signal,
+                                                  base::Unretained(&event)));
+  event.Wait();
 }
 
 void WaitForPDMToRefresh(int profile) {
@@ -180,6 +189,14 @@ void SetPaymentsCustomerDataOnDBSequence(
       ->SetPaymentsCustomerData(&customer_data);
 }
 
+void SetCreditCardCloudTokenDataOnDBSequence(
+    AutofillWebDataService* wds,
+    const std::vector<CreditCardCloudTokenData>& cloud_token_data) {
+  DCHECK(wds->GetDBTaskRunner()->RunsTasksInCurrentSequence());
+  AutofillTable::FromWebDatabase(wds->GetDatabase())
+      ->SetCreditCardCloudTokenData(cloud_token_data);
+}
+
 void GetServerCardsMetadataOnDBSequence(
     AutofillWebDataService* wds,
     std::map<std::string, AutofillMetadata>* cards_metadata) {
@@ -214,6 +231,7 @@ const char kDefaultCardID[] = "wallet card ID";
 const char kDefaultAddressID[] = "wallet address ID";
 const char kDefaultCustomerID[] = "deadbeef";
 const char kDefaultBillingAddressID[] = "billing address entity ID";
+const char kDefaultCreditCardCloudTokenDataID[] = "cloud token data ID";
 
 PersonalDataManager* GetPersonalDataManager(int index) {
   return autofill::PersonalDataManagerFactory::GetForProfile(
@@ -257,6 +275,15 @@ void SetPaymentsCustomerData(
       FROM_HERE, base::BindOnce(&SetPaymentsCustomerDataOnDBSequence,
                                 base::Unretained(wds.get()), customer_data));
   WaitForCurrentTasksToComplete(wds->GetDBTaskRunner());
+}
+
+void SetCreditCardCloudTokenData(
+    int profile,
+    const std::vector<autofill::CreditCardCloudTokenData>& cloud_token_data) {
+  scoped_refptr<AutofillWebDataService> wds = GetProfileWebDataService(profile);
+  wds->GetDBTaskRunner()->PostTask(
+      FROM_HERE, base::BindOnce(&SetCreditCardCloudTokenDataOnDBSequence,
+                                base::Unretained(wds.get()), cloud_token_data));
 }
 
 void UpdateServerCardMetadata(int profile, const CreditCard& credit_card) {
@@ -317,10 +344,10 @@ sync_pb::SyncEntity CreateDefaultSyncWalletCard() {
                               kDefaultBillingAddressID);
 }
 
-sync_pb::SyncEntity CreateSyncWalletCard(
-    const std::string& name,
-    const std::string& last_four,
-    const std::string& billing_address_id) {
+sync_pb::SyncEntity CreateSyncWalletCard(const std::string& name,
+                                         const std::string& last_four,
+                                         const std::string& billing_address_id,
+                                         const std::string& nickname) {
   sync_pb::SyncEntity entity;
   entity.set_name(name);
   entity.set_id_string(name);
@@ -343,6 +370,9 @@ sync_pb::SyncEntity CreateSyncWalletCard(
   credit_card->set_type(kDefaultCardType);
   if (!billing_address_id.empty()) {
     credit_card->set_billing_address_id(billing_address_id);
+  }
+  if (!nickname.empty()) {
+    credit_card->set_nickname(nickname);
   }
   return entity;
 }
@@ -383,7 +413,6 @@ autofill::CreditCard GetCreditCard(const std::string& name,
                   base::UTF8ToUTF16(kDefaultCardName));
   card.SetServerStatus(CreditCard::OK);
   card.SetNetworkForMaskedCard(autofill::kAmericanExpressCard);
-  card.set_card_type(CreditCard::CARD_TYPE_CREDIT);
   card.set_billing_address_id(kDefaultBillingAddressID);
   return card;
 }
@@ -428,6 +457,28 @@ sync_pb::SyncEntity CreateSyncWalletAddress(const std::string& name,
   wallet_address->set_id(name);
   wallet_address->set_company_name(company);
   return result;
+}
+
+sync_pb::SyncEntity CreateSyncCreditCardCloudTokenData(
+    const std::string& cloud_token_data_id) {
+  sync_pb::SyncEntity entity;
+  entity.set_name(cloud_token_data_id);
+  entity.set_id_string(cloud_token_data_id);
+  entity.set_version(0);  // Will be overridden by the fake server.
+  entity.set_ctime(12345);
+  entity.set_mtime(12345);
+  sync_pb::AutofillWalletSpecifics* wallet_specifics =
+      entity.mutable_specifics()->mutable_autofill_wallet();
+  wallet_specifics->set_type(
+      sync_pb::AutofillWalletSpecifics::CREDIT_CARD_CLOUD_TOKEN_DATA);
+  sync_pb::WalletCreditCardCloudTokenData* cloud_token_data =
+      wallet_specifics->mutable_cloud_token_data();
+  cloud_token_data->set_instrument_token(cloud_token_data_id);
+  return entity;
+}
+
+sync_pb::SyncEntity CreateDefaultSyncCreditCardCloudTokenData() {
+  return CreateSyncCreditCardCloudTokenData(kDefaultCreditCardCloudTokenDataID);
 }
 
 void ExpectDefaultCreditCardValues(const CreditCard& card) {
@@ -511,21 +562,49 @@ bool AutofillWalletChecker::Wait() {
   return StatusChangeChecker::Wait();
 }
 
-bool AutofillWalletChecker::IsExitConditionSatisfied() {
+bool AutofillWalletChecker::IsExitConditionSatisfied(std::ostream* os) {
+  *os << "Waiting for matching autofill wallet cards and addresses";
   autofill::PersonalDataManager* pdm_a =
       wallet_helper::GetPersonalDataManager(profile_a_);
   autofill::PersonalDataManager* pdm_b =
       wallet_helper::GetPersonalDataManager(profile_b_);
-  return WalletDataAndMetadataMatchAndAddressesHaveConverted(
-      profile_a_, pdm_a->GetServerCreditCards(), pdm_a->GetServerProfiles(),
-      profile_b_, pdm_b->GetServerCreditCards(), pdm_b->GetServerProfiles());
-}
-
-std::string AutofillWalletChecker::GetDebugMessage() const {
-  return "Waiting for matching autofill wallet cards and addresses";
+  return WalletDataAndMetadataMatch(profile_a_, pdm_a->GetServerCreditCards(),
+                                    pdm_a->GetServerProfiles(), profile_b_,
+                                    pdm_b->GetServerCreditCards(),
+                                    pdm_b->GetServerProfiles()) &&
+         // If data matches, it suffices to check addresses from profile_a_.
+         AddressesHaveConverted(pdm_a->GetServerProfiles());
 }
 
 void AutofillWalletChecker::OnPersonalDataChanged() {
+  CheckExitCondition();
+}
+
+AutofillWalletConversionChecker::AutofillWalletConversionChecker(int profile)
+    : profile_(profile) {
+  wallet_helper::GetPersonalDataManager(profile_)->AddObserver(this);
+}
+
+AutofillWalletConversionChecker::~AutofillWalletConversionChecker() {
+  wallet_helper::GetPersonalDataManager(profile_)->RemoveObserver(this);
+}
+
+bool AutofillWalletConversionChecker::Wait() {
+  // We need to make sure we are not reading before any locally instigated async
+  // writes. This is run exactly one time before the first
+  // IsExitConditionSatisfied() is called.
+  WaitForPDMToRefresh(profile_);
+  return StatusChangeChecker::Wait();
+}
+
+bool AutofillWalletConversionChecker::IsExitConditionSatisfied(
+    std::ostream* os) {
+  *os << "Waiting for converted autofill wallet addresses";
+  return AddressesHaveConverted(
+      wallet_helper::GetPersonalDataManager(profile_)->GetServerProfiles());
+}
+
+void AutofillWalletConversionChecker::OnPersonalDataChanged() {
   CheckExitCondition();
 }
 
@@ -542,34 +621,21 @@ AutofillWalletMetadataSizeChecker::~AutofillWalletMetadataSizeChecker() {
   wallet_helper::GetPersonalDataManager(profile_b_)->RemoveObserver(this);
 }
 
-bool AutofillWalletMetadataSizeChecker::IsExitConditionSatisfied() {
-  // Make sure we do not nest IsExitConditionSatisfiedImpl() (as it can happen
-  // that OnPersonalDataChanged() gets notified while we're inside
-  // IsExitConditionSatisfiedImpl(), waiting for the DB task that loads metadata
-  // to finish).
-  switch (state_) {
-    case IDLE:
-      do {
-        state_ = CHECKING;
-        if (IsExitConditionSatisfiedImpl()) {
-          return true;
-        }
-      } while (state_ == SHOULD_RECHECK);
-      state_ = IDLE;
-      return false;
-    case CHECKING:
-      // Make sure that each IsExitConditionSatisfied() call is followed by a
-      // IsExitConditionSatisfiedImpl() call so that we do not miss any updates
-      // to the DB.
-      state_ = SHOULD_RECHECK;
-      return false;
-    case SHOULD_RECHECK:
-      return false;
-  }
-}
-
-std::string AutofillWalletMetadataSizeChecker::GetDebugMessage() const {
-  return "Waiting for matching autofill wallet metadata sizes";
+bool AutofillWalletMetadataSizeChecker::IsExitConditionSatisfied(
+    std::ostream* os) {
+  *os << "Waiting for matching autofill wallet metadata sizes";
+  // This checker used to be flaky (crbug.com/921386) because of using RunLoops
+  // to load synchronously data from the DB in IsExitConditionSatisfiedImpl.
+  // Such a waiting RunLoop often processed another OnPersonalDataChanged() call
+  // resulting in nested RunLoops. This should be avoided now by blocking using
+  // WaitableEvent, instead. This check enforces that we do not nest it anymore.
+  DCHECK(!checking_exit_condition_in_flight_)
+      << "There should be no nested calls for "
+         "IsExitConditionSatisfied(std::ostream* os)";
+  checking_exit_condition_in_flight_ = true;
+  bool exit_condition_is_satisfied = IsExitConditionSatisfiedImpl();
+  checking_exit_condition_in_flight_ = false;
+  return exit_condition_is_satisfied;
 }
 
 void AutofillWalletMetadataSizeChecker::OnPersonalDataChanged() {
@@ -600,22 +666,4 @@ bool AutofillWalletMetadataSizeChecker::IsExitConditionSatisfiedImpl() {
     return false;
   }
   return true;
-}
-
-UssWalletSwitchToggler::UssWalletSwitchToggler() {}
-
-void UssWalletSwitchToggler::InitWithDefaultFeatures() {
-  InitWithFeatures({}, {});
-}
-
-void UssWalletSwitchToggler::InitWithFeatures(
-    std::vector<base::Feature> enabled_features,
-    std::vector<base::Feature> disabled_features) {
-  if (GetParam()) {
-    enabled_features.push_back(switches::kSyncUSSAutofillWalletMetadata);
-  } else {
-    disabled_features.push_back(switches::kSyncUSSAutofillWalletMetadata);
-  }
-
-  override_features_.InitWithFeatures(enabled_features, disabled_features);
 }

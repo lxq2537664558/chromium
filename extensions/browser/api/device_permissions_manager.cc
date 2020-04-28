@@ -9,6 +9,7 @@
 #include <utility>
 
 #include "base/bind.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/memory/singleton.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/stringprintf.h"
@@ -16,9 +17,6 @@
 #include "base/values.h"
 #include "components/keyed_service/content/browser_context_dependency_manager.h"
 #include "content/public/browser/browser_thread.h"
-#include "device/usb/mojo/type_converters.h"
-#include "device/usb/usb_device.h"
-#include "device/usb/usb_ids.h"
 #include "extensions/browser/api/hid/hid_device_manager.h"
 #include "extensions/browser/api/usb/usb_device_manager.h"
 #include "extensions/browser/extension_host.h"
@@ -26,6 +24,7 @@
 #include "extensions/browser/extensions_browser_client.h"
 #include "extensions/common/value_builder.h"
 #include "extensions/strings/grit/extensions_strings.h"
+#include "services/device/public/cpp/usb/usb_ids.h"
 #include "ui/base/l10n/l10n_util.h"
 
 namespace extensions {
@@ -227,11 +226,11 @@ scoped_refptr<DevicePermissionEntry> ReadDevicePermissionEntry(
   }
 
   if (type == kDeviceTypeUsb) {
-    return new DevicePermissionEntry(
+    return base::MakeRefCounted<DevicePermissionEntry>(
         DevicePermissionEntry::Type::USB, vendor_id, product_id, serial_number,
         manufacturer_string, product_string, last_used);
   } else if (type == kDeviceTypeHid) {
-    return new DevicePermissionEntry(
+    return base::MakeRefCounted<DevicePermissionEntry>(
         DevicePermissionEntry::Type::HID, vendor_id, product_id, serial_number,
         base::string16(), product_string, last_used);
   }
@@ -349,15 +348,6 @@ base::string16 DevicePermissionEntry::GetPermissionMessageString() const {
 }
 
 DevicePermissions::~DevicePermissions() {
-}
-
-scoped_refptr<DevicePermissionEntry> DevicePermissions::FindUsbDeviceEntry(
-    scoped_refptr<device::UsbDevice> device) const {
-  if (!device)
-    return nullptr;
-
-  auto device_info = device::mojom::UsbDeviceInfo::From(*device);
-  return FindUsbDeviceEntry(*device_info);
 }
 
 scoped_refptr<DevicePermissionEntry> DevicePermissions::FindUsbDeviceEntry(
@@ -549,8 +539,8 @@ void DevicePermissionsManager::AllowUsbDevice(
 
     device_permissions->entries_.insert(device_entry);
     SaveDevicePermissionEntry(context_, extension_id, device_entry);
-  } else if (!ContainsKey(device_permissions->ephemeral_usb_devices_,
-                          device_info.guid)) {
+  } else if (!base::Contains(device_permissions->ephemeral_usb_devices_,
+                             device_info.guid)) {
     // Non-persistent devices cannot be reliably identified when they are
     // reconnected so such devices are only remembered until disconnect.
     // Register an observer here so that this set doesn't grow undefinitely.
@@ -573,8 +563,7 @@ void DevicePermissionsManager::AllowHidDevice(
   DCHECK(thread_checker_.CalledOnValidThread());
   DevicePermissions* device_permissions = GetForExtension(extension_id);
 
-  scoped_refptr<DevicePermissionEntry> device_entry(
-      new DevicePermissionEntry(device));
+  auto device_entry = base::MakeRefCounted<DevicePermissionEntry>(device);
 
   if (device_entry->IsPersistent()) {
     for (const auto& entry : device_permissions->entries()) {
@@ -587,8 +576,8 @@ void DevicePermissionsManager::AllowHidDevice(
 
     device_permissions->entries_.insert(device_entry);
     SaveDevicePermissionEntry(context_, extension_id, device_entry);
-  } else if (!ContainsKey(device_permissions->ephemeral_hid_devices_,
-                          device.guid)) {
+  } else if (!base::Contains(device_permissions->ephemeral_hid_devices_,
+                             device.guid)) {
     // Non-persistent devices cannot be reliably identified when they are
     // reconnected so such devices are only remembered until disconnect.
     // Register an observer here so that this set doesn't grow undefinitely.
@@ -620,7 +609,7 @@ void DevicePermissionsManager::RemoveEntry(
   DCHECK(thread_checker_.CalledOnValidThread());
   DevicePermissions* device_permissions = GetInternal(extension_id);
   DCHECK(device_permissions);
-  DCHECK(ContainsKey(device_permissions->entries_, entry));
+  DCHECK(base::Contains(device_permissions->entries_, entry));
   device_permissions->entries_.erase(entry);
   if (entry->IsPersistent()) {
     RemoveDevicePermissionEntry(context_, extension_id, entry);

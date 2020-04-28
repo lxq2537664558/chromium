@@ -4,9 +4,9 @@
 
 package org.chromium.chrome.browser.suggestions;
 
-import org.chromium.chrome.browser.ChromeActivity;
-import org.chromium.chrome.browser.ChromeFeatureList;
-import org.chromium.chrome.browser.native_page.NativePageHost;
+import android.app.Activity;
+
+import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.native_page.NativePageNavigationDelegateImpl;
 import org.chromium.chrome.browser.net.spdyproxy.DataReductionProxySettings;
 import org.chromium.chrome.browser.ntp.NewTabPageUma;
@@ -16,6 +16,7 @@ import org.chromium.chrome.browser.offlinepages.OfflinePageUtils;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.tabmodel.TabModelSelector;
+import org.chromium.chrome.browser.ui.native_page.NativePageHost;
 import org.chromium.components.offline_items_collection.LaunchLocation;
 import org.chromium.content_public.browser.LoadUrlParams;
 import org.chromium.content_public.common.Referrer;
@@ -29,9 +30,9 @@ import org.chromium.ui.mojom.WindowOpenDisposition;
 public class SuggestionsNavigationDelegate extends NativePageNavigationDelegateImpl {
     private static final String NEW_TAB_URL_HELP = "https://support.google.com/chrome/?p=new_tab";
 
-    public SuggestionsNavigationDelegate(ChromeActivity activity, Profile profile,
-            NativePageHost host, TabModelSelector tabModelSelector) {
-        super(activity, profile, host, tabModelSelector);
+    public SuggestionsNavigationDelegate(Activity activity, Profile profile, NativePageHost host,
+            TabModelSelector tabModelSelector, Tab tab) {
+        super(activity, profile, host, tabModelSelector, tab);
     }
 
     @Override
@@ -60,13 +61,11 @@ public class SuggestionsNavigationDelegate extends NativePageNavigationDelegateI
      * @param article The content suggestion to open.
      */
     public void openSnippet(final int windowOpenDisposition, final SnippetArticle article) {
-        if (!article.isContextual()) {
-            NewTabPageUma.recordAction(NewTabPageUma.ACTION_OPENED_SNIPPET);
-        }
+        NewTabPageUma.recordAction(NewTabPageUma.ACTION_OPENED_SNIPPET);
 
-        // We explicitly open an offline page only for prefetched offline pages when Data Reduction
-        // Proxy is enabled. For all other sections the URL is opened and it is up to Offline Pages
-        // whether to open its offline page (e.g. when offline).
+        // We explicitly open an offline page only for prefetched offline pages when Data
+        // Reduction Proxy is enabled. For all other sections the URL is opened and it is up to
+        // Offline Pages whether to open its offline page (e.g. when offline).
         if (DataReductionProxySettings.getInstance().isDataReductionProxyEnabled()
                 && article.isPrefetched()) {
             assert article.getOfflinePageOfflineId() != null;
@@ -96,17 +95,8 @@ public class SuggestionsNavigationDelegate extends NativePageNavigationDelegateI
                     ReferrerPolicy.ALWAYS));
         }
 
-        // Set appropriate referrer for contextual suggestions to distinguish them from navigation
-        // from a page.
-        if (article.mCategory == KnownCategories.CONTEXTUAL) {
-            loadUrlParams.setReferrer(
-                    new Referrer(SuggestionsConfig.getReferrerUrl(
-                                         ChromeFeatureList.CONTEXTUAL_SUGGESTIONS_BUTTON),
-                            ReferrerPolicy.ALWAYS));
-        }
-
         Tab loadingTab = openUrl(windowOpenDisposition, loadUrlParams);
-        if (loadingTab != null && !article.isContextual()) {
+        if (loadingTab != null) {
             SuggestionsMetrics.recordVisit(loadingTab, article);
         }
     }

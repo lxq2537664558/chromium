@@ -19,6 +19,10 @@
 #include "ui/gfx/geometry/rect_conversions.h"
 #include "ui/gfx/skia_util.h"
 
+#ifndef OS_ANDROID
+#include "cc/paint/skottie_transfer_cache_entry.h"
+#endif
+
 namespace cc {
 namespace {
 const size_t kSkiaAlignment = 4u;
@@ -39,7 +43,7 @@ SkIRect MakeSrcRect(const PaintImage& image) {
 size_t PaintOpWriter::GetFlattenableSize(const SkFlattenable* flattenable) {
   // The first bit is always written to indicate the serialized size of the
   // flattenable, or zero if it doesn't exist.
-  size_t total_size = sizeof(uint64_t) + alignof(uint64_t);
+  size_t total_size = sizeof(uint64_t) + sizeof(uint64_t) /* alignment */;
   if (!flattenable)
     return total_size;
 
@@ -60,7 +64,7 @@ size_t PaintOpWriter::GetImageSize(const PaintImage& image) {
     image_size += sizeof(info.colorType());
     image_size += sizeof(info.width());
     image_size += sizeof(info.height());
-    image_size += sizeof(uint64_t) + alignof(uint64_t);
+    image_size += sizeof(uint64_t) + sizeof(uint64_t) /* alignment */;
     image_size += info.computeMinByteSize();
   }
   return image_size;
@@ -270,6 +274,35 @@ void PaintOpWriter::Write(const DrawImage& draw_image,
              decoded_draw_image.transfer_cache_entry_needs_mips());
 }
 
+// Android does not use skottie. Remove below section to keep binary size to a
+// minimum.
+#ifndef OS_ANDROID
+void PaintOpWriter::Write(scoped_refptr<SkottieWrapper> skottie) {
+  uint32_t id = skottie->id();
+  Write(id);
+
+  uint64_t* bytes_to_skip = WriteSize(0u);
+  if (!valid_)
+    return;
+
+  bool locked =
+      options_.transfer_cache->LockEntry(TransferCacheEntryType::kSkottie, id);
+
+  // Add a cache entry for the skottie animation.
+  uint64_t bytes_written = 0u;
+  if (!locked) {
+    bytes_written = options_.transfer_cache->CreateEntry(
+        ClientSkottieTransferCacheEntry(skottie), memory_);
+    options_.transfer_cache->AssertLocked(TransferCacheEntryType::kSkottie, id);
+  }
+
+  DCHECK_LE(bytes_written, remaining_bytes_);
+  *bytes_to_skip = bytes_written;
+  memory_ += bytes_written;
+  remaining_bytes_ -= bytes_written;
+}
+#endif  // OS_ANDROID
+
 void PaintOpWriter::WriteImage(uint32_t transfer_cache_entry_id,
                                bool needs_mips) {
   if (transfer_cache_entry_id == kInvalidImageTransferCacheEntryId) {
@@ -363,9 +396,17 @@ sk_sp<PaintShader> PaintOpWriter::TransformShaderIfNecessary(
   const auto& ctm = options_.canvas->getTotalMatrix();
 
   if (type == PaintShader::Type::kImage) {
-    return original->CreateDecodedImage(ctm, quality, options_.image_provider,
-                                        paint_image_transfer_cache_entry_id,
-                                        &quality, paint_image_needs_mips);
+    if (!original->paint_image().IsPaintWorklet()) {
+      return original->CreateDecodedImage(ctm, quality, options_.image_provider,
+                                          paint_image_transfer_cache_entry_id,
+                                          &quality, paint_image_needs_mips);
+    }
+    sk_sp<PaintShader> record_shader =
+        original->CreatePaintWorkletRecord(options_.image_provider);
+    if (!record_shader)
+      return nullptr;
+    return record_shader->CreateScaledPaintRecord(
+        ctm, options_.max_texture_size, paint_record_post_scale);
   }
 
   if (type == PaintShader::Type::kPaintRecord) {
@@ -464,6 +505,10 @@ void PaintOpWriter::Write(const PaintShader* shader, SkFilterQuality quality) {
 
 void PaintOpWriter::Write(SkColorType color_type) {
   WriteSimple(static_cast<uint32_t>(color_type));
+}
+
+void PaintOpWriter::Write(SkYUVColorSpace yuv_color_space) {
+  WriteSimple(static_cast<uint32_t>(yuv_color_space));
 }
 
 void PaintOpWriter::WriteData(size_t bytes, const void* input) {
@@ -808,8 +853,7 @@ void PaintOpWriter::Write(const PaintRecord* record,
       memory_, remaining_bytes_, options_.image_provider,
       options_.transfer_cache, options_.paint_cache, options_.strike_server,
       options_.color_space, can_use_lcd_text,
-      options_.context_supports_distance_field_text, options_.max_texture_size,
-      options_.max_texture_bytes);
+      options_.context_supports_distance_field_text, options_.max_texture_size);
   serializer.Serialize(record, playback_rect, post_scale,
                        post_matrix_for_analysis);
 

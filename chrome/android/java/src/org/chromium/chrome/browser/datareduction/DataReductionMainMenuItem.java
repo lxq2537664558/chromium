@@ -16,11 +16,12 @@ import android.widget.TextView;
 
 import org.chromium.base.metrics.RecordUserAction;
 import org.chromium.chrome.R;
+import org.chromium.chrome.browser.datareduction.settings.DataReductionPreferenceFragment;
 import org.chromium.chrome.browser.feature_engagement.TrackerFactory;
 import org.chromium.chrome.browser.net.spdyproxy.DataReductionProxySettings;
-import org.chromium.chrome.browser.preferences.PreferencesLauncher;
-import org.chromium.chrome.browser.preferences.datareduction.DataReductionPreferenceFragment;
 import org.chromium.chrome.browser.profiles.Profile;
+import org.chromium.chrome.browser.settings.SettingsLauncher;
+import org.chromium.chrome.browser.settings.SettingsLauncherImpl;
 import org.chromium.components.feature_engagement.EventConstants;
 import org.chromium.components.feature_engagement.Tracker;
 import org.chromium.third_party.android.datausagechart.ChartDataUsageView;
@@ -43,9 +44,7 @@ public class DataReductionMainMenuItem extends FrameLayout implements View.OnCli
         TextView itemText = (TextView) findViewById(R.id.menu_item_text);
         TextView itemSummary = (TextView) findViewById(R.id.menu_item_summary);
         ImageView icon = (ImageView) findViewById(R.id.icon);
-        icon.setContentDescription(getContext().getString(
-                DataReductionBrandingResourceProvider.getDataSaverBrandedString(
-                        R.string.data_reduction_title)));
+        icon.setContentDescription(getContext().getString(R.string.data_reduction_title_lite_mode));
 
         if (DataReductionProxySettings.getInstance().isDataReductionProxyEnabled()) {
             DataReductionProxyUma.dataReductionProxyUIAction(
@@ -74,8 +73,7 @@ public class DataReductionMainMenuItem extends FrameLayout implements View.OnCli
             DataReductionProxyUma.dataReductionProxyUIAction(
                     DataReductionProxyUma.ACTION_MAIN_MENU_DISPLAYED_OFF);
 
-            itemText.setText(DataReductionBrandingResourceProvider.getDataSaverBrandedString(
-                    R.string.data_reduction_title));
+            itemText.setText(R.string.data_reduction_title_lite_mode);
             itemSummary.setText(R.string.text_off);
         }
 
@@ -87,10 +85,14 @@ public class DataReductionMainMenuItem extends FrameLayout implements View.OnCli
         RecordUserAction.record("MobileMenuDataSaverOpened");
         Bundle fragmentArgs = new Bundle();
         fragmentArgs.putBoolean(DataReductionPreferenceFragment.FROM_MAIN_MENU, true);
-        PreferencesLauncher.launchSettingsPage(
+        SettingsLauncher settingsLauncher = new SettingsLauncherImpl();
+        settingsLauncher.launchSettingsActivity(
                 getContext(), DataReductionPreferenceFragment.class, fragmentArgs);
 
-        Tracker tracker = TrackerFactory.getTrackerForProfile(Profile.getLastUsedProfile());
+        // TODO (https://crbug.com/1048632): Use the current profile (i.e., regular profile or
+        // incognito profile) instead of always using regular profile. It works correctly now, but
+        // it is not safe.
+        Tracker tracker = TrackerFactory.getTrackerForProfile(Profile.getLastUsedRegularProfile());
         tracker.notifyEvent(EventConstants.DATA_SAVER_DETAIL_OPENED);
     }
 }

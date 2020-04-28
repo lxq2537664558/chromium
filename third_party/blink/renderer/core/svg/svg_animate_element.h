@@ -40,25 +40,25 @@ class CORE_EXPORT SVGAnimateElement : public SVGAnimationElement {
   DEFINE_WRAPPERTYPEINFO();
 
  public:
-  static SVGAnimateElement* Create(Document&);
-
   explicit SVGAnimateElement(Document&);
   SVGAnimateElement(const QualifiedName&, Document&);
   ~SVGAnimateElement() override;
 
-  void Trace(blink::Visitor*) override;
+  void Trace(Visitor*) override;
 
   bool IsSVGAnimationAttributeSettingJavaScriptURL(
       const Attribute&) const override;
 
-  AnimatedPropertyType GetAnimatedPropertyType();
-  bool AnimatedPropertyTypeSupportsAddition();
+  const QualifiedName& AttributeName() const { return attribute_name_; }
+  AnimatedPropertyType GetAnimatedPropertyType() const;
+  bool AnimatedPropertyTypeSupportsAddition() const;
+  bool IsAdditive() const final;
 
  protected:
-  bool HasValidTarget() override;
-
   void WillChangeAnimationTarget() final;
   void DidChangeAnimationTarget() final;
+
+  bool HasValidAnimation() const override;
 
   void ResetAnimatedType() final;
   void ClearAnimatedType() final;
@@ -71,11 +71,10 @@ class CORE_EXPORT SVGAnimateElement : public SVGAnimationElement {
                                 const String& by_string) final;
   void CalculateAnimatedValue(float percentage,
                               unsigned repeat_count,
-                              SVGSMILElement* result_element) final;
+                              SVGSMILElement* result_element) const final;
   void ApplyResultsToTarget() final;
   float CalculateDistance(const String& from_string,
                           const String& to_string) final;
-  bool IsAdditive() final;
 
   void ParseAttribute(const AttributeModificationParams&) override;
 
@@ -92,11 +91,6 @@ class CORE_EXPORT SVGAnimateElement : public SVGAnimationElement {
                            stringsShouldNotSupportAddition);
 
  private:
-  void ResetAnimatedPropertyType();
-
-  bool ShouldApplyAnimation(const SVGElement& target_element,
-                            const QualifiedName& attribute_name);
-
   void SetAttributeType(const AtomicString&);
 
   InsertionNotificationRequest InsertedInto(ContainerNode&) final;
@@ -104,6 +98,10 @@ class CORE_EXPORT SVGAnimateElement : public SVGAnimationElement {
 
   virtual void ResolveTargetProperty();
   void ClearTargetProperty();
+  void UpdateTargetProperty();
+
+  void WillChangeAnimatedType();
+  void DidChangeAnimatedType();
 
   virtual SVGPropertyBase* CreatePropertyForAnimation(const String&) const;
   SVGPropertyBase* CreatePropertyForAttributeAnimation(const String&) const;
@@ -119,6 +117,7 @@ class CORE_EXPORT SVGAnimateElement : public SVGAnimationElement {
 
  protected:
   Member<SVGAnimatedPropertyBase> target_property_;
+  QualifiedName attribute_name_;
   AnimatedPropertyType type_;
   CSSPropertyID css_property_id_;
 
@@ -139,7 +138,13 @@ inline bool IsSVGAnimateElement(const SVGElement& element) {
          element.HasTagName(svg_names::kSetTag);
 }
 
-DEFINE_SVGELEMENT_TYPE_CASTS_WITH_FUNCTION(SVGAnimateElement);
+template <>
+struct DowncastTraits<SVGAnimateElement> {
+  static bool AllowFrom(const Node& node) {
+    auto* element = DynamicTo<SVGElement>(node);
+    return element && IsSVGAnimateElement(*element);
+  }
+};
 
 }  // namespace blink
 

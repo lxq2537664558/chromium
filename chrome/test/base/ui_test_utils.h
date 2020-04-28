@@ -12,7 +12,12 @@
 #include <vector>
 
 #include "base/macros.h"
+#include "base/scoped_observer.h"
 #include "base/strings/string16.h"
+#include "chrome/browser/ui/browser_list_observer.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
+#include "chrome/browser/ui/tabs/tab_strip_model_observer.h"
+#include "chrome/browser/ui/view_ids.h"
 #include "components/history/core/browser/history_service.h"
 #include "content/public/browser/notification_details.h"
 #include "content/public/browser/notification_observer.h"
@@ -26,11 +31,10 @@
 #include "url/gurl.h"
 
 class Browser;
-class LocationBar;
 class Profile;
 
-namespace app_modal {
-class JavaScriptAppModalDialog;
+namespace javascript_dialogs {
+class AppModalDialogController;
 }
 
 namespace base {
@@ -58,21 +62,29 @@ namespace ui_test_utils {
 //    Tab
 //    Navigation
 enum BrowserTestWaitFlags {
-  BROWSER_TEST_NONE = 0,                      // Don't wait for anything.
-  BROWSER_TEST_WAIT_FOR_BROWSER = 1 << 0,     // Wait for a new browser.
-  BROWSER_TEST_WAIT_FOR_TAB = 1 << 1,         // Wait for a new tab.
-  BROWSER_TEST_WAIT_FOR_NAVIGATION = 1 << 2,  // Wait for navigation to finish.
+  // Don't wait for anything.
+  BROWSER_TEST_NONE = 0,
+  // Wait for a new browser.
+  BROWSER_TEST_WAIT_FOR_BROWSER = 1 << 0,
+  // Wait for a new tab.
+  BROWSER_TEST_WAIT_FOR_TAB = 1 << 1,
+  // Wait for loading to stop. Loading stops when either
+  // a document and its subresources are completely loaded
+  // (i.e. the spinner has stopped) or no document can be
+  // loaded due to an e.g. an error or crash.
+  BROWSER_TEST_WAIT_FOR_LOAD_STOP = 1 << 2,
 
   BROWSER_TEST_MASK = BROWSER_TEST_WAIT_FOR_BROWSER |
                       BROWSER_TEST_WAIT_FOR_TAB |
-                      BROWSER_TEST_WAIT_FOR_NAVIGATION
+                      BROWSER_TEST_WAIT_FOR_LOAD_STOP
 };
 
 // Puts the current tab title in |title|. Returns true on success.
 bool GetCurrentTabTitle(const Browser* browser, base::string16* title);
 
-// Performs the provided navigation process, blocking until the navigation
-// finishes. May change the params in some cases (i.e. if the navigation
+// Performs the provided navigation process, blocking until loading stops.
+// See BROWSER_TEST_WAIT_FOR_LOAD_STOP.
+// May change the params in some cases (i.e. if the navigation
 // opens a new browser window). Uses chrome::Navigate.
 //
 // Note this does not return a RenderProcessHost for where the navigation
@@ -80,8 +92,9 @@ bool GetCurrentTabTitle(const Browser* browser, base::string16* title);
 // the RenderProcessHost when navigating again.
 void NavigateToURL(NavigateParams* params);
 
-// Navigates the selected tab of |browser| to |url|, blocking until the
-// navigation finishes. Simulates a POST and uses chrome::Navigate.
+// Navigates the selected tab of |browser| to |url|, blocking until
+// loading stops. See BROWSER_TEST_WAIT_FOR_LOAD_STOP. Simulates a
+// POST and uses chrome::Navigate.
 //
 // Note this does not return a RenderProcessHost for where the navigation
 // occurs, so tests using this will be unable to verify the destruction of
@@ -89,7 +102,8 @@ void NavigateToURL(NavigateParams* params);
 void NavigateToURLWithPost(Browser* browser, const GURL& url);
 
 // Navigates the selected tab of |browser| to |url|, blocking until the
-// navigation finishes. Uses Browser::OpenURL --> chrome::Navigate.
+// loading stops. See BROWSER_TEST_WAIT_FOR_LOAD_STOP. Uses
+// Browser::OpenURL --> chrome::Navigate.
 //
 // Returns a RenderProcessHost* for the renderer where the navigation
 // occured. Use this when navigating again, when the test wants to wait not
@@ -101,7 +115,7 @@ void NavigateToURLWithPost(Browser* browser, const GURL& url);
 content::RenderProcessHost* NavigateToURL(Browser* browser, const GURL& url);
 
 // Navigates the specified tab of |browser| to |url|, blocking until the
-// navigation finishes.
+// loading stops.
 // |disposition| indicates what tab the navigation occurs in, and
 // |browser_test_flags| controls what to wait for before continuing.
 //
@@ -163,7 +177,12 @@ GURL GetTestUrl(const base::FilePath& dir, const base::FilePath& file);
 bool GetRelativeBuildDirectory(base::FilePath* build_dir);
 
 // Blocks until an application modal dialog is shown and returns it.
-app_modal::JavaScriptAppModalDialog* WaitForAppModalDialog();
+javascript_dialogs::AppModalDialogController* WaitForAppModalDialog();
+
+#if defined(TOOLKIT_VIEWS)
+// Blocks until the given view attains the given visibility state.
+void WaitForViewVisibility(Browser* browser, ViewID vid, bool visible);
+#endif
 
 // Performs a find in the page of the specified tab. Returns the number of
 // matches found.  |ordinal| is an optional parameter which is set to the index
@@ -179,12 +198,23 @@ int FindInPage(content::WebContents* tab,
 // Blocks until the |history_service|'s history finishes loading.
 void WaitForHistoryToLoad(history::HistoryService* history_service);
 
+// Blocks until a Browser is added to the BrowserList.
+Browser* WaitForBrowserToOpen();
+
+// Blocks until a Browser is removed from the BrowserList. If |browser| is null,
+// the removal of any browser will suffice; otherwise the removed browser must
+// match |browser|.
+void WaitForBrowserToClose(Browser* browser = nullptr);
+
 // Download the given file and waits for the download to complete.
 void DownloadURL(Browser* browser, const GURL& download_url);
 
+// Waits until the autocomplete controller reaches its done state.
+void WaitForAutocompleteDone(Browser* browser);
+
 // Send the given text to the omnibox and wait until it's updated.
 void SendToOmniboxAndSubmit(
-    LocationBar* location_bar,
+    Browser* browser,
     const std::string& input,
     base::TimeTicks match_selection_timestamp = base::TimeTicks());
 
@@ -197,30 +227,6 @@ void GetCookies(const GURL& url,
                 content::WebContents* contents,
                 int* value_size,
                 std::string* value);
-
-// A WindowedNotificationObserver hard-wired to observe
-// chrome::NOTIFICATION_TAB_ADDED.
-class WindowedTabAddedNotificationObserver
-    : public content::WindowedNotificationObserver {
- public:
-  // Register to listen for notifications of NOTIFICATION_TAB_ADDED from either
-  // a specific source, or from all sources if |source| is
-  // NotificationService::AllSources().
-  explicit WindowedTabAddedNotificationObserver(
-      const content::NotificationSource& source);
-
-  // Returns the added tab, or NULL if no notification was observed yet.
-  content::WebContents* GetTab() { return added_tab_; }
-
-  void Observe(int type,
-               const content::NotificationSource& source,
-               const content::NotificationDetails& details) override;
-
- private:
-  content::WebContents* added_tab_;
-
-  DISALLOW_COPY_AND_ASSIGN(WindowedTabAddedNotificationObserver);
-};
 
 // Similar to WindowedNotificationObserver but also provides a way of retrieving
 // the details associated with the notification.
@@ -281,22 +287,52 @@ class UrlLoadObserver : public content::WindowedNotificationObserver {
   DISALLOW_COPY_AND_ASSIGN(UrlLoadObserver);
 };
 
-// Convenience class for waiting for a new browser to be created.
-// Like WindowedNotificationObserver, this class provides a safe, non-racey
-// way to wait for a new browser to be created.
-class BrowserAddedObserver {
+// A helper that will wait until a tab is added to a specific Browser.
+class TabAddedWaiter : public TabStripModelObserver {
  public:
-  BrowserAddedObserver();
-  ~BrowserAddedObserver();
+  explicit TabAddedWaiter(Browser* browser);
+  ~TabAddedWaiter() override = default;
 
-  // Wait for a new browser to be created, and return a pointer to it.
-  Browser* WaitForSingleNewBrowser();
+  void Wait();
+
+  // TabStripModelObserver:
+  void OnTabStripModelChanged(
+      TabStripModel* tab_strip_model,
+      const TabStripModelChange& change,
+      const TabStripSelectionChange& selection) override;
 
  private:
-  content::WindowedNotificationObserver notification_observer_;
-  std::set<Browser*> original_browsers_;
+  base::RunLoop run_loop_;
 
-  DISALLOW_COPY_AND_ASSIGN(BrowserAddedObserver);
+  DISALLOW_COPY_AND_ASSIGN(TabAddedWaiter);
+};
+
+// Similar to TabAddedWaiter, but will observe tabs added to all Browser
+// objects, and can return the last tab that was added.
+class AllBrowserTabAddedWaiter : public TabStripModelObserver,
+                                 public BrowserListObserver {
+ public:
+  AllBrowserTabAddedWaiter();
+  ~AllBrowserTabAddedWaiter() override;
+
+  content::WebContents* Wait();
+
+  // TabStripModelObserver:
+  void OnTabStripModelChanged(
+      TabStripModel* tab_strip_model,
+      const TabStripModelChange& change,
+      const TabStripSelectionChange& selection) override;
+
+  // BrowserListObserver:
+  void OnBrowserAdded(Browser* browser) override;
+
+ private:
+  base::RunLoop run_loop_;
+
+  // The last tab that was added.
+  content::WebContents* web_contents_ = nullptr;
+
+  DISALLOW_COPY_AND_ASSIGN(AllBrowserTabAddedWaiter);
 };
 
 // Enumerates all history contents on the backend thread. Returns them in
@@ -309,15 +345,37 @@ class HistoryEnumerator {
   std::vector<GURL>& urls() { return urls_; }
 
  private:
-  void HistoryQueryComplete(
-      const base::Closure& quit_task,
-      history::QueryResults* results);
-
   std::vector<GURL> urls_;
 
-  base::CancelableTaskTracker tracker_;
-
   DISALLOW_COPY_AND_ASSIGN(HistoryEnumerator);
+};
+
+// In general, tests should use WaitForBrowserToClose() and
+// WaitForBrowserToOpen() rather than instantiating this class directly.
+class BrowserChangeObserver : public BrowserListObserver {
+ public:
+  enum class ChangeType {
+    kAdded,
+    kRemoved,
+  };
+
+  BrowserChangeObserver(Browser* browser, ChangeType type);
+
+  ~BrowserChangeObserver() override;
+
+  Browser* Wait();
+
+  // BrowserListObserver:
+  void OnBrowserAdded(Browser* browser) override;
+
+  void OnBrowserRemoved(Browser* browser) override;
+
+ private:
+  Browser* browser_;
+  ChangeType type_;
+  base::RunLoop run_loop_;
+
+  DISALLOW_COPY_AND_ASSIGN(BrowserChangeObserver);
 };
 
 }  // namespace ui_test_utils

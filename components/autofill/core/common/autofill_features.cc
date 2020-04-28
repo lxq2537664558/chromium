@@ -20,29 +20,19 @@
 namespace autofill {
 namespace features {
 
-// Controls whether the Autocomplete Retention Policy is being enforced or not.
-const base::Feature kAutocompleteRetentionPolicyEnabled{
-    "AutocompleteRetentionPolicyEnabled", base::FEATURE_DISABLED_BY_DEFAULT};
-
-// Controls whether autofill activates on non-HTTP(S) pages. Useful for
-// automated with data URLS in cases where it's too difficult to use the
-// embedded test server. Generally avoid using.
-//
-const base::Feature kAutofillAllowNonHttpActivation{
-    "AutofillAllowNonHttpActivation", base::FEATURE_DISABLED_BY_DEFAULT};
-
 // Controls whether the AddressNormalizer is supplied. If available, it may be
 // used to normalize address and will incur fetching rules from the server.
 const base::Feature kAutofillAddressNormalizer{
     "AutofillAddressNormalizer", base::FEATURE_ENABLED_BY_DEFAULT};
 
+// Controls whether autofill activates on non-HTTP(S) pages. Useful for
+// automated with data URLS in cases where it's too difficult to use the
+// embedded test server. Generally avoid using.
+const base::Feature kAutofillAllowNonHttpActivation{
+    "AutofillAllowNonHttpActivation", base::FEATURE_DISABLED_BY_DEFAULT};
+
 const base::Feature kAutofillAlwaysFillAddresses{
     "AlwaysFillAddresses", base::FEATURE_ENABLED_BY_DEFAULT};
-
-// Controls whether the server cards are always shown when the user is in sync
-// transport mode, or if an explicit opt-in is required.
-const base::Feature kAutofillAlwaysShowServerCardsInSyncTransport{
-    "AlwaysShowServerCardsInSyncTransport", base::FEATURE_DISABLED_BY_DEFAULT};
 
 // Controls the use of GET (instead of POST) to fetch cacheable autofill query
 // responses.
@@ -58,25 +48,23 @@ const base::Feature kAutofillCreditCardAssist{
 // Controls whether we download server credit cards to the ephemeral
 // account-based storage when sync the transport is enabled.
 const base::Feature kAutofillEnableAccountWalletStorage{
-    "AutofillEnableAccountWalletStorage", base::FEATURE_DISABLED_BY_DEFAULT};
-
-// Controls whether we show also upload prompts when we are using the
-// account-based storage for server cards.
-const base::Feature kAutofillEnableAccountWalletStorageUpload{
-    "AutofillEnableAccountWalletStorageUpload",
-    base::FEATURE_ENABLED_BY_DEFAULT};
+  "AutofillEnableAccountWalletStorage",
+#if defined(OS_CHROMEOS) || defined(OS_ANDROID) || defined(OS_IOS)
+      // Wallet transport is only currently available on Win/Mac/Linux.
+      // (Somehow, swapping this check makes iOS unhappy?)
+      base::FEATURE_DISABLED_BY_DEFAULT
+#else
+      base::FEATURE_ENABLED_BY_DEFAULT
+#endif
+};
 
 // Controls whether we use COMPANY as part of Autofill
 const base::Feature kAutofillEnableCompanyName{
     "AutofillEnableCompanyName", base::FEATURE_ENABLED_BY_DEFAULT};
 
-const base::Feature kAutofillOffNoServerData{"AutofillOffNoServerData",
-                                             base::FEATURE_DISABLED_BY_DEFAULT};
-
-// When enabled, autofill server will override field types with rater
-// consensus data before returning to client.
-const base::Feature kAutofillOverrideWithRaterConsensus{
-    "AutofillOverrideWithRaterConsensus", base::FEATURE_DISABLED_BY_DEFAULT};
+// Controls whether we show "Hide suggestions" item in the suggestions menu.
+const base::Feature kAutofillEnableHideSuggestionsUI{
+    "AutofillEnableHideSuggestionsUI", base::FEATURE_DISABLED_BY_DEFAULT};
 
 // Controls whether or not a minimum number of fields is required before
 // heuristic field type prediction is run for a form.
@@ -96,34 +84,45 @@ const base::Feature kAutofillEnforceMinRequiredFieldsForUpload{
     "AutofillEnforceMinRequiredFieldsForUpload",
     base::FEATURE_DISABLED_BY_DEFAULT};
 
-// When enabled, gets payment identity from sync service instead of
-// identity manager.
-const base::Feature kAutofillGetPaymentsIdentityFromSync{
-    "AutofillGetPaymentsIdentityFromSync", base::FEATURE_DISABLED_BY_DEFAULT};
-
 // When enabled, autofill suggestions are displayed in the keyboard accessory
 // instead of the regular popup.
 const base::Feature kAutofillKeyboardAccessory{
     "AutofillKeyboardAccessory", base::FEATURE_DISABLED_BY_DEFAULT};
 
-// Controls whether the manual fallback will be present.
-const base::Feature kAutofillManualFallback{"AutofillManualFallback",
-                                            base::FEATURE_DISABLED_BY_DEFAULT};
-
-// Controls whether the manual fallback will include addresses and cards.
-const base::Feature kAutofillManualFallbackPhaseTwo{
-    "AutofillManualFallbackPhaseTwo", base::FEATURE_DISABLED_BY_DEFAULT};
+const base::Feature kAutofillPruneSuggestions{
+    "AutofillPruneSuggestions", base::FEATURE_DISABLED_BY_DEFAULT};
 
 const base::Feature kAutofillMetadataUploads{"AutofillMetadataUploads",
                                              base::FEATURE_DISABLED_BY_DEFAULT};
 
+const base::Feature kAutofillOffNoServerData{"AutofillOffNoServerData",
+                                             base::FEATURE_DISABLED_BY_DEFAULT};
+
+// When enabled, autofill server will override field types with rater
+// consensus data before returning to client.
+const base::Feature kAutofillOverrideWithRaterConsensus{
+    "AutofillOverrideWithRaterConsensus", base::FEATURE_DISABLED_BY_DEFAULT};
+
 const base::Feature kAutofillPreferServerNamePredictions{
     "AutofillPreferServerNamePredictions", base::FEATURE_DISABLED_BY_DEFAULT};
+
+const base::Feature kAutofillProfileClientValidation{
+    "AutofillProfileClientValidation", base::FEATURE_DISABLED_BY_DEFAULT};
 
 // Controls whether Autofill uses server-side validation to ensure that fields
 // with invalid data are not suggested.
 const base::Feature kAutofillProfileServerValidation{
     "AutofillProfileServerValidation", base::FEATURE_DISABLED_BY_DEFAULT};
+
+// Controls whether autofill rejects using non-verified company names that are
+// in the format of a birthyear.
+const base::Feature kAutofillRejectCompanyBirthyear{
+    "AutofillRejectCompanyBirthyear", base::FEATURE_DISABLED_BY_DEFAULT};
+
+// Controls whether autofill rejects using non-verified company names that are
+// social titles (e.g., "Mrs.") in some languages.
+const base::Feature kAutofillRejectCompanySocialTitle{
+    "AutofillRejectCompanySocialTitle", base::FEATURE_DISABLED_BY_DEFAULT};
 
 // Controls whether or not a group of fields not enclosed in a form can be
 // considered a form. If this is enabled, unowned fields will only constitute
@@ -139,12 +138,12 @@ const base::Feature kAutofillRestrictUnownedFieldsToFormlessCheckout{
 const base::Feature kAutofillRichMetadataQueries{
     "AutofillRichMetadataQueries", base::FEATURE_DISABLED_BY_DEFAULT};
 
+// Controls whether UPI/VPA values will be saved and filled into payment forms.
+const base::Feature kAutofillSaveAndFillVPA{"AutofillSaveAndFillVPA",
+                                            base::FEATURE_DISABLED_BY_DEFAULT};
+
 const base::Feature kAutofillSaveOnProbablySubmitted{
     "AutofillSaveOnProbablySubmitted", base::FEATURE_ENABLED_BY_DEFAULT};
-
-const base::Feature kAutofillSaveCardDialogUnlabeledExpirationDate{
-    "AutofillSaveCardDialogUnlabeledExpirationDate",
-    base::FEATURE_ENABLED_BY_DEFAULT};
 
 // Enables or Disables (mostly for hermetic testing) autofill server
 // communication. The URL of the autofill server can further be controlled via
@@ -154,11 +153,6 @@ const base::Feature kAutofillSaveCardDialogUnlabeledExpirationDate{
 // i.e., https://other.autofill.server:port/tbproxy/af/
 const base::Feature kAutofillServerCommunication{
     "AutofillServerCommunication", base::FEATURE_ENABLED_BY_DEFAULT};
-
-// Controls whether the payments settings page should list the credit cards
-// split by type: Local of from Account.
-const base::Feature kAutofillSettingsCardTypeSplit{
-    "AutofillSettingsCardTypeSplit", base::FEATURE_DISABLED_BY_DEFAULT};
 
 // Controls whether autofill suggestions are filtered by field values previously
 // filled by website.
@@ -172,12 +166,6 @@ const base::Feature kAutofillShowAutocompleteConsoleWarnings{
     "AutofillShowAutocompleteConsoleWarnings",
     base::FEATURE_DISABLED_BY_DEFAULT};
 
-// Controls whether suggestions' labels use the improved label disambiguation
-// format.
-const base::Feature kAutofillUseImprovedLabelDisambiguation{
-    "AutofillUseImprovedLabelDisambiguation",
-    base::FEATURE_DISABLED_BY_DEFAULT};
-
 // Controls attaching the autofill type predictions to their respective
 // element in the DOM.
 const base::Feature kAutofillShowTypePredictions{
@@ -188,13 +176,14 @@ const base::Feature kAutofillShowTypePredictions{
 const base::Feature kAutofillSkipComparingInferredLabels{
     "AutofillSkipComparingInferredLabels", base::FEATURE_DISABLED_BY_DEFAULT};
 
-const base::Feature kAutofillProfileClientValidation{
-    "AutofillProfileClientValidation", base::FEATURE_DISABLED_BY_DEFAULT};
-
 // Controls whether Autofill should search prefixes of all words/tokens when
 // filtering profiles, or only on prefixes of the whole string.
 const base::Feature kAutofillTokenPrefixMatching{
     "AutofillTokenPrefixMatching", base::FEATURE_DISABLED_BY_DEFAULT};
+
+// Enables the touch to fill feature for Android.
+const base::Feature kAutofillTouchToFill = {"TouchToFillAndroid",
+                                            base::FEATURE_DISABLED_BY_DEFAULT};
 
 const base::Feature kAutofillUploadThrottling{"AutofillUploadThrottling",
                                               base::FEATURE_ENABLED_BY_DEFAULT};
@@ -203,10 +192,29 @@ const base::Feature kAutofillUploadThrottling{"AutofillUploadThrottling",
 const base::Feature kAutofillUseApi{"AutofillUseApi",
                                     base::FEATURE_DISABLED_BY_DEFAULT};
 
-// Controls whether password generation is offered automatically on fields
-// perceived as eligible for generation.
-const base::Feature kAutomaticPasswordGeneration = {
-    "AutomaticPasswordGeneration", base::FEATURE_ENABLED_BY_DEFAULT};
+// Controls whether suggestions' labels use the improved label disambiguation
+// format.
+const base::Feature kAutofillUseImprovedLabelDisambiguation{
+    "AutofillUseImprovedLabelDisambiguation",
+    base::FEATURE_DISABLED_BY_DEFAULT};
+
+// Controls whether to use the |ParseCityStateCountryZipCode| or not for
+// predicting the heuristic type.
+// |ParseCityStateCountryZipCode| is intended to prevent the misclassification
+// of the country field into |ADDRESS_HOME_STATE| while determining the
+// heuristic type. The misclassification happens sometimes because the regular
+// expression for |ADDRESS_HOME_STATE| contains the term "region" which is also
+// used for country selectors.
+const base::Feature kAutofillUseParseCityStateCountryZipCodeInHeuristic{
+    "AutofillUseParseCityStateCountryZipCodeInHeuristic",
+    base::FEATURE_DISABLED_BY_DEFAULT};
+
+// Controls whether or not autofill utilizes the country code from the Chrome
+// variation service. The country code is used for determining the address
+// requirements for address profile creation and as source for a default country
+// used in a new address profile.
+const base::Feature kAutofillUseVariationCountryCode{
+    "AutofillUseVariationCountryCode", base::FEATURE_DISABLED_BY_DEFAULT};
 
 #if defined(OS_ANDROID)
 // Controls whether the Autofill manual fallback for Addresses and Payments is
@@ -217,7 +225,16 @@ const base::Feature kAutofillManualFallbackAndroid{
 // Controls whether to use modernized style for the Autofill dropdown.
 const base::Feature kAutofillRefreshStyleAndroid{
     "AutofillRefreshStyleAndroid", base::FEATURE_DISABLED_BY_DEFAULT};
+
 #endif  // OS_ANDROID
+
+#if defined(OS_ANDROID) || defined(OS_IOS)
+const base::Feature kAutofillUseMobileLabelDisambiguation{
+    "AutofillUseMobileLabelDisambiguation", base::FEATURE_DISABLED_BY_DEFAULT};
+const char kAutofillUseMobileLabelDisambiguationParameterName[] = "variant";
+const char kAutofillUseMobileLabelDisambiguationParameterShowAll[] = "show-all";
+const char kAutofillUseMobileLabelDisambiguationParameterShowOne[] = "show-one";
+#endif  // defined(OS_ANDROID) || defined(OS_IOS)
 
 bool IsAutofillCreditCardAssistEnabled() {
 #if !defined(OS_ANDROID) && !defined(OS_IOS)
@@ -225,19 +242,6 @@ bool IsAutofillCreditCardAssistEnabled() {
 #else
   return base::FeatureList::IsEnabled(kAutofillCreditCardAssist);
 #endif
-}
-
-bool IsPasswordManualFallbackEnabled() {
-  return base::FeatureList::IsEnabled(kAutofillManualFallback);
-}
-
-bool IsAutofillManualFallbackEnabled() {
-  return base::FeatureList::IsEnabled(kAutofillManualFallbackPhaseTwo);
-}
-
-bool IsAutofillSaveCardDialogUnlabeledExpirationDateEnabled() {
-  return base::FeatureList::IsEnabled(
-      kAutofillSaveCardDialogUnlabeledExpirationDate);
 }
 
 }  // namespace features

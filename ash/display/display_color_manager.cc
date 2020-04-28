@@ -15,11 +15,11 @@
 #include "base/sequenced_task_runner.h"
 #include "base/stl_util.h"
 #include "base/task/post_task.h"
+#include "base/task/thread_pool.h"
 #include "base/task_runner_util.h"
 #include "base/threading/scoped_blocking_call.h"
 #include "components/quirks/quirks_manager.h"
 #include "third_party/qcms/src/qcms.h"
-#include "ui/base/ui_base_features.h"
 #include "ui/display/display.h"
 #include "ui/display/types/display_constants.h"
 #include "ui/display/types/display_snapshot.h"
@@ -197,12 +197,11 @@ DisplayColorManager::DisplayColorManager(
     display::Screen* screen_to_observe)
     : configurator_(configurator),
       matrix_buffer_(9, 0.0f),  // 3x3 matrix.
-      sequenced_task_runner_(base::CreateSequencedTaskRunnerWithTraits(
+      sequenced_task_runner_(base::ThreadPool::CreateSequencedTaskRunner(
           {base::MayBlock(), base::TaskPriority::USER_VISIBLE,
            base::TaskShutdownBehavior::SKIP_ON_SHUTDOWN})),
       displays_ctm_support_(DisplayCtmSupport::kNone),
-      screen_to_observe_(screen_to_observe),
-      weak_ptr_factory_(this) {
+      screen_to_observe_(screen_to_observe) {
   configurator_->AddObserver(this);
   if (screen_to_observe_)
     screen_to_observe_->AddObserver(this);
@@ -232,8 +231,7 @@ bool DisplayColorManager::SetDisplayColorMatrix(
     const display::DisplaySnapshot* display_snapshot,
     const SkMatrix44& color_matrix) {
   DCHECK(display_snapshot);
-  DCHECK(
-      base::ContainsValue(configurator_->cached_displays(), display_snapshot));
+  DCHECK(base::Contains(configurator_->cached_displays(), display_snapshot));
 
   if (!display_snapshot->has_color_correction_matrix()) {
     // This display doesn't support setting a CRTC matrix.
@@ -325,26 +323,20 @@ bool DisplayColorManager::LoadCalibrationForDisplay(
     return false;
   }
 
-  // TODO: enable QuirksManager for mash. http://crbug.com/728748. Some tests
-  // don't create the Shell when running this code, hence the
-  // Shell::HasInstance() conditional.
-  if (Shell::HasInstance() && features::IsMultiProcessMash())
-    return false;
-
   const bool valid_product_code =
       display->product_code() != display::DisplaySnapshot::kInvalidProductCode;
   // TODO(mcasas): correct UMA s/Id/Code/, https://crbug.com/821393.
   UMA_HISTOGRAM_BOOLEAN("Ash.DisplayColorManager.ValidProductId",
                         valid_product_code);
-  if (!valid_product_code)
+  if (!valid_product_code || !quirks::QuirksManager::HasInstance())
     return false;
 
   quirks::QuirksManager::Get()->RequestIccProfilePath(
       display->product_code(), display->display_name(),
-      base::Bind(&DisplayColorManager::FinishLoadCalibrationForDisplay,
-                 weak_ptr_factory_.GetWeakPtr(), display->display_id(),
-                 display->product_code(),
-                 display->has_color_correction_matrix(), display->type()));
+      base::BindOnce(&DisplayColorManager::FinishLoadCalibrationForDisplay,
+                     weak_ptr_factory_.GetWeakPtr(), display->display_id(),
+                     display->product_code(),
+                     display->has_color_correction_matrix(), display->type()));
   return true;
 }
 
@@ -381,9 +373,9 @@ void DisplayColorManager::FinishLoadCalibrationForDisplay(
 
   base::PostTaskAndReplyWithResult(
       sequenced_task_runner_.get(), FROM_HERE,
-      base::Bind(&ParseDisplayProfile, path, has_color_correction_matrix),
-      base::Bind(&DisplayColorManager::UpdateCalibrationData,
-                 weak_ptr_factory_.GetWeakPtr(), display_id, product_code));
+      base::BindOnce(&ParseDisplayProfile, path, has_color_correction_matrix),
+      base::BindOnce(&DisplayColorManager::UpdateCalibrationData,
+                     weak_ptr_factory_.GetWeakPtr(), display_id, product_code));
 }
 
 void DisplayColorManager::UpdateCalibrationData(

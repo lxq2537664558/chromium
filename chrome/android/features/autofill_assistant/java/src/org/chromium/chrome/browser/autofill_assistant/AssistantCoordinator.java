@@ -4,9 +4,13 @@
 
 package org.chromium.chrome.browser.autofill_assistant;
 
+import androidx.annotation.Nullable;
+
 import org.chromium.chrome.browser.ChromeActivity;
-import org.chromium.chrome.browser.autofill_assistant.metrics.DropOutReason;
 import org.chromium.chrome.browser.autofill_assistant.overlay.AssistantOverlayCoordinator;
+import org.chromium.chrome.browser.help.HelpAndFeedback;
+import org.chromium.chrome.browser.profiles.Profile;
+import org.chromium.chrome.browser.ui.TabObscuringHandler;
 import org.chromium.chrome.browser.widget.bottomsheet.BottomSheetController;
 
 /**
@@ -14,32 +18,38 @@ import org.chromium.chrome.browser.widget.bottomsheet.BottomSheetController;
  * sub-components and shutting down the Autofill Assistant.
  */
 class AssistantCoordinator {
-    interface Delegate {
-        /** Completely stop the Autofill Assistant. */
-        void stop(@DropOutReason int reason);
-
-        // TODO(crbug.com/806868): Move onboarding and snackbar out of this class and remove the
-        // delegate.
-    }
+    private static final String FEEDBACK_CATEGORY_TAG =
+            "com.android.chrome.USER_INITIATED_FEEDBACK_REPORT_AUTOFILL_ASSISTANT";
 
     private final ChromeActivity mActivity;
-    private final Delegate mDelegate;
 
     private final AssistantModel mModel;
     private AssistantBottomBarCoordinator mBottomBarCoordinator;
     private final AssistantKeyboardCoordinator mKeyboardCoordinator;
     private final AssistantOverlayCoordinator mOverlayCoordinator;
 
-    AssistantCoordinator(
-            ChromeActivity activity, Delegate delegate, BottomSheetController controller) {
+    AssistantCoordinator(ChromeActivity activity, BottomSheetController controller,
+            TabObscuringHandler tabObscuringHandler,
+            @Nullable AssistantOverlayCoordinator overlayCoordinator,
+            AssistantKeyboardCoordinator.Delegate keyboardCoordinatorDelegate) {
         mActivity = activity;
-        mDelegate = delegate;
-        mModel = new AssistantModel();
 
-        // Instantiate child components.
-        mBottomBarCoordinator = new AssistantBottomBarCoordinator(activity, mModel, controller);
-        mKeyboardCoordinator = new AssistantKeyboardCoordinator(activity, mModel);
-        mOverlayCoordinator = new AssistantOverlayCoordinator(activity, mModel.getOverlayModel());
+        if (overlayCoordinator != null) {
+            mModel = new AssistantModel(overlayCoordinator.getModel());
+            mOverlayCoordinator = overlayCoordinator;
+        } else {
+            mModel = new AssistantModel();
+            mOverlayCoordinator = new AssistantOverlayCoordinator(activity,
+                    activity.getFullscreenManager(), activity.getCompositorViewHolder(),
+                    activity.getScrim(), mModel.getOverlayModel());
+        }
+
+        mBottomBarCoordinator = new AssistantBottomBarCoordinator(activity, mModel, controller,
+                activity.getWindowAndroid().getApplicationBottomInsetProvider(),
+                tabObscuringHandler);
+        mKeyboardCoordinator = new AssistantKeyboardCoordinator(activity,
+                activity.getWindowAndroid().getKeyboardDelegate(),
+                activity.getCompositorViewHolder(), mModel, keyboardCoordinatorDelegate);
 
         mModel.setVisible(true);
     }
@@ -50,20 +60,6 @@ class AssistantCoordinator {
         mOverlayCoordinator.destroy();
         mBottomBarCoordinator.destroy();
         mBottomBarCoordinator = null;
-    }
-
-    /**
-     * Show the onboarding screen and call {@code onAccept} if the user agreed to proceed, shutdown
-     * otherwise.
-     */
-    public void showOnboarding(Runnable onAccept) {
-        mBottomBarCoordinator.showOnboarding(accepted -> {
-            if (accepted) {
-                onAccept.run();
-            } else {
-                mDelegate.stop(DropOutReason.DECLINED);
-            }
-        });
     }
 
     /**
@@ -78,5 +74,22 @@ class AssistantCoordinator {
 
     public AssistantBottomBarCoordinator getBottomBarCoordinator() {
         return mBottomBarCoordinator;
+    }
+
+    AssistantKeyboardCoordinator getKeyboardCoordinator() {
+        return mKeyboardCoordinator;
+    }
+
+    /**
+     * Show the Chrome feedback form.
+     */
+    public void showFeedback(String debugContext) {
+        Profile profile =
+                Profile.fromWebContents(mActivity.getActivityTabProvider().get().getWebContents());
+
+        HelpAndFeedback.getInstance().showFeedback(mActivity, profile,
+                mActivity.getActivityTab().getUrlString(), FEEDBACK_CATEGORY_TAG,
+                null /* feed context */,
+                FeedbackContext.buildContextString(mActivity, debugContext, 4));
     }
 }

@@ -6,12 +6,16 @@
 
 #include "base/metrics/histogram_macros.h"
 
-namespace content_settings {
+#if !defined(OS_ANDROID)
+#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_finder.h"
+#include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/location_bar/location_bar.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
+#include "content/public/browser/web_contents.h"
+#endif
 
-void RecordMixedScriptAction(MixedScriptAction action) {
-  UMA_HISTOGRAM_ENUMERATION("ContentSettings.MixedScript", action,
-                            MIXED_SCRIPT_ACTION_COUNT);
-}
+namespace content_settings {
 
 void RecordPluginsAction(PluginsAction action) {
   UMA_HISTOGRAM_ENUMERATION("ContentSettings.Plugins", action,
@@ -21,6 +25,21 @@ void RecordPluginsAction(PluginsAction action) {
 void RecordPopupsAction(PopupsAction action) {
   UMA_HISTOGRAM_ENUMERATION("ContentSettings.Popups", action,
                             POPUPS_ACTION_COUNT);
+}
+
+void UpdateLocationBarUiForWebContents(content::WebContents* web_contents) {
+#if !defined(OS_ANDROID)
+  Browser* browser = chrome::FindBrowserWithWebContents(web_contents);
+  if (!browser)
+    return;
+
+  if (browser->tab_strip_model()->GetActiveWebContents() != web_contents)
+    return;
+
+  LocationBar* location_bar = browser->window()->GetLocationBar();
+  if (location_bar)
+    location_bar->UpdateContentSettingsIcons();
+#endif
 }
 
 }  // namespace content_settings

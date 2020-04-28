@@ -17,9 +17,9 @@
 #include "base/metrics/histogram_functions.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/sequenced_task_runner.h"
+#include "base/time/default_clock.h"
 #include "base/values.h"
 #include "chrome/browser/browser_process.h"
-#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/chromeos/login/helper.h"
 #include "chrome/browser/chromeos/login/session/user_session_manager.h"
 #include "chrome/browser/chromeos/login/users/affiliation.h"
@@ -28,9 +28,10 @@
 #include "chrome/browser/chromeos/policy/browser_policy_connector_chromeos.h"
 #include "chrome/browser/chromeos/policy/policy_oauth2_token_fetcher.h"
 #include "chrome/browser/chromeos/policy/remote_commands/user_commands_factory_chromeos.h"
-#include "chrome/browser/chromeos/policy/user_policy_manager_factory_chromeos.h"
 #include "chrome/browser/chromeos/policy/wildcard_login_checker.h"
-#include "chrome/browser/invalidation/deprecated_profile_invalidation_provider_factory.h"
+#include "chrome/browser/enterprise/reporting/report_generator.h"
+#include "chrome/browser/enterprise/reporting/report_scheduler.h"
+#include "chrome/browser/invalidation/profile_invalidation_provider_factory.h"
 #include "chrome/browser/lifetime/application_lifetime.h"
 #include "chrome/browser/net/system_network_context_manager.h"
 #include "chrome/browser/policy/cloud/remote_commands_invalidator_impl.h"
@@ -48,12 +49,11 @@
 #include "components/policy/core/common/policy_pref_names.h"
 #include "components/policy/core/common/policy_types.h"
 #include "components/policy/policy_constants.h"
+#include "components/session_manager/core/session_manager.h"
 #include "components/user_manager/known_user.h"
 #include "components/user_manager/user.h"
 #include "components/user_manager/user_manager.h"
 #include "content/public/browser/network_service_instance.h"
-#include "content/public/browser/notification_details.h"
-#include "content/public/browser/notification_source.h"
 #include "net/url_request/url_request_context_getter.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "url/gurl.h"
@@ -122,8 +122,7 @@ class UserCloudPolicyManagerChromeOSNotifierFactory
   UserCloudPolicyManagerChromeOSNotifierFactory()
       : BrowserContextKeyedServiceShutdownNotifierFactory(
             "UserRemoteCommandsInvalidator") {
-    DependsOn(invalidation::DeprecatedProfileInvalidationProviderFactory::
-                  GetInstance());
+    DependsOn(invalidation::ProfileInvalidationProviderFactory::GetInstance());
   }
 
   ~UserCloudPolicyManagerChromeOSNotifierFactory() override = default;
@@ -176,18 +175,16 @@ UserCloudPolicyManagerChromeOS::UserCloudPolicyManagerChromeOS(
     DCHECK_EQ(enforcement_type_, PolicyEnforcement::kPolicyRequired);
     policy_refresh_timeout_.Start(
         FROM_HERE, policy_refresh_timeout,
-        base::BindRepeating(
-            &UserCloudPolicyManagerChromeOS::OnPolicyRefreshTimeout,
-            base::Unretained(this)));
+        base::BindOnce(&UserCloudPolicyManagerChromeOS::OnPolicyRefreshTimeout,
+                       base::Unretained(this)));
   }
 
   // Register for notification that profile creation is complete - this is used
   // for creating the invalidator for user remote commands. The invalidator must
   // not be initialized before then because the invalidation service cannot be
   // started because it depends on components initialized at the end of profile
-  // creation.
-  registrar_.Add(this, chrome::NOTIFICATION_PROFILE_ADDED,
-                 content::Source<Profile>(profile));
+  // creation. https://crbug.com/171406
+  observed_profile_manager_.Add(g_browser_process->profile_manager());
 }
 
 void UserCloudPolicyManagerChromeOS::ForceTimeoutForTest() {
@@ -208,7 +205,7 @@ void UserCloudPolicyManagerChromeOS::SetSystemURLLoaderFactoryForTests(
   system_url_loader_factory_for_tests_ = system_url_loader_factory;
 }
 
-UserCloudPolicyManagerChromeOS::~UserCloudPolicyManagerChromeOS() {}
+UserCloudPolicyManagerChromeOS::~UserCloudPolicyManagerChromeOS() = default;
 
 void UserCloudPolicyManagerChromeOS::Connect(
     PrefService* local_state,
@@ -227,7 +224,10 @@ void UserCloudPolicyManagerChromeOS::Connect(
   std::unique_ptr<CloudPolicyClient> cloud_policy_client =
       std::make_unique<CloudPolicyClient>(
           std::string() /* machine_id */, std::string() /* machine_model */,
-          std::string() /* brand_code */, device_management_service,
+          std::string() /* brand_code */,
+          std::string() /* ethernet_mac_address */,
+          std::string() /* dock_mac_address */,
+          std::string() /* manufacture_date */, device_management_service,
           system_url_loader_factory, nullptr /* signing_service */,
           chromeos::GetDeviceDMTokenForUserPolicyGetter(account_id_));
   CreateComponentCloudPolicyService(
@@ -271,7 +271,7 @@ void UserCloudPolicyManagerChromeOS::Connect(
   }
 
   app_install_event_log_uploader_ =
-      std::make_unique<AppInstallEventLogUploader>(client());
+      std::make_unique<AppInstallEventLogUploader>(client(), profile_);
 }
 
 void UserCloudPolicyManagerChromeOS::OnAccessTokenAvailable(
@@ -344,7 +344,9 @@ UserCloudPolicyManagerChromeOS::GetAppInstallEventLogUploader() {
 }
 
 void UserCloudPolicyManagerChromeOS::Shutdown() {
+  observed_profile_manager_.RemoveAll();
   app_install_event_log_uploader_.reset();
+  report_scheduler_.reset();
   if (client())
     client()->RemoveObserver(this);
   if (service())
@@ -403,6 +405,9 @@ void UserCloudPolicyManagerChromeOS::
   // available. If refresh scheduler is already started this call will do
   // nothing.
   StartRefreshSchedulerIfReady();
+
+  // Start the report scheduler to periodically upload usage data to DM server.
+  StartReportSchedulerIfReady(true /* enable_delayed_creation */);
 }
 
 void UserCloudPolicyManagerChromeOS::OnPolicyFetched(
@@ -444,10 +449,9 @@ void UserCloudPolicyManagerChromeOS::OnRegistrationStateChanged(
 
     // If we're blocked on the policy fetch, now is a good time to issue it.
     if (client()->is_registered()) {
-      service()->RefreshPolicy(
-          base::Bind(
-              &UserCloudPolicyManagerChromeOS::OnInitialPolicyFetchComplete,
-              base::Unretained(this)));
+      service()->RefreshPolicy(base::BindOnce(
+          &UserCloudPolicyManagerChromeOS::OnInitialPolicyFetchComplete,
+          base::Unretained(this)));
     } else {
       // If the client has switched to not registered, we bail out as this
       // indicates the cloud policy setup flow has been aborted.
@@ -493,6 +497,22 @@ void UserCloudPolicyManagerChromeOS::OnClientError(
 void UserCloudPolicyManagerChromeOS::OnComponentCloudPolicyUpdated() {
   CloudPolicyManager::OnComponentCloudPolicyUpdated();
   StartRefreshSchedulerIfReady();
+}
+
+void UserCloudPolicyManagerChromeOS::OnUserProfileLoaded(
+    const AccountId& account_id) {
+  if (!user_manager::UserManager::Get())
+    return;
+
+  const user_manager::User* primary_user =
+      user_manager::UserManager::Get()->GetPrimaryUser();
+
+  if (!primary_user || primary_user->GetAccountId() != account_id ||
+      !primary_user->is_profile_created())
+    return;
+
+  session_manager::SessionManager::Get()->RemoveObserver(this);
+  StartReportSchedulerIfReady(false /* enable_delayed_creation */);
 }
 
 void UserCloudPolicyManagerChromeOS::OnStoreLoaded(
@@ -629,18 +649,16 @@ void UserCloudPolicyManagerChromeOS::OnOAuth2PolicyTokenFetched(
 
     // Start client registration. Either OnRegistrationStateChanged() or
     // OnClientError() will be called back.
-    const auto lifetime =
-        user_manager::UserManager::Get()->IsCurrentUserCryptohomeDataEphemeral()
-            ? em::DeviceRegisterRequest::LIFETIME_EPHEMERAL_USER
-            : em::DeviceRegisterRequest::LIFETIME_INDEFINITE;
+    CloudPolicyClient::RegistrationParameters parameters(
+        em::DeviceRegisterRequest::USER,
+        em::DeviceRegisterRequest::FLAVOR_USER_REGISTRATION);
+    if (user_manager::UserManager::Get()
+            ->IsCurrentUserCryptohomeDataEphemeral())
+      parameters.lifetime = em::DeviceRegisterRequest::LIFETIME_EPHEMERAL_USER;
     std::string client_id;
     if (client()->requires_reregistration())
       client_id = client()->client_id();
-    client()->Register(em::DeviceRegisterRequest::USER,
-                       em::DeviceRegisterRequest::FLAVOR_USER_REGISTRATION,
-                       lifetime, em::LicenseType::UNDEFINED, policy_token,
-                       client_id, std::string() /* requisition */,
-                       std::string() /* current_state_key */);
+    client()->Register(parameters, client_id, policy_token);
   } else {
     UMA_HISTOGRAM_ENUMERATION(kUMAInitialFetchOAuth2Error, error.state(),
                               GoogleServiceAuthError::NUM_STATES);
@@ -729,28 +747,61 @@ void UserCloudPolicyManagerChromeOS::StartRefreshSchedulerIfReady() {
                                 policy_prefs::kUserPolicyRefreshRate);
 }
 
-void UserCloudPolicyManagerChromeOS::Observe(
-    int type,
-    const content::NotificationSource& source,
-    const content::NotificationDetails& details) {
-  DCHECK_EQ(chrome::NOTIFICATION_PROFILE_ADDED, type);
+void UserCloudPolicyManagerChromeOS::StartReportSchedulerIfReady(
+    bool enable_delayed_creation) {
+  if (!base::FeatureList::IsEnabled(features::kEnterpriseReportingInChromeOS))
+    return;
 
-  // Now that the profile is fully created we can unsubscribe from the
-  // notification.
-  registrar_.Remove(this, chrome::NOTIFICATION_PROFILE_ADDED,
-                    content::Source<Profile>(profile_));
+  if (!client() || !client()->is_registered())
+    return;
+
+  if (!user_manager::UserManager::Get())
+    return;
+
+  const user_manager::User* primary_user =
+      user_manager::UserManager::Get()->GetPrimaryUser();
+
+  if (!primary_user)
+    return;
+
+  // SessionManager uses another thread to load profiles. If the operation
+  // doesn't finish, the creation of |report_scheduler_| will be delayed and
+  // relies on SessionManagerObserver methods to monitor the progress.
+  if (enable_delayed_creation && !primary_user->is_profile_created()) {
+    session_manager::SessionManager::Get()->AddObserver(this);
+    VLOG(0) << "Report scheduler is delayed to create because the primary "
+               "user profile hasn't been loaded. This is a designed behavior.";
+    return;
+  }
+
+  report_scheduler_ = std::make_unique<enterprise_reporting::ReportScheduler>(
+      client(), std::make_unique<enterprise_reporting::ReportGenerator>());
+
+  report_scheduler_->OnDMTokenUpdated();
+}
+
+void UserCloudPolicyManagerChromeOS::OnProfileAdded(Profile* profile) {
+  if (profile != profile_)
+    return;
+
+  observed_profile_manager_.RemoveAll();
 
   invalidation::ProfileInvalidationProvider* const invalidation_provider =
-      invalidation::DeprecatedProfileInvalidationProviderFactory::GetForProfile(
-          profile_);
+      invalidation::ProfileInvalidationProviderFactory::GetForProfile(profile_);
 
   if (!invalidation_provider)
     return;
 
   core()->StartRemoteCommandsService(
-      std::make_unique<UserCommandsFactoryChromeOS>(profile_));
-  invalidator_ = std::make_unique<RemoteCommandsInvalidatorImpl>(core());
-  invalidator_->Initialize(invalidation_provider->GetInvalidationService());
+      std::make_unique<UserCommandsFactoryChromeOS>(profile_),
+      PolicyInvalidationScope::kUser);
+  invalidator_ = std::make_unique<RemoteCommandsInvalidatorImpl>(
+      core(), base::DefaultClock::GetInstance(),
+      PolicyInvalidationScope::kUser);
+
+  invalidator_->Initialize(
+      invalidation_provider->GetInvalidationServiceForCustomSender(
+          policy::kPolicyFCMInvalidationSenderID));
 
   shutdown_notifier_ =
       UserCloudPolicyManagerChromeOSNotifierFactory::GetInstance()
@@ -772,6 +823,11 @@ void UserCloudPolicyManagerChromeOS::SetUserContextRefreshTokenForTests(
   DCHECK(!refresh_token.empty());
   DCHECK(!user_context_refresh_token_for_tests_);
   user_context_refresh_token_for_tests_ = base::make_optional(refresh_token);
+}
+
+enterprise_reporting::ReportScheduler*
+UserCloudPolicyManagerChromeOS::GetReportSchedulerForTesting() {
+  return report_scheduler_.get();
 }
 
 }  // namespace policy

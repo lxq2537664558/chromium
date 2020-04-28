@@ -18,7 +18,6 @@
 #include "base/containers/span.h"
 #include "base/location.h"
 #include "base/logging.h"
-#include "base/mac/availability.h"
 #include "base/mac/foundation_util.h"
 #include "base/mac/mac_logging.h"
 #include "base/mac/mac_util.h"
@@ -300,9 +299,9 @@ class API_AVAILABLE(macosx(10.12)) SSLPlatformKeySecKey
       digest = *pss_storage;
     }
 
-    base::ScopedCFTypeRef<CFDataRef> digest_ref(CFDataCreateWithBytesNoCopy(
-        kCFAllocatorDefault, digest.data(),
-        base::checked_cast<CFIndex>(digest.size()), kCFAllocatorNull));
+    base::ScopedCFTypeRef<CFDataRef> digest_ref(
+        CFDataCreate(kCFAllocatorDefault, digest.data(),
+                     base::checked_cast<CFIndex>(digest.size())));
 
     base::ScopedCFTypeRef<CFErrorRef> error;
     base::ScopedCFTypeRef<CFDataRef> signature_ref(SecKeyCreateSignature(

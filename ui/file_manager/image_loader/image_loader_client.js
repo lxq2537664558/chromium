@@ -22,7 +22,12 @@ function ImageLoaderClient() {
   /**
    * LRU cache for images.
    * @type {!LRUCache.<{
-   *     data: string, width:number, height:number, timestamp: ?number}>}
+   *   timestamp: ?number,
+   *   width: number,
+   *   height: number,
+   *   ifd: ?string,
+   *   data: string
+   * }>}
    * @private
    */
   this.cache_ = new LRUCache(ImageLoaderClient.CACHE_MEMORY_LIMIT);
@@ -120,6 +125,7 @@ ImageLoaderClient.prototype.load = function(request, callback) {
         callback(new LoadImageResponse(LoadImageResponseStatus.SUCCESS, null, {
           width: cachedValue.width,
           height: cachedValue.height,
+          ifd: cachedValue.ifd,
           data: cachedValue.data,
         }));
         return null;
@@ -183,7 +189,7 @@ ImageLoaderClient.CACHE_MEMORY_LIMIT = 20 * 1024 * 1024;  // 20 MB.
  * @return {?number} Remote task id or null if loaded from cache.
  */
 ImageLoaderClient.loadToImage = function(request, image, onSuccess, onError) {
-  var callback = function(result) {
+  const callback = function(result) {
     if (result.status == LoadImageResponseStatus.ERROR) {
       onError();
       return;

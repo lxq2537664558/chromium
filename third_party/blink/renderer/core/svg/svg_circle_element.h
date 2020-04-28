@@ -31,8 +31,6 @@ class SVGCircleElement final : public SVGGeometryElement {
   DEFINE_WRAPPERTYPEINFO();
 
  public:
-  DECLARE_NODE_FACTORY(SVGCircleElement);
-
   explicit SVGCircleElement(Document&);
 
   Path AsPath() const override;
@@ -41,7 +39,7 @@ class SVGCircleElement final : public SVGGeometryElement {
   SVGAnimatedLength* cy() const { return cy_.Get(); }
   SVGAnimatedLength* r() const { return r_.Get(); }
 
-  void Trace(blink::Visitor*) override;
+  void Trace(Visitor*) override;
 
  private:
   void SvgAttributeChanged(const QualifiedName&) override;

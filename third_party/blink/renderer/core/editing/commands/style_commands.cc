@@ -45,8 +45,10 @@
 #include "third_party/blink/renderer/core/editing/frame_selection.h"
 #include "third_party/blink/renderer/core/editing/visible_position.h"
 #include "third_party/blink/renderer/core/editing/writing_direction.h"
+#include "third_party/blink/renderer/core/frame/local_dom_window.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
 #include "third_party/blink/renderer/core/html/html_font_element.h"
+#include "third_party/blink/renderer/platform/heap/heap.h"
 
 namespace blink {
 
@@ -84,7 +86,7 @@ bool StyleCommands::ApplyCommandToFrame(LocalFrame& frame,
                                         EditorCommandSource source,
                                         InputEvent::InputType input_type,
                                         CSSPropertyValueSet* style) {
-  // TODO(editnig-dev): We don't call shouldApplyStyle when the source is DOM;
+  // TODO(editing-dev): We don't call shouldApplyStyle when the source is DOM;
   // is there a good reason for that?
   switch (source) {
     case EditorCommandSource::kMenuOrKeyBinding:
@@ -104,8 +106,8 @@ bool StyleCommands::ExecuteApplyStyle(LocalFrame& frame,
                                       CSSPropertyID property_id,
                                       const String& property_value) {
   DCHECK(frame.GetDocument());
-  MutableCSSPropertyValueSet* const style =
-      MutableCSSPropertyValueSet::Create(kHTMLQuirksMode);
+  auto* const style =
+      MakeGarbageCollected<MutableCSSPropertyValueSet>(kHTMLQuirksMode);
   style->SetProperty(property_id, property_value, /* important */ false,
                      frame.GetDocument()->GetSecureContextMode());
   return ApplyCommandToFrame(frame, source, input_type, style);
@@ -116,8 +118,8 @@ bool StyleCommands::ExecuteApplyStyle(LocalFrame& frame,
                                       InputEvent::InputType input_type,
                                       CSSPropertyID property_id,
                                       CSSValueID property_value) {
-  MutableCSSPropertyValueSet* const style =
-      MutableCSSPropertyValueSet::Create(kHTMLQuirksMode);
+  auto* const style =
+      MakeGarbageCollected<MutableCSSPropertyValueSet>(kHTMLQuirksMode);
   style->SetProperty(property_id, property_value);
   return ApplyCommandToFrame(frame, source, input_type, style);
 }
@@ -170,8 +172,8 @@ bool StyleCommands::ExecuteMakeTextWritingDirectionLeftToRight(
     Event*,
     EditorCommandSource,
     const String&) {
-  MutableCSSPropertyValueSet* const style =
-      MutableCSSPropertyValueSet::Create(kHTMLQuirksMode);
+  auto* const style =
+      MakeGarbageCollected<MutableCSSPropertyValueSet>(kHTMLQuirksMode);
   style->SetProperty(CSSPropertyID::kUnicodeBidi, CSSValueID::kIsolate);
   style->SetProperty(CSSPropertyID::kDirection, CSSValueID::kLtr);
   ApplyStyle(frame, style, InputEvent::InputType::kFormatSetBlockTextDirection);
@@ -182,8 +184,8 @@ bool StyleCommands::ExecuteMakeTextWritingDirectionNatural(LocalFrame& frame,
                                                            Event*,
                                                            EditorCommandSource,
                                                            const String&) {
-  MutableCSSPropertyValueSet* const style =
-      MutableCSSPropertyValueSet::Create(kHTMLQuirksMode);
+  auto* const style =
+      MakeGarbageCollected<MutableCSSPropertyValueSet>(kHTMLQuirksMode);
   style->SetProperty(CSSPropertyID::kUnicodeBidi, CSSValueID::kNormal);
   ApplyStyle(frame, style, InputEvent::InputType::kFormatSetBlockTextDirection);
   return true;
@@ -194,8 +196,8 @@ bool StyleCommands::ExecuteMakeTextWritingDirectionRightToLeft(
     Event*,
     EditorCommandSource,
     const String&) {
-  MutableCSSPropertyValueSet* const style =
-      MutableCSSPropertyValueSet::Create(kHTMLQuirksMode);
+  auto* const style =
+      MakeGarbageCollected<MutableCSSPropertyValueSet>(kHTMLQuirksMode);
   style->SetProperty(CSSPropertyID::kUnicodeBidi, CSSValueID::kIsolate);
   style->SetProperty(CSSPropertyID::kDirection, CSSValueID::kRtl);
   ApplyStyle(frame, style, InputEvent::InputType::kFormatSetBlockTextDirection);
@@ -215,7 +217,8 @@ bool StyleCommands::SelectionStartHasStyle(LocalFrame& frame,
           frame.Selection().ComputeVisibleSelectionInDOMTreeDeprecated(),
           property_id == CSSPropertyID::kBackgroundColor,
           style_to_check->Style());
-  return style_to_check->TriStateOfStyle(style_at_start, secure_context_mode) !=
+  return style_to_check->TriStateOfStyle(frame.DomWindow(), style_at_start,
+                                         secure_context_mode) !=
          EditingTriState::kFalse;
 }
 
@@ -314,10 +317,10 @@ bool StyleCommands::ExecuteToggleStyleInList(LocalFrame& frame,
   const String new_style =
       ComputeToggleStyleInList(*selection_style, property_id, value);
 
-  // TODO(editnig-dev): We shouldn't be having to convert new style into text.
+  // TODO(editing-dev): We shouldn't be having to convert new style into text.
   // We should have setPropertyCSSValue.
-  MutableCSSPropertyValueSet* const new_mutable_style =
-      MutableCSSPropertyValueSet::Create(kHTMLQuirksMode);
+  auto* const new_mutable_style =
+      MakeGarbageCollected<MutableCSSPropertyValueSet>(kHTMLQuirksMode);
   new_mutable_style->SetProperty(property_id, new_style, /* important */ false,
                                  frame.GetDocument()->GetSecureContextMode());
   return ApplyCommandToFrame(frame, source, input_type, new_mutable_style);
@@ -350,7 +353,7 @@ bool StyleCommands::ExecuteStyleWithCSS(LocalFrame& frame,
                                         EditorCommandSource,
                                         const String& value) {
   frame.GetEditor().SetShouldStyleWithCSS(
-      !DeprecatedEqualIgnoringCase(value, "false"));
+      !EqualIgnoringASCIICase(value, "false"));
   return true;
 }
 
@@ -359,7 +362,7 @@ bool StyleCommands::ExecuteUseCSS(LocalFrame& frame,
                                   EditorCommandSource,
                                   const String& value) {
   frame.GetEditor().SetShouldStyleWithCSS(
-      DeprecatedEqualIgnoringCase(value, "false"));
+      EqualIgnoringASCIICase(value, "false"));
   return true;
 }
 
@@ -367,7 +370,7 @@ bool StyleCommands::ExecuteUseCSS(LocalFrame& frame,
 EditingTriState StyleCommands::StateStyle(LocalFrame& frame,
                                           CSSPropertyID property_id,
                                           const char* desired_value) {
-  frame.GetDocument()->UpdateStyleAndLayout();
+  frame.GetDocument()->UpdateStyleAndLayout(DocumentUpdateReason::kEditing);
   if (frame.GetEditor().Behavior().ShouldToggleStyleBasedOnStartOfSelection()) {
     return SelectionStartHasStyle(frame, property_id, desired_value)
                ? EditingTriState::kTrue
@@ -443,7 +446,7 @@ WritingDirection StyleCommands::TextDirectionForSelection(
       const CSSComputedStyleDeclaration& style =
           *MakeGarbageCollected<CSSComputedStyleDeclaration>(&node);
       const CSSValue* unicode_bidi =
-          style.GetPropertyCSSValue(GetCSSPropertyUnicodeBidi());
+          style.GetPropertyCSSValue(CSSPropertyID::kUnicodeBidi);
       auto* unicode_bidi_identifier_value =
           DynamicTo<CSSIdentifierValue>(unicode_bidi);
       if (!unicode_bidi_identifier_value)
@@ -477,11 +480,11 @@ WritingDirection StyleCommands::TextDirectionForSelection(
     if (!runner.IsStyledElement())
       continue;
 
-    Element* element = &ToElement(runner);
+    auto* element = To<Element>(&runner);
     const CSSComputedStyleDeclaration& style =
         *MakeGarbageCollected<CSSComputedStyleDeclaration>(element);
     const CSSValue* unicode_bidi =
-        style.GetPropertyCSSValue(GetCSSPropertyUnicodeBidi());
+        style.GetPropertyCSSValue(CSSPropertyID::kUnicodeBidi);
     auto* unicode_bidi_identifier_value =
         DynamicTo<CSSIdentifierValue>(unicode_bidi);
     if (!unicode_bidi_identifier_value)
@@ -498,7 +501,7 @@ WritingDirection StyleCommands::TextDirectionForSelection(
     DCHECK(EditingStyleUtilities::IsEmbedOrIsolate(unicode_bidi_value))
         << static_cast<int>(unicode_bidi_value);
     const CSSValue* direction =
-        style.GetPropertyCSSValue(GetCSSPropertyDirection());
+        style.GetPropertyCSSValue(CSSPropertyID::kDirection);
     auto* direction_identifier_value = DynamicTo<CSSIdentifierValue>(direction);
     if (!direction_identifier_value)
       continue;
@@ -527,13 +530,13 @@ WritingDirection StyleCommands::TextDirectionForSelection(
 EditingTriState StyleCommands::StateTextWritingDirection(
     LocalFrame& frame,
     WritingDirection direction) {
-  frame.GetDocument()->UpdateStyleAndLayout();
+  frame.GetDocument()->UpdateStyleAndLayout(DocumentUpdateReason::kEditing);
 
   bool has_nested_or_multiple_embeddings;
   WritingDirection selection_direction = TextDirectionForSelection(
       frame.Selection().ComputeVisibleSelectionInDOMTreeDeprecated(),
       frame.GetEditor().TypingStyle(), has_nested_or_multiple_embeddings);
-  // TODO(editnig-dev): We should be returning MixedTriState when
+  // TODO(editing-dev): We should be returning MixedTriState when
   // selectionDirection == direction && hasNestedOrMultipleEmbeddings
   return (selection_direction == direction &&
           !has_nested_or_multiple_embeddings)
@@ -581,9 +584,9 @@ String StyleCommands::SelectionStartCSSPropertyValue(
 }
 
 String StyleCommands::ValueStyle(LocalFrame& frame, CSSPropertyID property_id) {
-  frame.GetDocument()->UpdateStyleAndLayout();
+  frame.GetDocument()->UpdateStyleAndLayout(DocumentUpdateReason::kEditing);
 
-  // TODO(editnig-dev): Rather than retrieving the style at the start of the
+  // TODO(editing-dev): Rather than retrieving the style at the start of the
   // current selection, we should retrieve the style present throughout the
   // selection for non-Mac platforms.
   return SelectionStartCSSPropertyValue(frame, property_id);

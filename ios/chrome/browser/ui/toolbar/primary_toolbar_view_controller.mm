@@ -6,6 +6,7 @@
 
 #include "base/logging.h"
 #import "ios/chrome/browser/ui/commands/browser_commands.h"
+#import "ios/chrome/browser/ui/commands/omnibox_commands.h"
 #import "ios/chrome/browser/ui/fullscreen/fullscreen_animator.h"
 #import "ios/chrome/browser/ui/toolbar/adaptive_toolbar_view_controller+subclassing.h"
 #import "ios/chrome/browser/ui/toolbar/buttons/toolbar_button.h"
@@ -14,7 +15,6 @@
 #import "ios/chrome/browser/ui/toolbar/buttons/toolbar_tools_menu_button.h"
 #import "ios/chrome/browser/ui/toolbar/primary_toolbar_view.h"
 #import "ios/chrome/browser/ui/toolbar/primary_toolbar_view_controller_delegate.h"
-#import "ios/chrome/browser/ui/toolbar/public/omnibox_focuser.h"
 #import "ios/chrome/browser/ui/toolbar/public/toolbar_constants.h"
 #import "ios/chrome/browser/ui/toolbar/public/toolbar_utils.h"
 #import "ios/chrome/browser/ui/util/dynamic_type_util.h"
@@ -48,7 +48,7 @@
   __weak PrimaryToolbarViewController* weakSelf = self;
   [self.view.progressBar setProgress:0];
   [self.view.progressBar setHidden:NO
-                          animated:YES
+                          animated:[self areAnimationsEnabled]
                         completion:^(BOOL finished) {
                           [weakSelf stopProgressBar];
                         }];
@@ -68,7 +68,8 @@
 
 - (void)resetAfterSideSwipeSnapshot {
   [super resetAfterSideSwipeSnapshot];
-  self.view.backgroundColor = nil;
+  self.view.backgroundColor =
+      self.buttonFactory.toolbarConfiguration.backgroundColor;
   self.view.locationBarContainer.hidden = NO;
 }
 
@@ -89,6 +90,7 @@
                (progress - 1));
   }
   self.view.locationBarContainer.alpha = progress;
+  self.view.separator.alpha = progress;
 
   // When the locationBarContainer is hidden, show the |fakeOmniboxTarget|.
   if (progress == 0 && !self.view.fakeOmniboxTarget) {
@@ -127,12 +129,12 @@
   [self.view.collapsedToolbarButton addTarget:self
                                        action:@selector(exitFullscreen)
                              forControlEvents:UIControlEventTouchUpInside];
+}
 
-  if (IsCompactHeight(self)) {
-    self.view.locationBarExtraBottomPadding.constant =
-        kAdaptiveLocationBarExtraVerticalMargin;
-  } else {
-    self.view.locationBarExtraBottomPadding.constant = 0;
+- (void)viewDidLoad {
+  [super viewDidLoad];
+  if (@available(iOS 13, *)) {
+    [self updateLayoutForPreviousTraitCollection:nil];
   }
 }
 
@@ -145,24 +147,7 @@
 
 - (void)traitCollectionDidChange:(UITraitCollection*)previousTraitCollection {
   [super traitCollectionDidChange:previousTraitCollection];
-  [self.delegate
-      viewControllerTraitCollectionDidChange:previousTraitCollection];
-  if (IsCompactHeight(self)) {
-    self.view.locationBarExtraBottomPadding.constant =
-        kAdaptiveLocationBarExtraVerticalMargin;
-  } else {
-    self.view.locationBarExtraBottomPadding.constant = 0;
-  }
-  self.view.locationBarBottomConstraint.constant =
-      [self verticalMarginForLocationBarForFullscreenProgress:
-                self.previousFullscreenProgress];
-  if (previousTraitCollection.preferredContentSizeCategory !=
-      self.traitCollection.preferredContentSizeCategory) {
-    self.view.locationBarHeight.constant = [self
-        locationBarHeightForFullscreenProgress:self.previousFullscreenProgress];
-    self.view.locationBarContainer.layer.cornerRadius =
-        self.view.locationBarHeight.constant / 2;
-  }
+  [self updateLayoutForPreviousTraitCollection:previousTraitCollection];
 }
 
 #pragma mark - Property accessors
@@ -218,10 +203,13 @@
 
 - (void)animateFullscreenWithAnimator:(FullscreenAnimator*)animator {
   CGFloat finalProgress = animator.finalProgress;
-  [animator addAnimations:^{
-    [self updateForFullscreenProgress:finalProgress];
-    [self.view layoutIfNeeded];
-  }];
+  // Using the animator doesn't work as the animation doesn't trigger a relayout
+  // of the constraints (see crbug.com/978462, crbug.com/950994).
+  [UIView animateWithDuration:animator.duration
+                   animations:^{
+                     [self updateForFullscreenProgress:finalProgress];
+                     [self.view layoutIfNeeded];
+                   }];
 }
 
 #pragma mark - ToolbarAnimatee
@@ -265,6 +253,22 @@
 
 #pragma mark - Private
 
+- (void)updateLayoutForPreviousTraitCollection:
+    (UITraitCollection*)previousTraitCollection {
+  [self.delegate
+      viewControllerTraitCollectionDidChange:previousTraitCollection];
+  self.view.locationBarBottomConstraint.constant =
+      [self verticalMarginForLocationBarForFullscreenProgress:
+                self.previousFullscreenProgress];
+  if (previousTraitCollection.preferredContentSizeCategory !=
+      self.traitCollection.preferredContentSizeCategory) {
+    self.view.locationBarHeight.constant = [self
+        locationBarHeightForFullscreenProgress:self.previousFullscreenProgress];
+    self.view.locationBarContainer.layer.cornerRadius =
+        self.view.locationBarHeight.constant / 2;
+  }
+}
+
 - (CGFloat)clampedFontSizeMultiplier {
   return ToolbarClampedFontSizeMultiplier(
       self.traitCollection.preferredContentSizeCategory);
@@ -287,8 +291,8 @@
 - (CGFloat)verticalMarginForLocationBarForFullscreenProgress:(CGFloat)progress {
   // The vertical bottom margin for the location bar is such that the location
   // bar looks visually centered. However, the constraints are not geometrically
-  // centering the location bar. It is moved by 0pt (+ 1pt from extra padding)
-  // in iPhone landscape and by 3pt in all other configurations.
+  // centering the location bar. It is moved by 0pt in iPhone landscape and by
+  // 3pt in all other configurations.
   CGFloat fullscreenVerticalMargin =
       IsCompactHeight(self) ? 0 : kAdaptiveLocationBarVerticalMarginFullscreen;
   return -AlignValueToPixel((kAdaptiveLocationBarVerticalMargin * progress +

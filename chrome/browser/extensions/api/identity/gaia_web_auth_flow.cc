@@ -14,10 +14,11 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/signin/chrome_device_id_helper.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
-#include "components/signin/core/browser/ubertoken_fetcher.h"
+#include "components/signin/public/identity_manager/identity_manager.h"
+#include "components/signin/public/identity_manager/ubertoken_fetcher.h"
+#include "google_apis/gaia/gaia_auth_fetcher.h"
 #include "google_apis/gaia/gaia_urls.h"
 #include "net/base/escape.h"
-#include "services/identity/public/cpp/identity_manager.h"
 
 namespace extensions {
 
@@ -29,13 +30,9 @@ GaiaWebAuthFlow::GaiaWebAuthFlow(Delegate* delegate,
     : delegate_(delegate),
       profile_(profile),
       account_id_(token_key->account_id) {
-  TRACE_EVENT_ASYNC_BEGIN2("identity",
-                           "GaiaWebAuthFlow",
-                           this,
-                           "extension_id",
-                           token_key->extension_id,
-                           "account_id",
-                           token_key->account_id);
+  TRACE_EVENT_NESTABLE_ASYNC_BEGIN2(
+      "identity", "GaiaWebAuthFlow", this, "extension_id",
+      token_key->extension_id, "account_id", token_key->account_id.ToString());
 
   const char kOAuth2RedirectPathFormat[] = "/%s";
   const char kOAuth2AuthorizeFormat[] =
@@ -81,28 +78,27 @@ GaiaWebAuthFlow::GaiaWebAuthFlow(Delegate* delegate,
 }
 
 GaiaWebAuthFlow::~GaiaWebAuthFlow() {
-  TRACE_EVENT_ASYNC_END0("identity", "GaiaWebAuthFlow", this);
+  TRACE_EVENT_NESTABLE_ASYNC_END0("identity", "GaiaWebAuthFlow", this);
 
   if (web_flow_)
     web_flow_.release()->DetachDelegateAndDelete();
 }
 
 void GaiaWebAuthFlow::Start() {
+  TRACE_EVENT_NESTABLE_ASYNC_BEGIN0("identity", "UbertokenFetch", this);
   auto* identity_manager = IdentityManagerFactory::GetForProfile(profile_);
   ubertoken_fetcher_ = identity_manager->CreateUbertokenFetcherForAccount(
       account_id_,
       base::BindOnce(&GaiaWebAuthFlow::OnUbertokenFetchComplete,
                      base::Unretained(this)),
-      gaia::GaiaSource::kChrome, profile_->GetURLLoaderFactory(),
-      /*bound_to_channel_id=*/false);
+      gaia::GaiaSource::kChrome, profile_->GetURLLoaderFactory());
 }
 
 void GaiaWebAuthFlow::OnUbertokenFetchComplete(GoogleServiceAuthError error,
                                                const std::string& token) {
   if (error != GoogleServiceAuthError::AuthErrorNone()) {
-    TRACE_EVENT_ASYNC_STEP_PAST1("identity", "GaiaWebAuthFlow", this,
-                                 "OnUbertokenFetchComplete", "error",
-                                 error.ToString());
+    TRACE_EVENT_NESTABLE_ASYNC_END1("identity", "UbertokenFetch", this, "error",
+                                    error.ToString());
 
     DVLOG(1) << "OnUbertokenFetchComplete failure: " << error.error_message();
     delegate_->OnGaiaFlowFailure(GaiaWebAuthFlow::SERVICE_AUTH_ERROR, error,
@@ -110,8 +106,7 @@ void GaiaWebAuthFlow::OnUbertokenFetchComplete(GoogleServiceAuthError error,
     return;
   }
 
-  TRACE_EVENT_ASYNC_STEP_PAST0("identity", "GaiaWebAuthFlow", this,
-                               "OnUbertokenFetchComplete");
+  TRACE_EVENT_NESTABLE_ASYNC_END0("identity", "UbertokenFetch", this);
 
   const char kMergeSessionQueryFormat[] = "?uberauth=%s&"
                                           "continue=%s&"
@@ -145,12 +140,8 @@ void GaiaWebAuthFlow::OnAuthFlowFailure(WebAuthFlow::Failure failure) {
       break;
   }
 
-  TRACE_EVENT_ASYNC_STEP_PAST1("identity",
-                               "GaiaWebAuthFlow",
-                               this,
-                               "OnAuthFlowFailure",
-                               "error",
-                               gaia_failure);
+  TRACE_EVENT_NESTABLE_ASYNC_INSTANT1("identity", "OnAuthFlowFailure", this,
+                                      "error", gaia_failure);
 
   delegate_->OnGaiaFlowFailure(
       gaia_failure,
@@ -159,10 +150,7 @@ void GaiaWebAuthFlow::OnAuthFlowFailure(WebAuthFlow::Failure failure) {
 }
 
 void GaiaWebAuthFlow::OnAuthFlowURLChange(const GURL& url) {
-  TRACE_EVENT_ASYNC_STEP_PAST0("identity",
-                               "GaiaWebAuthFlow",
-                               this,
-                               "OnAuthFlowURLChange");
+  TRACE_EVENT_NESTABLE_ASYNC_INSTANT0("identity", "OnAuthFlowURLChange", this);
 
   const char kOAuth2RedirectAccessTokenKey[] = "access_token";
   const char kOAuth2RedirectErrorKey[] = "error";

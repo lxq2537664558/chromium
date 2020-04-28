@@ -11,7 +11,6 @@
 #include "third_party/blink/public/web/modules/autofill/web_form_element_observer.h"
 #include "third_party/blink/public/web/web_input_element.h"
 #include "third_party/blink/public/web/web_local_frame.h"
-#include "third_party/blink/public/web/web_user_gesture_indicator.h"
 #include "ui/base/page_transition_types.h"
 
 using blink::WebDocumentLoader;
@@ -21,8 +20,10 @@ using blink::WebFormElement;
 
 namespace autofill {
 
+using mojom::SubmissionSource;
+
 FormTracker::FormTracker(content::RenderFrame* render_frame)
-    : content::RenderFrameObserver(render_frame), weak_ptr_factory_(this) {
+    : content::RenderFrameObserver(render_frame) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(form_tracker_sequence_checker_);
 }
 
@@ -68,8 +69,7 @@ void FormTracker::TextFieldDidChange(const WebFormControlElement& element) {
   // that pastes aren't necessarily user gestures because Blink's conception of
   // user gestures is centered around creating new windows/tabs.
   if (user_gesture_required_ &&
-      !blink::WebUserGestureIndicator::IsProcessingUserGesture(
-          render_frame()->GetWebFrame()) &&
+      !render_frame()->GetWebFrame()->HasTransientUserActivation() &&
       !render_frame()->IsPasting())
     return;
 

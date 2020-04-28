@@ -5,8 +5,8 @@
 #include "ios/chrome/app/application_delegate/mock_tab_opener.h"
 
 #include "base/ios/block_types.h"
-#include "base/mac/scoped_block.h"
 #include "ios/chrome/app/application_mode.h"
+#import "ios/chrome/browser/url_loading/url_loading_params.h"
 #include "ui/base/page_transition_types.h"
 #include "url/gurl.h"
 
@@ -16,25 +16,19 @@
 
 @implementation MockTabOpener
 
-@synthesize url = _url;
-@synthesize virtualURL = _virtualURL;
-@synthesize applicationMode = _applicationMode;
-@synthesize completionBlock = _completionBlock;
-
-- (void)dismissModalsAndOpenSelectedTabInMode:(ApplicationMode)targetMode
-                                      withURL:(const GURL&)url
-                                   virtualURL:(const GURL&)virtualURL
+- (void)dismissModalsAndOpenSelectedTabInMode:
+            (ApplicationModeForTabOpening)targetMode
+                            withUrlLoadParams:
+                                (const UrlLoadParams&)urlLoadParams
                                dismissOmnibox:(BOOL)dismissOmnibox
-                                   transition:(ui::PageTransition)transition
                                    completion:(ProceduralBlock)completion {
-  _url = url;
-  _virtualURL = virtualURL;
+  _urlLoadParams = urlLoadParams;
   _applicationMode = targetMode;
   _completionBlock = [completion copy];
 }
 
 - (void)resetURL {
-  _url = _url.EmptyGURL();
+  _urlLoadParams.web_params.url = _urlLoadParams.web_params.url.EmptyGURL();
 }
 
 - (void)openTabFromLaunchOptions:(NSDictionary*)launchOptions
@@ -54,9 +48,7 @@
   return nil;
 }
 
-- (BOOL)shouldCompletePaymentRequestOnCurrentTab:
-    (id<StartupInformation>)startupInformation {
-  // Stub.
+- (BOOL)URLIsOpenedInRegularMode:(const GURL&)URL {
   return NO;
 }
 

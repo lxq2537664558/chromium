@@ -56,7 +56,7 @@ AccessibilityOrientation AXSlider::Orientation() const {
   if (!style)
     return kAccessibilityOrientationHorizontal;
 
-  ControlPart style_appearance = style->Appearance();
+  ControlPart style_appearance = style->EffectiveAppearance();
   switch (style_appearance) {
     case kSliderThumbHorizontalPart:
     case kSliderHorizontalPart:
@@ -87,7 +87,7 @@ void AXSlider::AddChildren() {
 
   // Before actually adding the value indicator to the hierarchy,
   // allow the platform to make a final decision about it.
-  if (thumb->AccessibilityIsIgnored())
+  if (!thumb->AccessibilityIsIncludedInTree())
     cache.Remove(thumb->AXObjectID());
   else
     children_.push_back(thumb);
@@ -113,11 +113,15 @@ bool AXSlider::OnNativeSetValueAction(const String& value) {
 
   // Fire change event manually, as LayoutSlider::setValueForPosition does.
   input->DispatchFormControlChangeEvent();
+
+  // Ensure the AX node is updated.
+  AXObjectCache().MarkAXObjectDirty(this, false);
+
   return true;
 }
 
 HTMLInputElement* AXSlider::GetInputElement() const {
-  return ToHTMLInputElement(layout_object_->GetNode());
+  return To<HTMLInputElement>(layout_object_->GetNode());
 }
 
 AXSliderThumb::AXSliderThumb(AXObjectCacheImpl& ax_object_cache)
@@ -131,7 +135,7 @@ LayoutObject* AXSliderThumb::LayoutObjectForRelativeBounds() const {
   if (!slider_layout_object || !slider_layout_object->IsSlider())
     return nullptr;
   Element* thumb_element =
-      ToElement(slider_layout_object->GetNode())
+      To<Element>(slider_layout_object->GetNode())
           ->UserAgentShadowRoot()
           ->getElementById(shadow_element_names::SliderThumb());
   DCHECK(thumb_element);

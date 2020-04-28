@@ -9,7 +9,7 @@
 #include <memory>
 
 #include "base/macros.h"
-#include "chrome/browser/page_load_metrics/page_load_metrics_observer.h"
+#include "components/page_load_metrics/browser/page_load_metrics_observer.h"
 #include "services/metrics/public/cpp/ukm_source.h"
 
 namespace content {
@@ -44,21 +44,6 @@ class NavigationHandle;
 class AMPPageLoadMetricsObserver
     : public page_load_metrics::PageLoadMetricsObserver {
  public:
-  // If you add elements to this enum, make sure you update the enum value in
-  // enums.xml. Only add elements to the end to prevent inconsistencies between
-  // versions.
-  enum class AMPViewType {
-    NONE,
-    AMP_CACHE,
-    GOOGLE_SEARCH_AMP_VIEWER,
-    GOOGLE_NEWS_AMP_VIEWER,
-
-    // New values should be added before this final entry.
-    AMP_VIEW_TYPE_LAST
-  };
-
-  static AMPViewType GetAMPViewType(const GURL& url);
-
   AMPPageLoadMetricsObserver();
   ~AMPPageLoadMetricsObserver() override;
 
@@ -68,36 +53,19 @@ class AMPPageLoadMetricsObserver
   void OnCommitSameDocumentNavigation(
       content::NavigationHandle* navigation_handle) override;
   void OnDidFinishSubFrameNavigation(
-      content::NavigationHandle* navigation_handle,
-      const page_load_metrics::PageLoadExtraInfo&) override;
+      content::NavigationHandle* navigation_handle) override;
   void OnFrameDeleted(content::RenderFrameHost* rfh) override;
-  void OnDomContentLoadedEventStart(
-      const page_load_metrics::mojom::PageLoadTiming& timing,
-      const page_load_metrics::PageLoadExtraInfo& info) override;
-  void OnLoadEventStart(
-      const page_load_metrics::mojom::PageLoadTiming& timing,
-      const page_load_metrics::PageLoadExtraInfo& info) override;
-  void OnFirstLayout(const page_load_metrics::mojom::PageLoadTiming& timing,
-                     const page_load_metrics::PageLoadExtraInfo& info) override;
-  void OnFirstContentfulPaintInPage(
-      const page_load_metrics::mojom::PageLoadTiming& timing,
-      const page_load_metrics::PageLoadExtraInfo& info) override;
-  void OnParseStart(const page_load_metrics::mojom::PageLoadTiming& timing,
-                    const page_load_metrics::PageLoadExtraInfo& info) override;
   void OnTimingUpdate(
       content::RenderFrameHost* subframe_rfh,
-      const page_load_metrics::mojom::PageLoadTiming& timing,
-      const page_load_metrics::PageLoadExtraInfo& extra_info) override;
+      const page_load_metrics::mojom::PageLoadTiming& timing) override;
   void OnSubFrameRenderDataUpdate(
       content::RenderFrameHost* subframe_rfh,
-      const page_load_metrics::mojom::FrameRenderDataUpdate& render_data,
-      const page_load_metrics::PageLoadExtraInfo& extra_info) override;
-  void OnComplete(const page_load_metrics::mojom::PageLoadTiming& timing,
-                  const page_load_metrics::PageLoadExtraInfo& info) override;
-  void OnLoadingBehaviorObserved(
-      content::RenderFrameHost* subframe_rfh,
-      int behavior_flags,
-      const page_load_metrics::PageLoadExtraInfo& extra_info) override;
+      const page_load_metrics::mojom::FrameRenderDataUpdate& render_data)
+      override;
+  void OnComplete(
+      const page_load_metrics::mojom::PageLoadTiming& timing) override;
+  void OnLoadingBehaviorObserved(content::RenderFrameHost* subframe_rfh,
+                                 int behavior_flags) override;
 
  private:
   // Information about an AMP navigation in the main frame. Both regular and
@@ -137,9 +105,11 @@ class AMPPageLoadMetricsObserver
     page_load_metrics::PageRenderData render_data;
 
     // Whether an AMP document was loaded, based on observed
-    // WebLoadingBehaviorFlags for this frame.
+    // LoadingBehaviorFlags for this frame.
     bool amp_document_loaded = false;
   };
+
+  void RecordLoadingBehaviorObserved();
 
   void ProcessMainFrameNavigation(content::NavigationHandle* navigation_handle);
   void MaybeRecordAmpDocumentMetrics();
@@ -153,7 +123,9 @@ class AMPPageLoadMetricsObserver
   std::map<content::RenderFrameHost*, SubFrameInfo> amp_subframe_info_;
 
   GURL current_url_;
-  AMPViewType view_type_ = AMPViewType::NONE;
+
+  bool observed_amp_main_frame_ = false;
+  bool observed_amp_sub_frame_ = false;
 
   DISALLOW_COPY_AND_ASSIGN(AMPPageLoadMetricsObserver);
 };

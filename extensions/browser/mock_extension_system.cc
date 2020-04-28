@@ -13,12 +13,13 @@ MockExtensionSystem::MockExtensionSystem(content::BrowserContext* context)
     : browser_context_(context) {
 }
 
-MockExtensionSystem::~MockExtensionSystem() {
+MockExtensionSystem::~MockExtensionSystem() = default;
+
+void MockExtensionSystem::SetReady() {
+  ready_.Signal();
 }
 
 void MockExtensionSystem::InitForRegularProfile(bool extensions_enabled) {}
-
-void MockExtensionSystem::InitForIncognitoProfile() {}
 
 ExtensionService* MockExtensionSystem::extension_service() {
   return nullptr;
@@ -85,6 +86,10 @@ void MockExtensionSystem::InstallUpdate(
     InstallUpdateCallback install_update_callback) {
   NOTREACHED();
 }
+
+void MockExtensionSystem::PerformActionBasedOnOmahaAttributes(
+    const std::string& extension_id,
+    const base::Value& attributes) {}
 
 bool MockExtensionSystem::FinishDelayedInstallationIfReady(
     const std::string& extension_id,

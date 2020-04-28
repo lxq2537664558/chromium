@@ -9,26 +9,118 @@ const kPageNodesTargetY = 20;
 const kPageNodesYRange = 100;
 
 // Range occupied by process nodes at the bottom of the graph view.
-const kProcessNodesYRange = 150;
+const kProcessNodesYRange = 100;
+
+// Range occupied by worker nodes at the bottom of the graph view, above
+// process nodes.
+const kWorkerNodesYRange = 200;
 
 // Target y position for frame nodes.
 const kFrameNodesTargetY = kPageNodesYRange + 50;
 
 // Range that frame nodes cannot enter at the top/bottom of the graph view.
 const kFrameNodesTopMargin = kPageNodesYRange;
-const kFrameNodesBottomMargin = kProcessNodesYRange + 50;
+const kFrameNodesBottomMargin = kWorkerNodesYRange + 50;
+
+class ToolTip {
+  /**
+   * @param {Element} div
+   * @param {GraphNode} node
+   */
+  constructor(div, node) {
+    /** @private {GraphNode} */
+    this.node_ = node;
+
+    /** @private {d3.selection} */
+    this.div_ = d3.select(div)
+                    .append('div')
+                    .attr('class', 'tooltip')
+                    .style('opacity', 0)
+                    .style('left', `${node.x}px`)
+                    .style('top', `${node.y - 28}px`);
+    this.div_.append('table').append('tbody');
+    this.div_.transition().duration(200).style('opacity', .9);
+
+    /** @private {string} */
+    this.description_json_ = '';
+    this.onDescription(JSON.stringify({}));
+  }
+
+  nodeMoved() {
+    const node = this.node_;
+    this.div_.style('left', `${node.x}px`).style('top', `${node.y - 28}px`);
+  }
+
+  goAway() {
+    this.div_.transition().duration(200).style('opacity', 0).remove();
+  }
+
+  /**
+   * Updates the description displayed.
+   * @param {string} description_json A JSON string.
+   */
+  onDescription(description_json) {
+    if (this.description_json_ === description_json) {
+      return;
+    }
+
+    // The JSON is a dictionary of data describer name to their data. Assuming a
+    // convention that describers emit a dictionary from string->string, this is
+    // flattened to an array. Each top-level dictionary entry is flattened to a
+    // 'heading' with [`the describer's name`, null], followed by some number of
+    // entries with a two-element list, each representing a key/value pair.
+    this.description_json_ = description_json;
+    const description =
+        /** @type {!Object<?,?>} */ (JSON.parse(description_json));
+    const flattenedDescription = [];
+    for (const [title, value] of Object.entries(description)) {
+      flattenedDescription.push([title, null], ...Object.entries(value));
+    }
+    if (flattenedDescription.length === 0) {
+      flattenedDescription.push(['No Data', null]);
+    }
+
+    let tr =
+        this.div_.selectAll('tbody').selectAll('tr').data(flattenedDescription);
+    tr.enter().append('tr').selectAll('td').data(d => d).enter().append('td');
+    tr.exit().remove();
+
+    tr = this.div_.selectAll('tr');
+    tr.select('td').attr('colspan', function(d) {
+      return (d3.select(this.parentElement).datum()[1] === null) ? 2 : null;
+    });
+    tr = tr.attr('class', d => d[1] === null ? 'heading' : 'value');
+    tr.selectAll('td').data(d => d).text(d => d === null ? '' : d);
+  }
+}
 
 /** @implements {d3.ForceNode} */
 class GraphNode {
   constructor(id) {
+    /** @type {number} */
     this.id = id;
-    // Implementation of the d3.ForceNode interface.
-    // See https://github.com/d3/d3-force#simulation_nodes.
-    this.index = null;
-    this.x = null;
-    this.y = null;
-    this.vx = null;
-    this.vy = null;
+    /** @type {string} */
+    this.color = 'black';
+    /** @type {string} */
+    this.iconUrl = '';
+
+    /** @type {ToolTip} */
+    this.tooltip = null;
+
+    /**
+     * Implementation of the d3.ForceNode interface.
+     * See https://github.com/d3/d3-force#simulation_nodes.
+     * @type {number|undefined}
+     */
+    this.index;
+    /** @type {number|undefined} */
+    this.x;
+    /** @type {number|undefined} */
+    this.y;
+    /** @type {number|undefined} */
+    this.vx;
+    /** @type {number|undefined} */
+    this.vy;
     this.fx = null;
     this.fy = null;
   }
@@ -39,15 +131,29 @@ class GraphNode {
   }
 
   /**
-   * @param {number} graph_height: Height of the graph view (svg).
-   * @return {number}
+   * Sets the initial x and y position of this node, also resets
+   * vx and vy.
+   * @param {number} graphWidth Width of the graph view (svg).
+   * @param {number} graphHeight Height of the graph view (svg).
    */
-  targetYPosition(graph_height) {
-    return 0;
+  setInitialPosition(graphWidth, graphHeight) {
+    this.x = graphWidth / 2;
+    this.y = this.targetYPosition(graphHeight);
+    this.vx = 0;
+    this.vy = 0;
   }
 
   /**
-   * @return {number}: The strength of the force that pulls the node towards
+   * @param {number} graphHeight Height of the graph view (svg).
+   * @return {number}
+   */
+  targetYPosition(graphHeight) {
+    const bounds = this.allowedYRange(graphHeight);
+    return (bounds[0] + bounds[1]) / 2;
+  }
+
+  /**
+   * @return {number} The strength of the force that pulls the node towards
    *                    its target y position.
    */
   targetYPositionStrength() {
@@ -55,15 +161,15 @@ class GraphNode {
   }
 
   /**
-   * @param {number} graph_height: Height of the graph view.
+   * @param {number} graphHeight Height of the graph view.
    * @return {!Array<number>}
    */
-  allowedYRange(graph_height) {
-    // By default, there is no hard constraint on the y position of a node.
-    return [-Infinity, Infinity];
+  allowedYRange(graphHeight) {
+    // By default, nodes just need to be in bounds of the graph.
+    return [0, graphHeight];
   }
 
-  /** @return {number}: The strength of the repulsion force with other nodes. */
+  /** @return {number} The strength of the repulsion force with other nodes. */
   manyBodyStrength() {
     return -200;
   }
@@ -72,24 +178,30 @@ class GraphNode {
   linkTargets() {
     return [];
   }
+
+  /**
+   * Selects a color string from an id.
+   * @param {number} id The id the returned color is selected from.
+   * @return {string}
+   */
+  selectColor(id) {
+    return d3.schemeSet3[Math.abs(id) % 12];
+  }
 }
 
 class PageNode extends GraphNode {
-  /** @param {resourceCoordinator.mojom.WebUIPageInfo} page */
+  /** @param {!discards.mojom.PageInfo} page */
   constructor(page) {
     super(page.id);
+    /** @type {!discards.mojom.PageInfo} */
     this.page = page;
     this.y = kPageNodesTargetY;
   }
 
   /** override */
   get title() {
-    return this.page.mainFrameUrl.length > 0 ? this.page.mainFrameUrl : 'Page';
-  }
-
-  /** override */
-  targetYPosition(graph_height) {
-    return kPageNodesTargetY;
+    return this.page.mainFrameUrl.url.length > 0 ? this.page.mainFrameUrl.url :
+                                                   'Page';
   }
 
   /** @override */
@@ -98,7 +210,7 @@ class PageNode extends GraphNode {
   }
 
   /** override */
-  allowedYRange(graph_height) {
+  allowedYRange(graphHeight) {
     return [0, kPageNodesYRange];
   }
 
@@ -106,57 +218,54 @@ class PageNode extends GraphNode {
   manyBodyStrength() {
     return -600;
   }
-
-  /** override */
-  linkTargets() {
-    return [this.page.mainFrameId];
-  }
 }
 
 class FrameNode extends GraphNode {
-  /** @param {resourceCoordinator.mojom.WebUIFrameInfo} frame */
+  /** @param {!discards.mojom.FrameInfo} frame */
   constructor(frame) {
     super(frame.id);
+    /** @type {!discards.mojom.FrameInfo} frame */
     this.frame = frame;
+    this.color = this.selectColor(frame.processId);
   }
 
   /** override */
   get title() {
-    return this.frame.url.length > 0 ? this.frame.url : 'Frame';
+    return this.frame.url.url.length > 0 ? this.frame.url.url : 'Frame';
   }
 
   /** override */
-  targetYPosition(graph_height) {
+  targetYPosition(graphHeight) {
     return kFrameNodesTargetY;
   }
 
   /** override */
-  allowedYRange(graph_height) {
-    return [kFrameNodesTopMargin, graph_height - kFrameNodesBottomMargin];
+  allowedYRange(graphHeight) {
+    return [kFrameNodesTopMargin, graphHeight - kFrameNodesBottomMargin];
   }
 
   /** override */
   linkTargets() {
-    return [this.frame.parentFrameId, this.frame.processId];
+    // Only link to the page if there isn't a parent frame.
+    return [
+      this.frame.parentFrameId || this.frame.pageId, this.frame.processId
+    ];
   }
 }
 
 class ProcessNode extends GraphNode {
-  /** @param {!resourceCoordinator.mojom.WebUIProcessInfo} process */
+  /** @param {!discards.mojom.ProcessInfo} process */
   constructor(process) {
     super(process.id);
-    /** {!resourceCoordinator.mojom.WebUIProcessInfo} */
+    /** @type {!discards.mojom.ProcessInfo} */
     this.process = process;
+
+    this.color = this.selectColor(process.id);
   }
 
   /** override */
   get title() {
     return `PID: ${this.process.pid.pid}`;
-  }
-
-  /** override */
-  targetYPosition(graph_height) {
-    return graph_height - (kProcessNodesYRange / 2);
   }
 
   /** @return {number} */
@@ -165,8 +274,8 @@ class ProcessNode extends GraphNode {
   }
 
   /** override */
-  allowedYRange(graph_height) {
-    return [graph_height - kProcessNodesYRange, graph_height];
+  allowedYRange(graphHeight) {
+    return [graphHeight - kProcessNodesYRange, graphHeight];
   }
 
   /** override */
@@ -175,27 +284,119 @@ class ProcessNode extends GraphNode {
   }
 }
 
+class WorkerNode extends GraphNode {
+  /** @param {!discards.mojom.WorkerInfo} worker */
+  constructor(worker) {
+    super(worker.id);
+    /** @type {!discards.mojom.WorkerInfo} */
+    this.worker = worker;
 
+    this.color = this.selectColor(worker.processId);
+  }
+
+  /** override */
+  get title() {
+    return this.worker.url.url.length > 0 ? this.worker.url.url : 'Worker';
+  }
+
+  /** @return {number} */
+  targetYPositionStrength() {
+    return 10;
+  }
+
+  /** override */
+  allowedYRange(graphHeight) {
+    return [
+      graphHeight - kWorkerNodesYRange, graphHeight - kProcessNodesYRange
+    ];
+  }
+
+  /** override */
+  manyBodyStrength() {
+    return -600;
+  }
+
+  /** override */
+  linkTargets() {
+    // Link the process, in addition to all the client and child workers.
+    return [
+      this.worker.processId, ...this.worker.clientFrameIds,
+      ...this.worker.clientWorkerIds, ...this.worker.childWorkerIds
+    ];
+  }
+}
+
+/**
+ * A force that bounds GraphNodes |allowedYRange| in Y.
+ * @param {number} graphHeight
+ */
+function boundingForce(graphHeight) {
+  /** @type {!Array<!GraphNode>} */
+  let nodes = [];
+  /** @type {!Array<!Array>} */
+  let bounds = [];
+
+  /** @param {number} alpha */
+  function force(alpha) {
+    const n = nodes.length;
+    for (let i = 0; i < n; ++i) {
+      const bound = bounds[i];
+      const node = nodes[i];
+      const yOld = node.y;
+      const yNew = Math.max(bound[0], Math.min(yOld, bound[1]));
+      if (yOld !== yNew) {
+        node.y = yNew;
+        // Zero the velocity of clamped nodes.
+        node.vy = 0;
+      }
+    }
+  }
+
+  /** @param {!Array<!GraphNode>} n */
+  force.initialize = function(n) {
+    nodes = n;
+    bounds = nodes.map(node => node.allowedYRange(graphHeight));
+  };
+
+  return force;
+}
+
+/**
+ * @implements {discards.mojom.GraphChangeStreamInterface}
+ */
 class Graph {
   /**
    * TODO(siggi): This should be SVGElement, but closure doesn't have externs
    *    for this yet.
    * @param {Element} svg
+   * @param {Element} div
    */
-  constructor(svg) {
+  constructor(svg, div) {
     /**
      * TODO(siggi): SVGElement.
      * @private {Element}
      */
     this.svg_ = svg;
 
+    /** @private {Element} */
+    this.div_ = div;
+
+    /** @private {boolean} */
+    this.wasResized_ = false;
+
     /** @private {number} */
-    this.width_ = 100;
+    this.width_ = 0;
     /** @private {number} */
-    this.height_ = 100;
+    this.height_ = 0;
 
     /** @private {d3.ForceSimulation} */
     this.simulation_ = null;
+
+    /**
+     * A selection for the top-level <g> node that contains all separators.
+     * @private {d3.selection}
+     */
+    this.separatorGroup_ = null;
 
     /**
      * A selection for the top-level <g> node that contains all nodes.
@@ -217,6 +418,24 @@ class Graph {
      * @private {!Array<!d3.ForceLink>}
      */
     this.links_ = [];
+
+    /**
+     * The host window.
+     * @private {Window}
+     */
+    this.hostWindow_ = null;
+
+    /**
+     * The interval timer used to poll for node descriptions.
+     * @private {number}
+     */
+    this.pollDescriptionsInterval_ = 0;
+
+    /**
+     * The d3.drag instance applied to nodes.
+     * @private {?d3.Drag}
+     */
+    this.drag_ = null;
   }
 
   initialize() {
@@ -225,7 +444,7 @@ class Graph {
     // so these event handlers are never removed.
     window.addEventListener('message', this.onMessage_.bind(this));
 
-    // Set up a window resize listener to track the graph on resize.
+    // Set up a resize listener to track the graph on resize.
     window.addEventListener('resize', this.onResize_.bind(this));
 
     // Create the simulation and set up the permanent forces.
@@ -248,6 +467,130 @@ class Graph {
     const svg = d3.select(this.svg_);
     this.linkGroup_ = svg.append('g').attr('class', 'links');
     this.nodeGroup_ = svg.append('g').attr('class', 'nodes');
+    this.separatorGroup_ = svg.append('g').attr('class', 'separators');
+
+    const drag = d3.drag();
+    drag.clickDistance(4);
+    drag.on('start', this.onDragStart_.bind(this));
+    drag.on('drag', this.onDrag_.bind(this));
+    drag.on('end', this.onDragEnd_.bind(this));
+    this.drag_ = drag;
+  }
+
+  /** @override */
+  frameCreated(frame) {
+    this.addNode_(new FrameNode(frame));
+  }
+
+  /** @override */
+  pageCreated(page) {
+    this.addNode_(new PageNode(page));
+  }
+
+  /** @override */
+  processCreated(process) {
+    this.addNode_(new ProcessNode(process));
+  }
+
+  /** @override */
+  workerCreated(worker) {
+    this.addNode_(new WorkerNode(worker));
+  }
+
+  /** @override */
+  frameChanged(frame) {
+    const frameNode = /** @type {!FrameNode} */ (this.nodes_.get(frame.id));
+    frameNode.frame = frame;
+  }
+
+  /** @override */
+  pageChanged(page) {
+    const pageNode = /** @type {!PageNode} */ (this.nodes_.get(page.id));
+    pageNode.page = page;
+  }
+
+  /** @override */
+  processChanged(process) {
+    const processNode =
+        /** @type {!ProcessNode} */ (this.nodes_.get(process.id));
+    processNode.process = process;
+  }
+
+  /** @override */
+  workerChanged(worker) {
+    const workerNode =
+        /** @type {!WorkerNode} */ (this.nodes_.get(worker.id));
+
+    // Worker node links may change dynamically, so account for that here.
+    this.removeNodeLinks_(workerNode);
+    workerNode.worker = worker;
+    this.addNodeLinks_(workerNode);
+  }
+
+  /** @override */
+  favIconDataAvailable(iconInfo) {
+    const graphNode = this.nodes_.get(iconInfo.nodeId);
+    if (graphNode) {
+      graphNode.iconUrl = 'data:image/png;base64,' + iconInfo.iconData;
+    }
+  }
+
+  /** @override */
+  nodeDeleted(nodeId) {
+    const node = this.nodes_.get(nodeId);
+
+    // Remove any links, and then the node itself.
+    this.removeNodeLinks_(node);
+    this.nodes_.delete(nodeId);
+  }
+
+  /**
+   * @param {!GraphNode} node
+   * @private
+   */
+  removeNodeLinks_(node) {
+    // Filter away any links to or from the deleted node.
+    this.links_ = this.links_.filter(
+        link => link.source !== node && link.target !== node);
+  }
+
+  /**
+   * @param {!Object<string>} nodeDescriptions
+   * @private
+   */
+  nodeDescriptions_(nodeDescriptions) {
+    for (const nodeId in nodeDescriptions) {
+      const node = this.nodes_.get(Number.parseInt(nodeId, 10));
+      if (node && node.tooltip) {
+        node.tooltip.onDescription(nodeDescriptions[nodeId]);
+      }
+    }
+  }
+
+  /**
+   * @private
+   */
+  pollForNodeDescriptions_() {
+    const nodeIds = [];
+    for (const node of this.nodes_.values()) {
+      if (node.tooltip) {
+        nodeIds.push(node.id);
+      }
+    }
+
+    if (nodeIds.length) {
+      this.hostWindow_.postMessage(['requestNodeDescriptions', nodeIds], '*');
+
+      if (this.pollDescriptionsInterval_ === 0) {
+        // Start polling if not already in progress.
+        this.pollDescriptionsInterval_ =
+            setInterval(this.pollForNodeDescriptions_.bind(this), 1000);
+      }
+    } else {
+      // No tooltips, stop polling.
+      clearInterval(this.pollDescriptionsInterval_);
+      this.pollDescriptionsInterval_ = 0;
+    }
   }
 
   /**
@@ -255,10 +598,92 @@ class Graph {
    * @private
    */
   onMessage_(event) {
-    this.onGraphDump_(event.data);
+    if (!this.hostWindow_) {
+      this.hostWindow_ = event.source;
+    }
+
+    const type = /** @type {string} */ (event.data[0]);
+    const data = /** @type {Object|number} */ (event.data[1]);
+    switch (type) {
+      case 'frameCreated':
+        this.frameCreated(
+            /** @type {!discards.mojom.FrameInfo} */ (data));
+        break;
+      case 'pageCreated':
+        this.pageCreated(
+            /** @type {!discards.mojom.PageInfo} */ (data));
+        break;
+      case 'processCreated':
+        this.processCreated(
+            /** @type {!discards.mojom.ProcessInfo} */ (data));
+        break;
+      case 'workerCreated':
+        this.workerCreated(
+            /** @type {!discards.mojom.WorkerInfo} */ (data));
+        break;
+      case 'frameChanged':
+        this.frameChanged(
+            /** @type {!discards.mojom.FrameInfo} */ (data));
+        break;
+      case 'pageChanged':
+        this.pageChanged(
+            /** @type {!discards.mojom.PageInfo} */ (data));
+        break;
+      case 'processChanged':
+        this.processChanged(
+            /** @type {!discards.mojom.ProcessInfo} */ (data));
+        break;
+      case 'favIconDataAvailable':
+        this.favIconDataAvailable(
+            /** @type {!discards.mojom.FavIconInfo} */ (data));
+        break;
+      case 'workerChanged':
+        this.workerChanged(
+            /** @type {!discards.mojom.WorkerInfo} */ (data));
+        break;
+      case 'nodeDeleted':
+        this.nodeDeleted(/** @type {number} */ (data));
+        break;
+      case 'nodeDescriptions':
+        this.nodeDescriptions_(/** @type {!Object<string>} */ (data));
+        break;
+    }
+
+    this.render_();
   }
 
-  /** @private */
+  /**
+   * @param {GraphNode} node
+   * @private
+   */
+  onGraphNodeClick_(node) {
+    if (node.tooltip) {
+      node.tooltip.goAway();
+      node.tooltip = null;
+    } else {
+      node.tooltip = new ToolTip(this.div_, node);
+
+      // Poll for all tooltip node descriptions immediately.
+      this.pollForNodeDescriptions_();
+    }
+  }
+
+  /**
+   * Renders nodes_ and edges_ to the SVG DOM.
+   *
+   * Each edge is a line element.
+   * Each node is represented as a group element with three children:
+   *   1. A circle that has a color and which animates the node on creation
+   *      and deletion.
+   *   2. An image that is provided a data URL for the nodes favicon, when
+   *      available.
+   *   3. A title element that presents the nodes URL on hover-over, if
+   *      available.
+   * Deleted nodes are classed '.dead', and CSS takes care of hiding their
+   * image element if it's been populated with an icon.
+   *
+   * @private
+   */
   render_() {
     // Select the links.
     const link = this.linkGroup_.selectAll('line').data(this.links_);
@@ -270,40 +695,61 @@ class Graph {
     // Select the nodes, except for any dead ones that are still transitioning.
     const nodes = Array.from(this.nodes_.values());
     const node =
-        this.nodeGroup_.selectAll('circle:not(.dead)').data(nodes, d => d.id);
+        this.nodeGroup_.selectAll('g:not(.dead)').data(nodes, d => d.id);
 
     // Add new nodes, if any.
     if (!node.enter().empty()) {
-      const drag = d3.drag();
-      drag.on('start', this.onDragStart_.bind(this));
-      drag.on('drag', this.onDrag_.bind(this));
-      drag.on('end', this.onDragEnd_.bind(this));
+      const newNodes = node.enter()
+                           .append('g')
+                           .call(this.drag_)
+                           .on('click', this.onGraphNodeClick_.bind(this));
+      const circles = newNodes.append('circle').attr('r', 9).attr(
+          'fill', 'green');  // New nodes appear green.
 
-      const circles = node.enter()
-                          .append('circle')
-                          .attr('r', 7.5)
-                          .attr('fill', 'green')  // New nodes appear green.
-                          .call(drag);
-      circles.append('title');
+      newNodes.append('image')
+          .attr('x', -8)
+          .attr('y', -8)
+          .attr('width', 16)
+          .attr('height', 16);
+      newNodes.append('title');
 
-      // Transition new nodes to black over 2 seconds.
-      circles.transition().duration(2000).attr('fill', 'black').attr('r', 5);
+      // Transition new nodes to their chosen color in 2 seconds.
+      circles.transition()
+          .duration(2000)
+          .attr('fill', d => d.color)
+          .attr('r', 6);
     }
 
-    // Give dead notes a distinguishing class to exclude them from the selection
-    // above. Interrupt any ongoing transitions, then transition them out.
-    node.exit()
-        .classed('dead', true)
-        .interrupt()
-        .attr('r', 7.5)
-        .attr('fill', 'red')
-        .transition()
-        .duration(2000)
-        .attr('r', 0)
-        .remove();
+    if (!node.exit().empty()) {
+      // Give dead nodes a distinguishing class to exclude them from the
+      // selection above.
+      const deletedNodes = node.exit().classed('dead', true);
+
+      // Interrupt any ongoing transitions.
+      deletedNodes.interrupt();
+
+      // Turn down the node associated tooltips.
+      deletedNodes.each(d => {
+        if (d.tooltip) {
+          d.tooltip.goAway();
+        }
+      });
+
+      // Transition the nodes out and remove them at the end of transition.
+      deletedNodes.transition()
+          .remove()
+          .select('circle')
+          .attr('r', 9)
+          .attr('fill', 'red')
+          .transition()
+          .duration(2000)
+          .attr('r', 0);
+    }
 
     // Update the title for all nodes.
     node.selectAll('title').text(d => d.title);
+    // Update the favicon for all nodes.
+    node.selectAll('image').attr('href', d => d.iconUrl);
 
     // Update and restart the simulation if the graph changed.
     if (!node.enter().empty() || !node.exit().empty() ||
@@ -317,9 +763,14 @@ class Graph {
 
   /** @private */
   onTick_() {
-    const circles = this.nodeGroup_.selectAll('circle');
-    circles.attr('cx', this.getClampedXPosition_.bind(this))
-        .attr('cy', this.getClampedYPosition_.bind(this));
+    const nodes = this.nodeGroup_.selectAll('g');
+    nodes.attr('transform', d => `translate(${d.x},${d.y})`);
+
+    for (const node of this.nodes_.values()) {
+      if (node.tooltip) {
+        node.tooltip.nodeMoved();
+      }
+    }
 
     const lines = this.linkGroup_.selectAll('line');
     lines.attr('x1', d => d.source.x)
@@ -329,110 +780,32 @@ class Graph {
   }
 
   /**
-   * @param {!Map<number, !GraphNode>} oldNodes
-   * @param {resourceCoordinator.mojom.WebUIPageInfo} page
+   * Adds a new node to the graph, populates its links and gives it an initial
+   * position.
+   *
+   * @param {!GraphNode} node
    * @private
    */
-  addOrUpdatePage_(oldNodes, page) {
-    if (!page) {
-      return;
-    }
-    let node = /** @type {?PageNode} */ (oldNodes.get(page.id));
-    if (node) {
-      node.page = page;
-    } else {
-      node = new PageNode(page);
-    }
-
-    this.nodes_.set(page.id, node);
+  addNode_(node) {
+    this.nodes_.set(node.id, node);
+    this.addNodeLinks_(node);
+    node.setInitialPosition(this.width_, this.height_);
   }
 
   /**
-   * @param {!Map<number, !GraphNode>} oldNodes
-   * @param {resourceCoordinator.mojom.WebUIFrameInfo} frame
+   * Adds all the links for a node to the graph.
+   *
+   * @param {!GraphNode} node
    * @private
    */
-  addOrUpdateFrame_(oldNodes, frame) {
-    if (!frame) {
-      return;
-    }
-    let node = /** @type {?FrameNode} */ (oldNodes.get(frame.id));
-    if (node) {
-      node.frame = frame;
-    } else {
-      node = new FrameNode(frame);
-    }
-
-    this.nodes_.set(frame.id, node);
-  }
-
-  /**
-   * @param {!Map<number, !GraphNode>} oldNodes
-   * @param {resourceCoordinator.mojom.WebUIProcessInfo} process
-   * @private
-   */
-  addOrUpdateProcess_(oldNodes, process) {
-    if (!process) {
-      return;
-    }
-    let node = /** @type {?ProcessNode} */ (oldNodes.get(process.id));
-    if (node) {
-      node.process = process;
-    } else {
-      node = new ProcessNode(process);
-    }
-
-    this.nodes_.set(process.id, node);
-  }
-
-  /**
-   * @param {!GraphNode} source
-   * @param {number} dst_id
-   * @private
-   */
-  maybeAddLink_(source, dst_id) {
-    const target = this.nodes_.get(dst_id);
-    if (target) {
-      this.links_.push({source: source, target: target});
-    }
-  }
-
-  /**
-   * @param {resourceCoordinator.mojom.WebUIGraph} graph An updated graph from
-   *     the WebUI.
-   * @private
-   */
-  onGraphDump_(graph) {
-    // Keep a copy of the current node list, as the new node list will copy
-    // existing nodes into it.
-    const oldNodes = this.nodes_;
-    this.nodes_ = new Map();
-    for (const page of graph.pages) {
-      this.addOrUpdatePage_(oldNodes, page);
-    }
-    for (const frame of graph.frames) {
-      this.addOrUpdateFrame_(oldNodes, frame);
-    }
-    for (const process of graph.processes) {
-      this.addOrUpdateProcess_(oldNodes, process);
-    }
-
-
-    // Recompute the links, there's no benefit to maintaining the identity
-    // of the previous links.
-    // TODO(siggi): I'm not sure this is true in general. Edges might cache
-    //     their individual strengths, as a case in point.
-    this.links_ = [];
-    const newNodes = this.nodes_.values();
-    for (const node of newNodes) {
-      const linkTargets = node.linkTargets();
-      for (const linkTarget of linkTargets) {
-        this.maybeAddLink_(node, linkTarget);
+  addNodeLinks_(node) {
+    const linkTargets = node.linkTargets();
+    for (const linkTarget of linkTargets) {
+      const target = this.nodes_.get(linkTarget);
+      if (target) {
+        this.links_.push({source: node, target: target});
       }
     }
-
-    // TODO(siggi): this is a good place to do initial positioning of new nodes.
-    this.render_();
   }
 
   /**
@@ -480,25 +853,6 @@ class Graph {
    * @param {!d3.ForceNode} d The node to position.
    * @private
    */
-  getClampedYPosition_(d) {
-    const range = d.allowedYRange(this.height_);
-    d.y = Math.max(range[0], Math.min(d.y, range[1]));
-    return d.y;
-  }
-
-  /**
-   * @param {!d3.ForceNode} d The node to position.
-   * @private
-   */
-  getClampedXPosition_(d) {
-    d.x = Math.max(10, Math.min(d.x, this.width_ - 10));
-    return d.x;
-  }
-
-  /**
-   * @param {!d3.ForceNode} d The node to position.
-   * @private
-   */
   getTargetYPositionStrength_(d) {
     return d.targetYPositionStrength();
   }
@@ -509,6 +863,55 @@ class Graph {
    */
   getManyBodyStrength_(d) {
     return d.manyBodyStrength();
+  }
+
+  /**
+   * @param {number} graphWidth Width of the graph view (svg).
+   * @param {number} graphHeight Height of the graph view (svg).
+   * @private
+   */
+  updateSeparators_(graphWidth, graphHeight) {
+    const separators = [
+      ['Pages', 'Frame Tree', kPageNodesYRange],
+      ['', 'Workers', graphHeight - kWorkerNodesYRange],
+      ['', 'Processes', graphHeight - kProcessNodesYRange],
+    ];
+    const kAboveLabelOffset = -6;
+    const kBelowLabelOffset = 14;
+
+    const groups = this.separatorGroup_.selectAll('g').data(separators);
+    if (groups.enter()) {
+      const group = groups.enter().append('g').attr(
+          'transform', d => `translate(0,${d[2]})`);
+      group.append('line')
+          .attr('x1', 10)
+          .attr('y1', 0)
+          .attr('x2', graphWidth - 10)
+          .attr('y2', 0)
+          .attr('stroke', 'black')
+          .attr('stroke-dasharray', '4');
+
+      group.each(function(d) {
+        const parentGroup = d3.select(this);
+        if (d[0]) {
+          parentGroup.append('text')
+              .attr('x', 20)
+              .attr('y', kAboveLabelOffset)
+              .attr('class', 'separator')
+              .text(d => d[0]);
+        }
+        if (d[1]) {
+          parentGroup.append('text')
+              .attr('x', 20)
+              .attr('y', kBelowLabelOffset)
+              .attr('class', 'separator')
+              .text(d => d[1]);
+        }
+      });
+    }
+
+    groups.attr('transform', d => `translate(0,${d[2]})`);
+    groups.selectAll('line').attr('x2', graphWidth - 10);
   }
 
   /** @private */
@@ -525,6 +928,8 @@ class Graph {
     this.width_ = this.svg_.clientWidth;
     this.height_ = this.svg_.clientHeight;
 
+    this.updateSeparators_(this.width_, this.height_);
+
     // Reset both X and Y attractive forces, as they're cached.
     const xForce = d3.forceX().x(this.width_ / 2).strength(0.1);
     const yForce = d3.forceY()
@@ -532,6 +937,20 @@ class Graph {
                        .strength(this.getTargetYPositionStrength_.bind(this));
     this.simulation_.force('x_pos', xForce);
     this.simulation_.force('y_pos', yForce);
+    this.simulation_.force('y_bound', boundingForce(this.height_));
+
+    if (!this.wasResized_) {
+      this.wasResized_ = true;
+
+      // Reinitialize all node positions on first resize.
+      this.nodes_.forEach(
+          node => node.setInitialPosition(this.width_, this.height_));
+
+      // Allow the simulation to settle by running it for a bit.
+      for (let i = 0; i < 200; ++i) {
+        this.simulation_.tick();
+      }
+    }
 
     this.restartSimulation_();
   }
@@ -539,7 +958,8 @@ class Graph {
 
 let graph = null;
 function onLoad() {
-  graph = new Graph(document.querySelector('svg'));
+  graph =
+      new Graph(document.querySelector('svg'), document.querySelector('div'));
 
   graph.initialize();
 }

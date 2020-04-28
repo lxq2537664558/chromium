@@ -18,14 +18,10 @@ namespace ash {
 class MultiprofilesIntroDialog : public views::DialogDelegateView {
  public:
   // This callback and its parameters match
-  // SessionController::ShowMultiprofilesIntroDialogCallback.
+  // SessionControllerImpl::ShowMultiprofilesIntroDialogCallback.
   typedef base::OnceCallback<void(bool, bool)> OnAcceptCallback;
 
   static void Show(OnAcceptCallback on_accept);
-
-  // views::DialogDelegate overrides.
-  bool Cancel() override;
-  bool Accept() override;
 
   // views::WidgetDelegate overrides.
   ui::ModalType GetModalType() const override;

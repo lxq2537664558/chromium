@@ -102,6 +102,7 @@ class QuicHttpProxyBackendStream : public net::URLRequest::Delegate {
       net::URLRequest* request,
       net::SSLCertRequestInfo* cert_request_info) override;
   void OnSSLCertificateError(net::URLRequest* request,
+                             int net_error,
                              const net::SSLInfo& ssl_info,
                              bool fatal) override;
   void OnResponseStarted(net::URLRequest* request, int net_error) override;
@@ -155,7 +156,7 @@ class QuicHttpProxyBackendStream : public net::URLRequest::Delegate {
   bool headers_set_;
   std::unique_ptr<quic::QuicBackendResponse> quic_response_;
 
-  base::WeakPtrFactory<QuicHttpProxyBackendStream> weak_factory_;
+  base::WeakPtrFactory<QuicHttpProxyBackendStream> weak_factory_{this};
 
   DISALLOW_COPY_AND_ASSIGN(QuicHttpProxyBackendStream);
 };

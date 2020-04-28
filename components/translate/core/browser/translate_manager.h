@@ -118,8 +118,9 @@ class TranslateManager {
   void InitiateTranslation(const std::string& page_lang);
 
   // Initiate a manually triggered translation process for the current page.
-  // Collect source and target languages, and show translation UI.
-  void InitiateManualTranslation();
+  // Collect source and target languages, and show translation UI. If
+  // |auto_translate| is true the page gets translated to the target language.
+  void InitiateManualTranslation(bool auto_translate = false);
 
   // Returns true iff the current page could be manually translated.
   bool CanManuallyTranslate();
@@ -305,7 +306,7 @@ class TranslateManager {
 
   std::unique_ptr<metrics::TranslateEventProto> translate_event_;
 
-  base::WeakPtrFactory<TranslateManager> weak_method_factory_;
+  base::WeakPtrFactory<TranslateManager> weak_method_factory_{this};
 
   // By default, don't offer to translate in builds lacking an API key. For
   // testing, set to true to offer anyway.

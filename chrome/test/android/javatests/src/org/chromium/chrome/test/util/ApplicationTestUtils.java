@@ -49,13 +49,9 @@ public class ApplicationTestUtils {
     // TODO(jbudorick): fix deprecation warning crbug.com/537347
     @SuppressWarnings("deprecation")
     @SuppressLint("WakelockTimeout")
-    public static void setUp(Context context, boolean clearAppData) {
-        if (clearAppData) {
-            // Clear data and remove any tasks listed in Android's Overview menu between test runs.
-            clearAppData(context);
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-                finishAllChromeTasks(context);
-            }
+    public static void setUp(Context context) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            finishAllChromeTasks(context);
         }
 
         // Make sure the screen is on during test runs.
@@ -70,7 +66,7 @@ public class ApplicationTestUtils {
         VersionNumberGetter.setEnableUpdateDetection(false);
     }
 
-    public static void tearDown(Context context) throws Exception {
+    public static void tearDown(Context context) {
         Assert.assertNotNull("Uninitialized wake lock", sWakeLock);
         sWakeLock.release();
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
@@ -81,19 +77,10 @@ public class ApplicationTestUtils {
         }
     }
 
-    /**
-     * Clear all files and folders in the Chrome application directory except 'lib'.
-     * The 'cache' directory is recreated as an empty directory.
-     * @param context Target instrumentation context.
-     */
-    public static void clearAppData(Context context) {
-        ApplicationData.clearAppData(context);
-    }
-
     // TODO(bauerb): make this function throw more specific exception and update
     // StartupLoadingMetricsTest correspondingly.
     /** Send the user to the Android home screen. */
-    public static void fireHomeScreenIntent(Context context) throws Exception {
+    public static void fireHomeScreenIntent(Context context) {
         Intent intent = new Intent(Intent.ACTION_MAIN);
         intent.addCategory(Intent.CATEGORY_HOME);
         intent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
@@ -102,7 +89,7 @@ public class ApplicationTestUtils {
     }
 
     /** Simulate starting Chrome from the launcher with a Main Intent. */
-    public static void launchChrome(Context context) throws Exception {
+    public static void launchChrome(Context context) {
         Intent intent = new Intent(Intent.ACTION_MAIN);
         intent.setPackage(context.getPackageName());
         intent.addCategory(Intent.CATEGORY_LAUNCHER);
@@ -162,39 +149,40 @@ public class ApplicationTestUtils {
                 }));
     }
 
-    /** Finishes the given activity and waits for its onDestroy() to be called. */
-    public static void finishActivity(final Activity activity) throws Exception {
+    /** Waits until the given activity transitions to the given state. */
+    public static void waitForActivityState(Activity activity, @ActivityState int state)
+            throws Exception {
         final CallbackHelper callbackHelper = new CallbackHelper();
         final ApplicationStatus.ActivityStateListener activityStateListener =
-                new ApplicationStatus.ActivityStateListener() {
-                    @Override
-                    public void onActivityStateChange(Activity activity, int newState) {
-                        if (newState == ActivityState.DESTROYED) {
-                            callbackHelper.notifyCalled();
-                        }
-                    }
-                };
+                (activity1, newState) -> {
+            if (newState == state) {
+                callbackHelper.notifyCalled();
+            }
+        };
         try {
-            boolean alreadyDestroyed =
-                    TestThreadUtils.runOnUiThreadBlocking(new Callable<Boolean>() {
-                        @Override
-                        public Boolean call() {
-                            if (ApplicationStatus.getStateForActivity(activity)
-                                    == ActivityState.DESTROYED) {
-                                return true;
-                            }
-                            ApplicationStatus.registerStateListenerForActivity(
-                                    activityStateListener, activity);
-                            activity.finish();
-                            return false;
-                        }
-                    });
-            if (!alreadyDestroyed) {
+            boolean correctState = TestThreadUtils.runOnUiThreadBlocking(() -> {
+                if (ApplicationStatus.getStateForActivity(activity) == state) {
+                    return true;
+                }
+                ApplicationStatus.registerStateListenerForActivity(activityStateListener, activity);
+                return false;
+            });
+            if (!correctState) {
                 callbackHelper.waitForCallback(0);
             }
         } finally {
             ApplicationStatus.unregisterActivityStateListener(activityStateListener);
         }
+    }
+
+    /** Finishes the given activity and waits for its onDestroy() to be called. */
+    public static void finishActivity(final Activity activity) throws Exception {
+        TestThreadUtils.runOnUiThreadBlocking(() -> {
+            if (ApplicationStatus.getStateForActivity(activity) != ActivityState.DESTROYED) {
+                activity.finish();
+            }
+        });
+        waitForActivityState(activity, ActivityState.DESTROYED);
     }
 
     /** Finishes all tasks Chrome has listed in Android's Overview. */
@@ -286,7 +274,7 @@ public class ApplicationTestUtils {
             T createdActivity = activityRef.get();
             Assert.assertNotNull("Activity reference is null.", createdActivity);
             return createdActivity;
-        } catch (InterruptedException | TimeoutException e) {
+        } catch (TimeoutException e) {
             throw new RuntimeException(e);
         } finally {
             ApplicationStatus.unregisterActivityStateListener(stateListener);

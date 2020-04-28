@@ -6,6 +6,7 @@
 
 #include "chrome/browser/ui/browser_list.h"
 #include "chrome/browser/ui/browser_list_observer.h"
+#include "chrome/browser/ui/find_bar/find_bar.h"
 #include "content/public/browser/keyboard_event_processing_result.h"
 #include "ui/gfx/geometry/rect.h"
 
@@ -60,16 +61,25 @@ TestBrowserWindow::TestBrowserWindow() {}
 
 TestBrowserWindow::~TestBrowserWindow() {}
 
+void TestBrowserWindow::Close() {
+  if (close_callback_)
+    std::move(close_callback_).Run();
+}
+
 bool TestBrowserWindow::IsActive() const {
   return false;
 }
 
-bool TestBrowserWindow::IsAlwaysOnTop() const {
-  return false;
+ui::ZOrderLevel TestBrowserWindow::GetZOrderLevel() const {
+  return ui::ZOrderLevel::kNormal;
 }
 
 gfx::NativeWindow TestBrowserWindow::GetNativeWindow() const {
-  return NULL;
+  return native_window_;
+}
+
+bool TestBrowserWindow::IsOnCurrentWorkspace() const {
+  return true;
 }
 
 void TestBrowserWindow::SetTopControlsShownRatio(
@@ -108,6 +118,8 @@ gfx::Size TestBrowserWindow::GetContentsSize() const {
   return gfx::Size();
 }
 
+void TestBrowserWindow::SetContentsSize(const gfx::Size& size) {}
+
 bool TestBrowserWindow::IsMaximized() const {
   return false;
 }
@@ -136,17 +148,11 @@ LocationBar* TestBrowserWindow::GetLocationBar() const {
   return const_cast<TestLocationBar*>(&location_bar_);
 }
 
-PageActionIconContainer*
-TestBrowserWindow::GetOmniboxPageActionIconContainer() {
-  return &omnibox_page_action_icon_container_;
+autofill::AutofillBubbleHandler* TestBrowserWindow::GetAutofillBubbleHandler() {
+  return &autofill_bubble_handler_;
 }
 
-PageActionIconContainer*
-TestBrowserWindow::GetToolbarPageActionIconContainer() {
-  return nullptr;
-}
-
-ToolbarActionsBar* TestBrowserWindow::GetToolbarActionsBar() {
+ExtensionsContainer* TestBrowserWindow::GetExtensionsContainer() {
   return nullptr;
 }
 
@@ -191,18 +197,25 @@ ShowTranslateBubbleResult TestBrowserWindow::ShowTranslateBubble(
   return ShowTranslateBubbleResult::SUCCESS;
 }
 
-autofill::SaveCardBubbleView* TestBrowserWindow::ShowSaveCreditCardBubble(
+qrcode_generator::QRCodeGeneratorBubbleView*
+TestBrowserWindow::ShowQRCodeGeneratorBubble(
     content::WebContents* contents,
-    autofill::SaveCardBubbleController* controller,
-    bool user_gesture) {
+    qrcode_generator::QRCodeGeneratorBubbleController* controller,
+    const GURL& url) {
   return nullptr;
 }
 
-autofill::LocalCardMigrationBubble*
-TestBrowserWindow::ShowLocalCardMigrationBubble(
+SharingDialog* TestBrowserWindow::ShowSharingDialog(
+    content::WebContents* web_contents,
+    SharingDialogData data) {
+  return nullptr;
+}
+
+send_tab_to_self::SendTabToSelfBubbleView*
+TestBrowserWindow::ShowSendTabToSelfBubble(
     content::WebContents* contents,
-    autofill::LocalCardMigrationBubbleController* controller,
-    bool user_gesture) {
+    send_tab_to_self::SendTabToSelfBubbleController* controller,
+    bool is_user_gesture) {
   return nullptr;
 }
 
@@ -214,7 +227,7 @@ DownloadShelf* TestBrowserWindow::GetDownloadShelf() {
   return &download_shelf_;
 }
 
-FindBar* TestBrowserWindow::CreateFindBar() {
+std::unique_ptr<FindBar> TestBrowserWindow::CreateFindBar() {
   return NULL;
 }
 
@@ -237,6 +250,14 @@ std::string TestBrowserWindow::GetWorkspace() const {
 
 bool TestBrowserWindow::IsVisibleOnAllWorkspaces() const {
   return false;
+}
+
+void TestBrowserWindow::SetNativeWindow(gfx::NativeWindow window) {
+  native_window_ = window;
+}
+
+void TestBrowserWindow::SetCloseCallback(base::OnceClosure close_callback) {
+  close_callback_ = std::move(close_callback);
 }
 
 // TestBrowserWindowOwner -----------------------------------------------------

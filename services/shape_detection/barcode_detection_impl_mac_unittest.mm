@@ -15,9 +15,9 @@
 #include "base/mac/mac_util.h"
 #include "base/mac/scoped_cftyperef.h"
 #include "base/mac/scoped_nsobject.h"
-#include "base/mac/sdk_forward_declarations.h"
-#include "base/message_loop/message_loop.h"
 #include "base/run_loop.h"
+#include "base/test/gmock_callback_support.h"
+#include "base/test/task_environment.h"
 #include "services/shape_detection/barcode_detection_impl_mac_vision.h"
 #include "services/shape_detection/public/mojom/barcodedetection.mojom.h"
 #include "testing/gmock/include/gmock/gmock.h"
@@ -25,6 +25,7 @@
 #include "third_party/skia/include/utils/mac/SkCGUtils.h"
 #include "ui/gl/gl_switches.h"
 
+using base::test::RunOnceClosure;
 using ::testing::TestWithParam;
 using ::testing::ValuesIn;
 
@@ -32,16 +33,9 @@ namespace shape_detection {
 
 namespace {
 
-ACTION_P(RunClosure, closure) {
-  closure.Run();
-}
-
 std::unique_ptr<mojom::BarcodeDetection> CreateBarcodeDetectorImplMacCoreImage(
     mojom::BarcodeDetectorOptionsPtr options) {
-  if (@available(macOS 10.10, *)) {
-    return std::make_unique<BarcodeDetectionImplMac>();
-  }
-  return nullptr;
+  return std::make_unique<BarcodeDetectionImplMac>();
 }
 
 std::unique_ptr<mojom::BarcodeDetection> CreateBarcodeDetectorImplMacVision(
@@ -123,7 +117,7 @@ class BarcodeDetectionImplMacTest : public TestWithParam<struct TestParams> {
   MOCK_METHOD0(Detection, void(void));
 
   std::unique_ptr<mojom::BarcodeDetection> impl_;
-  const base::MessageLoop message_loop_;
+  base::test::SingleThreadTaskEnvironment task_environment_;
   void* vision_framework_ = nullptr;
 };
 
@@ -181,9 +175,9 @@ TEST_P(BarcodeDetectionImplMacTest, ScanOneBarcode) {
   ASSERT_TRUE(SkCreateBitmapFromCGImage(&bitmap, cg_image));
 
   base::RunLoop run_loop;
-  base::Closure quit_closure = run_loop.QuitClosure();
   // Send the image Detect() and expect the response in callback.
-  EXPECT_CALL(*this, Detection()).WillOnce(RunClosure(quit_closure));
+  EXPECT_CALL(*this, Detection())
+      .WillOnce(RunOnceClosure(run_loop.QuitClosure()));
   // TODO(crbug.com/938663): expect detected symbology.
   impl_->Detect(bitmap,
                 base::BindOnce(&BarcodeDetectionImplMacTest::DetectCallback,

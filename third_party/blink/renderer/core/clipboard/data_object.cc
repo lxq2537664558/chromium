@@ -42,18 +42,19 @@
 
 namespace blink {
 
-DataObject* DataObject::CreateFromClipboard(PasteMode paste_mode) {
+// static
+DataObject* DataObject::CreateFromClipboard(SystemClipboard* system_clipboard,
+                                            PasteMode paste_mode) {
   DataObject* data_object = Create();
 #if DCHECK_IS_ON()
   HashSet<String> types_seen;
 #endif
-  uint64_t sequence_number = SystemClipboard::GetInstance().SequenceNumber();
-  for (const String& type :
-       SystemClipboard::GetInstance().ReadAvailableTypes()) {
+  uint64_t sequence_number = system_clipboard->SequenceNumber();
+  for (const String& type : system_clipboard->ReadAvailableTypes()) {
     if (paste_mode == PasteMode::kPlainTextOnly && type != kMimeTypeTextPlain)
       continue;
-    data_object->item_list_.push_back(
-        DataObjectItem::CreateFromClipboard(type, sequence_number));
+    data_object->item_list_.push_back(DataObjectItem::CreateFromClipboard(
+        system_clipboard, type, sequence_number));
 #if DCHECK_IS_ON()
     DCHECK(types_seen.insert(type).is_new_entry);
 #endif
@@ -61,12 +62,14 @@ DataObject* DataObject::CreateFromClipboard(PasteMode paste_mode) {
   return data_object;
 }
 
+// static
 DataObject* DataObject::CreateFromString(const String& data) {
   DataObject* data_object = Create();
   data_object->Add(data, kMimeTypeTextPlain);
   return data_object;
 }
 
+// static
 DataObject* DataObject::Create() {
   return MakeGarbageCollected<DataObject>();
 }
@@ -276,12 +279,13 @@ void DataObject::NotifyItemListChanged() const {
     observer->OnItemListChanged();
 }
 
-void DataObject::Trace(blink::Visitor* visitor) {
+void DataObject::Trace(Visitor* visitor) {
   visitor->Trace(item_list_);
   visitor->Trace(observers_);
   Supplementable<DataObject>::Trace(visitor);
 }
 
+// static
 DataObject* DataObject::Create(WebDragData data) {
   DataObject* data_object = Create();
   bool has_file_system = false;
@@ -305,8 +309,8 @@ DataObject* DataObject::Create(WebDragData data) {
         // This should never happen when dragging in.
         break;
       case WebDragData::Item::kStorageTypeFileSystemFile: {
-        // FIXME: The file system URL may refer a user visible file, see
-        // http://crbug.com/429077
+        // TODO(http://crbug.com/429077): The file system URL may refer a user
+        // visible file.
         has_file_system = true;
         FileMetadata file_metadata;
         file_metadata.length = item.file_system_file_size;
@@ -363,8 +367,8 @@ WebDragData DataObject::ToWebDragData() {
             item.file_system_file_size = file->size();
             item.file_system_id = original_item->FileSystemId();
           } else {
-            // FIXME: support dragging constructed Files across renderers, see
-            // http://crbug.com/394955
+            // TODO(http://crbug.com/394955): support dragging constructed Files
+            // across renderers.
             item.storage_type = WebDragData::Item::kStorageTypeString;
             item.string_type = "text/plain";
             item.string_data = file->name();

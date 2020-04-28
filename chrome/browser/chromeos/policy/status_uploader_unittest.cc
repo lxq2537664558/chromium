@@ -10,6 +10,7 @@
 #include "base/bind_helpers.h"
 #include "base/callback.h"
 #include "base/run_loop.h"
+#include "base/test/gmock_move_support.h"
 #include "base/test/test_simple_task_runner.h"
 #include "base/time/time.h"
 #include "chrome/browser/chromeos/policy/device_local_account.h"
@@ -24,7 +25,7 @@
 #include "components/policy/core/common/cloud/mock_device_management_service.h"
 #include "components/prefs/testing_pref_service.h"
 #include "components/session_manager/core/session_manager.h"
-#include "content/public/test/test_browser_thread_bundle.h"
+#include "content/public/test/browser_task_environment.h"
 #include "content/public/test/test_utils.h"
 #include "net/url_request/url_request_context_getter.h"
 #include "testing/gmock/include/gmock/gmock.h"
@@ -50,20 +51,12 @@ constexpr base::TimeDelta kDefaultStatusUploadDelay =
 constexpr base::TimeDelta kMinImmediateUploadInterval =
     base::TimeDelta::FromSeconds(10);
 
+// Using a DeviceStatusCollector to have a concrete StatusCollector, but the
+// exact type doesn't really matter, as it is being mocked.
 class MockDeviceStatusCollector : public policy::DeviceStatusCollector {
  public:
   explicit MockDeviceStatusCollector(PrefService* local_state)
-      : DeviceStatusCollector(
-            local_state,
-            nullptr,
-            policy::DeviceStatusCollector::VolumeInfoFetcher(),
-            policy::DeviceStatusCollector::CPUStatisticsFetcher(),
-            policy::DeviceStatusCollector::CPUTempFetcher(),
-            policy::DeviceStatusCollector::AndroidStatusFetcher(),
-            policy::DeviceStatusCollector::TpmStatusFetcher(),
-            base::TimeDelta(), /* Day starts at midnight */
-            true /* is_enterprise_device */) {}
-
+      : DeviceStatusCollector(local_state, nullptr) {}
   MOCK_METHOD1(GetStatusAsync, void(const policy::StatusCollectorCallback&));
 
   MOCK_METHOD0(OnSubmittedSuccessfully, void());
@@ -133,7 +126,7 @@ class StatusUploaderTest : public testing::Test {
     // Running the status collected callback should trigger
     // CloudPolicyClient::UploadDeviceStatus.
     CloudPolicyClient::StatusCallback callback;
-    EXPECT_CALL(client_, UploadDeviceStatus).WillOnce(SaveArg<3>(&callback));
+    EXPECT_CALL(client_, UploadDeviceStatus_).WillOnce(MoveArg<3>(&callback));
 
     // Send some "valid" (read: non-nullptr) device/session data to the
     // callback in order to simulate valid status data.
@@ -152,7 +145,7 @@ class StatusUploaderTest : public testing::Test {
         .Times(upload_success ? 1 : 0);
 
     // Now invoke the response.
-    callback.Run(upload_success);
+    std::move(callback).Run(upload_success);
 
     // Now that the previous request was satisfied, a task to do the next
     // upload should be queued.
@@ -180,7 +173,7 @@ class StatusUploaderTest : public testing::Test {
                                             kDefaultStatusUploadDelay);
   }
 
-  content::TestBrowserThreadBundle thread_bundle_;
+  content::BrowserTaskEnvironment task_environment_;
   scoped_refptr<base::TestSimpleTaskRunner> task_runner_;
   chromeos::ScopedTestingCrosSettings scoped_testing_cros_settings_;
   std::unique_ptr<MockDeviceStatusCollector> collector_;
@@ -287,7 +280,7 @@ TEST_F(StatusUploaderTest, ResetTimerAfterUnregisteredClient) {
   EXPECT_FALSE(task_runner_->HasPendingTask());
 
   // StatusUploader should not try to upload using an unregistered client
-  EXPECT_CALL(client_, UploadDeviceStatus).Times(0);
+  EXPECT_CALL(client_, UploadDeviceStatus_).Times(0);
   StatusCollectorParams status_params;
   status_callback.Run(std::move(status_params));
 
@@ -329,7 +322,8 @@ TEST_F(StatusUploaderTest, NoUploadAfterVideoCapture) {
 
   // Now mock video capture, and no session data should be allowed.
   MediaCaptureDevicesDispatcher::GetInstance()->OnMediaRequestStateChanged(
-      0, 0, 0, GURL("http://www.google.com"), blink::MEDIA_DEVICE_VIDEO_CAPTURE,
+      0, 0, 0, GURL("http://www.google.com"),
+      blink::mojom::MediaStreamType::DEVICE_VIDEO_CAPTURE,
       content::MEDIA_REQUEST_STATE_OPENING);
   base::RunLoop().RunUntilIdle();
   EXPECT_FALSE(uploader->IsSessionDataUploadAllowed());

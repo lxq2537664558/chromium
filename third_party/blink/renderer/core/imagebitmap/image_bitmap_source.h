@@ -12,7 +12,7 @@
 #include "third_party/blink/renderer/platform/bindings/script_state.h"
 #include "third_party/blink/renderer/platform/geometry/int_rect.h"
 #include "third_party/blink/renderer/platform/geometry/int_size.h"
-#include "third_party/blink/renderer/platform/wtf/allocator.h"
+#include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
 
 namespace blink {
 
@@ -27,11 +27,14 @@ class CORE_EXPORT ImageBitmapSource {
   virtual ScriptPromise CreateImageBitmap(ScriptState*,
                                           EventTarget&,
                                           base::Optional<IntRect>,
-                                          const ImageBitmapOptions*);
+                                          const ImageBitmapOptions*,
+                                          ExceptionState&);
 
   virtual bool IsBlob() const { return false; }
 
-  static ScriptPromise FulfillImageBitmap(ScriptState*, ImageBitmap*);
+  static ScriptPromise FulfillImageBitmap(ScriptState*,
+                                          ImageBitmap*,
+                                          ExceptionState&);
 
  protected:
   virtual ~ImageBitmapSource() = default;

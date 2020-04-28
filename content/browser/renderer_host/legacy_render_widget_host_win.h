@@ -5,6 +5,10 @@
 #ifndef CONTENT_BROWSER_RENDERER_HOST_LEGACY_RENDER_WIDGET_HOST_WIN_H_
 #define CONTENT_BROWSER_RENDERER_HOST_LEGACY_RENDER_WIDGET_HOST_WIN_H_
 
+// Must be included before <atlapp.h>.
+#include "base/win/atl.h"   // NOLINT(build/include_order)
+
+#include <atlapp.h>
 #include <atlcrack.h>
 #include <oleacc.h>
 #include <wrl/client.h>
@@ -12,8 +16,8 @@
 #include <memory>
 
 #include "base/macros.h"
-#include "base/win/atl.h"
 #include "content/common/content_export.h"
+#include "ui/accessibility/platform/ax_fragment_root_delegate_win.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/native_widget_types.h"
 
@@ -25,7 +29,7 @@ class WindowEventTarget;
 
 namespace content {
 
-class DirectManipulationBrowserTest;
+class DirectManipulationBrowserTestBase;
 class DirectManipulationHelper;
 class RenderWidgetHostViewAura;
 
@@ -55,7 +59,8 @@ class RenderWidgetHostViewAura;
 class CONTENT_EXPORT LegacyRenderWidgetHostHWND
     : public ATL::CWindowImpl<LegacyRenderWidgetHostHWND,
                               ATL::CWindow,
-                              ATL::CWinTraits<WS_CHILD>> {
+                              ATL::CWinTraits<WS_CHILD>>,
+      public ui::AXFragmentRootDelegateWin {
  public:
   DECLARE_WND_CLASS_EX(L"Chrome_RenderWidgetHostHWND", CS_DBLCLKS, 0)
 
@@ -78,6 +83,7 @@ class CONTENT_EXPORT LegacyRenderWidgetHostHWND
     MESSAGE_HANDLER_EX(WM_PAINT, OnPaint)
     MESSAGE_HANDLER_EX(WM_NCPAINT, OnNCPaint)
     MESSAGE_HANDLER_EX(WM_ERASEBKGND, OnEraseBkGnd)
+    MESSAGE_HANDLER_EX(WM_INPUT, OnInput)
     MESSAGE_RANGE_HANDLER(WM_MOUSEFIRST, WM_MOUSELAST, OnMouseRange)
     MESSAGE_HANDLER_EX(WM_MOUSELEAVE, OnMouseLeave)
     MESSAGE_HANDLER_EX(WM_MOUSEACTIVATE, OnMouseActivate)
@@ -122,25 +128,27 @@ class CONTENT_EXPORT LegacyRenderWidgetHostHWND
   }
 
   // Return the root accessible object for either MSAA or UI Automation.
-  gfx::NativeViewAccessible GetOrCreateWindowRootAccessible();
+  gfx::NativeViewAccessible GetOrCreateWindowRootAccessible(
+      bool is_uia_request);
 
  protected:
   void OnFinalMessage(HWND hwnd) override;
 
  private:
   friend class AccessibilityObjectLifetimeWinBrowserTest;
-  friend class DirectManipulationBrowserTest;
+  friend class DirectManipulationBrowserTestBase;
 
   explicit LegacyRenderWidgetHostHWND(HWND parent);
   ~LegacyRenderWidgetHostHWND() override;
 
-  bool Init();
+  void Init();
 
   // Returns the target to which the windows input events are forwarded.
   static ui::WindowEventTarget* GetWindowEventTarget(HWND parent);
 
   LRESULT OnEraseBkGnd(UINT message, WPARAM w_param, LPARAM l_param);
   LRESULT OnGetObject(UINT message, WPARAM w_param, LPARAM l_param);
+  LRESULT OnInput(UINT message, WPARAM w_param, LPARAM l_param);
   LRESULT OnKeyboardRange(UINT message, WPARAM w_param, LPARAM l_param,
                           BOOL& handled);
   LRESULT OnMouseLeave(UINT message, WPARAM w_param, LPARAM l_param);
@@ -160,6 +168,13 @@ class CONTENT_EXPORT LegacyRenderWidgetHostHWND
   LRESULT OnDestroy(UINT message, WPARAM w_param, LPARAM l_param);
 
   LRESULT OnPointerHitTest(UINT message, WPARAM w_param, LPARAM l_param);
+
+  // Overridden from AXFragmentRootDelegateWin.
+  gfx::NativeViewAccessible GetChildOfAXFragmentRoot() override;
+  gfx::NativeViewAccessible GetParentOfAXFragmentRoot() override;
+  bool IsAXFragmentRootAControlElement() override;
+
+  gfx::NativeViewAccessible GetOrCreateBrowserAccessibilityRoot();
 
   Microsoft::WRL::ComPtr<IAccessible> window_accessible_;
 

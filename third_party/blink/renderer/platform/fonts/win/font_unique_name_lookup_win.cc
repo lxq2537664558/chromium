@@ -4,12 +4,15 @@
 
 #include "third_party/blink/renderer/platform/fonts/win/font_unique_name_lookup_win.h"
 
+#include <memory>
+#include <utility>
+
 #include "base/files/file_path.h"
 #include "mojo/public/mojom/base/shared_memory.mojom-blink.h"
+#include "third_party/blink/public/common/thread_safe_browser_interface_broker_proxy.h"
 #include "third_party/blink/public/mojom/dwrite_font_proxy/dwrite_font_proxy.mojom-blink.h"
-#include "third_party/blink/public/platform/interface_provider.h"
 #include "third_party/blink/public/platform/platform.h"
-#include "third_party/blink/renderer/platform/histogram.h"
+#include "third_party/blink/renderer/platform/instrumentation/histogram.h"
 #include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "third_party/skia/include/ports/SkTypeface_win.h"
 
@@ -66,7 +69,7 @@ sk_sp<SkTypeface> FontUniqueNameLookupWin::MatchUniqueNameLookupTable(
     return nullptr;
 
   base::Optional<FontTableMatcher::MatchResult> match_result =
-      font_table_matcher_->MatchName(font_unique_name.Utf8().data());
+      font_table_matcher_->MatchName(font_unique_name.Utf8());
   if (!match_result)
     return nullptr;
 
@@ -160,8 +163,10 @@ bool FontUniqueNameLookupWin::IsFontUniqueNameLookupReadyForSyncLookup() {
 }
 
 void FontUniqueNameLookupWin::EnsureServiceConnected() {
-  Platform::Current()->GetInterfaceProvider()->GetInterface(
-      mojo::MakeRequest(&service_));
+  if (service_)
+    return;
+  Platform::Current()->GetBrowserInterfaceBroker()->GetInterface(
+      service_.BindNewPipeAndPassReceiver());
 }
 
 void FontUniqueNameLookupWin::PrepareFontUniqueNameLookup(
@@ -181,7 +186,7 @@ void FontUniqueNameLookupWin::PrepareFontUniqueNameLookup(
 
   EnsureServiceConnected();
 
-  service_->GetUniqueNameLookupTable(base::BindRepeating(
+  service_->GetUniqueNameLookupTable(base::BindOnce(
       &FontUniqueNameLookupWin::ReceiveReadOnlySharedMemoryRegion,
       base::Unretained(this)));
 }

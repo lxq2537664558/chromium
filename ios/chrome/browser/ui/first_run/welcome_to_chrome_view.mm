@@ -4,17 +4,20 @@
 
 #import "ios/chrome/browser/ui/first_run/welcome_to_chrome_view.h"
 
+#include "base/feature_list.h"
 #include "base/i18n/rtl.h"
 #include "base/logging.h"
 #include "base/strings/sys_string_conversions.h"
 #include "ios/chrome/browser/ui/fancy_ui/primary_action_button.h"
 #include "ios/chrome/browser/ui/first_run/first_run_util.h"
+#include "ios/chrome/browser/ui/ui_feature_flags.h"
 #import "ios/chrome/browser/ui/util/CRUILabel+AttributeUtils.h"
 #import "ios/chrome/browser/ui/util/label_link_controller.h"
 #import "ios/chrome/browser/ui/util/label_observer.h"
 #include "ios/chrome/browser/ui/util/ui_util.h"
 #import "ios/chrome/browser/ui/util/uikit_ui_util.h"
 #include "ios/chrome/common/string_util.h"
+#import "ios/chrome/common/ui/colors/semantic_color_names.h"
 #include "ios/chrome/grit/ios_chromium_strings.h"
 #include "ios/chrome/grit/ios_strings.h"
 #import "ios/third_party/material_components_ios/src/components/Typography/src/MaterialTypography.h"
@@ -51,9 +54,6 @@ SizeClassIdiom GetSizeClassIdiom(UIUserInterfaceSizeClass size_class) {
 NSString* const kUMAMetricsButtonAccessibilityIdentifier =
     @"UMAMetricsButtonAccessibilityIdentifier";
 
-// Color of "Terms of Service" link text.
-const int kLinkColorRGB = 0x5D9AFF;
-
 // The width of the container view for a REGULAR width size class.
 const CGFloat kContainerViewRegularWidth = 510.0;
 
@@ -89,10 +89,8 @@ NSString* const kAppLogoImageName = @"launchscreen_app_logo";
 NSString* const kCheckBoxImageName = @"checkbox";
 NSString* const kCheckBoxCheckedImageName = @"checkbox_checked";
 
-// Constants for the Terms of Service and Privacy Notice URLs in the
-// first run experience.
+// Constant for the Terms of Service URL in the first run experience.
 const char kTermsOfServiceUrl[] = "internal://terms-of-service";
-const char kPrivacyNoticeUrl[] = "internal://privacy-notice";
 
 }  // namespace
 
@@ -166,7 +164,7 @@ const char kPrivacyNoticeUrl[] = "internal://privacy-notice";
 - (instancetype)initWithFrame:(CGRect)frame {
   self = [super initWithFrame:frame];
   if (self) {
-    self.backgroundColor = [UIColor whiteColor];
+    self.backgroundColor = [UIColor colorNamed:kBackgroundColor];
     self.autoresizingMask =
         UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
   }
@@ -225,7 +223,6 @@ const char kPrivacyNoticeUrl[] = "internal://privacy-notice";
 - (UIView*)containerView {
   if (!_containerView) {
     _containerView = [[UIView alloc] initWithFrame:CGRectZero];
-    [_containerView setBackgroundColor:[UIColor whiteColor]];
   }
   return _containerView;
 }
@@ -233,7 +230,6 @@ const char kPrivacyNoticeUrl[] = "internal://privacy-notice";
 - (UILabel*)titleLabel {
   if (!_titleLabel) {
     _titleLabel = [[UILabel alloc] initWithFrame:CGRectZero];
-    [_titleLabel setBackgroundColor:[UIColor whiteColor]];
     [_titleLabel setNumberOfLines:0];
     [_titleLabel setLineBreakMode:NSLineBreakByWordWrapping];
     [_titleLabel setBaselineAdjustment:UIBaselineAdjustmentAlignBaselines];
@@ -247,7 +243,6 @@ const char kPrivacyNoticeUrl[] = "internal://privacy-notice";
   if (!_imageView) {
     UIImage* image = [UIImage imageNamed:kAppLogoImageName];
     _imageView = [[UIImageView alloc] initWithImage:image];
-    [_imageView setBackgroundColor:[UIColor whiteColor]];
   }
   return _imageView;
 }
@@ -294,8 +289,16 @@ const char kPrivacyNoticeUrl[] = "internal://privacy-notice";
         setAccessibilityValue:l10n_util::GetNSString(IDS_IOS_SETTING_OFF)];
     [_checkBoxButton setImage:[UIImage imageNamed:kCheckBoxImageName]
                      forState:UIControlStateNormal];
-    [_checkBoxButton setImage:[UIImage imageNamed:kCheckBoxCheckedImageName]
-                     forState:UIControlStateSelected];
+    UIImage* selectedImage = [[UIImage imageNamed:kCheckBoxCheckedImageName]
+        imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
+    [_checkBoxButton setImage:selectedImage forState:UIControlStateSelected];
+#if defined(__IPHONE_13_4)
+    if (@available(iOS 13.4, *)) {
+      if (base::FeatureList::IsEnabled(kPointerSupport)) {
+        _checkBoxButton.pointerInteractionEnabled = YES;
+      }
+    }
+#endif  // defined(__IPHONE_13_4)
   }
   return _checkBoxButton;
 }
@@ -314,6 +317,13 @@ const char kPrivacyNoticeUrl[] = "internal://privacy-notice";
     // First Run UI when it shows up.
     SetA11yLabelAndUiAutomationName(
         _OKButton, IDS_IOS_FIRSTRUN_OPT_IN_ACCEPT_BUTTON, @"Accept & Continue");
+#if defined(__IPHONE_13_4)
+    if (@available(iOS 13.4, *)) {
+      if (base::FeatureList::IsEnabled(kPointerSupport)) {
+        _OKButton.pointerInteractionEnabled = YES;
+      }
+    }
+#endif  // defined(__IPHONE_13_4)
   }
   return _OKButton;
 }
@@ -390,35 +400,13 @@ const char kPrivacyNoticeUrl[] = "internal://privacy-notice";
   self.TOSLabel.frame = {CGPointZero, containerSize};
   NSString* TOSText = l10n_util::GetNSString(IDS_IOS_FIRSTRUN_AGREE_TO_TERMS);
   NSRange tosLinkTextRange = NSMakeRange(NSNotFound, 0);
-  NSRange privacyLinkTextRange = NSMakeRange(NSNotFound, 0);
   TOSText = ParseStringWithTag(TOSText, &tosLinkTextRange,
                                @"BEGIN_LINK_TOS[ \t]*", @"[ \t]*END_LINK_TOS");
-  TOSText = ParseStringWithTag(TOSText, &privacyLinkTextRange,
-                               @"BEGIN_LINK_PRIVACY[ \t]*",
-                               @"[ \t]*END_LINK_PRIVACY");
 
   DCHECK_NE(NSNotFound, static_cast<NSInteger>(tosLinkTextRange.location));
   DCHECK_NE(0u, tosLinkTextRange.length);
-  DCHECK_NE(NSNotFound, static_cast<NSInteger>(privacyLinkTextRange.location));
-  DCHECK_NE(0u, privacyLinkTextRange.length);
 
   self.TOSLabel.text = TOSText;
-  if (FixOrphanWord(self.TOSLabel)) {
-    // If a newline is inserted, check whether it was added mid-link and adjust
-    // |tosLinkTextRange| and |privacyLinkTextRange| accordingly.
-    NSRange newlineRange = [self.TOSLabel.text rangeOfString:@"\n"
-                                                     options:0
-                                                       range:tosLinkTextRange];
-    if (newlineRange.length) {
-      tosLinkTextRange.location++;
-      privacyLinkTextRange.location++;
-    }
-    newlineRange = [self.TOSLabel.text rangeOfString:@"\n"
-                                             options:0
-                                               range:privacyLinkTextRange];
-    if (newlineRange.length)
-      privacyLinkTextRange.location++;
-  }
 
   __weak WelcomeToChromeView* weakSelf = self;
   ProceduralBlockWithURL action = ^(const GURL& url) {
@@ -427,8 +415,6 @@ const char kPrivacyNoticeUrl[] = "internal://privacy-notice";
       return;
     if (url == kTermsOfServiceUrl) {
       [[strongSelf delegate] welcomeToChromeViewDidTapTOSLink];
-    } else if (url == kPrivacyNoticeUrl) {
-      [[strongSelf delegate] welcomeToChromeViewDidTapPrivacyLink];
     } else {
       NOTREACHED();
     }
@@ -438,9 +424,7 @@ const char kPrivacyNoticeUrl[] = "internal://privacy-notice";
       [[LabelLinkController alloc] initWithLabel:_TOSLabel action:action];
   [_TOSLabelLinkController addLinkWithRange:tosLinkTextRange
                                         url:GURL(kTermsOfServiceUrl)];
-  [_TOSLabelLinkController addLinkWithRange:privacyLinkTextRange
-                                        url:GURL(kPrivacyNoticeUrl)];
-  [_TOSLabelLinkController setLinkColor:UIColorFromRGB(kLinkColorRGB)];
+  [_TOSLabelLinkController setLinkColor:[UIColor colorNamed:kBlueColor]];
 
   CGSize TOSLabelSize = [self.TOSLabel sizeThatFits:containerSize];
   CGFloat TOSLabelTopPadding = kTOSLabelTopPadding[[self heightSizeClassIdiom]];
@@ -469,7 +453,6 @@ const char kPrivacyNoticeUrl[] = "internal://privacy-notice";
       CGRectMake(optInLabelOriginX,
                  CGRectGetMaxY(self.TOSLabel.frame) + optInLabelTopPadding,
                  optInLabelSize.width, optInLabelSize.height));
-  FixOrphanWord(self.optInLabel);
 }
 
 - (void)layoutCheckBoxButton {

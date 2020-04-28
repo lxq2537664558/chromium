@@ -8,10 +8,12 @@
 #include <utility>
 
 #include "base/bind.h"
+#include "base/check_op.h"
 #include "base/compiler_specific.h"
-#include "base/logging.h"
 #include "base/metrics/histogram_macros.h"
+#include "base/notreached.h"
 #include "base/strings/string_util.h"
+#include "base/threading/thread_task_runner_handle.h"
 #include "base/trace_event/trace_event.h"
 #include "base/values.h"
 #include "net/base/ip_endpoint.h"
@@ -46,8 +48,12 @@ bool AddressListOnlyContainsIPv6(const AddressList& list) {
 
 TransportSocketParams::TransportSocketParams(
     const HostPortPair& host_port_pair,
+    const NetworkIsolationKey& network_isolation_key,
+    bool disable_secure_dns,
     const OnHostResolutionCallback& host_resolution_callback)
     : destination_(host_port_pair),
+      network_isolation_key_(network_isolation_key),
+      disable_secure_dns_(disable_secure_dns),
       host_resolution_callback_(host_resolution_callback) {}
 
 TransportSocketParams::~TransportSocketParams() = default;
@@ -144,6 +150,10 @@ ConnectionAttempts TransportConnectJob::GetConnectionAttempts() const {
   attempts.insert(attempts.begin(), fallback_connection_attempts_.begin(),
                   fallback_connection_attempts_.end());
   return attempts;
+}
+
+ResolveErrorInfo TransportConnectJob::GetResolveErrorInfo() const {
+  return resolve_error_info_;
 }
 
 // static
@@ -258,8 +268,11 @@ int TransportConnectJob::DoResolveHost() {
 
   HostResolver::ResolveHostParameters parameters;
   parameters.initial_priority = priority();
-  request_ = host_resolver()->CreateRequest(params_->destination(), net_log(),
-                                            parameters);
+  if (params_->disable_secure_dns())
+    parameters.secure_dns_mode_override = DnsConfig::SecureDnsMode::OFF;
+  request_ = host_resolver()->CreateRequest(params_->destination(),
+                                            params_->network_isolation_key(),
+                                            net_log(), parameters);
 
   return request_->Start(base::BindOnce(&TransportConnectJob::OnIOComplete,
                                         base::Unretained(this)));
@@ -273,20 +286,28 @@ int TransportConnectJob::DoResolveHostComplete(int result) {
   // through proxies, |connect_start| should not include dns lookup time.
   connect_timing_.connect_start = connect_timing_.dns_end;
   resolve_result_ = result;
+  resolve_error_info_ = request_->GetResolveErrorInfo();
 
   if (result != OK)
     return result;
   DCHECK(request_->GetAddressResults());
 
-  // Invoke callback, and abort if it fails.
+  next_state_ = STATE_TRANSPORT_CONNECT;
+
+  // Invoke callback.  If it indicates |this| may be slated for deletion, then
+  // only continue after a PostTask.
   if (!params_->host_resolution_callback().is_null()) {
-    result = params_->host_resolution_callback().Run(
-        request_->GetAddressResults().value(), net_log());
-    if (result != OK)
-      return result;
+    OnHostResolutionCallbackResult callback_result =
+        params_->host_resolution_callback().Run(
+            params_->destination(), request_->GetAddressResults().value());
+    if (callback_result == OnHostResolutionCallbackResult::kMayBeDeletedAsync) {
+      base::ThreadTaskRunnerHandle::Get()->PostTask(
+          FROM_HERE, base::BindOnce(&TransportConnectJob::OnIOComplete,
+                                    weak_ptr_factory_.GetWeakPtr(), OK));
+      return ERR_IO_PENDING;
+    }
   }
 
-  next_state_ = STATE_TRANSPORT_CONNECT;
   return result;
 }
 

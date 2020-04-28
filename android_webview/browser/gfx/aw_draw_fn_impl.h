@@ -7,12 +7,15 @@
 
 #include <memory>
 
+#include "android_webview/browser/gfx/aw_vulkan_context_provider.h"
 #include "android_webview/browser/gfx/compositor_frame_consumer.h"
 #include "android_webview/browser/gfx/render_thread_manager.h"
 #include "android_webview/public/browser/draw_fn.h"
 #include "base/android/jni_weak_ref.h"
 #include "base/containers/queue.h"
+#include "base/files/scoped_file.h"
 #include "base/macros.h"
+#include "base/optional.h"
 #include "third_party/skia/include/core/SkRefCnt.h"
 #include "third_party/skia/include/gpu/vk/GrVkTypes.h"
 
@@ -22,9 +25,12 @@ namespace gl {
 class GLImageAHardwareBuffer;
 }
 
+namespace gpu {
+class VulkanImage;
+}
+
 namespace android_webview {
 class GLNonOwnedCompatibilityContext;
-class AwVulkanContextProvider;
 
 class AwDrawFnImpl {
  public:
@@ -72,6 +78,7 @@ class AwDrawFnImpl {
     sk_sp<SkImage> ahb_skimage;
     uint32_t texture_id = 0;
     uint32_t framebuffer_id = 0;
+    std::unique_ptr<gpu::VulkanImage> vulkan_image;
     GrVkImageInfo image_info;
 
     // Used to clean up Vulkan objects.
@@ -91,8 +98,8 @@ class AwDrawFnImpl {
   // Vulkan context provider for Vk rendering.
   scoped_refptr<AwVulkanContextProvider> vulkan_context_provider_;
 
-  // The draw context for the current frame. It is for direct mode only.
-  sk_sp<GrVkSecondaryCBDrawContext> draw_context_;
+  base::Optional<AwVulkanContextProvider::ScopedSecondaryCBDraw>
+      scoped_secondary_cb_draw_;
 
   // GL context used to draw via GL in Vk interop path.
   scoped_refptr<GLNonOwnedCompatibilityContext> gl_context_;

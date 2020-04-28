@@ -34,9 +34,10 @@ class ExampleAppListClient : public TestAppListClient {
   void StartSearch(const base::string16& trimmed_query) override;
   void OpenSearchResult(const std::string& result_id,
                         int event_flags,
-                        ash::mojom::AppListLaunchedFrom launched_from,
-                        ash::mojom::AppListLaunchType launch_type,
-                        int suggestion_index) override;
+                        ash::AppListLaunchedFrom launched_from,
+                        ash::AppListLaunchType launch_type,
+                        int suggestion_index,
+                        bool launch_as_default) override;
   void ActivateItem(int profile_id,
                     const std::string& id,
                     int event_flags) override;

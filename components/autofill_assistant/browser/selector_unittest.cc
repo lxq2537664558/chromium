@@ -16,6 +16,7 @@ TEST(SelectorTest, FromProto) {
   proto.add_selectors("a");
   proto.add_selectors("b");
   proto.set_inner_text_pattern("c");
+  proto.set_value_pattern("d");
   proto.set_visibility_requirement(MUST_BE_VISIBLE);
   proto.set_pseudo_type(PseudoType::BEFORE);
 
@@ -23,7 +24,25 @@ TEST(SelectorTest, FromProto) {
   EXPECT_THAT(selector.selectors, testing::ElementsAre("a", "b"));
   EXPECT_TRUE(selector.must_be_visible);
   EXPECT_EQ("c", selector.inner_text_pattern);
+  EXPECT_EQ("d", selector.value_pattern);
   EXPECT_EQ(PseudoType::BEFORE, selector.pseudo_type);
+}
+
+TEST(SelectorTest, ToProto) {
+  Selector selector;
+  selector.selectors.emplace_back("a");
+  selector.selectors.emplace_back("b");
+  selector.inner_text_pattern = "c";
+  selector.value_pattern = "d";
+  selector.must_be_visible = true;
+  selector.pseudo_type = PseudoType::BEFORE;
+
+  ElementReferenceProto proto = selector.ToElementReferenceProto();
+  EXPECT_THAT(proto.selectors(), testing::ElementsAre("a", "b"));
+  EXPECT_EQ("c", proto.inner_text_pattern());
+  EXPECT_EQ("d", proto.value_pattern());
+  EXPECT_EQ(MUST_BE_VISIBLE, proto.visibility_requirement());
+  EXPECT_EQ(PseudoType::BEFORE, proto.pseudo_type());
 }
 
 TEST(SelectorTest, Comparison) {
@@ -50,6 +69,13 @@ TEST(SelectorTest, Comparison) {
             Selector({"a"}).MatchingInnerText("b"));
   EXPECT_TRUE(Selector({"a"}).MatchingInnerText("a") ==
               Selector({"a"}).MatchingInnerText("a"));
+
+  EXPECT_FALSE(Selector({"a"}).MatchingValue("a") ==
+               Selector({"a"}).MatchingValue("b"));
+  EXPECT_LT(Selector({"a"}).MatchingValue("a"),
+            Selector({"a"}).MatchingValue("b"));
+  EXPECT_TRUE(Selector({"a"}).MatchingValue("a") ==
+              Selector({"a"}).MatchingValue("a"));
 }
 
 }  // namespace

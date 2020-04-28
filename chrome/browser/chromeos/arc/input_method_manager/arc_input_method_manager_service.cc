@@ -8,6 +8,9 @@
 #include <utility>
 
 #include "ash/public/cpp/ash_pref_names.h"
+#include "ash/public/cpp/keyboard/keyboard_switches.h"
+#include "ash/public/cpp/tablet_mode.h"
+#include "ash/public/cpp/tablet_mode_observer.h"
 #include "base/bind.h"
 #include "base/logging.h"
 #include "base/memory/singleton.h"
@@ -19,19 +22,17 @@
 #include "chrome/browser/chromeos/arc/input_method_manager/arc_input_method_manager_bridge_impl.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/ash/keyboard/chrome_keyboard_controller_client.h"
-#include "chrome/browser/ui/ash/tablet_mode_client.h"
-#include "chrome/browser/ui/ash/tablet_mode_client_observer.h"
 #include "chrome/common/pref_names.h"
 #include "components/arc/arc_browser_context_keyed_service_factory_base.h"
-#include "components/arc/common/ime_struct_traits.h"
+#include "components/arc/mojom/ime_mojom_traits.h"
 #include "components/crx_file/id_util.h"
 #include "components/prefs/pref_service.h"
+#include "mojo/public/cpp/bindings/pending_remote.h"
 #include "ui/base/ime/chromeos/component_extension_ime_manager.h"
 #include "ui/base/ime/chromeos/extension_ime_util.h"
 #include "ui/base/ime/chromeos/input_method_util.h"
 #include "ui/base/ime/ime_bridge.h"
 #include "ui/base/ime/input_method_observer.h"
-#include "ui/keyboard/public/keyboard_switches.h"
 
 namespace arc {
 
@@ -75,10 +76,10 @@ void SwitchImeToCallback(const std::string& ime_id,
 void SetKeyboardDisabled(bool disabled) {
   if (disabled) {
     ChromeKeyboardControllerClient::Get()->SetEnableFlag(
-        keyboard::mojom::KeyboardEnableFlag::kAndroidDisabled);
+        keyboard::KeyboardEnableFlag::kAndroidDisabled);
   } else {
     ChromeKeyboardControllerClient::Get()->ClearEnableFlag(
-        keyboard::mojom::KeyboardEnableFlag::kAndroidDisabled);
+        keyboard::KeyboardEnableFlag::kAndroidDisabled);
   }
 }
 
@@ -142,9 +143,8 @@ class ArcInputMethodManagerService::InputMethodEngineObserver
   }
   void OnCompositionBoundsChanged(
       const std::vector<gfx::Rect>& bounds) override {}
-  bool IsInterestedInKeyEvent() const override { return true; }
   void OnSurroundingTextChanged(const std::string& engine_id,
-                                const std::string& text,
+                                const base::string16& text,
                                 int cursor_pos,
                                 int anchor_pos,
                                 int offset_pos) override {
@@ -194,18 +194,22 @@ class ArcInputMethodManagerService::InputMethodObserver
 };
 
 class ArcInputMethodManagerService::TabletModeObserver
-    : public TabletModeClientObserver {
+    : public ash::TabletModeObserver {
  public:
   explicit TabletModeObserver(ArcInputMethodManagerService* owner)
       : owner_(owner) {}
   ~TabletModeObserver() override = default;
 
-  void OnTabletModeToggled(bool enabled) override {
+  // ash::TabletModeObserver overrides:
+  void OnTabletModeStarted() override { OnTabletModeToggled(true); }
+  void OnTabletModeEnded() override { OnTabletModeToggled(false); }
+
+ private:
+  void OnTabletModeToggled(bool enabled) {
     owner_->UpdateArcIMEAllowed();
     owner_->NotifyInputMethodManagerObservers(enabled);
   }
 
- private:
   ArcInputMethodManagerService* owner_;
 
   DISALLOW_COPY_AND_ASSIGN(TabletModeObserver);
@@ -239,7 +243,7 @@ ArcInputMethodManagerService::ArcInputMethodManagerService(
           std::make_unique<ArcInputMethodManagerBridgeImpl>(this,
                                                             bridge_service)),
       is_virtual_keyboard_shown_(false),
-      is_removing_imm_entry_(false),
+      is_updating_imm_entry_(false),
       proxy_ime_extension_id_(
           crx_file::id_util::GenerateId(kArcIMEProxyExtensionName)),
       proxy_ime_engine_(std::make_unique<chromeos::InputMethodEngine>()),
@@ -253,10 +257,7 @@ ArcInputMethodManagerService::ArcInputMethodManagerService(
       std::make_unique<InputMethodEngineObserver>(this),
       proxy_ime_extension_id_.c_str(), profile_);
 
-  // TabletModeClient should be already created here because it's created in
-  // PreProfileInit() and this service is created in PostProfileInit().
-  DCHECK(TabletModeClient::Get());
-  TabletModeClient::Get()->AddObserver(tablet_mode_observer_.get());
+  ash::TabletMode::Get()->AddObserver(tablet_mode_observer_.get());
 
   chromeos::AccessibilityManager* accessibility_manager =
       chromeos::AccessibilityManager::Get();
@@ -304,8 +305,8 @@ void ArcInputMethodManagerService::Shutdown() {
   if (ui::IMEBridge::Get())
     ui::IMEBridge::Get()->RemoveObserver(this);
 
-  if (TabletModeClient::Get())
-    TabletModeClient::Get()->RemoveObserver(tablet_mode_observer_.get());
+  if (ash::TabletMode::Get())
+    ash::TabletMode::Get()->RemoveObserver(tablet_mode_observer_.get());
 
   auto* imm = chromeos::input_method::InputMethodManager::Get();
   imm->RemoveImeMenuObserver(this);
@@ -335,7 +336,6 @@ void ArcInputMethodManagerService::OnActiveImeChanged(
 }
 
 void ArcInputMethodManagerService::OnImeDisabled(const std::string& ime_id) {
-
   const std::string component_id =
       chromeos::extension_ime_util::GetArcInputMethodID(proxy_ime_extension_id_,
                                                         ime_id);
@@ -358,22 +358,31 @@ void ArcInputMethodManagerService::OnImeInfoChanged(
   using chromeos::input_method::InputMethodDescriptors;
   using chromeos::input_method::InputMethodManager;
 
-  is_removing_imm_entry_ = true;
-  scoped_refptr<InputMethodManager::State> state =
-      InputMethodManager::Get()->GetActiveIMEState();
+  InputMethodManager* imm = InputMethodManager::Get();
+  if (!imm || !imm->GetActiveIMEState()) {
+    LOG(WARNING) << "InputMethodManager is not ready yet.";
+    return;
+  }
+
+  base::AutoReset<bool> in_updating(&is_updating_imm_entry_, true);
+  scoped_refptr<InputMethodManager::State> state = imm->GetActiveIMEState();
+  const std::string active_ime_id = state->GetCurrentInputMethod().id();
+
   // Remove the old registered entry.
   state->RemoveInputMethodExtension(proxy_ime_extension_id_);
-  is_removing_imm_entry_ = false;
 
   // Convert ime_info_array to InputMethodDescriptors.
   InputMethodDescriptors descriptors;
   std::vector<std::string> enabled_input_method_ids;
+  ime_ids_allowed_in_clamshell_mode_.clear();
   for (const auto& ime_info : ime_info_array) {
     const InputMethodDescriptor& descriptor =
         BuildInputMethodDescriptor(ime_info.get());
     descriptors.push_back(descriptor);
     if (ime_info->enabled)
       enabled_input_method_ids.push_back(descriptor.id());
+    if (ime_info->is_allowed_in_clamshell_mode)
+      ime_ids_allowed_in_clamshell_mode_.insert(descriptor.id());
   }
   if (descriptors.empty()) {
     // If no ARC IME is installed, remove ARC IME entry from preferences.
@@ -392,19 +401,29 @@ void ArcInputMethodManagerService::OnImeInfoChanged(
   // TODO(crbug.com/845079): We should keep the order of the IMEs as same as in
   // chrome://settings
   for (const auto& input_method_id : enabled_input_method_ids) {
-    if (!base::ContainsValue(active_ime_list, input_method_id))
+    if (!base::Contains(active_ime_list, input_method_id))
       active_ime_list.push_back(input_method_id);
   }
   // Disable IMEs that are already disable in the container.
   base::EraseIf(active_ime_list, [&enabled_input_method_ids](const auto& id) {
     return chromeos::extension_ime_util::IsArcIME(id) &&
-           !base::ContainsValue(enabled_input_method_ids, id);
+           !base::Contains(enabled_input_method_ids, id);
   });
   profile_->GetPrefs()->SetString(prefs::kLanguageEnabledImes,
                                   base::JoinString(active_ime_list, ","));
 
   // Refresh allowed IME list.
   UpdateArcIMEAllowed();
+
+  InputMethodManager::Get()->GetActiveIMEState()->ChangeInputMethod(
+      active_ime_id, false);
+  is_updating_imm_entry_ = false;
+
+  // Call ImeMenuListChanged() here to notify the latest state.
+  ImeMenuListChanged();
+  // If the active input method is changed, call InputMethodChanged() here.
+  if (active_ime_id != state->GetCurrentInputMethod().id())
+    InputMethodChanged(InputMethodManager::Get(), nullptr, false);
 
   UMA_HISTOGRAM_COUNTS_100("Arc.ImeCount", descriptors.size());
 }
@@ -421,12 +440,17 @@ void ArcInputMethodManagerService::OnConnectionClosed() {
 }
 
 void ArcInputMethodManagerService::ImeMenuListChanged() {
-  // Ignore ime menu list change while removing the old entry in
+  // Ignore ime menu list change while updating the old entry in
   // |OnImeInfoChanged| not to expose temporary state to ARC++ container.
-  if (is_removing_imm_entry_)
+  if (is_updating_imm_entry_)
     return;
 
   auto* manager = chromeos::input_method::InputMethodManager::Get();
+  if (!manager || !manager->GetActiveIMEState()) {
+    LOG(WARNING) << "InputMethodManager is not ready yet";
+    return;
+  }
+
   auto new_active_ime_ids =
       manager->GetActiveIMEState()->GetActiveInputMethodIds();
 
@@ -481,8 +505,13 @@ void ArcInputMethodManagerService::ImeMenuListChanged() {
 
 void ArcInputMethodManagerService::InputMethodChanged(
     chromeos::input_method::InputMethodManager* manager,
-    Profile* profile,
+    Profile* /* profile */,
     bool /* show_message */) {
+  // Ignore input method change while updating the entry in |OnImeInfoChanged|
+  // not to expose temporary state to ARC++ container.
+  if (is_updating_imm_entry_)
+    return;
+
   scoped_refptr<chromeos::input_method::InputMethodManager::State> state =
       manager->GetActiveIMEState();
   if (!state)
@@ -567,10 +596,10 @@ void ArcInputMethodManagerService::Focus(int context_id) {
   DCHECK(!active_connection_);
   active_connection_ = std::make_unique<InputConnectionImpl>(
       proxy_ime_engine_.get(), imm_bridge_.get(), context_id);
-  mojom::InputConnectionPtr connection_ptr;
-  active_connection_->Bind(&connection_ptr);
+  mojo::PendingRemote<mojom::InputConnection> connection_remote;
+  active_connection_->Bind(&connection_remote);
 
-  imm_bridge_->SendFocus(std::move(connection_ptr),
+  imm_bridge_->SendFocus(std::move(connection_remote),
                          active_connection_->GetTextInputState(false));
 }
 
@@ -686,15 +715,23 @@ void ArcInputMethodManagerService::UpdateArcIMEAllowed() {
       // Currently there is no restriction. Add all IMEs except ARC IMEs to
       // |allowed_method_ids_set|.
       for (const auto& desc : installed_imes) {
-        if (!chromeos::extension_ime_util::IsArcIME(desc.id()))
+        if (!chromeos::extension_ime_util::IsArcIME(desc.id()) ||
+            ime_ids_allowed_in_clamshell_mode_.count(desc.id())) {
           allowed_method_ids_set.insert(desc.id());
+        }
       }
     } else {
       // Remove ARC IMEs from |allowed_method_ids_set|.
-      base::EraseIf(allowed_method_ids_set, [](const std::string& id) {
-        return chromeos::extension_ime_util::IsArcIME(id);
+      base::EraseIf(allowed_method_ids_set, [this](const std::string& id) {
+        return chromeos::extension_ime_util::IsArcIME(id) &&
+               !ime_ids_allowed_in_clamshell_mode_.count(id);
       });
+
+      // Add back IMEs allowed in clamshell mode.
+      for (const auto& ime_id : ime_ids_allowed_in_clamshell_mode_)
+        allowed_method_ids_set.insert(ime_id);
     }
+
     DCHECK(!allowed_method_ids_set.empty());
   }
 
@@ -716,7 +753,7 @@ bool ArcInputMethodManagerService::ShouldArcIMEAllowed() const {
   const bool is_normal_vk_enabled =
       !profile_->GetPrefs()->GetBoolean(
           ash::prefs::kAccessibilityVirtualKeyboardEnabled) &&
-      TabletModeClient::Get()->tablet_mode_enabled();
+      ash::TabletMode::Get()->InTabletMode();
   return is_command_line_flag_enabled || is_normal_vk_enabled;
 }
 

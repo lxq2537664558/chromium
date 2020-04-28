@@ -38,6 +38,15 @@ class ArcSystemModel {
   ~ArcSystemModel();
 
   void Reset();
+  // Trims the model using |trim_timestamp|. Events before
+  // |trim_timestamp| are consolidated with their timestamps aligned
+  // to |trim_timestamp|. Events on or after |trim_timestamp| are left
+  // in the model unchanged.
+  void Trim(uint64_t trim_timestamp);
+
+  // Closes range for each value event type by extending the latest value till
+  // the |max_timestamp|.
+  void CloseRangeForValueEvents(uint64_t max_timestamp);
 
   void CopyFrom(const ArcSystemModel& other);
   base::DictionaryValue Serialize() const;
@@ -57,6 +66,8 @@ class ArcSystemModel {
  private:
   ThreadMap thread_map_;
   AllCpuEvents all_cpu_events_;
+  // TODO(khmel): For simplification and performance use separate channels
+  // for each event type.
   ValueEvents memory_events_;
 
   DISALLOW_COPY_AND_ASSIGN(ArcSystemModel);

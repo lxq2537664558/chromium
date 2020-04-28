@@ -9,6 +9,7 @@
 #include <memory>
 #include <string>
 
+#include "base/compiler_specific.h"
 #include "base/memory/weak_ptr.h"
 #include "base/strings/string_piece.h"
 
@@ -39,9 +40,9 @@ class JSChecker {
   void ExecuteAsync(const std::string& expression);
 
   // Evaluates |expression| and returns its result.
-  bool GetBool(const std::string& expression);
-  int GetInt(const std::string& expression);
-  std::string GetString(const std::string& expression);
+  WARN_UNUSED_RESULT bool GetBool(const std::string& expression);
+  WARN_UNUSED_RESULT int GetInt(const std::string& expression);
+  WARN_UNUSED_RESULT std::string GetString(const std::string& expression);
 
   // Checks truthfulness of the given |expression|.
   void ExpectTrue(const std::string& expression);
@@ -57,28 +58,45 @@ class JSChecker {
 
   // Checks test waiter that would await until |js_condition| evaluates
   // to true.
-  std::unique_ptr<TestConditionWaiter> CreateWaiter(
+  WARN_UNUSED_RESULT std::unique_ptr<TestConditionWaiter> CreateWaiter(
       const std::string& js_condition);
 
-  // Waiter that waits until specified element is (not) hidden.
-  std::unique_ptr<TestConditionWaiter> CreateVisibilityWaiter(
-      bool visibility,
+  // Checks test waiter that would await until |js_condition| evaluates
+  // to true.
+  WARN_UNUSED_RESULT std::unique_ptr<TestConditionWaiter>
+  CreateWaiterWithDescription(const std::string& js_condition,
+                              const std::string& description);
+
+  // Waiter that waits until the given attribute is (not) present.
+  // WARNING! This does not cover the case where ATTRIBUTE=false.
+  // Should only be used for boolean attributes.
+  WARN_UNUSED_RESULT std::unique_ptr<TestConditionWaiter>
+  CreateAttributePresenceWaiter(
+      const std::string& attribute,
+      bool presence,
       std::initializer_list<base::StringPiece> element_ids);
+
+  // Waiter that waits until specified element is (not) hidden.
+  WARN_UNUSED_RESULT std::unique_ptr<TestConditionWaiter>
+  CreateVisibilityWaiter(bool visibility,
+                         std::initializer_list<base::StringPiece> element_ids);
+  WARN_UNUSED_RESULT std::unique_ptr<TestConditionWaiter>
+  CreateVisibilityWaiter(bool visibility, const std::string& element);
 
   // Waiter that waits until specified element is (not) displayed with non-zero
   // size.
-  std::unique_ptr<TestConditionWaiter> CreateDisplayedWaiter(
+  WARN_UNUSED_RESULT std::unique_ptr<TestConditionWaiter> CreateDisplayedWaiter(
       bool displayed,
       std::initializer_list<base::StringPiece> element_ids);
 
   // Waiter that waits until an element is enabled or disabled.
-  std::unique_ptr<TestConditionWaiter> CreateEnabledWaiter(
+  WARN_UNUSED_RESULT std::unique_ptr<TestConditionWaiter> CreateEnabledWaiter(
       bool enabled,
       std::initializer_list<base::StringPiece> element_ids);
 
   // Waiter that waits until the specified element's class list contains, or
   // doesn't contain the specified class.
-  std::unique_ptr<TestConditionWaiter> CreateHasClassWaiter(
+  WARN_UNUSED_RESULT std::unique_ptr<TestConditionWaiter> CreateHasClassWaiter(
       bool has_class,
       const std::string& css_class,
       std::initializer_list<base::StringPiece> element_ids);
@@ -114,9 +132,30 @@ class JSChecker {
   void ExpectHasNoClass(const std::string& css_class,
                         std::initializer_list<base::StringPiece> element_ids);
 
-  // Tap on indicated UI element.
+  // Expects that indicated UI element has particular attribute.
+  void ExpectHasAttribute(const std::string& attribute,
+                          std::initializer_list<base::StringPiece> element_ids);
+  void ExpectHasNoAttribute(
+      const std::string& attribute,
+      std::initializer_list<base::StringPiece> element_ids);
+
+  // Expect that the indicated UI element has particular text content.
+  void ExpectElementText(const std::string& content,
+                         std::initializer_list<base::StringPiece> element_ids);
+
+  // Fires a native 'click' event on the indicated UI element. Prefer using
+  // native 'click' event as it works on both polymer and native UI elements.
+  void ClickOnPath(std::initializer_list<base::StringPiece> element_ids);
+  void ClickOn(const std::string& element_id);
+
+  // Fires a synthetic 'tap' event on the indicated UI element. Provided as
+  // backwards compatibility with some OOBE UI elements that only listen to
+  // tap events.
   void TapOnPath(std::initializer_list<base::StringPiece> element_ids);
   void TapOn(const std::string& element_id);
+
+  // Clicks on the indicated UI element that should be a link.
+  void TapLinkOnPath(std::initializer_list<base::StringPiece> element_ids);
 
   // Select particular radio button.
   void SelectRadioPath(std::initializer_list<base::StringPiece> element_ids);
@@ -166,7 +205,7 @@ std::string GetOobeElementPath(
 
 // Creates a waiter that allows to wait until screen with |oobe_screen_id| is
 // shown in webui.
-std::unique_ptr<TestConditionWaiter> CreateOobeScreenWaiter(
+WARN_UNUSED_RESULT std::unique_ptr<TestConditionWaiter> CreateOobeScreenWaiter(
     const std::string& oobe_screen_id);
 
 }  // namespace test

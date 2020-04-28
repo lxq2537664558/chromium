@@ -7,6 +7,8 @@
 
 #include "base/macros.h"
 #include "chrome/browser/ui/webui/chromeos/system_web_dialog_delegate.h"
+#include "chromeos/services/cellular_setup/public/mojom/cellular_setup.mojom-forward.h"
+#include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "ui/web_dialogs/web_dialog_ui.h"
 
 namespace chromeos {
@@ -38,6 +40,12 @@ class CellularSetupDialogUI : public ui::MojoWebDialogUI {
   explicit CellularSetupDialogUI(content::WebUI* web_ui);
   ~CellularSetupDialogUI() override;
 
+  // Instantiates implementor of the mojom::CellularSetup mojo interface
+  // passing the pending receiver that will be internally bound.
+  void BindInterface(mojo::PendingReceiver<mojom::CellularSetup> receiver);
+
+ private:
+  WEB_UI_CONTROLLER_TYPE_DECL();
   DISALLOW_COPY_AND_ASSIGN(CellularSetupDialogUI);
 };
 

@@ -12,6 +12,7 @@
 #include "base/bind.h"
 #include "base/compiler_specific.h"
 #include "base/files/file_util.h"
+#include "base/guid.h"
 #include "base/json/json_file_value_serializer.h"
 #include "base/json/json_reader.h"
 #include "base/json/json_string_value_serializer.h"
@@ -53,8 +54,8 @@ void AddBookmarksToIndex(BookmarkLoadDetails* details,
     if (node->url().is_valid())
       details->index()->Add(node);
   } else {
-    for (int i = 0; i < node->child_count(); ++i)
-      AddBookmarksToIndex(details, node->GetChild(i));
+    for (const auto& child : node->children())
+      AddBookmarksToIndex(details, child.get());
   }
 }
 
@@ -70,8 +71,8 @@ void PopulateNumNodesPerUrlHash(
   if (!node->is_folder())
     (*num_nodes_per_url_hash)[std::hash<std::string>()(node->url().spec())]++;
 
-  for (int i = 0; i < node->child_count(); ++i)
-    PopulateNumNodesPerUrlHash(node->GetChild(i), num_nodes_per_url_hash);
+  for (const auto& child : node->children())
+    PopulateNumNodesPerUrlHash(child.get(), num_nodes_per_url_hash);
 }
 
 // Computes the number of bookmarks (excluding folders) with a URL that is used
@@ -102,8 +103,8 @@ int GetNumNodesWithEmptyTitle(const BookmarkNode* node) {
   if (!node->is_root() && node->GetTitle().empty())
     ++num_nodes_with_empty_title;
 
-  for (int i = 0; i < node->child_count(); ++i)
-    num_nodes_with_empty_title += GetNumNodesWithEmptyTitle(node->GetChild(i));
+  for (const auto& child : node->children())
+    num_nodes_with_empty_title += GetNumNodesWithEmptyTitle(child.get());
 
   return num_nodes_with_empty_title;
 }
@@ -138,9 +139,8 @@ void LoadBookmarks(const base::FilePath& path,
       details->set_computed_checksum(codec.computed_checksum());
       details->set_stored_checksum(codec.stored_checksum());
       details->set_ids_reassigned(codec.ids_reassigned());
+      details->set_guids_reassigned(codec.guids_reassigned());
       details->set_model_meta_info_map(codec.model_meta_info_map());
-      details->set_model_sync_transaction_version(
-          codec.model_sync_transaction_version());
       UMA_HISTOGRAM_TIMES("Bookmarks.DecodeTime",
                           TimeTicks::Now() - start_time);
       int64_t size = 0;
@@ -157,7 +157,7 @@ void LoadBookmarks(const base::FilePath& path,
     }
   }
 
-  if (details->LoadExtraNodes())
+  if (details->LoadManagedNode())
     load_index = true;
 
   // Load any extra root nodes now, after the IDs have been potentially
@@ -199,14 +199,13 @@ void LoadBookmarks(const base::FilePath& path,
 // BookmarkLoadDetails ---------------------------------------------------------
 
 BookmarkLoadDetails::BookmarkLoadDetails(BookmarkClient* client)
-    : load_extra_callback_(client->GetLoadExtraNodesCallback()),
-      index_(std::make_unique<TitledUrlIndex>()),
-      model_sync_transaction_version_(
-          BookmarkNode::kInvalidSyncTransactionVersion) {
+    : load_managed_node_callback_(client->GetLoadManagedNodeCallback()),
+      index_(std::make_unique<TitledUrlIndex>()) {
   // WARNING: do NOT add |client| as a member. Much of this code runs on another
   // thread, and |client_| is not thread safe, and/or may be destroyed before
   // this.
-  root_node_ = std::make_unique<BookmarkNode>(GURL());
+  root_node_ = std::make_unique<BookmarkNode>(
+      /*id=*/0, BookmarkNode::RootNodeGuid(), GURL());
   root_node_ptr_ = root_node_.get();
   // WARNING: order is important here, various places assume the order is
   // constant (but can vary between embedders with the initial visibility
@@ -219,19 +218,17 @@ BookmarkLoadDetails::BookmarkLoadDetails(BookmarkClient* client)
 BookmarkLoadDetails::~BookmarkLoadDetails() {
 }
 
-bool BookmarkLoadDetails::LoadExtraNodes() {
-  if (!load_extra_callback_)
+bool BookmarkLoadDetails::LoadManagedNode() {
+  if (!load_managed_node_callback_)
     return false;
 
-  BookmarkPermanentNodeList extra_nodes =
-      std::move(load_extra_callback_).Run(&max_id_);
-  bool has_non_empty_node = false;
-  for (auto& node : extra_nodes) {
-    if (node->child_count() != 0)
-      has_non_empty_node = true;
-    root_node_->Add(std::move(node), root_node_->child_count());
-  }
-  return has_non_empty_node;
+  std::unique_ptr<BookmarkPermanentNode> managed_node =
+      std::move(load_managed_node_callback_).Run(&max_id_);
+  if (!managed_node)
+    return false;
+  bool has_children = !managed_node->children().empty();
+  root_node_->Add(std::move(managed_node));
+  return has_children;
 }
 
 void BookmarkLoadDetails::CreateUrlIndex() {
@@ -244,9 +241,9 @@ BookmarkPermanentNode* BookmarkLoadDetails::CreatePermanentNode(
   DCHECK(type == BookmarkNode::BOOKMARK_BAR ||
          type == BookmarkNode::OTHER_NODE || type == BookmarkNode::MOBILE);
   std::unique_ptr<BookmarkPermanentNode> node =
-      std::make_unique<BookmarkPermanentNode>(max_id_++);
-  node->set_type(type);
-  node->set_visible(client->IsPermanentNodeVisible(node.get()));
+      std::make_unique<BookmarkPermanentNode>(
+          max_id_++, type,
+          /*visible_when_empty=*/client->IsPermanentNodeVisibleWhenEmpty(type));
 
   int title_id;
   switch (type) {
@@ -266,7 +263,7 @@ BookmarkPermanentNode* BookmarkLoadDetails::CreatePermanentNode(
   }
   node->SetTitle(l10n_util::GetStringUTF16(title_id));
   BookmarkPermanentNode* permanent_node = node.get();
-  root_node_->Add(std::move(node), root_node_->child_count());
+  root_node_->Add(std::move(node));
   return permanent_node;
 }
 
@@ -281,8 +278,7 @@ BookmarkStorage::BookmarkStorage(
               sequenced_task_runner,
               base::TimeDelta::FromMilliseconds(kSaveDelayMS),
               "BookmarkStorage"),
-      sequenced_task_runner_(sequenced_task_runner),
-      weak_factory_(this) {}
+      sequenced_task_runner_(sequenced_task_runner) {}
 
 BookmarkStorage::~BookmarkStorage() {
   if (writer_.HasPendingWrite())

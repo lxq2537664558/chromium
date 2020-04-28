@@ -6,8 +6,8 @@
 
 #include "ash/root_window_controller.h"
 #include "ash/shell.h"
+#include "ash/wm/screen_pinning_controller.h"
 #include "ash/wm/work_area_insets.h"
-#include "base/logging.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/wm/core/window_util.h"
 #include "ui/wm/public/activation_client.h"
@@ -26,9 +26,14 @@ AccessibilityPanelLayoutManager::~AccessibilityPanelLayoutManager() {
   display::Screen::GetScreen()->RemoveObserver(this);
 }
 
+void AccessibilityPanelLayoutManager::SetAlwaysVisible(bool always_visible) {
+  always_visible_ = always_visible;
+  UpdateWindowBounds();
+}
+
 void AccessibilityPanelLayoutManager::SetPanelBounds(
     const gfx::Rect& bounds,
-    mojom::AccessibilityPanelState state) {
+    AccessibilityPanelState state) {
   if (!panel_window_)
     return;
 
@@ -101,11 +106,21 @@ void AccessibilityPanelLayoutManager::UpdateWindowBounds() {
   gfx::Rect bounds = panel_bounds_;
 
   // The panel can make itself fill the screen (including covering the shelf).
-  if (panel_state_ == mojom::AccessibilityPanelState::FULLSCREEN) {
+  if (panel_state_ == AccessibilityPanelState::FULLSCREEN) {
     bounds = root_window->bounds();
-  } else if (panel_state_ == mojom::AccessibilityPanelState::FULL_WIDTH) {
+  } else if (panel_state_ == AccessibilityPanelState::FULL_WIDTH) {
     bounds.set_x(0);
     bounds.set_width(root_window->bounds().width());
+  }
+
+  // If a fullscreen browser window is open, give the panel a height of 0
+  // unless it's active or always_visible_ is true.
+  if (!always_visible_ && root_controller->GetWindowForFullscreenMode() &&
+      !wm::IsActiveWindow(panel_window_)) {
+    bounds.set_height(0);
+    panel_window_->SetBounds(bounds);
+    UpdateWorkAreaForPanelHeight();
+    return;
   }
 
   // Make sure the accessibility panel is always below the Docked Magnifier
@@ -126,7 +141,7 @@ void AccessibilityPanelLayoutManager::UpdateWindowBounds() {
 
 void AccessibilityPanelLayoutManager::UpdateWorkAreaForPanelHeight() {
   bool has_height = panel_window_ && panel_window_->bounds().y() == 0 &&
-                    panel_state_ == mojom::AccessibilityPanelState::FULL_WIDTH;
+                    panel_state_ == AccessibilityPanelState::FULL_WIDTH;
   Shell::GetPrimaryRootWindowController()
       ->work_area_insets()
       ->SetAccessibilityPanelHeight(

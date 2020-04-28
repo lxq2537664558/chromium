@@ -8,7 +8,6 @@
 
 #include <utility>
 
-#include "base/logging.h"
 #include "base/values.h"
 #include "components/onc/onc_constants.h"
 #include "net/cert/x509_certificate.h"
@@ -72,7 +71,7 @@ bool OncCertificatePattern::Matches(
   }
 
   if (!pem_encoded_issuer_cas_.empty() &&
-      !base::ContainsValue(pem_encoded_issuer_cas_, pem_encoded_issuer_ca)) {
+      !base::Contains(pem_encoded_issuer_cas_, pem_encoded_issuer_ca)) {
     return false;
   }
   return true;

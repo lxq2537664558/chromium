@@ -7,12 +7,13 @@
 
 #include <string>
 
+#include "base/optional.h"
+#include "chrome/browser/web_applications/components/web_app_id.h"
+
 class GURL;
+class Profile;
 
 namespace web_app {
-
-// App ID matches Extension ID.
-using AppId = std::string;
 
 // Compute a deterministic name based on the URL. We use this pseudo name
 // as a key to store window location per application URLs in Browser and
@@ -46,8 +47,18 @@ AppId GetAppIdFromApplicationName(const std::string& app_name);
 AppId GenerateAppIdFromURL(const GURL& url);
 std::string GenerateAppKeyFromURL(const GURL& url);
 
-// Returns whether the given |app_url| is a valid bookmark app url.
+// Returns whether the given |app_url| is a valid web app url.
 bool IsValidWebAppUrl(const GURL& app_url);
+
+// Returns whether the given |app_url| is a valid extension url.
+bool IsValidExtensionUrl(const GURL& app_url);
+
+// Searches for the first locally installed app id in the registry for which
+// the |url| is in scope. If |window_only| is specified, only apps that
+// open in app windows will be considered.
+base::Optional<AppId> FindInstalledAppWithUrlInScope(Profile* profile,
+                                                     const GURL& url,
+                                                     bool window_only = false);
 
 }  // namespace web_app
 

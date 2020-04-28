@@ -5,8 +5,6 @@
 #include "gpu/ipc/client/command_buffer_proxy_impl.h"
 
 #include <memory>
-#include <utility>
-#include <vector>
 
 #include "base/bind.h"
 #include "base/callback.h"
@@ -31,13 +29,13 @@
 #include "gpu/ipc/common/command_buffer_id.h"
 #include "gpu/ipc/common/gpu_messages.h"
 #include "gpu/ipc/common/gpu_param_traits.h"
-#include "mojo/public/cpp/base/shared_memory_utils.h"
 #include "mojo/public/cpp/system/buffer.h"
 #include "mojo/public/cpp/system/platform_handle.h"
 #include "ui/gfx/buffer_format_util.h"
 #include "ui/gfx/geometry/size.h"
 #include "ui/gfx/gpu_fence.h"
 #include "ui/gl/gl_bindings.h"
+#include "ui/gl/gpu_preference.h"
 
 namespace gpu {
 
@@ -53,8 +51,7 @@ CommandBufferProxyImpl::CommandBufferProxyImpl(
       stream_id_(stream_id),
       command_buffer_id_(
           CommandBufferIdFromChannelAndRoute(channel_id_, route_id_)),
-      callback_thread_(std::move(task_runner)),
-      weak_ptr_factory_(this) {
+      callback_thread_(std::move(task_runner)) {
   DCHECK(route_id_);
 }
 
@@ -98,8 +95,7 @@ ContextResult CommandBufferProxyImpl::Initialize(
 
   shared_state()->Initialize();
 
-  base::UnsafeSharedMemoryRegion region =
-      channel->ShareToGpuProcess(shared_state_shm_);
+  base::UnsafeSharedMemoryRegion region = shared_state_shm_.Duplicate();
   if (!region.IsValid()) {
     // TODO(piman): ShareToGpuProcess should alert if it is failing due to
     // being out of file descriptors, in which case this is a fatal error
@@ -143,6 +139,7 @@ bool CommandBufferProxyImpl::OnMessageReceived(const IPC::Message& message) {
   IPC_BEGIN_MESSAGE_MAP(CommandBufferProxyImpl, message)
     IPC_MESSAGE_HANDLER(GpuCommandBufferMsg_Destroyed, OnDestroyed);
     IPC_MESSAGE_HANDLER(GpuCommandBufferMsg_ConsoleMsg, OnConsoleMessage);
+    IPC_MESSAGE_HANDLER(GpuCommandBufferMsg_GpuSwitched, OnGpuSwitched);
     IPC_MESSAGE_HANDLER(GpuCommandBufferMsg_SignalAck, OnSignalAck);
     IPC_MESSAGE_HANDLER(GpuCommandBufferMsg_SwapBuffersCompleted,
                         OnSwapBuffersCompleted);
@@ -189,6 +186,12 @@ void CommandBufferProxyImpl::OnConsoleMessage(
   if (gpu_control_client_)
     gpu_control_client_->OnGpuControlErrorMessage(message.message.c_str(),
                                                   message.id);
+}
+
+void CommandBufferProxyImpl::OnGpuSwitched(
+    gl::GpuPreference active_gpu_heuristic) {
+  if (gpu_control_client_)
+    gpu_control_client_->OnGpuSwitched(active_gpu_heuristic);
 }
 
 void CommandBufferProxyImpl::AddDeletionObserver(DeletionObserver* observer) {
@@ -375,8 +378,7 @@ scoped_refptr<gpu::Buffer> CommandBufferProxyImpl::CreateTransferBuffer(
   DCHECK_LE(shared_memory_mapping.size(), static_cast<size_t>(UINT32_MAX));
 
   if (last_state_.error == gpu::error::kNoError) {
-    base::UnsafeSharedMemoryRegion region =
-        channel_->ShareToGpuProcess(shared_memory_region);
+    base::UnsafeSharedMemoryRegion region = shared_memory_region.Duplicate();
     if (!region.IsValid()) {
       if (last_state_.error == gpu::error::kNoError)
         OnClientError(gpu::error::kLostContext);
@@ -473,23 +475,6 @@ void CommandBufferProxyImpl::DestroyImage(int32_t id) {
     return;
 
   Send(new GpuCommandBufferMsg_DestroyImage(route_id_, id));
-}
-
-uint32_t CommandBufferProxyImpl::CreateStreamTexture(uint32_t texture_id) {
-  CheckLock();
-  base::AutoLock lock(last_state_lock_);
-  if (last_state_.error != gpu::error::kNoError)
-    return 0;
-
-  int32_t stream_id = channel_->GenerateRouteID();
-  bool succeeded = false;
-  Send(new GpuCommandBufferMsg_CreateStreamTexture(route_id_, texture_id,
-                                                   stream_id, &succeeded));
-  if (!succeeded) {
-    DLOG(ERROR) << "GpuCommandBufferMsg_CreateStreamTexture returned failure";
-    return 0;
-  }
-  return stream_id;
 }
 
 void CommandBufferProxyImpl::SetLock(base::Lock* lock) {
@@ -599,6 +584,11 @@ void CommandBufferProxyImpl::CreateGpuFence(uint32_t gpu_fence_id,
                                                         handle));
 }
 
+void CommandBufferProxyImpl::SetDisplayTransform(
+    gfx::OverlayTransform transform) {
+  NOTREACHED();
+}
+
 void CommandBufferProxyImpl::GetGpuFence(
     uint32_t gpu_fence_id,
     base::OnceCallback<void(std::unique_ptr<gfx::GpuFence>)> callback) {
@@ -665,7 +655,6 @@ void CommandBufferProxyImpl::ReturnFrontBuffer(const gpu::Mailbox& mailbox,
 
 bool CommandBufferProxyImpl::Send(IPC::Message* msg) {
   DCHECK(channel_);
-  last_state_lock_.AssertAcquired();
   DCHECK_EQ(gpu::error::kNoError, last_state_.error);
 
   last_state_lock_.Release();
@@ -703,7 +692,7 @@ bool CommandBufferProxyImpl::Send(IPC::Message* msg) {
 std::pair<base::UnsafeSharedMemoryRegion, base::WritableSharedMemoryMapping>
 CommandBufferProxyImpl::AllocateAndMapSharedMemory(size_t size) {
   base::UnsafeSharedMemoryRegion region =
-      mojo::CreateUnsafeSharedMemoryRegion(size);
+      base::UnsafeSharedMemoryRegion::Create(size);
   if (!region.IsValid()) {
     DLOG(ERROR) << "AllocateAndMapSharedMemory: Allocation failed";
     return {};
@@ -721,7 +710,6 @@ CommandBufferProxyImpl::AllocateAndMapSharedMemory(size_t size) {
 void CommandBufferProxyImpl::SetStateFromMessageReply(
     const gpu::CommandBuffer::State& state) {
   CheckLock();
-  last_state_lock_.AssertAcquired();
   if (last_state_.error != gpu::error::kNoError)
     return;
   // Handle wraparound. It works as long as we don't have more than 2B state
@@ -734,7 +722,6 @@ void CommandBufferProxyImpl::SetStateFromMessageReply(
 
 void CommandBufferProxyImpl::TryUpdateState() {
   CheckLock();
-  last_state_lock_.AssertAcquired();
   if (last_state_.error == gpu::error::kNoError) {
     shared_state()->Read(&last_state_);
     if (last_state_.error != gpu::error::kNoError)
@@ -743,7 +730,6 @@ void CommandBufferProxyImpl::TryUpdateState() {
 }
 
 void CommandBufferProxyImpl::TryUpdateStateThreadSafe() {
-  last_state_lock_.AssertAcquired();
   if (last_state_.error == gpu::error::kNoError) {
     shared_state()->Read(&last_state_);
     if (last_state_.error != gpu::error::kNoError) {
@@ -756,7 +742,6 @@ void CommandBufferProxyImpl::TryUpdateStateThreadSafe() {
 }
 
 void CommandBufferProxyImpl::TryUpdateStateDontReportError() {
-  last_state_lock_.AssertAcquired();
   if (last_state_.error == gpu::error::kNoError)
     shared_state()->Read(&last_state_);
 }
@@ -786,7 +771,6 @@ void CommandBufferProxyImpl::OnBufferPresented(
 
 void CommandBufferProxyImpl::OnGpuSyncReplyError() {
   CheckLock();
-  last_state_lock_.AssertAcquired();
   last_state_.error = gpu::error::kLostContext;
   last_state_.context_lost_reason = gpu::error::kInvalidGpuMessage;
   // This method may be inside a callstack from the GpuControlClient (we got a
@@ -799,7 +783,6 @@ void CommandBufferProxyImpl::OnGpuAsyncMessageError(
     gpu::error::ContextLostReason reason,
     gpu::error::Error error) {
   CheckLock();
-  last_state_lock_.AssertAcquired();
   last_state_.error = error;
   last_state_.context_lost_reason = reason;
   // This method only occurs when receiving IPC messages, so we know it's not in
@@ -811,7 +794,6 @@ void CommandBufferProxyImpl::OnGpuAsyncMessageError(
 
 void CommandBufferProxyImpl::OnGpuStateError() {
   CheckLock();
-  last_state_lock_.AssertAcquired();
   DCHECK_NE(gpu::error::kNoError, last_state_.error);
   // This method may be inside a callstack from the GpuControlClient (we
   // encountered an error while trying to perform some action). So avoid
@@ -821,7 +803,6 @@ void CommandBufferProxyImpl::OnGpuStateError() {
 
 void CommandBufferProxyImpl::OnClientError(gpu::error::Error error) {
   CheckLock();
-  last_state_lock_.AssertAcquired();
   last_state_.error = error;
   last_state_.context_lost_reason = gpu::error::kUnknown;
   // This method may be inside a callstack from the GpuControlClient (we
@@ -832,7 +813,6 @@ void CommandBufferProxyImpl::OnClientError(gpu::error::Error error) {
 
 void CommandBufferProxyImpl::DisconnectChannelInFreshCallStack() {
   CheckLock();
-  last_state_lock_.AssertAcquired();
   // Inform the GpuControlClient of the lost state immediately, though this may
   // be a re-entrant call to the client so we use the MaybeReentrant variant.
   if (gpu_control_client_)

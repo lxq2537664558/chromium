@@ -18,6 +18,8 @@ bool TestBrowserAccessibilityDelegate::AccessibilityViewHasFocus() const {
   return false;
 }
 
+void TestBrowserAccessibilityDelegate::AccessibilityViewSetFocus() {}
+
 gfx::Rect TestBrowserAccessibilityDelegate::AccessibilityGetViewBounds() const {
   return gfx::Rect();
 }
@@ -46,7 +48,11 @@ gfx::NativeViewAccessible TestBrowserAccessibilityDelegate::
   return nullptr;
 }
 
-bool TestBrowserAccessibilityDelegate::AccessibilityIsMainFrame() {
+WebContents* TestBrowserAccessibilityDelegate::AccessibilityWebContents() {
+  return nullptr;
+}
+
+bool TestBrowserAccessibilityDelegate::AccessibilityIsMainFrame() const {
   return is_root_frame_;
 }
 

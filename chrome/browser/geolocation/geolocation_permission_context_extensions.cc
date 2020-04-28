@@ -9,8 +9,8 @@
 #include "extensions/buildflags/buildflags.h"
 
 #if BUILDFLAG(ENABLE_EXTENSIONS)
-#include "chrome/browser/permissions/permission_request_id.h"
 #include "chrome/browser/profiles/profile.h"
+#include "components/permissions/permission_request_id.h"
 #include "extensions/browser/extension_registry.h"
 #include "extensions/browser/guest_view/web_view/web_view_permission_helper.h"
 #include "extensions/browser/process_map.h"
@@ -26,9 +26,10 @@ namespace {
 
 #if BUILDFLAG(ENABLE_EXTENSIONS)
 void CallbackContentSettingWrapper(
-    const base::Callback<void(ContentSetting)>& callback,
+    base::OnceCallback<void(ContentSetting)> callback,
     bool allowed) {
-  callback.Run(allowed ? CONTENT_SETTING_ALLOW : CONTENT_SETTING_BLOCK);
+  std::move(callback).Run(allowed ? CONTENT_SETTING_ALLOW
+                                  : CONTENT_SETTING_BLOCK);
 }
 #endif  // BUILDFLAG(ENABLE_EXTENSIONS)
 
@@ -48,11 +49,11 @@ GeolocationPermissionContextExtensions::
 
 bool GeolocationPermissionContextExtensions::DecidePermission(
     content::WebContents* web_contents,
-    const PermissionRequestID& request_id,
+    const permissions::PermissionRequestID& request_id,
     int bridge_id,
     const GURL& requesting_frame,
     bool user_gesture,
-    const base::Callback<void(ContentSetting)>& callback,
+    base::OnceCallback<void(ContentSetting)>* callback,
     bool* permission_set,
     bool* new_permission) {
 #if BUILDFLAG(ENABLE_EXTENSIONS)
@@ -63,7 +64,7 @@ bool GeolocationPermissionContextExtensions::DecidePermission(
   if (web_view_permission_helper) {
     web_view_permission_helper->RequestGeolocationPermission(
         bridge_id, requesting_frame, user_gesture,
-        base::Bind(&CallbackContentSettingWrapper, callback));
+        base::BindOnce(&CallbackContentSettingWrapper, std::move(*callback)));
     *permission_set = false;
     *new_permission = false;
     return true;

@@ -5,8 +5,6 @@
 package org.chromium.chrome.browser.history;
 
 import android.content.res.Resources;
-import android.support.v7.widget.RecyclerView;
-import android.support.v7.widget.RecyclerView.ViewHolder;
 import android.text.SpannableString;
 import android.text.method.LinkMovementMethod;
 import android.view.LayoutInflater;
@@ -16,17 +14,23 @@ import android.view.ViewGroup;
 import android.widget.Button;
 import android.widget.TextView;
 
-import org.chromium.base.VisibleForTesting;
+import androidx.annotation.Nullable;
+import androidx.annotation.VisibleForTesting;
+import androidx.recyclerview.widget.RecyclerView;
+import androidx.recyclerview.widget.RecyclerView.ViewHolder;
+
 import org.chromium.chrome.R;
-import org.chromium.chrome.browser.UrlConstants;
-import org.chromium.chrome.browser.favicon.FaviconHelper.DefaultFaviconHelper;
 import org.chromium.chrome.browser.history.HistoryProvider.BrowsingHistoryObserver;
 import org.chromium.chrome.browser.preferences.Pref;
 import org.chromium.chrome.browser.preferences.PrefServiceBridge;
+import org.chromium.chrome.browser.ui.favicon.FaviconHelper.DefaultFaviconHelper;
 import org.chromium.chrome.browser.widget.DateDividedAdapter;
-import org.chromium.chrome.browser.widget.selection.SelectableItemViewHolder;
-import org.chromium.chrome.browser.widget.selection.SelectionDelegate;
-import org.chromium.chrome.browser.widget.selection.SelectionDelegate.SelectionObserver;
+import org.chromium.components.browser_ui.widget.MoreProgressButton;
+import org.chromium.components.browser_ui.widget.MoreProgressButton.State;
+import org.chromium.components.browser_ui.widget.selectable_list.SelectableItemViewHolder;
+import org.chromium.components.browser_ui.widget.selectable_list.SelectionDelegate;
+import org.chromium.components.browser_ui.widget.selectable_list.SelectionDelegate.SelectionObserver;
+import org.chromium.components.embedder_support.util.UrlConstants;
 import org.chromium.ui.text.NoUnderlineClickableSpan;
 import org.chromium.ui.text.SpanApplier;
 
@@ -40,16 +44,21 @@ public class HistoryAdapter extends DateDividedAdapter implements BrowsingHistor
     private static final String EMPTY_QUERY = "";
 
     private final SelectionDelegate<HistoryItem> mSelectionDelegate;
-    private final HistoryProvider mHistoryProvider;
     private final HistoryManager mHistoryManager;
     private final ArrayList<HistoryItemView> mItemViews;
     private final DefaultFaviconHelper mFaviconHelper;
     private RecyclerView mRecyclerView;
+    private @Nullable HistoryProvider mHistoryProvider;
 
+    // Headers
     private View mPrivacyDisclaimerBottomSpace;
     private Button mClearBrowsingDataButton;
     private HeaderItem mPrivacyDisclaimerHeaderItem;
     private HeaderItem mClearBrowsingDataButtonHeaderItem;
+
+    // Footers
+    private MoreProgressButton mMoreProgressButton;
+    private FooterItem mMoreProgressButtonFooterItem;
 
     private boolean mHasOtherFormsOfBrowsingData;
     private boolean mIsDestroyed;
@@ -61,6 +70,8 @@ public class HistoryAdapter extends DateDividedAdapter implements BrowsingHistor
     private boolean mPrivacyDisclaimersVisible;
     private boolean mClearBrowsingDataButtonVisible;
     private String mQueryText = EMPTY_QUERY;
+
+    private boolean mDisableScrollToLoadForTest;
 
     public HistoryAdapter(SelectionDelegate<HistoryItem> delegate, HistoryManager manager,
             HistoryProvider provider) {
@@ -77,8 +88,11 @@ public class HistoryAdapter extends DateDividedAdapter implements BrowsingHistor
      * Called when the activity/native page is destroyed.
      */
     public void onDestroyed() {
-        mHistoryProvider.destroy();
         mIsDestroyed = true;
+
+        mHistoryProvider.destroy();
+        mHistoryProvider = null;
+
         mRecyclerView = null;
         mFaviconHelper.clearCache();
     }
@@ -111,10 +125,11 @@ public class HistoryAdapter extends DateDividedAdapter implements BrowsingHistor
      * there are no more items to load.
      */
     public void loadMoreItems() {
-        if (!canLoadMoreItems()) return;
-
+        if (!canLoadMoreItems()) {
+            return;
+        }
         mIsLoadingItems = true;
-        addFooter();
+        updateFooter();
         notifyDataSetChanged();
         mHistoryProvider.queryHistoryContinuation();
     }
@@ -239,10 +254,15 @@ public class HistoryAdapter extends DateDividedAdapter implements BrowsingHistor
 
         mIsLoadingItems = false;
         mHasMorePotentialItems = hasMorePotentialMatches;
+
+        if (mHasMorePotentialItems) updateFooter();
     }
 
     @Override
     public void onHistoryDeleted() {
+        // Return early if this call comes in after the activity/native page is destroyed.
+        if (mIsDestroyed) return;
+
         mSelectionDelegate.clearSelection();
         // TODO(twellington): Account for items that have been paged in due to infinite scroll.
         //                    This currently removes all items and re-issues a query.
@@ -253,13 +273,50 @@ public class HistoryAdapter extends DateDividedAdapter implements BrowsingHistor
     public void hasOtherFormsOfBrowsingData(boolean hasOtherForms) {
         mHasOtherFormsOfBrowsingData = hasOtherForms;
         setPrivacyDisclaimer();
+        mHistoryManager.onHasPrivacyDisclaimersChanged();
     }
 
     @Override
     protected BasicViewHolder createFooter(ViewGroup parent) {
-        return new BasicViewHolder(
-                LayoutInflater.from(parent.getContext())
-                        .inflate(R.layout.indeterminate_progress_view, parent, false));
+        // Create the same frame layout as place holder for more footer items.
+        return createHeader(parent);
+    }
+
+    /**
+     * Initialize a more progress button as footer items that will be re-used
+     * during page loading.
+     */
+    void generateFooterItems() {
+        mMoreProgressButton = (MoreProgressButton) View.inflate(
+                mHistoryManager.getSelectableListLayout().getContext(),
+                R.layout.more_progress_button, null);
+
+        mMoreProgressButton.setOnClickRunnable(this::loadMoreItems);
+        mMoreProgressButtonFooterItem = new FooterItem(-1, mMoreProgressButton);
+    }
+
+    @Override
+    public void addFooter() {
+        if (hasListFooter()) return;
+
+        ItemGroup footer = new FooterItemGroup();
+        footer.addItem(mMoreProgressButtonFooterItem);
+
+        // When scroll to load is enabled, the footer just added should be set to spinner.
+        // When scroll to load is disabled, the footer just added should first display the button.
+        if (isScrollToLoadDisabled()) {
+            mMoreProgressButton.setState(State.BUTTON);
+        } else {
+            mMoreProgressButton.setState(State.LOADING);
+        }
+        addGroup(footer);
+    }
+
+    /**
+     * Update footer when the content change.
+     */
+    private void updateFooter() {
+        if (isScrollToLoadDisabled() || mIsLoadingItems) addFooter();
     }
 
     /**
@@ -329,6 +386,14 @@ public class HistoryAdapter extends DateDividedAdapter implements BrowsingHistor
     }
 
     /**
+     * @return True if HistoryManager is not null, and scroll to load is disabled in HistoryManager
+     */
+    boolean isScrollToLoadDisabled() {
+        return mDisableScrollToLoadForTest
+                || (mHistoryManager != null && mHistoryManager.isScrollToLoadDisabled());
+    }
+
+    /**
      * Set text of privacy disclaimer and visibility of its container.
      */
     void setPrivacyDisclaimer() {
@@ -359,6 +424,12 @@ public class HistoryAdapter extends DateDividedAdapter implements BrowsingHistor
     }
 
     @VisibleForTesting
+    ItemGroup getLastGroupForTests() {
+        final int itemCount = getItemCount();
+        return itemCount > 0 ? getGroupAt(itemCount - 1).first : null;
+    }
+
+    @VisibleForTesting
     void setClearBrowsingDataButtonVisibilityForTest(boolean isVisible) {
         if (mClearBrowsingDataButtonVisible == isVisible) return;
         mClearBrowsingDataButtonVisible = isVisible;
@@ -379,6 +450,12 @@ public class HistoryAdapter extends DateDividedAdapter implements BrowsingHistor
     }
 
     @VisibleForTesting
+    void generateFooterItemsForTest(MoreProgressButton mockButton) {
+        mMoreProgressButton = mockButton;
+        mMoreProgressButtonFooterItem = new FooterItem(-1, null);
+    }
+
+    @VisibleForTesting
     boolean arePrivacyDisclaimersVisible() {
         return mPrivacyDisclaimersVisible;
     }
@@ -386,5 +463,15 @@ public class HistoryAdapter extends DateDividedAdapter implements BrowsingHistor
     @VisibleForTesting
     boolean isClearBrowsingDataButtonVisible() {
         return mClearBrowsingDataButtonVisible;
+    }
+
+    @VisibleForTesting
+    void setScrollToLoadDisabledForTest(boolean isDisabled) {
+        mDisableScrollToLoadForTest = isDisabled;
+    }
+
+    @VisibleForTesting
+    MoreProgressButton getMoreProgressButtonForTest() {
+        return mMoreProgressButton;
     }
 }

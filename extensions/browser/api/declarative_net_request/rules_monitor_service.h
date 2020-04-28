@@ -5,6 +5,7 @@
 #ifndef EXTENSIONS_BROWSER_API_DECLARATIVE_NET_REQUEST_RULES_MONITOR_SERVICE_H_
 #define EXTENSIONS_BROWSER_API_DECLARATIVE_NET_REQUEST_RULES_MONITOR_SERVICE_H_
 
+#include <map>
 #include <memory>
 #include <set>
 #include <string>
@@ -15,7 +16,10 @@
 #include "base/memory/weak_ptr.h"
 #include "base/optional.h"
 #include "base/scoped_observer.h"
+#include "extensions/browser/api/declarative_net_request/action_tracker.h"
+#include "extensions/browser/api/declarative_net_request/ruleset_manager.h"
 #include "extensions/browser/browser_context_keyed_api_factory.h"
+#include "extensions/browser/extension_registry.h"
 #include "extensions/browser/extension_registry_observer.h"
 #include "extensions/common/extension_id.h"
 
@@ -24,9 +28,7 @@ class BrowserContext;
 }  // namespace content
 
 namespace extensions {
-class InfoMap;
 class ExtensionPrefs;
-class ExtensionRegistry;
 class WarningService;
 
 namespace api {
@@ -36,6 +38,7 @@ struct Rule;
 }  // namespace api
 
 namespace declarative_net_request {
+class RulesetMatcher;
 enum class DynamicRuleUpdateAction;
 struct LoadRequestData;
 
@@ -46,52 +49,77 @@ struct LoadRequestData;
 class RulesMonitorService : public BrowserContextKeyedAPI,
                             public ExtensionRegistryObserver {
  public:
-  class Observer {
+  // An observer used in tests.
+  class TestObserver {
    public:
-    // Called when this service loads a new ruleset.
-    virtual void OnRulesetLoaded() = 0;
+    // Called when the ruleset load (in response to extension load) is complete
+    // for |extension_id|,
+    virtual void OnRulesetLoadComplete(const ExtensionId& extension_id) = 0;
 
    protected:
-    virtual ~Observer() {}
+    virtual ~TestObserver() = default;
   };
+
+  // This is public so that it can be deleted by tests.
+  ~RulesMonitorService() override;
+
+  // Returns the instance for |browser_context|. An instance is shared between
+  // an incognito and a regular context.
+  static RulesMonitorService* Get(content::BrowserContext* browser_context);
 
   // BrowserContextKeyedAPI implementation.
   static BrowserContextKeyedAPIFactory<RulesMonitorService>*
   GetFactoryInstance();
 
-  bool HasAnyRegisteredRulesets() const;
-
-  // Returns true if there is registered declarative ruleset corresponding to
-  // the given |extension_id|.
-  bool HasRegisteredRuleset(const ExtensionId& extension_id) const;
-
-  // Adds or removes an observer.
-  void AddObserver(Observer* observer);
-  void RemoveObserver(Observer* observer);
+  static std::unique_ptr<RulesMonitorService> CreateInstanceForTesting(
+      content::BrowserContext* context);
 
   // Updates the dynamic rules for the |extension| and then invokes
   // |callback| with an optional error.
   using DynamicRuleUpdateUICallback =
       base::OnceCallback<void(base::Optional<std::string> error)>;
-  void UpdateDynamicRules(const Extension& extension,
-                          std::vector<api::declarative_net_request::Rule> rules,
-                          DynamicRuleUpdateAction action,
-                          DynamicRuleUpdateUICallback callback);
+  void UpdateDynamicRules(
+      const Extension& extension,
+      std::vector<int> rule_ids_to_remove,
+      std::vector<api::declarative_net_request::Rule> rules_to_add,
+      DynamicRuleUpdateUICallback callback);
+
+  RulesetManager* ruleset_manager() { return &ruleset_manager_; }
+
+  const ActionTracker& action_tracker() const { return action_tracker_; }
+  ActionTracker& action_tracker() { return action_tracker_; }
+
+  void SetObserverForTest(TestObserver* observer) { test_observer_ = observer; }
 
  private:
   class FileSequenceBridge;
 
   friend class BrowserContextKeyedAPIFactory<RulesMonitorService>;
 
+  struct DynamicRuleUpdate {
+    DynamicRuleUpdate(
+        std::vector<int> rule_ids_to_remove,
+        std::vector<api::declarative_net_request::Rule> rules_to_add,
+        DynamicRuleUpdateUICallback ui_callback);
+
+    DynamicRuleUpdate(DynamicRuleUpdate&&);
+    DynamicRuleUpdate& operator=(DynamicRuleUpdate&&);
+
+    ~DynamicRuleUpdate();
+
+    std::vector<int> rule_ids_to_remove;
+    std::vector<api::declarative_net_request::Rule> rules_to_add;
+    DynamicRuleUpdateUICallback ui_callback;
+  };
+
   // The constructor is kept private since this should only be created by the
   // BrowserContextKeyedAPIFactory.
   explicit RulesMonitorService(content::BrowserContext* browser_context);
 
-  ~RulesMonitorService() override;
-
   // BrowserContextKeyedAPI implementation.
   static const char* service_name() { return "RulesMonitorService"; }
   static const bool kServiceIsNULLWhileTesting = true;
+  static const bool kServiceRedirectedInIncognito = true;
 
   // ExtensionRegistryObserver implementation.
   void OnExtensionLoaded(content::BrowserContext* browser_context,
@@ -103,35 +131,59 @@ class RulesMonitorService : public BrowserContextKeyedAPI,
                               const Extension* extension,
                               UninstallReason reason) override;
 
-  // Invoked when we have loaded the ruleset on |file_task_runner_|.
-  void OnRulesetLoaded(LoadRequestData load_data);
+  // Internal helper for UpdateDynamicRules.
+  void UpdateDynamicRulesInternal(const ExtensionId& extension_id,
+                                  DynamicRuleUpdate update);
+
+  // Invoked when we have loaded the rulesets in |load_data| on
+  // |file_task_runner_|.
+  void OnRulesetsLoaded(LoadRequestData load_data);
 
   // Invoked when the dynamic rules for the extension have been updated.
   void OnDynamicRulesUpdated(DynamicRuleUpdateUICallback callback,
                              LoadRequestData load_data,
                              base::Optional<std::string> error);
 
-  ScopedObserver<ExtensionRegistry, ExtensionRegistryObserver>
-      registry_observer_;
+  // Unloads all rulesets for the given |extension_id|.
+  void UnloadRulesets(const ExtensionId& extension_id);
 
-  std::set<ExtensionId> extensions_with_rulesets_;
+  // Loads the given |matcher| for the given |extension_id|.
+  void LoadRulesets(const ExtensionId& extension_id,
+                    std::unique_ptr<CompositeMatcher> matcher);
+
+  // Adds the given ruleset for the given |extension_id|.
+  void UpdateRuleset(const ExtensionId& extension_id,
+                     std::unique_ptr<RulesetMatcher> ruleset_matcher);
+
+  ScopedObserver<ExtensionRegistry, ExtensionRegistryObserver>
+      registry_observer_{this};
 
   // Helper to bridge tasks to a sequence which allows file IO.
   std::unique_ptr<const FileSequenceBridge> file_sequence_bridge_;
 
   // Guaranteed to be valid through-out the lifetime of this instance.
-  InfoMap* const info_map_;
   ExtensionPrefs* const prefs_;
   ExtensionRegistry* const extension_registry_;
   WarningService* const warning_service_;
 
-  base::ObserverList<Observer>::Unchecked observers_;
+  content::BrowserContext* const context_;
 
-  const content::BrowserContext* const context_;
+  declarative_net_request::RulesetManager ruleset_manager_;
+
+  ActionTracker action_tracker_;
+
+  // Non-owned pointer.
+  TestObserver* test_observer_ = nullptr;
+
+  // Stores the pending dynamic rule updates to be performed once ruleset
+  // loading is done for an extension. This is only maintained for extensions
+  // which are undergoing a ruleset load in response to OnExtensionLoaded.
+  std::map<ExtensionId, std::vector<DynamicRuleUpdate>>
+      pending_dynamic_rule_updates_;
 
   // Must be the last member variable. See WeakPtrFactory documentation for
   // details.
-  base::WeakPtrFactory<RulesMonitorService> weak_factory_;
+  base::WeakPtrFactory<RulesMonitorService> weak_factory_{this};
 
   DISALLOW_COPY_AND_ASSIGN(RulesMonitorService);
 };

@@ -9,14 +9,14 @@
 #include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/event_type_names.h"
 #include "third_party/blink/renderer/modules/payments/payment_test_helper.h"
+#include "third_party/blink/renderer/platform/bindings/exception_code.h"
 #include "third_party/blink/renderer/platform/heap/heap_allocator.h"
 
 namespace blink {
 namespace {
 
 TEST(PaymentRequestTest, NoExceptionWithValidData) {
-  V8TestingScope scope;
-  MakePaymentRequestOriginSecure(scope.GetDocument());
+  PaymentRequestV8TestingScope scope;
   PaymentRequest::Create(
       scope.GetExecutionContext(), BuildPaymentMethodDataForTest(),
       BuildPaymentDetailsInitForTest(), scope.GetExceptionState());
@@ -25,8 +25,7 @@ TEST(PaymentRequestTest, NoExceptionWithValidData) {
 }
 
 TEST(PaymentRequestTest, SupportedMethodListRequired) {
-  V8TestingScope scope;
-  MakePaymentRequestOriginSecure(scope.GetDocument());
+  PaymentRequestV8TestingScope scope;
   PaymentRequest::Create(
       scope.GetExecutionContext(), HeapVector<Member<PaymentMethodData>>(),
       BuildPaymentDetailsInitForTest(), scope.GetExceptionState());
@@ -37,8 +36,7 @@ TEST(PaymentRequestTest, SupportedMethodListRequired) {
 }
 
 TEST(PaymentRequestTest, NullShippingOptionWhenNoOptionsAvailable) {
-  V8TestingScope scope;
-  MakePaymentRequestOriginSecure(scope.GetDocument());
+  PaymentRequestV8TestingScope scope;
   PaymentDetailsInit* details = PaymentDetailsInit::Create();
   details->setTotal(BuildPaymentItemForTest());
   PaymentOptions* options = PaymentOptions::Create();
@@ -52,8 +50,7 @@ TEST(PaymentRequestTest, NullShippingOptionWhenNoOptionsAvailable) {
 }
 
 TEST(PaymentRequestTest, NullShippingOptionWhenMultipleOptionsAvailable) {
-  V8TestingScope scope;
-  MakePaymentRequestOriginSecure(scope.GetDocument());
+  PaymentRequestV8TestingScope scope;
   PaymentDetailsInit* details = PaymentDetailsInit::Create();
   details->setTotal(BuildPaymentItemForTest());
   HeapVector<Member<PaymentShippingOption>> shipping_options;
@@ -71,8 +68,7 @@ TEST(PaymentRequestTest, NullShippingOptionWhenMultipleOptionsAvailable) {
 }
 
 TEST(PaymentRequestTest, DontSelectSingleAvailableShippingOptionByDefault) {
-  V8TestingScope scope;
-  MakePaymentRequestOriginSecure(scope.GetDocument());
+  PaymentRequestV8TestingScope scope;
   PaymentDetailsInit* details = PaymentDetailsInit::Create();
   details->setTotal(BuildPaymentItemForTest());
   details->setShippingOptions(HeapVector<Member<PaymentShippingOption>>(
@@ -88,8 +84,7 @@ TEST(PaymentRequestTest, DontSelectSingleAvailableShippingOptionByDefault) {
 
 TEST(PaymentRequestTest,
      DontSelectSingleAvailableShippingOptionWhenShippingNotRequested) {
-  V8TestingScope scope;
-  MakePaymentRequestOriginSecure(scope.GetDocument());
+  PaymentRequestV8TestingScope scope;
   PaymentDetailsInit* details = PaymentDetailsInit::Create();
   details->setTotal(BuildPaymentItemForTest());
   details->setShippingOptions(HeapVector<Member<PaymentShippingOption>>(
@@ -106,8 +101,7 @@ TEST(PaymentRequestTest,
 
 TEST(PaymentRequestTest,
      DontSelectSingleUnselectedShippingOptionWhenShippingRequested) {
-  V8TestingScope scope;
-  MakePaymentRequestOriginSecure(scope.GetDocument());
+  PaymentRequestV8TestingScope scope;
   PaymentDetailsInit* details = PaymentDetailsInit::Create();
   details->setTotal(BuildPaymentItemForTest());
   details->setShippingOptions(HeapVector<Member<PaymentShippingOption>>(
@@ -124,8 +118,7 @@ TEST(PaymentRequestTest,
 
 TEST(PaymentRequestTest,
      SelectSingleSelectedShippingOptionWhenShippingRequested) {
-  V8TestingScope scope;
-  MakePaymentRequestOriginSecure(scope.GetDocument());
+  PaymentRequestV8TestingScope scope;
   PaymentDetailsInit* details = PaymentDetailsInit::Create();
   details->setTotal(BuildPaymentItemForTest());
   HeapVector<Member<PaymentShippingOption>> shipping_options(
@@ -145,8 +138,7 @@ TEST(PaymentRequestTest,
 
 TEST(PaymentRequestTest,
      SelectOnlySelectedShippingOptionWhenShippingRequested) {
-  V8TestingScope scope;
-  MakePaymentRequestOriginSecure(scope.GetDocument());
+  PaymentRequestV8TestingScope scope;
   PaymentDetailsInit* details = PaymentDetailsInit::Create();
   details->setTotal(BuildPaymentItemForTest());
   HeapVector<Member<PaymentShippingOption>> shipping_options(2);
@@ -168,8 +160,7 @@ TEST(PaymentRequestTest,
 
 TEST(PaymentRequestTest,
      SelectLastSelectedShippingOptionWhenShippingRequested) {
-  V8TestingScope scope;
-  MakePaymentRequestOriginSecure(scope.GetDocument());
+  PaymentRequestV8TestingScope scope;
   PaymentDetailsInit* details = PaymentDetailsInit::Create();
   details->setTotal(BuildPaymentItemForTest());
   HeapVector<Member<PaymentShippingOption>> shipping_options(2);
@@ -191,8 +182,7 @@ TEST(PaymentRequestTest,
 }
 
 TEST(PaymentRequestTest, NullShippingTypeWhenRequestShippingIsFalse) {
-  V8TestingScope scope;
-  MakePaymentRequestOriginSecure(scope.GetDocument());
+  PaymentRequestV8TestingScope scope;
   PaymentDetailsInit* details = PaymentDetailsInit::Create();
   details->setTotal(BuildPaymentItemForTest());
   PaymentOptions* options = PaymentOptions::Create();
@@ -207,8 +197,7 @@ TEST(PaymentRequestTest, NullShippingTypeWhenRequestShippingIsFalse) {
 
 TEST(PaymentRequestTest,
      DefaultShippingTypeWhenRequestShippingIsTrueWithNoSpecificType) {
-  V8TestingScope scope;
-  MakePaymentRequestOriginSecure(scope.GetDocument());
+  PaymentRequestV8TestingScope scope;
   PaymentDetailsInit* details = PaymentDetailsInit::Create();
   details->setTotal(BuildPaymentItemForTest());
   PaymentOptions* options = PaymentOptions::Create();
@@ -222,8 +211,7 @@ TEST(PaymentRequestTest,
 }
 
 TEST(PaymentRequestTest, DeliveryShippingTypeWhenShippingTypeIsDelivery) {
-  V8TestingScope scope;
-  MakePaymentRequestOriginSecure(scope.GetDocument());
+  PaymentRequestV8TestingScope scope;
   PaymentDetailsInit* details = PaymentDetailsInit::Create();
   details->setTotal(BuildPaymentItemForTest());
   PaymentOptions* options = PaymentOptions::Create();
@@ -238,8 +226,7 @@ TEST(PaymentRequestTest, DeliveryShippingTypeWhenShippingTypeIsDelivery) {
 }
 
 TEST(PaymentRequestTest, PickupShippingTypeWhenShippingTypeIsPickup) {
-  V8TestingScope scope;
-  MakePaymentRequestOriginSecure(scope.GetDocument());
+  PaymentRequestV8TestingScope scope;
   PaymentDetailsInit* details = PaymentDetailsInit::Create();
   details->setTotal(BuildPaymentItemForTest());
   PaymentOptions* options = PaymentOptions::Create();
@@ -254,15 +241,13 @@ TEST(PaymentRequestTest, PickupShippingTypeWhenShippingTypeIsPickup) {
 }
 
 TEST(PaymentRequestTest, RejectShowPromiseOnInvalidShippingAddress) {
-  V8TestingScope scope;
+  PaymentRequestV8TestingScope scope;
   PaymentRequestMockFunctionScope funcs(scope.GetScriptState());
-  MakePaymentRequestOriginSecure(scope.GetDocument());
   PaymentRequest* request = PaymentRequest::Create(
       scope.GetExecutionContext(), BuildPaymentMethodDataForTest(),
-      BuildPaymentDetailsInitForTest(), scope.GetExceptionState());
-  EXPECT_FALSE(scope.GetExceptionState().HadException());
+      BuildPaymentDetailsInitForTest(), ASSERT_NO_EXCEPTION);
 
-  request->show(scope.GetScriptState())
+  request->show(scope.GetScriptState(), ASSERT_NO_EXCEPTION)
       .Then(funcs.ExpectNoCall(), funcs.ExpectCall());
 
   static_cast<payments::mojom::blink::PaymentRequestClient*>(request)
@@ -270,15 +255,13 @@ TEST(PaymentRequestTest, RejectShowPromiseOnInvalidShippingAddress) {
 }
 
 TEST(PaymentRequestTest, OnShippingOptionChange) {
-  V8TestingScope scope;
+  PaymentRequestV8TestingScope scope;
   PaymentRequestMockFunctionScope funcs(scope.GetScriptState());
-  MakePaymentRequestOriginSecure(scope.GetDocument());
   PaymentRequest* request = PaymentRequest::Create(
       scope.GetExecutionContext(), BuildPaymentMethodDataForTest(),
-      BuildPaymentDetailsInitForTest(), scope.GetExceptionState());
-  EXPECT_FALSE(scope.GetExceptionState().HadException());
+      BuildPaymentDetailsInitForTest(), ASSERT_NO_EXCEPTION);
 
-  request->show(scope.GetScriptState())
+  request->show(scope.GetScriptState(), ASSERT_NO_EXCEPTION)
       .Then(funcs.ExpectNoCall(), funcs.ExpectNoCall());
 
   static_cast<payments::mojom::blink::PaymentRequestClient*>(request)
@@ -286,51 +269,49 @@ TEST(PaymentRequestTest, OnShippingOptionChange) {
 }
 
 TEST(PaymentRequestTest, CannotCallShowTwice) {
-  V8TestingScope scope;
+  PaymentRequestV8TestingScope scope;
   PaymentRequestMockFunctionScope funcs(scope.GetScriptState());
-  MakePaymentRequestOriginSecure(scope.GetDocument());
   PaymentRequest* request = PaymentRequest::Create(
       scope.GetExecutionContext(), BuildPaymentMethodDataForTest(),
-      BuildPaymentDetailsInitForTest(), scope.GetExceptionState());
-  EXPECT_FALSE(scope.GetExceptionState().HadException());
-  request->show(scope.GetScriptState());
+      BuildPaymentDetailsInitForTest(), ASSERT_NO_EXCEPTION);
+  request->show(scope.GetScriptState(), ASSERT_NO_EXCEPTION);
 
-  request->show(scope.GetScriptState())
-      .Then(funcs.ExpectNoCall(), funcs.ExpectCall());
+  request->show(scope.GetScriptState(), scope.GetExceptionState());
+  EXPECT_EQ(scope.GetExceptionState().Code(),
+            ToExceptionCode(DOMExceptionCode::kInvalidStateError));
 }
 
 TEST(PaymentRequestTest, CannotShowAfterAborted) {
-  V8TestingScope scope;
+  PaymentRequestV8TestingScope scope;
   PaymentRequestMockFunctionScope funcs(scope.GetScriptState());
-  MakePaymentRequestOriginSecure(scope.GetDocument());
   PaymentRequest* request = PaymentRequest::Create(
       scope.GetExecutionContext(), BuildPaymentMethodDataForTest(),
-      BuildPaymentDetailsInitForTest(), scope.GetExceptionState());
-  EXPECT_FALSE(scope.GetExceptionState().HadException());
-  request->show(scope.GetScriptState());
-  request->abort(scope.GetScriptState());
+      BuildPaymentDetailsInitForTest(), ASSERT_NO_EXCEPTION);
+  request->show(scope.GetScriptState(), ASSERT_NO_EXCEPTION);
+  request->abort(scope.GetScriptState(), ASSERT_NO_EXCEPTION);
   static_cast<payments::mojom::blink::PaymentRequestClient*>(request)->OnAbort(
       true);
 
-  request->show(scope.GetScriptState())
-      .Then(funcs.ExpectNoCall(), funcs.ExpectCall());
+  request->show(scope.GetScriptState(), scope.GetExceptionState());
+  EXPECT_EQ(scope.GetExceptionState().Code(),
+            ToExceptionCode(DOMExceptionCode::kInvalidStateError));
+  ;
 }
 
 TEST(PaymentRequestTest, RejectShowPromiseOnErrorPaymentMethodNotSupported) {
-  V8TestingScope scope;
+  PaymentRequestV8TestingScope scope;
   PaymentRequestMockFunctionScope funcs(scope.GetScriptState());
-  MakePaymentRequestOriginSecure(scope.GetDocument());
   PaymentRequest* request = PaymentRequest::Create(
       scope.GetExecutionContext(), BuildPaymentMethodDataForTest(),
-      BuildPaymentDetailsInitForTest(), scope.GetExceptionState());
-  EXPECT_FALSE(scope.GetExceptionState().HadException());
+      BuildPaymentDetailsInitForTest(), ASSERT_NO_EXCEPTION);
 
   String error_message;
-  request->show(scope.GetScriptState())
+  request->show(scope.GetScriptState(), ASSERT_NO_EXCEPTION)
       .Then(funcs.ExpectNoCall(), funcs.ExpectCall(&error_message));
 
   static_cast<payments::mojom::blink::PaymentRequestClient*>(request)->OnError(
-      payments::mojom::blink::PaymentErrorReason::NOT_SUPPORTED);
+      payments::mojom::blink::PaymentErrorReason::NOT_SUPPORTED,
+      "The payment method \"foo\" is not supported");
 
   v8::MicrotasksScope::PerformCheckpoint(scope.GetScriptState()->GetIsolate());
   EXPECT_EQ("NotSupportedError: The payment method \"foo\" is not supported",
@@ -338,36 +319,33 @@ TEST(PaymentRequestTest, RejectShowPromiseOnErrorPaymentMethodNotSupported) {
 }
 
 TEST(PaymentRequestTest, RejectShowPromiseOnErrorCancelled) {
-  V8TestingScope scope;
+  PaymentRequestV8TestingScope scope;
   PaymentRequestMockFunctionScope funcs(scope.GetScriptState());
-  MakePaymentRequestOriginSecure(scope.GetDocument());
   PaymentRequest* request = PaymentRequest::Create(
       scope.GetExecutionContext(), BuildPaymentMethodDataForTest(),
-      BuildPaymentDetailsInitForTest(), scope.GetExceptionState());
-  EXPECT_FALSE(scope.GetExceptionState().HadException());
+      BuildPaymentDetailsInitForTest(), ASSERT_NO_EXCEPTION);
 
   String error_message;
-  request->show(scope.GetScriptState())
+  request->show(scope.GetScriptState(), ASSERT_NO_EXCEPTION)
       .Then(funcs.ExpectNoCall(), funcs.ExpectCall(&error_message));
 
   static_cast<payments::mojom::blink::PaymentRequestClient*>(request)->OnError(
-      payments::mojom::blink::PaymentErrorReason::USER_CANCEL);
+      payments::mojom::blink::PaymentErrorReason::USER_CANCEL,
+      "Request cancelled");
 
   v8::MicrotasksScope::PerformCheckpoint(scope.GetScriptState()->GetIsolate());
   EXPECT_EQ("AbortError: Request cancelled", error_message);
 }
 
 TEST(PaymentRequestTest, RejectShowPromiseOnUpdateDetailsFailure) {
-  V8TestingScope scope;
+  PaymentRequestV8TestingScope scope;
   PaymentRequestMockFunctionScope funcs(scope.GetScriptState());
-  MakePaymentRequestOriginSecure(scope.GetDocument());
   PaymentRequest* request = PaymentRequest::Create(
       scope.GetExecutionContext(), BuildPaymentMethodDataForTest(),
-      BuildPaymentDetailsInitForTest(), scope.GetExceptionState());
-  EXPECT_FALSE(scope.GetExceptionState().HadException());
+      BuildPaymentDetailsInitForTest(), ASSERT_NO_EXCEPTION);
 
   String error_message;
-  request->show(scope.GetScriptState())
+  request->show(scope.GetScriptState(), ASSERT_NO_EXCEPTION)
       .Then(funcs.ExpectNoCall(), funcs.ExpectCall(&error_message));
 
   static_cast<payments::mojom::blink::PaymentRequestClient*>(request)
@@ -379,14 +357,12 @@ TEST(PaymentRequestTest, RejectShowPromiseOnUpdateDetailsFailure) {
 }
 
 TEST(PaymentRequestTest, IgnoreUpdatePaymentDetailsAfterShowPromiseResolved) {
-  V8TestingScope scope;
+  PaymentRequestV8TestingScope scope;
   PaymentRequestMockFunctionScope funcs(scope.GetScriptState());
-  MakePaymentRequestOriginSecure(scope.GetDocument());
   PaymentRequest* request = PaymentRequest::Create(
       scope.GetExecutionContext(), BuildPaymentMethodDataForTest(),
-      BuildPaymentDetailsInitForTest(), scope.GetExceptionState());
-  EXPECT_FALSE(scope.GetExceptionState().HadException());
-  request->show(scope.GetScriptState())
+      BuildPaymentDetailsInitForTest(), ASSERT_NO_EXCEPTION);
+  request->show(scope.GetScriptState(), ASSERT_NO_EXCEPTION)
       .Then(funcs.ExpectCall(), funcs.ExpectNoCall());
   static_cast<payments::mojom::blink::PaymentRequestClient*>(request)
       ->OnPaymentResponse(BuildPaymentResponseForTest());
@@ -396,15 +372,13 @@ TEST(PaymentRequestTest, IgnoreUpdatePaymentDetailsAfterShowPromiseResolved) {
 }
 
 TEST(PaymentRequestTest, RejectShowPromiseOnNonPaymentDetailsUpdate) {
-  V8TestingScope scope;
+  PaymentRequestV8TestingScope scope;
   PaymentRequestMockFunctionScope funcs(scope.GetScriptState());
-  MakePaymentRequestOriginSecure(scope.GetDocument());
   PaymentRequest* request = PaymentRequest::Create(
       scope.GetExecutionContext(), BuildPaymentMethodDataForTest(),
-      BuildPaymentDetailsInitForTest(), scope.GetExceptionState());
-  EXPECT_FALSE(scope.GetExceptionState().HadException());
+      BuildPaymentDetailsInitForTest(), ASSERT_NO_EXCEPTION);
 
-  request->show(scope.GetScriptState())
+  request->show(scope.GetScriptState(), ASSERT_NO_EXCEPTION)
       .Then(funcs.ExpectNoCall(), funcs.ExpectCall());
 
   static_cast<payments::mojom::blink::PaymentRequestClient*>(request)
@@ -414,43 +388,37 @@ TEST(PaymentRequestTest, RejectShowPromiseOnNonPaymentDetailsUpdate) {
 }
 
 TEST(PaymentRequestTest, RejectShowPromiseOnInvalidPaymentDetailsUpdate) {
-  V8TestingScope scope;
+  PaymentRequestV8TestingScope scope;
   PaymentRequestMockFunctionScope funcs(scope.GetScriptState());
-  MakePaymentRequestOriginSecure(scope.GetDocument());
   PaymentRequest* request = PaymentRequest::Create(
       scope.GetExecutionContext(), BuildPaymentMethodDataForTest(),
-      BuildPaymentDetailsInitForTest(), scope.GetExceptionState());
-  EXPECT_FALSE(scope.GetExceptionState().HadException());
+      BuildPaymentDetailsInitForTest(), ASSERT_NO_EXCEPTION);
 
-  request->show(scope.GetScriptState())
+  request->show(scope.GetScriptState(), ASSERT_NO_EXCEPTION)
       .Then(funcs.ExpectNoCall(), funcs.ExpectCall());
 
   static_cast<payments::mojom::blink::PaymentRequestClient*>(request)
       ->OnShippingAddressChange(BuildPaymentAddressForTest());
-  request->OnUpdatePaymentDetails(
-      ScriptValue::From(
-          scope.GetScriptState(),
-          FromJSONString(scope.GetScriptState()->GetIsolate(),
-                         scope.GetScriptState()->GetContext(),
-                         "{\"total\": {}}", scope.GetExceptionState())));
-  EXPECT_FALSE(scope.GetExceptionState().HadException());
+  request->OnUpdatePaymentDetails(ScriptValue::From(
+      scope.GetScriptState(),
+      FromJSONString(scope.GetScriptState()->GetIsolate(),
+                     scope.GetScriptState()->GetContext(), "{\"total\": {}}",
+                     ASSERT_NO_EXCEPTION)));
 }
 
 TEST(PaymentRequestTest,
      ClearShippingOptionOnPaymentDetailsUpdateWithoutShippingOptions) {
-  V8TestingScope scope;
+  PaymentRequestV8TestingScope scope;
   PaymentRequestMockFunctionScope funcs(scope.GetScriptState());
-  MakePaymentRequestOriginSecure(scope.GetDocument());
   PaymentDetailsInit* details = PaymentDetailsInit::Create();
   details->setTotal(BuildPaymentItemForTest());
   PaymentOptions* options = PaymentOptions::Create();
   options->setRequestShipping(true);
   PaymentRequest* request = PaymentRequest::Create(
       scope.GetExecutionContext(), BuildPaymentMethodDataForTest(), details,
-      options, scope.GetExceptionState());
-  EXPECT_FALSE(scope.GetExceptionState().HadException());
+      options, ASSERT_NO_EXCEPTION);
   EXPECT_TRUE(request->shippingOption().IsNull());
-  request->show(scope.GetScriptState())
+  request->show(scope.GetScriptState(), ASSERT_NO_EXCEPTION)
       .Then(funcs.ExpectNoCall(), funcs.ExpectNoCall());
   static_cast<payments::mojom::blink::PaymentRequestClient*>(request)
       ->OnShippingAddressChange(BuildPaymentAddressForTest());
@@ -460,13 +428,11 @@ TEST(PaymentRequestTest,
       "\"shippingOptions\": [{\"id\": \"standardShippingOption\", \"label\": "
       "\"Standard shipping\", \"amount\": {\"currency\": \"USD\", \"value\": "
       "\"5.00\"}, \"selected\": true}]}";
-  request->OnUpdatePaymentDetails(
-      ScriptValue::From(scope.GetScriptState(),
-                        FromJSONString(scope.GetScriptState()->GetIsolate(),
-                                       scope.GetScriptState()->GetContext(),
-                                       detail_with_shipping_options,
-                                       scope.GetExceptionState())));
-  EXPECT_FALSE(scope.GetExceptionState().HadException());
+  request->OnUpdatePaymentDetails(ScriptValue::From(
+      scope.GetScriptState(),
+      FromJSONString(scope.GetScriptState()->GetIsolate(),
+                     scope.GetScriptState()->GetContext(),
+                     detail_with_shipping_options, ASSERT_NO_EXCEPTION)));
   EXPECT_EQ("standardShippingOption", request->shippingOption());
   static_cast<payments::mojom::blink::PaymentRequestClient*>(request)
       ->OnShippingAddressChange(BuildPaymentAddressForTest());
@@ -474,30 +440,26 @@ TEST(PaymentRequestTest,
       "{\"total\": {\"label\": \"Total\", \"amount\": {\"currency\": \"USD\", "
       "\"value\": \"5.00\"}}}";
 
-  request->OnUpdatePaymentDetails(
-      ScriptValue::From(scope.GetScriptState(),
-                        FromJSONString(scope.GetScriptState()->GetIsolate(),
-                                       scope.GetScriptState()->GetContext(),
-                                       detail_without_shipping_options,
-                                       scope.GetExceptionState())));
+  request->OnUpdatePaymentDetails(ScriptValue::From(
+      scope.GetScriptState(),
+      FromJSONString(scope.GetScriptState()->GetIsolate(),
+                     scope.GetScriptState()->GetContext(),
+                     detail_without_shipping_options, ASSERT_NO_EXCEPTION)));
 
-  EXPECT_FALSE(scope.GetExceptionState().HadException());
   EXPECT_TRUE(request->shippingOption().IsNull());
 }
 
 TEST(
     PaymentRequestTest,
     ClearShippingOptionOnPaymentDetailsUpdateWithMultipleUnselectedShippingOptions) {
-  V8TestingScope scope;
+  PaymentRequestV8TestingScope scope;
   PaymentRequestMockFunctionScope funcs(scope.GetScriptState());
-  MakePaymentRequestOriginSecure(scope.GetDocument());
   PaymentOptions* options = PaymentOptions::Create();
   options->setRequestShipping(true);
   PaymentRequest* request = PaymentRequest::Create(
       scope.GetExecutionContext(), BuildPaymentMethodDataForTest(),
-      BuildPaymentDetailsInitForTest(), options, scope.GetExceptionState());
-  EXPECT_FALSE(scope.GetExceptionState().HadException());
-  request->show(scope.GetScriptState())
+      BuildPaymentDetailsInitForTest(), options, ASSERT_NO_EXCEPTION);
+  request->show(scope.GetScriptState(), ASSERT_NO_EXCEPTION)
       .Then(funcs.ExpectNoCall(), funcs.ExpectNoCall());
   String detail =
       "{\"total\": {\"label\": \"Total\", \"amount\": {\"currency\": \"USD\", "
@@ -511,23 +473,20 @@ TEST(
       ScriptValue::From(scope.GetScriptState(),
                         FromJSONString(scope.GetScriptState()->GetIsolate(),
                                        scope.GetScriptState()->GetContext(),
-                                       detail, scope.GetExceptionState())));
-  EXPECT_FALSE(scope.GetExceptionState().HadException());
+                                       detail, ASSERT_NO_EXCEPTION)));
 
   EXPECT_TRUE(request->shippingOption().IsNull());
 }
 
 TEST(PaymentRequestTest, UseTheSelectedShippingOptionFromPaymentDetailsUpdate) {
-  V8TestingScope scope;
+  PaymentRequestV8TestingScope scope;
   PaymentRequestMockFunctionScope funcs(scope.GetScriptState());
-  MakePaymentRequestOriginSecure(scope.GetDocument());
   PaymentOptions* options = PaymentOptions::Create();
   options->setRequestShipping(true);
   PaymentRequest* request = PaymentRequest::Create(
       scope.GetExecutionContext(), BuildPaymentMethodDataForTest(),
-      BuildPaymentDetailsInitForTest(), options, scope.GetExceptionState());
-  EXPECT_FALSE(scope.GetExceptionState().HadException());
-  request->show(scope.GetScriptState())
+      BuildPaymentDetailsInitForTest(), options, ASSERT_NO_EXCEPTION);
+  request->show(scope.GetScriptState(), ASSERT_NO_EXCEPTION)
       .Then(funcs.ExpectNoCall(), funcs.ExpectNoCall());
   static_cast<payments::mojom::blink::PaymentRequestClient*>(request)
       ->OnShippingAddressChange(BuildPaymentAddressForTest());
@@ -543,42 +502,36 @@ TEST(PaymentRequestTest, UseTheSelectedShippingOptionFromPaymentDetailsUpdate) {
       ScriptValue::From(scope.GetScriptState(),
                         FromJSONString(scope.GetScriptState()->GetIsolate(),
                                        scope.GetScriptState()->GetContext(),
-                                       detail, scope.GetExceptionState())));
-  EXPECT_FALSE(scope.GetExceptionState().HadException());
+                                       detail, ASSERT_NO_EXCEPTION)));
 
   EXPECT_EQ("fast", request->shippingOption());
 }
 
 TEST(PaymentRequestTest, NoExceptionWithErrorMessageInUpdate) {
-  V8TestingScope scope;
+  PaymentRequestV8TestingScope scope;
   PaymentRequestMockFunctionScope funcs(scope.GetScriptState());
-  MakePaymentRequestOriginSecure(scope.GetDocument());
   PaymentRequest* request = PaymentRequest::Create(
       scope.GetExecutionContext(), BuildPaymentMethodDataForTest(),
-      BuildPaymentDetailsInitForTest(), scope.GetExceptionState());
-  EXPECT_FALSE(scope.GetExceptionState().HadException());
+      BuildPaymentDetailsInitForTest(), ASSERT_NO_EXCEPTION);
 
-  request->show(scope.GetScriptState())
+  request->show(scope.GetScriptState(), ASSERT_NO_EXCEPTION)
       .Then(funcs.ExpectNoCall(), funcs.ExpectNoCall());
   String detail_with_error_msg =
       "{\"total\": {\"label\": \"Total\", \"amount\": {\"currency\": \"USD\", "
       "\"value\": \"5.00\"}},"
       "\"error\": \"This is an error message.\"}";
 
-  request->OnUpdatePaymentDetails(
-      ScriptValue::From(
-          scope.GetScriptState(),
-          FromJSONString(scope.GetScriptState()->GetIsolate(),
-                         scope.GetScriptState()->GetContext(),
-                         detail_with_error_msg, scope.GetExceptionState())));
-  EXPECT_FALSE(scope.GetExceptionState().HadException());
+  request->OnUpdatePaymentDetails(ScriptValue::From(
+      scope.GetScriptState(),
+      FromJSONString(scope.GetScriptState()->GetIsolate(),
+                     scope.GetScriptState()->GetContext(),
+                     detail_with_error_msg, ASSERT_NO_EXCEPTION)));
 }
 
 TEST(PaymentRequestTest,
      ShouldResolveWithExceptionIfIDsOfShippingOptionsAreDuplicated) {
-  V8TestingScope scope;
+  PaymentRequestV8TestingScope scope;
   PaymentRequestMockFunctionScope funcs(scope.GetScriptState());
-  MakePaymentRequestOriginSecure(scope.GetDocument());
   PaymentDetailsInit* details = PaymentDetailsInit::Create();
   details->setTotal(BuildPaymentItemForTest());
   HeapVector<Member<PaymentShippingOption>> shipping_options(2);
@@ -597,8 +550,7 @@ TEST(PaymentRequestTest,
 }
 
 TEST(PaymentRequestTest, DetailsIdIsSet) {
-  V8TestingScope scope;
-  MakePaymentRequestOriginSecure(scope.GetDocument());
+  PaymentRequestV8TestingScope scope;
   PaymentDetailsInit* details = PaymentDetailsInit::Create();
   details->setTotal(BuildPaymentItemForTest());
   details->setId("my_payment_id");

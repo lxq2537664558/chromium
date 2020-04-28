@@ -37,7 +37,7 @@
 #include "third_party/blink/renderer/core/dom/events/event_listener.h"
 #include "third_party/blink/renderer/core/dom/events/event_target.h"
 #include "third_party/blink/renderer/platform/heap/handle.h"
-#include "third_party/blink/renderer/platform/wtf/allocator.h"
+#include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
 
 namespace blink {
 
@@ -64,43 +64,58 @@ class CORE_EXPORT FontFaceSetDocument final : public FontFaceSet,
   void NotifyLoaded(FontFace*) override;
   void NotifyError(FontFace*) override;
 
+  // After flipping the flag to true, all 'font-display: auto' fonts that
+  // haven't finished loading will enter the failure period immediately (except
+  // for those already in the memory cache), so that they don't cause a bad
+  // Largest Contentful Paint (https://wicg.github.io/largest-contentful-paint/)
+  bool HasReachedLCPLimit() const { return has_reached_lcp_limit_; }
+  void LCPLimitReached(TimerBase*);
+
   size_t ApproximateBlankCharacterCount() const;
 
   static FontFaceSetDocument* From(Document&);
   static void DidLayout(Document&);
   static size_t ApproximateBlankCharacterCount(Document&);
 
-  void Trace(blink::Visitor*) override;
+  void Trace(Visitor*) override;
 
  protected:
   bool InActiveContext() const override;
   FontSelector* GetFontSelector() const override {
+    // TODO(Fserb): tracking down crbug.com/988125, can be DCHECK later.
+    CHECK(IsMainThread());
     return GetDocument()->GetStyleEngine().GetFontSelector();
   }
 
   bool ResolveFontStyle(const String&, Font&) override;
 
  private:
+  Document* GetDocument() const;
+
   void FireDoneEventIfPossible() override;
   const HeapLinkedHashSet<Member<FontFace>>& CSSConnectedFontFaceList()
       const override;
+
+  void StartLCPLimitTimerIfNeeded();
 
   class FontLoadHistogram {
     DISALLOW_NEW();
 
    public:
     enum Status { kNoWebFonts, kHadBlankText, kDidNotHaveBlankText, kReported };
-    FontLoadHistogram() : status_(kNoWebFonts), count_(0), recorded_(false) {}
-    void IncrementCount() { count_++; }
+    FontLoadHistogram() : status_(kNoWebFonts) {}
     void UpdateStatus(FontFace*);
     void Record();
 
    private:
     Status status_;
-    int count_;
-    bool recorded_;
   };
   FontLoadHistogram histogram_;
+
+  TaskRunnerTimer<FontFaceSetDocument> lcp_limit_timer_;
+
+  bool has_reached_lcp_limit_ = false;
+
   DISALLOW_COPY_AND_ASSIGN(FontFaceSetDocument);
 };
 

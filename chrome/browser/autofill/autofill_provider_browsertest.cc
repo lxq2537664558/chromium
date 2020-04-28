@@ -15,7 +15,7 @@
 #include "components/autofill/core/browser/test_autofill_provider.h"
 #include "components/autofill/core/common/autofill_features.h"
 #include "components/autofill/core/common/form_data.h"
-#include "components/autofill/core/common/submission_source.h"
+#include "components/autofill/core/common/mojom/autofill_types.mojom.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/url_constants.h"
 #include "content/public/test/browser_test_utils.h"
@@ -29,6 +29,9 @@ using ::testing::_;
 using ::testing::Invoke;
 
 namespace autofill {
+
+using mojom::SubmissionSource;
+
 namespace {
 
 class MockAutofillProvider : public TestAutofillProvider {
@@ -280,38 +283,50 @@ IN_PROC_BROWSER_TEST_F(AutofillProviderBrowserTest,
   EXPECT_EQ("\"SUBMISSION_FINISHED\"", message);
 }
 
-IN_PROC_BROWSER_TEST_F(AutofillProviderBrowserTest,
-                       LabelTagChangeImpactFormComparingWithFlagOn) {
-  base::test::ScopedFeatureList scoped_feature_list;
-  scoped_feature_list.InitAndEnableFeature(
-      features::kAutofillSkipComparingInferredLabels);
+class AutofillProviderBrowserTestWithSkipFlagOn
+    : public AutofillProviderBrowserTest {
+ public:
+  AutofillProviderBrowserTestWithSkipFlagOn() {
+    feature_list_.InitAndEnableFeature(
+        features::kAutofillSkipComparingInferredLabels);
+  }
+
+ private:
+  base::test::ScopedFeatureList feature_list_;
+};
+
+class AutofillProviderBrowserTestWithSkipFlagOff
+    : public AutofillProviderBrowserTest {
+ public:
+  AutofillProviderBrowserTestWithSkipFlagOff() {
+    feature_list_.InitAndDisableFeature(
+        features::kAutofillSkipComparingInferredLabels);
+  }
+
+ private:
+  base::test::ScopedFeatureList feature_list_;
+};
+
+IN_PROC_BROWSER_TEST_F(AutofillProviderBrowserTestWithSkipFlagOn,
+                       LabelTagChangeImpactFormComparing) {
   SetLabelChangeExpectationAndTriggerQuery();
   ChangeLabelAndCheckResult("label_id", false /*expect_forms_same*/);
 }
 
-IN_PROC_BROWSER_TEST_F(AutofillProviderBrowserTest,
-                       InferredLabelChangeNotImpactFormComparingWithFlagOn) {
-  base::test::ScopedFeatureList scoped_feature_list;
-  scoped_feature_list.InitAndEnableFeature(
-      features::kAutofillSkipComparingInferredLabels);
+IN_PROC_BROWSER_TEST_F(AutofillProviderBrowserTestWithSkipFlagOn,
+                       InferredLabelChangeNotImpactFormComparing) {
   SetLabelChangeExpectationAndTriggerQuery();
   ChangeLabelAndCheckResult("p_id", true /*expect_forms_same*/);
 }
 
-IN_PROC_BROWSER_TEST_F(AutofillProviderBrowserTest,
-                       LabelTagChangeImpactFormComparingWithFlagOff) {
-  base::test::ScopedFeatureList scoped_feature_list;
-  scoped_feature_list.InitAndDisableFeature(
-      features::kAutofillSkipComparingInferredLabels);
+IN_PROC_BROWSER_TEST_F(AutofillProviderBrowserTestWithSkipFlagOff,
+                       LabelTagChangeImpactFormComparing) {
   SetLabelChangeExpectationAndTriggerQuery();
   ChangeLabelAndCheckResult("label_id", false /*expect_forms_same*/);
 }
 
-IN_PROC_BROWSER_TEST_F(AutofillProviderBrowserTest,
-                       InferredLabelChangeImpactFormComparingWithFlagOff) {
-  base::test::ScopedFeatureList scoped_feature_list;
-  scoped_feature_list.InitAndDisableFeature(
-      features::kAutofillSkipComparingInferredLabels);
+IN_PROC_BROWSER_TEST_F(AutofillProviderBrowserTestWithSkipFlagOff,
+                       InferredLabelChangeImpactFormComparing) {
   SetLabelChangeExpectationAndTriggerQuery();
   ChangeLabelAndCheckResult("p_id", false /*expect_forms_same*/);
 }

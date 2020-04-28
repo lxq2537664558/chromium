@@ -13,6 +13,7 @@
 #include "third_party/blink/renderer/platform/bindings/exception_state.h"
 #include "third_party/blink/renderer/platform/bindings/script_state.h"
 #include "third_party/blink/renderer/platform/blob/blob_data.h"
+#include "third_party/blink/renderer/platform/heap/heap.h"
 #include "third_party/blink/renderer/platform/wtf/assertions.h"
 #include "third_party/blink/renderer/platform/wtf/text/text_encoding.h"
 #include "v8/include/v8.h"
@@ -38,14 +39,15 @@ PushMessageData* PushMessageData::Create(
             : message_data.GetAsArrayBuffer();
 
     return MakeGarbageCollected<PushMessageData>(
-        static_cast<const char*>(buffer->Data()), buffer->ByteLength());
+        static_cast<const char*>(buffer->Data()),
+        base::checked_cast<wtf_size_t>(buffer->ByteLengthAsSizeT()));
   }
 
   if (message_data.IsUSVString()) {
-    CString encoded_string = UTF8Encoding().Encode(
+    std::string encoded_string = UTF8Encoding().Encode(
         message_data.GetAsUSVString(), WTF::kNoUnencodables);
-    return MakeGarbageCollected<PushMessageData>(encoded_string.data(),
-                                                 encoded_string.length());
+    return MakeGarbageCollected<PushMessageData>(
+        encoded_string.c_str(), static_cast<unsigned>(encoded_string.length()));
   }
 
   DCHECK(message_data.IsNull());
@@ -70,7 +72,7 @@ Blob* PushMessageData::blob() const {
   // provided, following the specification.
 
   const uint64_t byte_length = blob_data->length();
-  return Blob::Create(
+  return MakeGarbageCollected<Blob>(
       BlobDataHandle::Create(std::move(blob_data), byte_length));
 }
 
@@ -83,7 +85,7 @@ ScriptValue PushMessageData::json(ScriptState* script_state,
   if (exception_state.HadException())
     return ScriptValue();
 
-  return ScriptValue(script_state, parsed);
+  return ScriptValue(script_state->GetIsolate(), parsed);
 }
 
 String PushMessageData::text() const {

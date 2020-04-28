@@ -4,7 +4,6 @@
 
 #include "third_party/blink/renderer/modules/webgpu/dawn_object.h"
 
-#include "third_party/blink/renderer/modules/webgpu/dawn_control_client_holder.h"
 #include "third_party/blink/renderer/modules/webgpu/gpu_device.h"
 
 namespace blink {
@@ -12,8 +11,6 @@ namespace blink {
 DawnObjectBase::DawnObjectBase(
     scoped_refptr<DawnControlClientHolder> dawn_control_client)
     : dawn_control_client_(std::move(dawn_control_client)) {}
-
-DawnObjectBase::~DawnObjectBase() = default;
 
 const scoped_refptr<DawnControlClientHolder>&
 DawnObjectBase::GetDawnControlClient() const {
@@ -35,7 +32,9 @@ const DawnProcTable& DawnObjectBase::GetProcs() const {
 DawnObjectImpl::DawnObjectImpl(GPUDevice* device)
     : DawnObjectBase(device->GetDawnControlClient()), device_(device) {}
 
-void DawnObjectImpl::Trace(blink::Visitor* visitor) {
+DawnObjectImpl::~DawnObjectImpl() = default;
+
+void DawnObjectImpl::Trace(Visitor* visitor) {
   visitor->Trace(device_);
   ScriptWrappable::Trace(visitor);
 }

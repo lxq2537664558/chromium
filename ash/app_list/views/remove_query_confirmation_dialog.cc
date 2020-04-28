@@ -11,9 +11,8 @@
 #include "ui/views/focus/focus_manager.h"
 #include "ui/views/layout/box_layout.h"
 #include "ui/views/layout/layout_provider.h"
-#include "ui/views/window/dialog_client_view.h"
 
-namespace app_list {
+namespace ash {
 
 namespace {
 
@@ -23,20 +22,35 @@ constexpr int kDialogYOffset = 32;
 }  // namespace
 
 RemoveQueryConfirmationDialog::RemoveQueryConfirmationDialog(
+    const base::string16& query,
     RemovalConfirmationCallback confirm_callback,
     int event_flags,
     ContentsView* contents_view)
     : confirm_callback_(std::move(confirm_callback)),
       event_flags_(event_flags),
       contents_view_(contents_view) {
+  DialogDelegate::SetButtonLabel(
+      ui::DIALOG_BUTTON_OK,
+      l10n_util::GetStringUTF16(IDS_REMOVE_SUGGESTION_BUTTON_LABEL));
+  DialogDelegate::SetButtonLabel(ui::DIALOG_BUTTON_CANCEL,
+                                   l10n_util::GetStringUTF16(IDS_APP_CANCEL));
+
+  auto run_callback = [](RemoveQueryConfirmationDialog* dialog, bool accept) {
+    std::move(dialog->confirm_callback_).Run(accept, dialog->event_flags_);
+  };
+  DialogDelegate::SetAcceptCallback(
+      base::BindOnce(run_callback, base::Unretained(this), true));
+  DialogDelegate::SetCancelCallback(
+      base::BindOnce(run_callback, base::Unretained(this), false));
+
   const views::LayoutProvider* provider = views::LayoutProvider::Get();
   SetLayoutManager(std::make_unique<views::BoxLayout>(
-      views::BoxLayout::kVertical,
+      views::BoxLayout::Orientation::kVertical,
       provider->GetDialogInsetsForContentType(views::TEXT, views::TEXT),
       provider->GetDistanceMetric(views::DISTANCE_RELATED_CONTROL_VERTICAL)));
 
-  views::Label* label = new views::Label(
-      l10n_util::GetStringUTF16(IDS_REMOVE_ZERO_STATE_SUGGESTION_DETAILS));
+  views::Label* label = new views::Label(l10n_util::GetStringFUTF16(
+      IDS_REMOVE_ZERO_STATE_SUGGESTION_DETAILS, query));
   label->SetMultiLine(true);
   label->SetHorizontalAlignment(gfx::ALIGN_LEFT);
   label->SetAllowCharacterBreak(true);
@@ -55,6 +69,10 @@ void RemoveQueryConfirmationDialog::Show(gfx::NativeWindow parent) {
   GetWidget()->Show();
 }
 
+const char* RemoveQueryConfirmationDialog::GetClassName() const {
+  return "RemoveQueryConfirmationDialog";
+}
+
 base::string16 RemoveQueryConfirmationDialog::GetWindowTitle() const {
   return l10n_util::GetStringUTF16(IDS_REMOVE_ZERO_STATE_SUGGESTION_TITLE);
 }
@@ -65,27 +83,6 @@ ui::ModalType RemoveQueryConfirmationDialog::GetModalType() const {
 
 bool RemoveQueryConfirmationDialog::ShouldShowCloseButton() const {
   return false;
-}
-
-base::string16 RemoveQueryConfirmationDialog::GetDialogButtonLabel(
-    ui::DialogButton button) const {
-  return button == ui::DIALOG_BUTTON_CANCEL
-             ? l10n_util::GetStringUTF16(IDS_APP_CANCEL)
-             : l10n_util::GetStringUTF16(IDS_REMOVE_SUGGESTION_BUTTON_LABEL);
-}
-
-bool RemoveQueryConfirmationDialog::Accept() {
-  if (confirm_callback_)
-    std::move(confirm_callback_).Run(true, event_flags_);
-
-  return true;
-}
-
-bool RemoveQueryConfirmationDialog::Cancel() {
-  if (confirm_callback_)
-    std::move(confirm_callback_).Run(false, event_flags_);
-
-  return true;
 }
 
 gfx::Size RemoveQueryConfirmationDialog::CalculatePreferredSize() const {
@@ -110,7 +107,7 @@ void RemoveQueryConfirmationDialog::OnSearchBoxClearAndDeactivated() {
       contents_view_->GetSearchBoxView()->GetWidget()->GetFocusManager();
   views::View* strored_focus_view = focus_manager->GetStoredFocusView();
   focus_manager->SetStoredFocusView(nullptr);
-  GetDialogClientView()->CancelWindow();
+  CancelDialog();
   focus_manager->SetStoredFocusView(strored_focus_view);
 }
 
@@ -128,4 +125,4 @@ void RemoveQueryConfirmationDialog::UpdateBounds() {
   widget->SetBounds(widget_rect);
 }
 
-}  // namespace app_list
+}  // namespace ash

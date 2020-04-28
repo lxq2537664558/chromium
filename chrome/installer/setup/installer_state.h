@@ -77,12 +77,6 @@ class InstallerState {
   // flag is set is to be operated on.
   bool is_msi() const { return msi_; }
 
-  // True if the process is running at a reduced "background" priority.
-  bool is_background_mode() const { return background_mode_; }
-
-  // Indicate that the process is or is not running in the background.
-  void set_background_mode(bool bg) { background_mode_ = bg; }
-
   // True if the --verbose-logging command-line flag is set or if the
   // verbose_logging master preferences option is true.
   bool verbose_logging() const { return verbose_logging_; }
@@ -91,10 +85,6 @@ class InstallerState {
 
   // The ClientState key by which we interact with Google Update.
   const base::string16& state_key() const { return state_key_; }
-
-  // Returns true if this is an update of multi-install Chrome to
-  // single-install.
-  bool is_migrating_to_single() const { return is_migrating_to_single_; }
 
   // Returns the currently installed version in |target_path|, or NULL if no
   // products are installed. Ownership is passed to the caller.
@@ -117,9 +107,6 @@ class InstallerState {
   // Sets the current stage of processing. This reports a progress value to
   // Google Update for presentation to a user.
   void SetStage(InstallerStage stage) const;
-
-  // Strips all evidence of multi-install from Chrome's "ap" value.
-  void UpdateChannels() const;
 
   // Sets installer result information in the registry for consumption by Google
   // Update. The InstallerResult value is set to 0 (SUCCESS) or 1
@@ -150,9 +137,7 @@ class InstallerState {
   Level level_;
   HKEY root_key_;
   bool msi_;
-  bool background_mode_;
   bool verbose_logging_;
-  bool is_migrating_to_single_;
 
  private:
   DISALLOW_COPY_AND_ASSIGN(InstallerState);

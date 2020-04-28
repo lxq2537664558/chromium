@@ -14,6 +14,7 @@
 #include "base/callback.h"
 #include "base/macros.h"
 #include "base/memory/ptr_util.h"
+#include "base/stl_util.h"
 #include "mojo/public/cpp/bindings/connection_error_callback.h"
 #include "mojo/public/cpp/bindings/message.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
@@ -31,6 +32,7 @@ struct ReceiverSetTraits;
 template <typename Interface, typename ImplRefTraits>
 struct ReceiverSetTraits<Receiver<Interface, ImplRefTraits>> {
   using InterfaceType = Interface;
+  using PendingType = PendingReceiver<Interface>;
   using ImplPointerType = typename ImplRefTraits::PointerType;
 };
 
@@ -87,12 +89,13 @@ class ReceiverSetBase {
  public:
   using Traits = ReceiverSetTraits<ReceiverType>;
   using Interface = typename Traits::InterfaceType;
+  using PendingType = typename Traits::PendingType;
   using ImplPointerType = typename Traits::ImplPointerType;
   using ContextTraits = ReceiverSetContextTraits<ContextType>;
   using Context = typename ContextTraits::Type;
   using PreDispatchCallback = base::RepeatingCallback<void(const Context&)>;
 
-  ReceiverSetBase() : weak_ptr_factory_(this) {}
+  ReceiverSetBase() = default;
 
   // Sets a callback to be invoked any time a receiver in the set is
   // disconnected. The callback is invoked *after* the receiver in question
@@ -101,6 +104,14 @@ class ReceiverSetBase {
   // ContextType is not void.
   void set_disconnect_handler(base::RepeatingClosure handler) {
     disconnect_handler_ = std::move(handler);
+    disconnect_with_reason_handler_.Reset();
+  }
+
+  // Like above but also provides the reason given for disconnection, if any.
+  void set_disconnect_with_reason_handler(
+      RepeatingConnectionErrorWithReasonCallback handler) {
+    disconnect_with_reason_handler_ = std::move(handler);
+    disconnect_handler_.Reset();
   }
 
   // Adds a new receiver to the set, binding |receiver| to |impl| with no
@@ -112,7 +123,7 @@ class ReceiverSetBase {
   // will be used to run scheduled tasks for the receiver.
   ReceiverId Add(
       ImplPointerType impl,
-      PendingReceiver<Interface> receiver,
+      PendingType receiver,
       scoped_refptr<base::SequencedTaskRunner> task_runner = nullptr) {
     static_assert(!ContextTraits::SupportsContext(),
                   "Context value required for non-void context type.");
@@ -124,7 +135,7 @@ class ReceiverSetBase {
   // other (identical) details.
   ReceiverId Add(
       ImplPointerType impl,
-      PendingReceiver<Interface> receiver,
+      PendingType receiver,
       Context context,
       scoped_refptr<base::SequencedTaskRunner> task_runner = nullptr) {
     static_assert(ContextTraits::SupportsContext(),
@@ -153,6 +164,13 @@ class ReceiverSetBase {
   // ReceiverSet will not schedule or execute any further method invocations or
   // disconnection notifications until a new receiver is added to the set.
   void Clear() { receivers_.clear(); }
+
+  // Predicate to test if a receiver exists in the set.
+  //
+  // Returns |true| if the receiver is in the set and |false| if not.
+  bool HasReceiver(ReceiverId id) const {
+    return base::Contains(receivers_, id);
+  }
 
   bool empty() const { return receivers_.empty(); }
 
@@ -214,10 +232,42 @@ class ReceiverSetBase {
            const std::string& error) {
           std::move(error_callback).Run(error);
           if (receiver_set)
-            receiver_set->RemoveBinding(receiver_id);
+            receiver_set->Remove(receiver_id);
         },
         mojo::GetBadMessageCallback(), weak_ptr_factory_.GetWeakPtr(),
         current_receiver());
+  }
+
+  void FlushForTesting() {
+    // We avoid flushing while iterating over |receivers_| because this set
+    // may be mutated during individual flush operations.  Instead, snapshot
+    // the ReceiverIds first, then iterate over them. This is less efficient,
+    // but it's only a testing API. This also allows for correct behavior in
+    // reentrant calls to FlushForTesting().
+    std::vector<ReceiverId> ids;
+    for (const auto& receiver : receivers_)
+      ids.push_back(receiver.first);
+
+    auto weak_self = weak_ptr_factory_.GetWeakPtr();
+    for (const auto& id : ids) {
+      if (!weak_self)
+        return;
+      auto it = receivers_.find(id);
+      if (it != receivers_.end())
+        it->second->FlushForTesting();
+    }
+  }
+
+  // Swaps the interface implementation with a different one, to allow tests
+  // to modify behavior.
+  //
+  // Returns the existing interface implementation to the caller.
+  ImplPointerType SwapImplForTesting(ReceiverId id, ImplPointerType new_impl) {
+    auto it = receivers_.find(id);
+    if (it == receivers_.end())
+      return nullptr;
+
+    return it->second->SwapImplForTesting(new_impl);
   }
 
  private:
@@ -226,7 +276,7 @@ class ReceiverSetBase {
   class Entry {
    public:
     Entry(ImplPointerType impl,
-          PendingReceiver<Interface> receiver,
+          PendingType receiver,
           ReceiverSetBase* receiver_set,
           ReceiverId receiver_id,
           Context context,
@@ -237,23 +287,31 @@ class ReceiverSetBase {
           receiver_set_(receiver_set),
           receiver_id_(receiver_id),
           context_(std::move(context)) {
-      receiver_.AddFilter(std::make_unique<DispatchFilter>(this));
-      receiver_.set_disconnect_handler(
+      receiver_.SetFilter(std::make_unique<DispatchFilter>(this));
+      receiver_.set_disconnect_with_reason_handler(
           base::BindOnce(&Entry::OnDisconnect, base::Unretained(this)));
     }
 
+    ImplPointerType SwapImplForTesting(ImplPointerType new_impl) {
+      return receiver_.SwapImplForTesting(new_impl);
+    }
+
+    void FlushForTesting() { receiver_.FlushForTesting(); }
+
    private:
-    class DispatchFilter : public MessageReceiver {
+    class DispatchFilter : public MessageFilter {
      public:
       explicit DispatchFilter(Entry* entry) : entry_(entry) {}
       ~DispatchFilter() override {}
 
      private:
-      // MessageReceiver:
-      bool Accept(Message* message) override {
+      // MessageFilter:
+      bool WillDispatch(Message* message) override {
         entry_->WillDispatch();
         return true;
       }
+
+      void DidDispatchOrReject(Message* message, bool accepted) override {}
 
       Entry* entry_;
 
@@ -264,9 +322,11 @@ class ReceiverSetBase {
       receiver_set_->SetDispatchContext(&context_, receiver_id_);
     }
 
-    void OnDisconnect() {
+    void OnDisconnect(uint32_t custom_reason_code,
+                      const std::string& description) {
       WillDispatch();
-      receiver_set_->OnDisconnect(receiver_id_);
+      receiver_set_->OnDisconnect(receiver_id_, custom_reason_code,
+                                  description);
     }
 
     ReceiverType receiver_;
@@ -283,7 +343,7 @@ class ReceiverSetBase {
   }
 
   ReceiverId AddImpl(ImplPointerType impl,
-                     PendingReceiver<Interface> receiver,
+                     PendingType receiver,
                      Context context,
                      scoped_refptr<base::SequencedTaskRunner> task_runner) {
     ReceiverId id = next_receiver_id_++;
@@ -295,7 +355,9 @@ class ReceiverSetBase {
     return id;
   }
 
-  void OnDisconnect(ReceiverId id) {
+  void OnDisconnect(ReceiverId id,
+                    uint32_t custom_reason_code,
+                    const std::string& description) {
     auto it = receivers_.find(id);
     DCHECK(it != receivers_.end());
 
@@ -305,14 +367,17 @@ class ReceiverSetBase {
 
     if (disconnect_handler_)
       disconnect_handler_.Run();
+    else if (disconnect_with_reason_handler_)
+      disconnect_with_reason_handler_.Run(custom_reason_code, description);
   }
 
   base::RepeatingClosure disconnect_handler_;
+  RepeatingConnectionErrorWithReasonCallback disconnect_with_reason_handler_;
   ReceiverId next_receiver_id_ = 0;
   std::map<ReceiverId, std::unique_ptr<Entry>> receivers_;
   const Context* current_context_ = nullptr;
   ReceiverId current_receiver_;
-  base::WeakPtrFactory<ReceiverSetBase> weak_ptr_factory_;
+  base::WeakPtrFactory<ReceiverSetBase> weak_ptr_factory_{this};
 
   DISALLOW_COPY_AND_ASSIGN(ReceiverSetBase);
 };
@@ -320,14 +385,6 @@ class ReceiverSetBase {
 // Common helper for a set of Receivers which do not own their implementation.
 template <typename Interface, typename ContextType = void>
 using ReceiverSet = ReceiverSetBase<Receiver<Interface>, ContextType>;
-
-// Helper for a set of Receivers where each bound Receiver is tied to an owned
-// implementation. The |Add()| method takes a std::unique_ptr<Interface> for
-// each bound implementation.
-template <typename Interface, typename ContextType = void>
-using OwnedReceiverSet =
-    ReceiverSetBase<Receiver<Interface, UniquePtrImplRefTraits<Interface>>,
-                    ContextType>;
 
 }  // namespace mojo
 

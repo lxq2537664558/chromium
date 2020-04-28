@@ -95,7 +95,8 @@ class OmniboxPedalLaunchIncognito : public OmniboxPedal {
                 IDS_OMNIBOX_PEDAL_LAUNCH_INCOGNITO_HINT,
                 IDS_OMNIBOX_PEDAL_LAUNCH_INCOGNITO_HINT_SHORT,
                 IDS_OMNIBOX_PEDAL_LAUNCH_INCOGNITO_SUGGESTION_CONTENTS),
-            GURL()) {}
+            // Fake URL to distinguish matches.
+            GURL("chrome://newtab?incognito=true")) {}
 
   void Execute(ExecutionContext& context) const override {
     context.client_.NewIncognitoWindow();
@@ -111,7 +112,8 @@ class OmniboxPedalTranslate : public OmniboxPedal {
             LabelStrings(IDS_OMNIBOX_PEDAL_TRANSLATE_HINT,
                          IDS_OMNIBOX_PEDAL_TRANSLATE_HINT_SHORT,
                          IDS_OMNIBOX_PEDAL_TRANSLATE_SUGGESTION_CONTENTS),
-            GURL()) {}
+            // Fake URL to distinguish matches.
+            GURL("chrome://translate/pedals")) {}
 
   void Execute(ExecutionContext& context) const override {
     context.client_.PromptPageTranslation();
@@ -125,7 +127,8 @@ OmniboxPedalUpdateChrome::OmniboxPedalUpdateChrome()
           LabelStrings(IDS_OMNIBOX_PEDAL_UPDATE_CHROME_HINT,
                        IDS_OMNIBOX_PEDAL_UPDATE_CHROME_HINT_SHORT,
                        IDS_OMNIBOX_PEDAL_UPDATE_CHROME_SUGGESTION_CONTENTS),
-          GURL()) {}
+          // Fake URL to distinguish matches.
+          GURL("chrome://update/pedals")) {}
 
 void OmniboxPedalUpdateChrome::Execute(ExecutionContext& context) const {
   context.client_.OpenUpdateChromeDialog();
@@ -142,7 +145,7 @@ std::unordered_map<OmniboxPedalId, std::unique_ptr<OmniboxPedal>>
 GetPedalImplementations() {
   std::unordered_map<OmniboxPedalId, std::unique_ptr<OmniboxPedal>> pedals;
   const auto add = [&](OmniboxPedalId id, OmniboxPedal* pedal) {
-    pedals.insert({id, std::unique_ptr<OmniboxPedal>(pedal)});
+    pedals.insert(std::make_pair(id, std::unique_ptr<OmniboxPedal>(pedal)));
   };
   add(OmniboxPedalId::CLEAR_BROWSING_DATA, new OmniboxPedalClearBrowsingData());
   add(OmniboxPedalId::CHANGE_SEARCH_ENGINE,

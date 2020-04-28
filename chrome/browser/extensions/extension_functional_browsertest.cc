@@ -65,13 +65,7 @@ class ExtensionFunctionalTest : public ExtensionBrowserTest {
   }
 };
 
-// Failing on Linux: http://crbug.com/654945
-#if defined(OS_LINUX)
-#define MAYBE_TestSetExtensionsState DISABLED_TestSetExtensionsState
-#else
-#define MAYBE_TestSetExtensionsState TestSetExtensionsState
-#endif
-IN_PROC_BROWSER_TEST_F(ExtensionFunctionalTest, MAYBE_TestSetExtensionsState) {
+IN_PROC_BROWSER_TEST_F(ExtensionFunctionalTest, TestSetExtensionsState) {
   InstallExtensionSilently(extension_service(), "google_talk.crx");
 
   // Disable the extension and verify.
@@ -109,7 +103,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionFunctionalTest,
   ui_test_utils::NavigateToURL(browser(), extension_url);
   ui_test_utils::NavigateToURLWithDisposition(
       browser(), extension_url, WindowOpenDisposition::NEW_FOREGROUND_TAB,
-      ui_test_utils::BROWSER_TEST_WAIT_FOR_NAVIGATION);
+      ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP);
 
   // Sanity-check test setup: 2 frames share a renderer process, but are not in
   // a related browsing instance.
@@ -144,13 +138,6 @@ IN_PROC_BROWSER_TEST_F(ExtensionFunctionalTest,
 
   // Verify that |tab1_popup| can find unrelated frames from the same extension
   // (i.e. that it can find |tab2|.
-  // TODO(lukasza): https://crbug.com/786411: The verification below is helpful
-  // to 1) verify about:blank-handling, parent-hopping done by
-  // GetExtensionFromFrame in extension_frame_helper.cc and 2) verify the old
-  // behavior.  We want to change the old behavior - this would expectedly make
-  // the assestion below fail and in this case we would need to tweak the test
-  // to look-up another window (most likely a background page).
-  base::HistogramTester histogram_tester;
   std::string location_of_opened_window;
   EXPECT_TRUE(ExecuteScriptAndExtractString(
       tab1_popup,
@@ -158,24 +145,6 @@ IN_PROC_BROWSER_TEST_F(ExtensionFunctionalTest,
       "window.domAutomationController.send(w.location.href);",
       &location_of_opened_window));
   EXPECT_EQ(tab2->GetLastCommittedURL(), location_of_opened_window);
-
-  // Verify UMA got recorded as expected.
-  SubprocessMetricsProvider::MergeHistogramDeltasForTesting();
-  EXPECT_THAT(histogram_tester.GetAllSamples(
-                  "Extensions.BrowsingInstanceViolation.ExtensionType"),
-              testing::ElementsAre(base::Bucket(Manifest::TYPE_EXTENSION, 1)));
-  EXPECT_THAT(
-      histogram_tester.GetAllSamples(
-          "Extensions.BrowsingInstanceViolation.SourceExtensionViewType"),
-      testing::ElementsAre(base::Bucket(VIEW_TYPE_TAB_CONTENTS, 1)));
-  EXPECT_THAT(
-      histogram_tester.GetAllSamples(
-          "Extensions.BrowsingInstanceViolation.TargetExtensionViewType"),
-      testing::ElementsAre(base::Bucket(VIEW_TYPE_TAB_CONTENTS, 1)));
-  EXPECT_THAT(
-      histogram_tester.GetAllSamples(
-          "Extensions.BrowsingInstanceViolation.IsBackgroundSourceOrTarget"),
-      testing::ElementsAre(base::Bucket(false, 1)));
 }
 
 IN_PROC_BROWSER_TEST_F(ExtensionFunctionalTest, DownloadExtensionResource) {

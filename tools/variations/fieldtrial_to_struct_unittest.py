@@ -80,7 +80,6 @@ class FieldTrialToStruct(unittest.TestCase):
                   ],
                   'enable_features': ['A', 'B'],
                   'disable_features': ['C'],
-                  'is_low_end_device': 'Study::OPTIONAL_BOOL_MISSING',
                   'form_factors': [],
                 },
                 {
@@ -92,7 +91,6 @@ class FieldTrialToStruct(unittest.TestCase):
                   ],
                   'enable_features': ['D', 'E'],
                   'disable_features': ['F'],
-                  'is_low_end_device': 'Study::OPTIONAL_BOOL_MISSING',
                   'form_factors': [],
                 },
               ],
@@ -103,7 +101,6 @@ class FieldTrialToStruct(unittest.TestCase):
                 {
                   'name': 'OtherGroup',
                   'platforms': ['Study::PLATFORM_WINDOWS'],
-                  'is_low_end_device': 'Study::OPTIONAL_BOOL_MISSING',
                   'form_factors': [],
                 }
               ]
@@ -115,7 +112,6 @@ class FieldTrialToStruct(unittest.TestCase):
                     'name': 'ForcedGroup',
                     'platforms': ['Study::PLATFORM_WINDOWS'],
                     'forcing_flag': "my-forcing-flag",
-                    'is_low_end_device': 'Study::OPTIONAL_BOOL_MISSING',
                     'form_factors': [],
                   }
               ]
@@ -131,7 +127,7 @@ class FieldTrialToStruct(unittest.TestCase):
     'Trial1': [
       {
         'platforms': ['windows', 'ios'],
-        'is_low_end_device': True,
+        'is_low_end_device': 'true',
         'experiments': [
           {
             'name': 'Group1',
@@ -189,7 +185,7 @@ class FieldTrialToStruct(unittest.TestCase):
                   ],
                   'enable_features': ['A', 'B'],
                   'disable_features': ['C'],
-                  'is_low_end_device': 'Study::OPTIONAL_BOOL_TRUE',
+                  'is_low_end_device': 'true',
                   'form_factors': [],
                 },
                 {
@@ -201,13 +197,12 @@ class FieldTrialToStruct(unittest.TestCase):
                   ],
                   'enable_features': ['D', 'E'],
                   'disable_features': ['F'],
-                  'is_low_end_device': 'Study::OPTIONAL_BOOL_TRUE',
+                  'is_low_end_device': 'true',
                   'form_factors': [],
                 },
                 {
                   'name': 'IOSOnly',
                   'platforms': ['Study::PLATFORM_IOS'],
-                  'is_low_end_device': 'Study::OPTIONAL_BOOL_MISSING',
                   'form_factors': [],
                 },
               ],
@@ -232,7 +227,6 @@ class FieldTrialToStruct(unittest.TestCase):
                 {
                   'name': 'OtherGroup',
                   'platforms': ['Study::PLATFORM_MAC'],
-                  'is_low_end_device': 'Study::OPTIONAL_BOOL_MISSING',
                   'form_factors': [],
                 },
               ],
@@ -274,7 +268,6 @@ class FieldTrialToStruct(unittest.TestCase):
                 {
                   'name': 'Group1',
                   'platforms': ['Study::PLATFORM_WINDOWS'],
-                  'is_low_end_device': 'Study::OPTIONAL_BOOL_MISSING',
                   'form_factors': ['Study::DESKTOP', 'Study::PHONE'],
                 },
               ],
@@ -285,11 +278,93 @@ class FieldTrialToStruct(unittest.TestCase):
                 {
                   'name': 'OtherGroup',
                   'platforms': ['Study::PLATFORM_WINDOWS'],
-                  'is_low_end_device': 'Study::OPTIONAL_BOOL_MISSING',
                   'form_factors': ['Study::TABLET'],
                 },
               ],
             },
+          ]
+        }
+      }
+    }
+    self.maxDiff = None
+    self.assertEqual(expected, result)
+
+  _MULTIPLE_OVERRIDE_UI_STRING_CONFIG = {
+    'Trial1': [
+      {
+        'platforms': ['windows'],
+        'experiments': [
+          {
+            'name': 'Group1',
+            'override_ui_strings': {
+              'IDS_NEW_TAB_TITLE': 'test1',
+              'IDS_SAD_TAB_TITLE': 'test2',
+            },
+          },
+        ]
+      }
+    ],
+    'Trial2': [
+      {
+        'platforms': ['windows'],
+        'experiments': [
+          {
+            'name': 'Group2',
+            'override_ui_strings': {
+              'IDS_DEFAULT_TAB_TITLE': 'test3',
+            },
+          }
+        ]
+      }
+    ]
+  }
+
+  def test_FieldTrialToDescriptionMultipleOverrideUIStringTrial(self):
+    result = fieldtrial_to_struct._FieldTrialConfigToDescription(
+        self._MULTIPLE_OVERRIDE_UI_STRING_CONFIG, ['windows'])
+    expected = {
+      'elements': {
+        'kFieldTrialConfig': {
+          'studies': [
+            {
+              'name': 'Trial1',
+              'experiments': [
+                {
+                  'name': 'Group1',
+                  'platforms': ['Study::PLATFORM_WINDOWS'],
+                  'override_ui_string': [
+                    {
+                      'name_hash':
+                        4045341670,
+                      'value': 'test1'
+                    },
+                    {
+                      'name_hash':
+                        1173727369,
+                      'value': 'test2'
+                    },
+                  ],
+                  'form_factors': [],
+                },
+              ],
+            },
+            {
+              'name': 'Trial2',
+              'experiments': [
+                {
+                  'name': 'Group2',
+                  'platforms': ['Study::PLATFORM_WINDOWS'],
+                  'override_ui_string': [
+                    {
+                      'name_hash':
+                        3477264953,
+                      'value': 'test3'
+                    },
+                  ],
+                  'form_factors': [],
+                },
+              ],
+            }
           ]
         }
       }

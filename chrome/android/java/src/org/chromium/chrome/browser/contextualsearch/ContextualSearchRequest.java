@@ -1,16 +1,16 @@
 // Copyright 2015 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
-
 package org.chromium.chrome.browser.contextualsearch;
 
 import android.net.Uri;
-import android.support.annotation.Nullable;
 import android.text.TextUtils;
 
-import org.chromium.base.VisibleForTesting;
-import org.chromium.chrome.browser.search_engines.TemplateUrlService;
-import org.chromium.chrome.browser.util.UrlUtilities;
+import androidx.annotation.Nullable;
+import androidx.annotation.VisibleForTesting;
+
+import org.chromium.chrome.browser.search_engines.TemplateUrlServiceFactory;
+import org.chromium.components.embedder_support.util.UrlUtilitiesJni;
 
 import java.net.MalformedURLException;
 import java.net.URL;
@@ -30,6 +30,7 @@ class ContextualSearchRequest {
     private boolean mIsTranslationForced;
     private boolean mIsFullSearchUrlProvided;
 
+    private static final String GWS_NORMAL_PRIORITY_SEARCH_PATH = "search";
     private static final String GWS_LOW_PRIORITY_SEARCH_PATH = "s";
     private static final String GWS_SEARCH_NO_SUGGESTIONS_PARAM = "sns";
     private static final String GWS_SEARCH_NO_SUGGESTIONS_PARAM_VALUE = "1";
@@ -220,8 +221,12 @@ class ContextualSearchRequest {
      */
     protected Uri getUriTemplate(String query, @Nullable String alternateTerm, @Nullable String mid,
             boolean shouldPrefetch) {
-        Uri uri = Uri.parse(TemplateUrlService.getInstance().getUrlForContextualSearchQuery(
-                query, alternateTerm, shouldPrefetch, CTXS_TWO_REQUEST_PROTOCOL));
+        // TODO(https://crbug.com/783819): Avoid parsing the GURL as a Uri, and update
+        // makeKPTriggeringUri to operate on GURLs.
+        Uri uri = Uri.parse(TemplateUrlServiceFactory.get()
+                                    .getUrlForContextualSearchQuery(query, alternateTerm,
+                                            shouldPrefetch, CTXS_TWO_REQUEST_PROTOCOL)
+                                    .getSpec());
         if (!TextUtils.isEmpty(mid)) uri = makeKPTriggeringUri(uri, mid);
         return uri;
     }
@@ -233,13 +238,18 @@ class ContextualSearchRequest {
      */
     @VisibleForTesting
     boolean isGoogleUrl(@Nullable String someUrl) {
-        return !TextUtils.isEmpty(someUrl) && UrlUtilities.nativeIsGoogleDomainUrl(someUrl, true);
+        return !TextUtils.isEmpty(someUrl) && UrlUtilitiesJni.get().isGoogleSubDomainUrl(someUrl);
     }
 
     /**
      * @return a low-priority {@code Uri} from the given base {@code Uri}.
      */
     private Uri makeLowPriorityUri(Uri baseUri) {
+        if (baseUri.getPath() == null
+                || !baseUri.getPath().contains(GWS_NORMAL_PRIORITY_SEARCH_PATH)) {
+            return baseUri;
+        }
+
         return baseUri.buildUpon()
                 .path(GWS_LOW_PRIORITY_SEARCH_PATH)
                 .appendQueryParameter(

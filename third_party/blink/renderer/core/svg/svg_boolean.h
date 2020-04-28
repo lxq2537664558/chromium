@@ -43,10 +43,6 @@ class SVGBoolean final : public SVGPropertyHelper<SVGBoolean> {
   typedef void TearOffType;
   typedef bool PrimitiveType;
 
-  static SVGBoolean* Create(bool value = false) {
-    return MakeGarbageCollected<SVGBoolean>(value);
-  }
-
   SVGBoolean(bool value = false) : value_(value) {}
 
   SVGBoolean* Clone() const { return MakeGarbageCollected<SVGBoolean>(value_); }
@@ -55,7 +51,7 @@ class SVGBoolean final : public SVGPropertyHelper<SVGBoolean> {
   SVGParsingError SetValueAsString(const String&);
 
   void Add(SVGPropertyBase*, SVGElement*) override;
-  void CalculateAnimatedValue(SVGAnimationElement*,
+  void CalculateAnimatedValue(const SVGAnimateElement&,
                               float percentage,
                               unsigned repeat_count,
                               SVGPropertyBase* from,
@@ -72,8 +68,6 @@ class SVGBoolean final : public SVGPropertyHelper<SVGBoolean> {
  private:
   bool value_;
 };
-
-DEFINE_SVG_PROPERTY_TYPE_CASTS(SVGBoolean);
 
 }  // namespace blink
 

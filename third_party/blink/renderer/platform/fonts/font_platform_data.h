@@ -38,10 +38,9 @@
 #include "third_party/blink/renderer/platform/fonts/font_orientation.h"
 #include "third_party/blink/renderer/platform/fonts/small_caps_iterator.h"
 #include "third_party/blink/renderer/platform/platform_export.h"
-#include "third_party/blink/renderer/platform/wtf/allocator.h"
+#include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
 #include "third_party/blink/renderer/platform/wtf/forward.h"
 #include "third_party/blink/renderer/platform/wtf/hash_table_deleted_value_type.h"
-#include "third_party/blink/renderer/platform/wtf/text/cstring.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_impl.h"
 #include "third_party/blink/renderer/platform/wtf/vector.h"
 #include "third_party/skia/include/core/SkFont.h"
@@ -79,7 +78,7 @@ class PLATFORM_EXPORT FontPlatformData {
                    FontOrientation = FontOrientation::kHorizontal);
   FontPlatformData(const FontPlatformData& src, float text_size);
   FontPlatformData(const sk_sp<SkTypeface>,
-                   const CString& name,
+                   const std::string& name,
                    float text_size,
                    bool synthetic_bold,
                    bool synthetic_italic,
@@ -139,14 +138,13 @@ class PLATFORM_EXPORT FontPlatformData {
   enum Flags {
     kAntiAlias = 1 << 0,
     kSubpixelsAntiAlias = 1 << 1,
-    kSubpixelMetrics = 1 << 2,
   };
   int FontFlags() const { return font_flags_; }
 #endif
 
  private:
 #if !defined(OS_WIN) && !defined(OS_MACOSX)
-  WebFontRenderStyle QuerySystemRenderStyle(const CString& family,
+  WebFontRenderStyle QuerySystemRenderStyle(const std::string& family,
                                             float text_size,
                                             SkFontStyle);
 #endif
@@ -158,7 +156,7 @@ class PLATFORM_EXPORT FontPlatformData {
 
   sk_sp<SkTypeface> typeface_;
 #if !defined(OS_WIN) && !defined(OS_MACOSX)
-  CString family_;
+  std::string family_;
 #endif
 
  public:

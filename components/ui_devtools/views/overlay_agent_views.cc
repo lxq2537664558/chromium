@@ -12,8 +12,6 @@
 #include "third_party/skia/include/core/SkColor.h"
 #include "third_party/skia/include/effects/SkDashPathEffect.h"
 #include "ui/compositor/paint_recorder.h"
-#include "ui/display/display.h"
-#include "ui/display/screen.h"
 #include "ui/events/event.h"
 #include "ui/gfx/canvas.h"
 #include "ui/gfx/geometry/rect_conversions.h"
@@ -29,8 +27,6 @@
 namespace ui_devtools {
 
 namespace {
-
-using namespace ui_devtools::protocol;
 
 void DrawRulerText(const base::string16& utf16_text,
                    const gfx::Point& p,
@@ -387,7 +383,7 @@ void OverlayAgentViews::SetPinnedNodeId(int node_id) {
 }
 
 protocol::Response OverlayAgentViews::setInspectMode(
-    const String& in_mode,
+    const protocol::String& in_mode,
     protocol::Maybe<protocol::Overlay::HighlightConfig> in_highlightConfig) {
   pinned_id_ = 0;
   if (in_mode.compare("searchForNode") == 0) {
@@ -395,7 +391,7 @@ protocol::Response OverlayAgentViews::setInspectMode(
   } else if (in_mode.compare("none") == 0) {
     RemovePreTargetHandler();
   }
-  return protocol::Response::OK();
+  return protocol::Response::Success();
 }
 
 protocol::Response OverlayAgentViews::highlightNode(
@@ -407,19 +403,20 @@ protocol::Response OverlayAgentViews::highlightNode(
 protocol::Response OverlayAgentViews::hideHighlight() {
   if (layer_for_highlighting_ && layer_for_highlighting_->visible())
     layer_for_highlighting_->SetVisible(false);
-  return Response::OK();
+  return protocol::Response::Success();
 }
 
 void OverlayAgentViews::ShowDistancesInHighlightOverlay(int pinned_id,
                                                         int element_id) {
+  UIElement* element_r1 = dom_agent()->GetElementFromNodeId(pinned_id);
+  UIElement* element_r2 = dom_agent()->GetElementFromNodeId(element_id);
+  if (!element_r1 || !element_r2)
+    return;
+
   const std::pair<gfx::NativeWindow, gfx::Rect> pair_r2(
-      dom_agent()
-          ->GetElementFromNodeId(element_id)
-          ->GetNodeWindowAndScreenBounds());
+      element_r2->GetNodeWindowAndScreenBounds());
   const std::pair<gfx::NativeWindow, gfx::Rect> pair_r1(
-      dom_agent()
-          ->GetElementFromNodeId(pinned_id)
-          ->GetNodeWindowAndScreenBounds());
+      element_r1->GetNodeWindowAndScreenBounds());
 #if defined(OS_MACOSX)
   // TODO(lgrey): Explain this
   if (pair_r1.first != pair_r2.first) {
@@ -468,14 +465,18 @@ void OverlayAgentViews::ShowDistancesInHighlightOverlay(int pinned_id,
   }
 }
 
-Response OverlayAgentViews::HighlightNode(int node_id, bool show_size) {
+protocol::Response OverlayAgentViews::HighlightNode(int node_id,
+                                                    bool show_size) {
   UIElement* element = dom_agent()->GetElementFromNodeId(node_id);
   if (!element)
-    return Response::Error("No node found with that id");
+    return protocol::Response::ServerError("No node found with that id");
+
+  if (element->type() == UIElementType::ROOT)
+    return protocol::Response::ServerError("Cannot highlight root node.");
 
   if (!layer_for_highlighting_) {
     layer_for_highlighting_.reset(new ui::Layer(ui::LayerType::LAYER_TEXTURED));
-    layer_for_highlighting_->set_name("HighlightingLayer");
+    layer_for_highlighting_->SetName("HighlightingLayer");
     layer_for_highlighting_->set_delegate(this);
     layer_for_highlighting_->SetFillsBoundsOpaquely(false);
   }
@@ -484,7 +485,7 @@ Response OverlayAgentViews::HighlightNode(int node_id, bool show_size) {
   show_size_on_canvas_ = show_size;
   layer_for_highlighting_->SetVisible(
       UpdateHighlight(element->GetNodeWindowAndScreenBounds()));
-  return Response::OK();
+  return protocol::Response::Success();
 }
 
 void OverlayAgentViews::OnMouseEvent(ui::MouseEvent* event) {
@@ -577,7 +578,7 @@ void OverlayAgentViews::OnPaintLayer(const ui::PaintContext& context) {
   flags.setPathEffect(SkDashPathEffect::Make(intervals, 2, 0));
 
   if (!render_text_)
-    render_text_ = gfx::RenderText::CreateHarfBuzzInstance();
+    render_text_ = gfx::RenderText::CreateRenderText();
   DrawRulers(screen_bounds, canvas, render_text_.get());
 
   // Display guide lines if |highlight_rect_config_| is NO_DRAW.
@@ -719,14 +720,6 @@ bool OverlayAgentViews::UpdateHighlight(
 #else
   gfx::NativeWindow root = window_and_bounds.first->GetRootWindow();
   root_layer = root->layer();
-#if defined(OS_CHROMEOS)
-  // Get the screen's display-root window; otherwise, if the window belongs to
-  // a window service client, |root| will only be a client-root window.
-  aura::Window* window = display::Screen::GetScreen()->GetWindowAtScreenPoint(
-      root->GetBoundsInScreen().origin());
-  if (window)  // May be null in unit tests.
-    root = window->GetRootWindow();
-#endif  // OS_CHROMEOS
   layer_for_highlighting_screen_offset_ =
       root->GetBoundsInScreen().OffsetFromOrigin();
 #endif  // defined(OS_MACOSX)

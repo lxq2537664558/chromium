@@ -17,6 +17,7 @@
 #include "base/process/launch.h"
 #include "base/system/sys_info.h"
 #include "base/task/post_task.h"
+#include "base/task/thread_pool.h"
 #include "content/public/browser/browser_thread.h"
 
 using content::BrowserThread;
@@ -60,9 +61,6 @@ void ExecuteCommandLines(system_logs::SystemLogsResponse* response) {
   command = base::CommandLine((base::FilePath("/usr/bin/printenv")));
   commands.emplace_back("env", command);
 
-  command = base::CommandLine(base::FilePath("/usr/bin/modetest"));
-  commands.emplace_back("modetest", command);
-
   // Get a list of file sizes for the whole system (excluding the names of the
   // files in the Downloads directory for privay reasons).
   if (base::SysInfo::IsRunningOnChromeOS()) {
@@ -104,7 +102,7 @@ void CommandLineLogSource::Fetch(SysLogsSourceCallback callback) {
 
   auto response = std::make_unique<SystemLogsResponse>();
   SystemLogsResponse* response_ptr = response.get();
-  base::PostTaskWithTraitsAndReply(
+  base::ThreadPool::PostTaskAndReply(
       FROM_HERE, {base::MayBlock(), base::TaskPriority::BEST_EFFORT},
       base::BindOnce(&ExecuteCommandLines, response_ptr),
       base::BindOnce(std::move(callback), std::move(response)));

@@ -106,8 +106,7 @@ struct PluginMetricsProvider::ChildProcessStats {
 };
 
 PluginMetricsProvider::PluginMetricsProvider(PrefService* local_state)
-    : local_state_(local_state),
-      weak_ptr_factory_(this) {
+    : local_state_(local_state) {
   DCHECK(local_state_);
 
   BrowserChildProcessObserver::Add(this);
@@ -117,11 +116,10 @@ PluginMetricsProvider::~PluginMetricsProvider() {
   BrowserChildProcessObserver::Remove(this);
 }
 
-void PluginMetricsProvider::AsyncInit(const base::Closure& done_callback) {
+void PluginMetricsProvider::AsyncInit(base::OnceClosure done_callback) {
   content::PluginService::GetInstance()->GetPlugins(
-      base::Bind(&PluginMetricsProvider::OnGotPlugins,
-                 weak_ptr_factory_.GetWeakPtr(),
-                 done_callback));
+      base::BindOnce(&PluginMetricsProvider::OnGotPlugins,
+                     weak_ptr_factory_.GetWeakPtr(), std::move(done_callback)));
 }
 
 void PluginMetricsProvider::ProvideSystemProfileMetrics(
@@ -324,17 +322,17 @@ void PluginMetricsProvider::RegisterPrefs(PrefRegistrySimple* registry) {
 }
 
 void PluginMetricsProvider::OnGotPlugins(
-    const base::Closure& done_callback,
+    base::OnceClosure done_callback,
     const std::vector<content::WebPluginInfo>& plugins) {
   plugins_ = plugins;
-  done_callback.Run();
+  std::move(done_callback).Run();
 }
 
 PluginMetricsProvider::ChildProcessStats&
 PluginMetricsProvider::GetChildProcessStats(
     const content::ChildProcessData& data) {
   const base::string16& child_name = data.name;
-  if (!base::ContainsKey(child_process_stats_buffer_, child_name)) {
+  if (!base::Contains(child_process_stats_buffer_, child_name)) {
     child_process_stats_buffer_[child_name] =
         ChildProcessStats(data.process_type);
   }

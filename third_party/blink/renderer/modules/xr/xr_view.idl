@@ -4,6 +4,7 @@
 
 // https://immersive-web.github.io/webxr/#xrview-interface
 enum XREye {
+  "none",
   "left",
   "right"
 };
@@ -15,5 +16,5 @@ enum XREye {
 ] interface XRView {
   readonly attribute XREye eye;
   readonly attribute Float32Array projectionMatrix;
-  readonly attribute XRRigidTransform transform;
+  [SameObject] readonly attribute XRRigidTransform transform;
 };

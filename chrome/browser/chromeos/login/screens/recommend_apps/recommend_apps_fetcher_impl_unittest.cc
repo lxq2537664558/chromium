@@ -5,16 +5,16 @@
 #include "chrome/browser/chromeos/login/screens/recommend_apps/recommend_apps_fetcher_impl.h"
 
 #include <memory>
+#include <utility>
 #include <vector>
 
-#include "ash/public/interfaces/constants.mojom.h"
-#include "ash/public/interfaces/cros_display_config.mojom.h"
+#include "ash/public/mojom/cros_display_config.mojom.h"
 #include "base/base64url.h"
 #include "base/files/file_path.h"
 #include "base/run_loop.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
-#include "base/test/scoped_task_environment.h"
+#include "base/test/task_environment.h"
 #include "base/values.h"
 #include "chrome/browser/chromeos/login/screens/recommend_apps/fake_recommend_apps_fetcher_delegate.h"
 #include "chrome/browser/chromeos/login/screens/recommend_apps/recommend_apps_fetcher.h"
@@ -23,21 +23,19 @@
 #include "chrome/test/base/testing_profile_manager.h"
 #include "components/arc/arc_features_parser.h"
 #include "components/user_manager/scoped_user_manager.h"
-#include "content/public/test/test_browser_thread_bundle.h"
-#include "mojo/public/cpp/bindings/binding.h"
+#include "content/public/test/browser_task_environment.h"
+#include "mojo/public/cpp/bindings/pending_associated_remote.h"
+#include "mojo/public/cpp/bindings/pending_receiver.h"
+#include "mojo/public/cpp/bindings/receiver.h"
 #include "services/network/test/test_url_loader_factory.h"
-#include "services/service_manager/public/cpp/connector.h"
-#include "services/service_manager/public/cpp/service.h"
-#include "services/service_manager/public/cpp/service_binding.h"
-#include "services/service_manager/public/cpp/test/test_connector_factory.h"
-#include "services/ws/public/cpp/input_devices/input_device_client_test_api.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/zlib/google/compression_utils.h"
-#include "ui/aura/test/aura_test_utils.h"
 #include "ui/display/display.h"
 #include "ui/display/test/test_screen.h"
+#include "ui/events/devices/device_data_manager.h"
+#include "ui/events/devices/device_data_manager_test_api.h"
 #include "ui/events/devices/input_device.h"
-#include "ui/events/devices/input_device_manager.h"
+#include "ui/events/devices/touchscreen_device.h"
 
 namespace chromeos {
 
@@ -67,20 +65,15 @@ arc::ArcFeatures CreateArcFeaturesForTest() {
   return arc_features;
 }
 
-class TestCrosDisplayConfig : public ash::mojom::CrosDisplayConfigController,
-                              public service_manager::Service {
+class TestCrosDisplayConfig : public ash::mojom::CrosDisplayConfigController {
  public:
-  explicit TestCrosDisplayConfig(service_manager::mojom::ServiceRequest request)
-      : service_binding_(this, std::move(request)) {}
+  explicit TestCrosDisplayConfig(
+      mojo::PendingReceiver<ash::mojom::CrosDisplayConfigController> receiver)
+      : receiver_(this, std::move(receiver)) {}
   ~TestCrosDisplayConfig() override = default;
 
   void Flush() {
-    if (!ready_) {
-      base::RunLoop run_loop;
-      ready_callback_ = run_loop.QuitClosure();
-      run_loop.Run();
-    }
-    binding_.FlushForTesting();
+    receiver_.FlushForTesting();
   }
 
   bool RunGetDisplayUnitInfoListCallback(
@@ -93,8 +86,9 @@ class TestCrosDisplayConfig : public ash::mojom::CrosDisplayConfigController,
   }
 
   // ash::mojom::CrosDisplayConfigController:
-  void AddObserver(ash::mojom::CrosDisplayConfigObserverAssociatedPtrInfo
-                       observer) override {}
+  void AddObserver(
+      mojo::PendingAssociatedRemote<ash::mojom::CrosDisplayConfigObserver>
+          observer) override {}
   void GetDisplayLayoutInfo(GetDisplayLayoutInfoCallback callback) override {}
   void SetDisplayLayoutInfo(ash::mojom::DisplayLayoutInfoPtr info,
                             SetDisplayLayoutInfoCallback callback) override {}
@@ -116,25 +110,11 @@ class TestCrosDisplayConfig : public ash::mojom::CrosDisplayConfigController,
                         ash::mojom::DisplayConfigOperation op,
                         ash::mojom::TouchCalibrationPtr calibration,
                         TouchCalibrationCallback callback) override {}
-
-  // service_manager::Service:
-  void OnBindInterface(const service_manager::BindSourceInfo& source_info,
-                       const std::string& interface_name,
-                       mojo::ScopedMessagePipeHandle interface_pipe) override {
-    DCHECK(interface_name == ash::mojom::CrosDisplayConfigController::Name_);
-    binding_.Bind(ash::mojom::CrosDisplayConfigControllerRequest(
-        std::move(interface_pipe)));
-    ready_ = true;
-    if (ready_callback_)
-      std::move(ready_callback_).Run();
-  }
+  void HighlightDisplay(int64_t id) override {}
 
  private:
-  service_manager::ServiceBinding service_binding_;
-  mojo::Binding<ash::mojom::CrosDisplayConfigController> binding_{this};
+  mojo::Receiver<ash::mojom::CrosDisplayConfigController> receiver_;
 
-  bool ready_ = false;
-  base::OnceClosure ready_callback_;
   GetDisplayUnitInfoListCallback get_display_unit_info_list_callback_;
 
   DISALLOW_COPY_AND_ASSIGN(TestCrosDisplayConfig);
@@ -229,21 +209,21 @@ class RecommendAppsFetcherImplTest : public testing::Test {
   ~RecommendAppsFetcherImplTest() override = default;
 
   void SetUp() override {
-    input_device_manager_ = aura::test::CreateTestInputDeviceManager();
-
     display::Screen::SetScreenInstance(&test_screen_);
     display::Display::SetInternalDisplayId(
         test_screen_.GetPrimaryDisplay().id());
 
+    mojo::PendingRemote<ash::mojom::CrosDisplayConfigController>
+        remote_display_config;
     cros_display_config_ = std::make_unique<TestCrosDisplayConfig>(
-        connector_factory_.RegisterInstance(ash::mojom::kServiceName));
+        remote_display_config.InitWithNewPipeAndPassReceiver());
 
     test_url_loader_factory_.SetInterceptor(
         base::BindRepeating(&RecommendAppsFetcherImplTest::InterceptRequest,
                             base::Unretained(this)));
 
     recommend_apps_fetcher_ = std::make_unique<RecommendAppsFetcherImpl>(
-        &delegate_, connector_factory_.GetDefaultConnector(),
+        &delegate_, std::move(remote_display_config),
         &test_url_loader_factory_);
 
     static_cast<RecommendAppsFetcherImpl*>(recommend_apps_fetcher_.get())
@@ -256,7 +236,8 @@ class RecommendAppsFetcherImplTest : public testing::Test {
     recommend_apps_fetcher_.reset();
     cros_display_config_.reset();
     display::Screen::SetScreenInstance(nullptr);
-    input_device_manager_.reset();
+    device_data_manager_test_api_.SetKeyboardDevices({});
+    device_data_manager_test_api_.SetTouchscreenDevices({});
   }
 
  protected:
@@ -327,7 +308,7 @@ class RecommendAppsFetcherImplTest : public testing::Test {
   std::unique_ptr<RecommendAppsFetcher> recommend_apps_fetcher_;
   std::unique_ptr<TestCrosDisplayConfig> cros_display_config_;
 
-  ws::InputDeviceClientTestApi input_device_client_test_api_;
+  ui::DeviceDataManagerTestApi device_data_manager_test_api_;
   display::test::TestScreen test_screen_;
   base::OnceCallback<void(base::Optional<arc::ArcFeatures>)>
       arc_features_callback_;
@@ -347,11 +328,7 @@ class RecommendAppsFetcherImplTest : public testing::Test {
     arc_features_callback_ = std::move(callback);
   }
 
-  content::TestBrowserThreadBundle thread_bundle_;
-
-  service_manager::TestConnectorFactory connector_factory_;
-
-  std::unique_ptr<ui::InputDeviceManager> input_device_manager_;
+  content::BrowserTaskEnvironment task_environment_;
 
   std::unique_ptr<base::RunLoop> request_waiter_;
 };
@@ -359,10 +336,10 @@ class RecommendAppsFetcherImplTest : public testing::Test {
 TEST_F(RecommendAppsFetcherImplTest, ExtraLargeScreenWithTouch) {
   ASSERT_TRUE(recommend_apps_fetcher_);
 
-  input_device_client_test_api_.SetTouchscreenDevices({ui::TouchscreenDevice(
+  device_data_manager_test_api_.SetTouchscreenDevices({ui::TouchscreenDevice(
       123, ui::InputDeviceType::INPUT_DEVICE_USB,
       std::string("test external touch device"), gfx::Size(1920, 1200), 1)});
-  input_device_client_test_api_.SetKeyboardDevices(std::vector<ui::InputDevice>{
+  device_data_manager_test_api_.SetKeyboardDevices(std::vector<ui::InputDevice>{
       {1, ui::INPUT_DEVICE_INTERNAL, "internal keyboard"}});
   SetDisplaySize(gfx::Size(1920, 1200));
 
@@ -415,7 +392,7 @@ TEST_F(RecommendAppsFetcherImplTest, ExtraLargeScreenWithTouch) {
   app.SetKey("name", base::Value("Test app 1"));
   app.SetKey("icon", base::Value("http://test.app"));
   app.SetKey("package_name", base::Value("test.app1"));
-  expected_apps.GetList().emplace_back(std::move(app));
+  expected_apps.Append(std::move(app));
 
   EXPECT_EQ(expected_apps, delegate_.loaded_apps());
 }
@@ -423,10 +400,10 @@ TEST_F(RecommendAppsFetcherImplTest, ExtraLargeScreenWithTouch) {
 TEST_F(RecommendAppsFetcherImplTest, NoArcFeatures) {
   ASSERT_TRUE(recommend_apps_fetcher_);
 
-  input_device_client_test_api_.SetTouchscreenDevices({ui::TouchscreenDevice(
+  device_data_manager_test_api_.SetTouchscreenDevices({ui::TouchscreenDevice(
       123, ui::InputDeviceType::INPUT_DEVICE_USB,
       std::string("test external touch device"), gfx::Size(1920, 1200), 1)});
-  input_device_client_test_api_.SetKeyboardDevices(std::vector<ui::InputDevice>{
+  device_data_manager_test_api_.SetKeyboardDevices(std::vector<ui::InputDevice>{
       {1, ui::INPUT_DEVICE_INTERNAL, "internal keyboard"}});
   SetDisplaySize(gfx::Size(1920, 1200));
 
@@ -483,7 +460,7 @@ TEST_F(RecommendAppsFetcherImplTest, NoArcFeatures) {
   app.SetKey("name", base::Value("Test app 1"));
   app.SetKey("icon", base::Value("http://test.app"));
   app.SetKey("package_name", base::Value("test.app1"));
-  expected_apps.GetList().emplace_back(std::move(app));
+  expected_apps.Append(std::move(app));
 
   EXPECT_EQ(expected_apps, delegate_.loaded_apps());
 }
@@ -491,12 +468,12 @@ TEST_F(RecommendAppsFetcherImplTest, NoArcFeatures) {
 TEST_F(RecommendAppsFetcherImplTest, HasHardKeyboard) {
   ASSERT_TRUE(recommend_apps_fetcher_);
 
-  input_device_client_test_api_.SetTouchscreenDevices({ui::TouchscreenDevice(
+  device_data_manager_test_api_.SetTouchscreenDevices({ui::TouchscreenDevice(
       123, ui::InputDeviceType::INPUT_DEVICE_USB,
       std::string("test external touch device"), gfx::Size(1920, 1200), 1)});
-  input_device_client_test_api_.SetKeyboardDevices(std::vector<ui::InputDevice>{
+  device_data_manager_test_api_.SetKeyboardDevices(std::vector<ui::InputDevice>{
       {1, ui::INPUT_DEVICE_INTERNAL, "internal keyboard", "phys",
-       base::FilePath("sys_path"), 0, 0}});
+       base::FilePath("sys_path"), 0, 0, 0}});
   SetDisplaySize(gfx::Size(1920, 1200));
 
   recommend_apps_fetcher_->Start();
@@ -548,7 +525,7 @@ TEST_F(RecommendAppsFetcherImplTest, HasHardKeyboard) {
   app.SetKey("name", base::Value("Test app 1"));
   app.SetKey("icon", base::Value("http://test.app"));
   app.SetKey("package_name", base::Value("test.app1"));
-  expected_apps.GetList().emplace_back(std::move(app));
+  expected_apps.Append(std::move(app));
 
   EXPECT_EQ(expected_apps, delegate_.loaded_apps());
 }
@@ -607,7 +584,7 @@ TEST_F(RecommendAppsFetcherImplTest, NoKeyboard) {
   app.SetKey("name", base::Value("Test app 1"));
   app.SetKey("icon", base::Value("http://test.app"));
   app.SetKey("package_name", base::Value("test.app1"));
-  expected_apps.GetList().emplace_back(std::move(app));
+  expected_apps.Append(std::move(app));
 
   EXPECT_EQ(expected_apps, delegate_.loaded_apps());
 }
@@ -615,11 +592,11 @@ TEST_F(RecommendAppsFetcherImplTest, NoKeyboard) {
 TEST_F(RecommendAppsFetcherImplTest, ExtraLargeScreenWithStylus) {
   ASSERT_TRUE(recommend_apps_fetcher_);
 
-  input_device_client_test_api_.SetTouchscreenDevices(
+  device_data_manager_test_api_.SetTouchscreenDevices(
       {ui::TouchscreenDevice(123, ui::InputDeviceType::INPUT_DEVICE_INTERNAL,
                              std::string("test external touch device"),
                              gfx::Size(1200, 1920), 1, true)});
-  input_device_client_test_api_.SetKeyboardDevices(std::vector<ui::InputDevice>{
+  device_data_manager_test_api_.SetKeyboardDevices(std::vector<ui::InputDevice>{
       {1, ui::INPUT_DEVICE_INTERNAL, "internal keyboard"}});
 
   SetDisplaySize(gfx::Size(1200, 1920));
@@ -672,7 +649,7 @@ TEST_F(RecommendAppsFetcherImplTest, ExtraLargeScreenWithStylus) {
   app.SetKey("name", base::Value("Test app 1"));
   app.SetKey("icon", base::Value("http://test.app"));
   app.SetKey("package_name", base::Value("test.app1"));
-  expected_apps.GetList().emplace_back(std::move(app));
+  expected_apps.Append(std::move(app));
 
   EXPECT_EQ(expected_apps, delegate_.loaded_apps());
 }
@@ -680,7 +657,7 @@ TEST_F(RecommendAppsFetcherImplTest, ExtraLargeScreenWithStylus) {
 TEST_F(RecommendAppsFetcherImplTest, LargeScreenWithoutTouchScreen) {
   ASSERT_TRUE(recommend_apps_fetcher_);
 
-  input_device_client_test_api_.SetKeyboardDevices(std::vector<ui::InputDevice>{
+  device_data_manager_test_api_.SetKeyboardDevices(std::vector<ui::InputDevice>{
       {1, ui::INPUT_DEVICE_INTERNAL, "internal keyboard"}});
 
   SetDisplaySize(gfx::Size(1200, 1200));
@@ -732,7 +709,7 @@ TEST_F(RecommendAppsFetcherImplTest, LargeScreenWithoutTouchScreen) {
   app.SetKey("name", base::Value("Test app 1"));
   app.SetKey("icon", base::Value("http://test.app"));
   app.SetKey("package_name", base::Value("test.app1"));
-  expected_apps.GetList().emplace_back(std::move(app));
+  expected_apps.Append(std::move(app));
 
   EXPECT_EQ(expected_apps, delegate_.loaded_apps());
 }
@@ -740,7 +717,7 @@ TEST_F(RecommendAppsFetcherImplTest, LargeScreenWithoutTouchScreen) {
 TEST_F(RecommendAppsFetcherImplTest, NormalScreenWithoutTouchScreen) {
   ASSERT_TRUE(recommend_apps_fetcher_);
 
-  input_device_client_test_api_.SetKeyboardDevices(std::vector<ui::InputDevice>{
+  device_data_manager_test_api_.SetKeyboardDevices(std::vector<ui::InputDevice>{
       {1, ui::INPUT_DEVICE_INTERNAL, "internal keyboard"}});
 
   SetDisplaySize(gfx::Size(1200, 512));
@@ -792,7 +769,7 @@ TEST_F(RecommendAppsFetcherImplTest, NormalScreenWithoutTouchScreen) {
   app.SetKey("name", base::Value("Test app 1"));
   app.SetKey("icon", base::Value("http://test.app"));
   app.SetKey("package_name", base::Value("test.app1"));
-  expected_apps.GetList().emplace_back(std::move(app));
+  expected_apps.Append(std::move(app));
 
   EXPECT_EQ(expected_apps, delegate_.loaded_apps());
 }
@@ -800,7 +777,7 @@ TEST_F(RecommendAppsFetcherImplTest, NormalScreenWithoutTouchScreen) {
 TEST_F(RecommendAppsFetcherImplTest, SmallScreenWithoutTouchScreen) {
   ASSERT_TRUE(recommend_apps_fetcher_);
 
-  input_device_client_test_api_.SetKeyboardDevices(std::vector<ui::InputDevice>{
+  device_data_manager_test_api_.SetKeyboardDevices(std::vector<ui::InputDevice>{
       {1, ui::INPUT_DEVICE_INTERNAL, "internal keyboard"},
       {2, ui::INPUT_DEVICE_USB, "external keyboard"}});
 
@@ -853,7 +830,7 @@ TEST_F(RecommendAppsFetcherImplTest, SmallScreenWithoutTouchScreen) {
   app.SetKey("name", base::Value("Test app 1"));
   app.SetKey("icon", base::Value("http://test.app"));
   app.SetKey("package_name", base::Value("test.app1"));
-  expected_apps.GetList().emplace_back(std::move(app));
+  expected_apps.Append(std::move(app));
 
   EXPECT_EQ(expected_apps, delegate_.loaded_apps());
 }
@@ -861,7 +838,7 @@ TEST_F(RecommendAppsFetcherImplTest, SmallScreenWithoutTouchScreen) {
 TEST_F(RecommendAppsFetcherImplTest, ArcFeaturesReadyBeforeAsh) {
   ASSERT_TRUE(recommend_apps_fetcher_);
 
-  input_device_client_test_api_.SetKeyboardDevices(std::vector<ui::InputDevice>{
+  device_data_manager_test_api_.SetKeyboardDevices(std::vector<ui::InputDevice>{
       {1, ui::INPUT_DEVICE_INTERNAL, "internal keyboard"},
       {2, ui::INPUT_DEVICE_USB, "external keyboard"}});
 
@@ -914,7 +891,7 @@ TEST_F(RecommendAppsFetcherImplTest, ArcFeaturesReadyBeforeAsh) {
   app.SetKey("name", base::Value("Test app 1"));
   app.SetKey("icon", base::Value("http://test.app"));
   app.SetKey("package_name", base::Value("test.app1"));
-  expected_apps.GetList().emplace_back(std::move(app));
+  expected_apps.Append(std::move(app));
 
   EXPECT_EQ(expected_apps, delegate_.loaded_apps());
 }
@@ -922,7 +899,7 @@ TEST_F(RecommendAppsFetcherImplTest, ArcFeaturesReadyBeforeAsh) {
 TEST_F(RecommendAppsFetcherImplTest, RetryCalledBeforeFirstRequest) {
   ASSERT_TRUE(recommend_apps_fetcher_);
 
-  input_device_client_test_api_.SetKeyboardDevices(std::vector<ui::InputDevice>{
+  device_data_manager_test_api_.SetKeyboardDevices(std::vector<ui::InputDevice>{
       {1, ui::INPUT_DEVICE_INTERNAL, "internal keyboard"},
       {2, ui::INPUT_DEVICE_USB, "external keyboard"}});
 
@@ -963,7 +940,7 @@ TEST_F(RecommendAppsFetcherImplTest, RetryCalledBeforeFirstRequest) {
   app.SetKey("name", base::Value("Test app 1"));
   app.SetKey("icon", base::Value("http://test.app"));
   app.SetKey("package_name", base::Value("test.app1"));
-  expected_apps.GetList().emplace_back(std::move(app));
+  expected_apps.Append(std::move(app));
 
   EXPECT_EQ(expected_apps, delegate_.loaded_apps());
 
@@ -1049,7 +1026,7 @@ TEST_F(RecommendAppsFetcherImplTest, ResponseWithLeadeingBrackets) {
   app.SetKey("name", base::Value("Test app 1"));
   app.SetKey("icon", base::Value("http://test.app"));
   app.SetKey("package_name", base::Value("test.app1"));
-  expected_apps.GetList().emplace_back(std::move(app));
+  expected_apps.Append(std::move(app));
 
   EXPECT_EQ(expected_apps, delegate_.loaded_apps());
 }
@@ -1133,11 +1110,11 @@ TEST_F(RecommendAppsFetcherImplTest, ResponseWithMultipleApps) {
   app1.SetKey("name", base::Value("Test app 1"));
   app1.SetKey("icon", base::Value("http://test.app"));
   app1.SetKey("package_name", base::Value("test.app1"));
-  expected_apps.GetList().emplace_back(std::move(app1));
+  expected_apps.Append(std::move(app1));
 
   base::Value app2(base::Value::Type::DICTIONARY);
   app2.SetKey("package_name", base::Value("test.app2"));
-  expected_apps.GetList().emplace_back(std::move(app2));
+  expected_apps.Append(std::move(app2));
 
   EXPECT_EQ(expected_apps, delegate_.loaded_apps());
 }
@@ -1177,11 +1154,11 @@ TEST_F(RecommendAppsFetcherImplTest, InvalidAppItemsIgnored) {
   app1.SetKey("name", base::Value("Test app 1"));
   app1.SetKey("icon", base::Value("http://test.app"));
   app1.SetKey("package_name", base::Value("test.app1"));
-  expected_apps.GetList().emplace_back(std::move(app1));
+  expected_apps.Append(std::move(app1));
 
   base::Value app2(base::Value::Type::DICTIONARY);
   app2.SetKey("package_name", base::Value("test.app2"));
-  expected_apps.GetList().emplace_back(std::move(app2));
+  expected_apps.Append(std::move(app2));
 
   EXPECT_EQ(expected_apps, delegate_.loaded_apps());
 }
@@ -1223,7 +1200,7 @@ TEST_F(RecommendAppsFetcherImplTest, InvalidErrorCodeType) {
   ASSERT_TRUE(request);
 
   test_url_loader_factory_.AddResponse(request->url.spec(),
-                                       R"({"Error Code": ""})");
+                                       R"({"Error code": ""})");
 
   EXPECT_EQ(FakeRecommendAppsFetcherDelegate::Result::PARSE_ERROR,
             delegate_.WaitForResult());
@@ -1245,7 +1222,7 @@ TEST_F(RecommendAppsFetcherImplTest, ResponseWithErrorCode) {
   ASSERT_TRUE(request);
 
   test_url_loader_factory_.AddResponse(request->url.spec(),
-                                       R"({"Error Code": "6"})");
+                                       R"({"Error code": "6"})");
 
   EXPECT_EQ(FakeRecommendAppsFetcherDelegate::Result::PARSE_ERROR,
             delegate_.WaitForResult());
@@ -1267,7 +1244,7 @@ TEST_F(RecommendAppsFetcherImplTest, NotEnoughAppsError) {
   ASSERT_TRUE(request);
 
   test_url_loader_factory_.AddResponse(request->url.spec(),
-                                       R"({"Error Code": "5"})");
+                                       R"({"Error code": "5"})");
 
   EXPECT_EQ(FakeRecommendAppsFetcherDelegate::Result::PARSE_ERROR,
             delegate_.WaitForResult());
@@ -1311,7 +1288,7 @@ TEST_F(RecommendAppsFetcherImplTest, SuccessOnRetry) {
   ASSERT_TRUE(request);
 
   test_url_loader_factory_.AddResponse(request->url.spec(),
-                                       R"({"Error Code": "5"})");
+                                       R"({"Error code": "5"})");
 
   EXPECT_EQ(FakeRecommendAppsFetcherDelegate::Result::PARSE_ERROR,
             delegate_.WaitForResult());
@@ -1344,7 +1321,7 @@ TEST_F(RecommendAppsFetcherImplTest, SuccessOnRetry) {
   app.SetKey("name", base::Value("Test app 1"));
   app.SetKey("icon", base::Value("http://test.app"));
   app.SetKey("package_name", base::Value("test.app1"));
-  expected_apps.GetList().emplace_back(std::move(app));
+  expected_apps.Append(std::move(app));
 
   EXPECT_EQ(expected_apps, delegate_.loaded_apps());
 }
@@ -1364,7 +1341,7 @@ TEST_F(RecommendAppsFetcherImplTest, FailureOnRetry) {
   network::ResourceRequest* request = WaitForAppListRequest();
   ASSERT_TRUE(request);
   test_url_loader_factory_.AddResponse(request->url.spec(),
-                                       R"({"Error Code": "5"})");
+                                       R"({"Error code": "5"})");
 
   EXPECT_EQ(FakeRecommendAppsFetcherDelegate::Result::PARSE_ERROR,
             delegate_.WaitForResult());
@@ -1377,7 +1354,7 @@ TEST_F(RecommendAppsFetcherImplTest, FailureOnRetry) {
   ASSERT_TRUE(request);
 
   test_url_loader_factory_.AddResponse(request->url.spec(),
-                                       R"({"Error Code": "10"})");
+                                       R"({"Error code": "10"})");
 
   EXPECT_EQ(FakeRecommendAppsFetcherDelegate::Result::PARSE_ERROR,
             delegate_.WaitForResult());

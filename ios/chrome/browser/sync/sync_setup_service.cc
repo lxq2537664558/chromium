@@ -9,9 +9,9 @@
 #include "base/metrics/histogram_macros.h"
 #include "base/stl_util.h"
 #include "components/sync/base/stop_source.h"
+#include "components/sync/base/user_selectable_type.h"
 #include "components/sync/driver/sync_service.h"
 #include "components/sync/driver/sync_user_settings.h"
-#include "components/unified_consent/feature.h"
 #include "google_apis/gaia/google_service_auth_error.h"
 
 namespace {
@@ -27,9 +27,6 @@ syncer::ModelType kDataTypes[] = {
 SyncSetupService::SyncSetupService(syncer::SyncService* sync_service)
     : sync_service_(sync_service) {
   DCHECK(sync_service_);
-  for (unsigned int i = 0; i < base::size(kDataTypes); ++i) {
-    user_selectable_types_.Put(kDataTypes[i]);
-  }
 }
 
 SyncSetupService::~SyncSetupService() {
@@ -56,16 +53,23 @@ void SyncSetupService::SetDataTypeEnabled(syncer::ModelType datatype,
                                           bool enabled) {
   if (!sync_blocker_)
     sync_blocker_ = sync_service_->GetSetupInProgressHandle();
-  syncer::ModelTypeSet types = GetPreferredDataTypes();
+  syncer::ModelTypeSet model_types = GetPreferredDataTypes();
   if (enabled)
-    types.Put(datatype);
+    model_types.Put(datatype);
   else
-    types.Remove(datatype);
-  types.RetainAll(user_selectable_types_);
+    model_types.Remove(datatype);
+  // TODO(crbug.com/950874): support syncer::UserSelectableType in ios code,
+  // get rid of this workaround and consider getting rid of SyncableDatatype.
+  syncer::UserSelectableTypeSet selected_types;
+  for (syncer::UserSelectableType type : syncer::UserSelectableTypeSet::All()) {
+    if (model_types.Has(syncer::UserSelectableTypeToCanonicalModelType(type))) {
+      selected_types.Put(type);
+    }
+  }
   if (enabled && !IsSyncEnabled())
     SetSyncEnabledWithoutChangingDatatypes(true);
-  sync_service_->GetUserSettings()->SetChosenDataTypes(IsSyncingAllDataTypes(),
-                                                       types);
+  sync_service_->GetUserSettings()->SetSelectedTypes(IsSyncingAllDataTypes(),
+                                                     selected_types);
   if (GetPreferredDataTypes().Empty())
     SetSyncEnabled(false);
 }
@@ -84,6 +88,7 @@ bool SyncSetupService::UserActionIsRequiredToHaveTabSyncWork() {
     // These errors effectively amount to disabled sync and require a signin.
     case SyncSetupService::kSyncServiceSignInNeedsUpdate:
     case SyncSetupService::kSyncServiceNeedsPassphrase:
+    case SyncSetupService::kSyncServiceNeedsTrustedVaultKey:
     case SyncSetupService::kSyncServiceUnrecoverableError:
     case SyncSetupService::kSyncSettingsNotConfirmed:
       return true;
@@ -101,9 +106,8 @@ void SyncSetupService::SetSyncingAllDataTypes(bool sync_all) {
     sync_blocker_ = sync_service_->GetSetupInProgressHandle();
   if (sync_all && !IsSyncEnabled())
     SetSyncEnabled(true);
-  sync_service_->GetUserSettings()->SetChosenDataTypes(
-      sync_all,
-      Intersection(GetPreferredDataTypes(), syncer::UserSelectableTypes()));
+  sync_service_->GetUserSettings()->SetSelectedTypes(
+      sync_all, sync_service_->GetUserSettings()->GetSelectedTypes());
 }
 
 bool SyncSetupService::IsSyncEnabled() const {
@@ -136,13 +140,7 @@ SyncSetupService::SyncServiceState SyncSetupService::GetSyncServiceState() {
     case GoogleServiceAuthError::UNEXPECTED_SERVICE_RESPONSE:
       break;
     // The following errors are unexpected on iOS.
-    case GoogleServiceAuthError::CAPTCHA_REQUIRED:
-    case GoogleServiceAuthError::ACCOUNT_DELETED:
-    case GoogleServiceAuthError::ACCOUNT_DISABLED:
-    case GoogleServiceAuthError::TWO_FACTOR:
-    case GoogleServiceAuthError::HOSTED_NOT_ALLOWED_DEPRECATED:
     case GoogleServiceAuthError::SERVICE_ERROR:
-    case GoogleServiceAuthError::WEB_LOGIN_REQUIRED:
     // Conventional value for counting the states, never used.
     case GoogleServiceAuthError::NUM_STATES:
       NOTREACHED() << "Unexpected Auth error ("
@@ -152,11 +150,21 @@ SyncSetupService::SyncServiceState SyncSetupService::GetSyncServiceState() {
   }
   if (sync_service_->HasUnrecoverableError())
     return kSyncServiceUnrecoverableError;
-  if (sync_service_->GetUserSettings()->IsPassphraseRequiredForDecryption())
+  if (sync_service_->GetUserSettings()
+          ->IsPassphraseRequiredForPreferredDataTypes()) {
     return kSyncServiceNeedsPassphrase;
+  }
   if (!IsFirstSetupComplete() && IsSyncEnabled())
     return kSyncSettingsNotConfirmed;
+  if (sync_service_->GetUserSettings()
+          ->IsTrustedVaultKeyRequiredForPreferredDataTypes()) {
+    return kSyncServiceNeedsTrustedVaultKey;
+  }
   return kNoSyncServiceError;
+}
+
+bool SyncSetupService::IsEncryptEverythingEnabled() const {
+  return sync_service_->GetUserSettings()->IsEncryptEverythingEnabled();
 }
 
 bool SyncSetupService::HasFinishedInitialSetup() {
@@ -176,13 +184,13 @@ void SyncSetupService::PrepareForFirstSyncSetup() {
     sync_blocker_ = sync_service_->GetSetupInProgressHandle();
 }
 
-void SyncSetupService::SetFirstSetupComplete() {
-  DCHECK(unified_consent::IsUnifiedConsentFeatureEnabled());
+void SyncSetupService::SetFirstSetupComplete(
+    syncer::SyncFirstSetupCompleteSource source) {
   DCHECK(sync_blocker_);
   // Turn on the sync setup completed flag only if the user did not turn sync
   // off.
   if (sync_service_->CanSyncFeatureStart()) {
-    sync_service_->GetUserSettings()->SetFirstSetupComplete();
+    sync_service_->GetUserSettings()->SetFirstSetupComplete(source);
   }
 }
 
@@ -190,21 +198,7 @@ bool SyncSetupService::IsFirstSetupComplete() const {
   return sync_service_->GetUserSettings()->IsFirstSetupComplete();
 }
 
-void SyncSetupService::PreUnityCommitChanges() {
-  DCHECK(!unified_consent::IsUnifiedConsentFeatureEnabled());
-  if (sync_service_->IsFirstSetupInProgress()) {
-    // Turn on the sync setup completed flag only if the user did not turn sync
-    // off.
-    if (sync_service_->CanSyncFeatureStart()) {
-      sync_service_->GetUserSettings()->SetFirstSetupComplete();
-    }
-  }
-
-  sync_blocker_.reset();
-}
-
 void SyncSetupService::CommitSyncChanges() {
-  DCHECK(unified_consent::IsUnifiedConsentFeatureEnabled());
   sync_blocker_.reset();
 }
 

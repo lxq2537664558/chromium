@@ -48,7 +48,7 @@ struct NET_EXPORT_PRIVATE SimpleIndexLoadResult {
 // the format see |SimpleIndexFile::Serialize()| and
 // |SimpleIndexFile::LoadFromDisk()|.
 //
-// The non-static methods must run on the IO thread. All the real
+// The non-static methods must run on the source creation sequence. All the real
 // work is done in the static methods, which are run on the cache thread
 // or in worker threads. Synchronization between methods is the
 // responsibility of the caller.
@@ -99,7 +99,7 @@ class NET_EXPORT_PRIVATE SimpleIndexFile {
   // |out_result.did_load| untouched, but still return partial and consistent
   // results in |out_result.entries|.
   virtual void LoadIndexEntries(base::Time cache_last_modified,
-                                const base::Closure& callback,
+                                base::OnceClosure callback,
                                 SimpleIndexLoadResult* out_result);
 
   // Writes the specified set of entries to disk.
@@ -109,19 +109,21 @@ class NET_EXPORT_PRIVATE SimpleIndexFile {
                            uint64_t cache_size,
                            const base::TimeTicks& start,
                            bool app_on_background,
-                           const base::Closure& callback);
+                           base::OnceClosure callback);
 
  private:
   friend class WrappedSimpleIndexFile;
 
   // Used for cache directory traversal.
-  using EntryFileCallback = base::Callback<void(const base::FilePath&,
-                                                base::Time last_accessed,
-                                                base::Time last_modified,
-                                                int64_t size)>;
+  using EntryFileCallback =
+      base::RepeatingCallback<void(const base::FilePath&,
+                                   base::Time last_accessed,
+                                   base::Time last_modified,
+                                   int64_t size)>;
 
   // When loading the entries from disk, add this many extra hash buckets to
-  // prevent reallocation on the IO thread when merging in new live entries.
+  // prevent reallocation on the creation sequence when merging in new live
+  // entries.
   static const int kExtraSizeForMerge = 512;
 
   // Synchronous (IO performing) implementation of LoadIndexEntries.

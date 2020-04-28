@@ -6,7 +6,7 @@
 
 #include "base/bind.h"
 #include "base/threading/thread_task_runner_handle.h"
-#include "chromeos/dbus/auth_policy/fake_auth_policy_client.h"
+#include "chromeos/dbus/authpolicy/fake_authpolicy_client.h"
 #include "chromeos/dbus/kerberos/fake_kerberos_client.h"
 #include "chromeos/dbus/kerberos/kerberos_client.h"
 #include "chromeos/dbus/media_analytics/fake_media_analytics_client.h"
@@ -28,6 +28,9 @@ FakeUpstartClient::~FakeUpstartClient() {
   g_instance = nullptr;
 }
 
+void FakeUpstartClient::AddObserver(Observer* observer) {}
+void FakeUpstartClient::RemoveObserver(Observer* observer) {}
+
 // static
 FakeUpstartClient* FakeUpstartClient::Get() {
   return g_instance;
@@ -36,14 +39,18 @@ FakeUpstartClient* FakeUpstartClient::Get() {
 void FakeUpstartClient::StartJob(const std::string& job,
                                  const std::vector<std::string>& upstart_env,
                                  VoidDBusMethodCallback callback) {
+  const bool result =
+      start_job_cb_ ? start_job_cb_.Run(job, upstart_env) : true;
   base::ThreadTaskRunnerHandle::Get()->PostTask(
-      FROM_HERE, base::BindOnce(std::move(callback), true));
+      FROM_HERE, base::BindOnce(std::move(callback), result));
 }
 
 void FakeUpstartClient::StopJob(const std::string& job,
+                                const std::vector<std::string>& upstart_env,
                                 VoidDBusMethodCallback callback) {
+  const bool result = stop_job_cb_ ? stop_job_cb_.Run(job, upstart_env) : true;
   base::ThreadTaskRunnerHandle::Get()->PostTask(
-      FROM_HERE, base::BindOnce(std::move(callback), true));
+      FROM_HERE, base::BindOnce(std::move(callback), result));
 }
 
 void FakeUpstartClient::StartAuthPolicyService() {
@@ -56,11 +63,8 @@ void FakeUpstartClient::RestartAuthPolicyService() {
   FakeAuthPolicyClient::Get()->SetStarted(true);
 }
 
-void FakeUpstartClient::StartKerberosService(VoidDBusMethodCallback callback) {
-  KerberosClient::Get()->GetTestInterface()->set_started(true);
-  base::ThreadTaskRunnerHandle::Get()->PostTask(
-      FROM_HERE, base::BindOnce(std::move(callback), true));
-}
+void FakeUpstartClient::StartLacrosChrome(
+    const std::vector<std::string>& upstart_env) {}
 
 void FakeUpstartClient::StartMediaAnalytics(
     const std::vector<std::string>& /* upstart_env */,

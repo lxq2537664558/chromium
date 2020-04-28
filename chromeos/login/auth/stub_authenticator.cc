@@ -6,7 +6,7 @@
 
 #include "base/bind.h"
 #include "base/location.h"
-#include "base/logging.h"
+#include "base/notreached.h"
 #include "base/threading/thread_task_runner_handle.h"
 
 namespace chromeos {
@@ -39,17 +39,35 @@ void StubAuthenticator::AuthenticateToLogin(content::BrowserContext* context,
   // Don't compare the entire |expected_user_context_| to |user_context| because
   // during non-online re-auth |user_context| does not have a gaia id.
   if (expected_user_context_.GetAccountId() == user_context.GetAccountId() &&
-      *expected_user_context_.GetKey() == *user_context.GetKey()) {
+      (*expected_user_context_.GetKey() == *user_context.GetKey() ||
+       *ExpectedUserContextWithTransformedKey().GetKey() ==
+           *user_context.GetKey())) {
     switch (auth_action_) {
       case AuthAction::kAuthSuccess:
         task_runner_->PostTask(
             FROM_HERE, base::BindOnce(&StubAuthenticator::OnAuthSuccess, this));
+        break;
+      case AuthAction::kAuthFailure:
+        task_runner_->PostTask(
+            FROM_HERE, base::BindOnce(&StubAuthenticator::OnAuthFailure, this,
+                                      AuthFailure(failure_reason_)));
         break;
       case AuthAction::kPasswordChange:
         task_runner_->PostTask(
             FROM_HERE,
             base::BindOnce(&StubAuthenticator::OnPasswordChangeDetected, this));
         break;
+      case AuthAction::kOldEncryption:
+        if (user_context.IsForcingDircrypto()) {
+          task_runner_->PostTask(
+              FROM_HERE,
+              base::BindOnce(&StubAuthenticator::OnOldEncryptionDetected,
+                             this));
+        } else {
+          task_runner_->PostTask(
+              FROM_HERE,
+              base::BindOnce(&StubAuthenticator::OnAuthSuccess, this));
+        }
     }
     return;
   }
@@ -112,15 +130,22 @@ void StubAuthenticator::LoginAsArcKioskAccount(
   consumer_->OnAuthSuccess(user_context);
 }
 
-void StubAuthenticator::OnAuthSuccess() {
-  // If we want to be more like the real thing, we could save the user ID
-  // in AuthenticateToLogin, but there's not much of a point.
-  UserContext user_context(expected_user_context_);
+void StubAuthenticator::LoginAsWebKioskAccount(
+    const AccountId& /* app_account_id */) {
+  UserContext user_context(user_manager::USER_TYPE_WEB_KIOSK_APP,
+                           expected_user_context_.GetAccountId());
+  user_context.SetIsUsingOAuth(false);
   user_context.SetUserIDHash(
       expected_user_context_.GetAccountId().GetUserEmail() + kUserIdHashSuffix);
   user_context.GetKey()->Transform(Key::KEY_TYPE_SALTED_SHA256_TOP_HALF,
                                    "some-salt");
+  consumer_->OnAuthSuccess(user_context);
+}
 
+void StubAuthenticator::OnAuthSuccess() {
+  // If we want to be more like the real thing, we could save the user ID
+  // in AuthenticateToLogin, but there's not much of a point.
+  UserContext user_context = ExpectedUserContextWithTransformedKey();
   consumer_->OnAuthSuccess(user_context);
 }
 
@@ -158,8 +183,24 @@ void StubAuthenticator::SetExpectedCredentials(
 
 StubAuthenticator::~StubAuthenticator() = default;
 
+UserContext StubAuthenticator::ExpectedUserContextWithTransformedKey() const {
+  UserContext user_context(expected_user_context_);
+  user_context.SetUserIDHash(
+      expected_user_context_.GetAccountId().GetUserEmail() + kUserIdHashSuffix);
+  user_context.GetKey()->Transform(Key::KEY_TYPE_SALTED_SHA256_TOP_HALF,
+                                   "some-salt");
+  return user_context;
+}
+
 void StubAuthenticator::OnPasswordChangeDetected() {
   consumer_->OnPasswordChangeDetected();
+}
+
+void StubAuthenticator::OnOldEncryptionDetected() {
+  // The user is expected to finish login using transformed key.
+  UserContext user_context = ExpectedUserContextWithTransformedKey();
+  consumer_->OnOldEncryptionDetected(user_context,
+                                     has_incomplete_encryption_migration_);
 }
 
 }  // namespace chromeos

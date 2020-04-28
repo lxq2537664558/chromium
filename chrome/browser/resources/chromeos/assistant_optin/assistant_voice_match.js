@@ -14,7 +14,13 @@ const MAX_INDEX = 4;
 Polymer({
   is: 'assistant-voice-match',
 
-  behaviors: [OobeDialogHostBehavior],
+  behaviors: [OobeI18nBehavior, OobeDialogHostBehavior],
+
+  /**
+   * Whether voice match is the first screen of the flow.
+   * @type {boolean}
+   */
+  isFirstScreen: false,
 
   /**
    * Current recording index.
@@ -24,11 +30,28 @@ Polymer({
   currentIndex_: 0,
 
   /**
+   * The delay in ms between speaker ID enrollment finishes and the
+   * voice-match-done action is reported to chrome.
+   * @private {number}
+   */
+  doneActionDelayMs_: 3000,
+
+  /**
+   * Overrides the default delay for sending voice-match-done action.
+   * @param {number} delay The delay to be used in tests.
+   */
+  setDoneActionDelayForTesting(delay) {
+    this.doneActionDelayMs_ = delay;
+  },
+
+  /**
    * On-tap event handler for skip button.
    *
    * @private
    */
-  onSkipTap_: function() {
+  onSkipTap_() {
+    this.$['voice-match-lottie'].setPlay(false);
+    this.$['already-setup-lottie'].setPlay(false);
     chrome.send(
         'login.AssistantOptInFlowScreen.VoiceMatchScreen.userActed',
         ['skip-pressed']);
@@ -39,7 +62,7 @@ Polymer({
    *
    * @private
    */
-  onAgreeTap_: function() {
+  onAgreeTap_() {
     this.removeClass_('intro');
     this.addClass_('recording');
     this.fire('loading');
@@ -54,7 +77,7 @@ Polymer({
    *
    * @private
    */
-  addClass_: function(className) {
+  addClass_(className) {
     this.$['voice-match-dialog'].classList.add(className);
   },
 
@@ -64,14 +87,14 @@ Polymer({
    *
    * @private
    */
-  removeClass_: function(className) {
+  removeClass_(className) {
     this.$['voice-match-dialog'].classList.remove(className);
   },
 
   /**
    * Reloads voice match flow.
    */
-  reloadPage: function() {
+  reloadPage() {
     this.removeClass_('recording');
     this.removeClass_('already-setup');
     this.removeClass_('completed');
@@ -83,7 +106,7 @@ Polymer({
   /**
    * Called when the server is ready to listening for hotword.
    */
-  listenForHotword: function() {
+  listenForHotword() {
     if (this.currentIndex_ == 0) {
       this.fire('loaded');
       announceAccessibleMessage(
@@ -98,7 +121,7 @@ Polymer({
   /**
    * Called when the server has detected and processing hotword.
    */
-  processingHotword: function() {
+  processingHotword() {
     var currentEntry = this.$['voice-entry-' + this.currentIndex_];
     currentEntry.removeAttribute('active');
     currentEntry.setAttribute('completed', true);
@@ -115,7 +138,7 @@ Polymer({
     }
   },
 
-  voiceMatchDone: function() {
+  voiceMatchDone() {
     this.removeClass_('recording');
     this.fire('loaded');
     announceAccessibleMessage(
@@ -129,17 +152,30 @@ Polymer({
     }
 
     window.setTimeout(function() {
+      this.$['voice-match-lottie'].setPlay(false);
+      this.$['already-setup-lottie'].setPlay(false);
       chrome.send(
           'login.AssistantOptInFlowScreen.VoiceMatchScreen.userActed',
           ['voice-match-done']);
-    }, 3000);
+    }.bind(this), this.doneActionDelayMs_);
   },
 
   /**
    * Signal from host to show the screen.
    */
-  onShow: function() {
+  onShow() {
+    if (this.isFirstScreen) {
+      // If voice match is the first screen, slightly delay showing the content
+      // for the lottie animations to load.
+      this.fire('loading');
+      window.setTimeout(function() {
+        this.fire('loaded');
+      }.bind(this), 100);
+    }
+
     chrome.send('login.AssistantOptInFlowScreen.VoiceMatchScreen.screenShown');
+    this.$['voice-match-lottie'].setPlay(true);
+    this.$['already-setup-lottie'].setPlay(true);
     this.$['agree-button'].focus();
     if (loadTimeData.getBoolean('hotwordDspAvailable')) {
       this.$['no-dsp-message'].hidden = true;

@@ -69,8 +69,8 @@ void RawInputDataFetcher::StartMonitor() {
 
   if (!window_) {
     window_.reset(new base::win::MessageWindow());
-    if (!window_->Create(base::Bind(&RawInputDataFetcher::HandleMessage,
-                                    base::Unretained(this)))) {
+    if (!window_->Create(base::BindRepeating(
+            &RawInputDataFetcher::HandleMessage, base::Unretained(this)))) {
       PLOG(ERROR) << "Failed to create the raw input window";
       window_.reset();
       return;
@@ -105,6 +105,17 @@ void RawInputDataFetcher::StopMonitor() {
 
   events_monitored_ = false;
   window_.reset();
+}
+
+bool RawInputDataFetcher::DisconnectUnrecognizedGamepad(int source_id) {
+  for (auto it = controllers_.begin(); it != controllers_.end(); ++it) {
+    if (it->second->GetSourceId() == source_id) {
+      it->second->Shutdown();
+      controllers_.erase(it);
+      return true;
+    }
+  }
+  return false;
 }
 
 void RawInputDataFetcher::ClearControllers() {
@@ -179,6 +190,10 @@ void RawInputDataFetcher::EnumerateDevices() {
           continue;
         }
 
+        bool is_recognized =
+            GamepadId::kUnknownGamepad !=
+            GamepadIdList::Get().GetGamepadId(vendor_int, product_int);
+
         // Record gamepad metrics before excluding XInput devices. This allows
         // us to recognize XInput devices even though the XInput API masks
         // the vendor and product IDs.
@@ -194,7 +209,7 @@ void RawInputDataFetcher::EnumerateDevices() {
           continue;
         }
 
-        PadState* state = GetPadState(source_id);
+        PadState* state = GetPadState(source_id, is_recognized);
         if (!state) {
           new_device->Shutdown();
           continue;  // No slot available for this gamepad.
@@ -211,19 +226,19 @@ void RawInputDataFetcher::EnumerateDevices() {
         pad.vibration_actuator.not_null = device->SupportsVibration();
 
         state->mapper = GetGamepadStandardMappingFunction(
-            vendor_int, product_int, version_number, GAMEPAD_BUS_UNKNOWN);
+            vendor_int, product_int, /*hid_specification_version=*/0,
+            version_number, GAMEPAD_BUS_UNKNOWN);
         state->axis_mask = 0;
         state->button_mask = 0;
 
-        swprintf(pad.id, Gamepad::kIdLengthCap,
-                 L"%ls (%lsVendor: %04x Product: %04x)", product_string.c_str(),
-                 state->mapper ? L"STANDARD GAMEPAD " : L"", vendor_int,
-                 product_int);
+        pad.SetID(base::StringPrintf(L"%ls (%lsVendor: %04x Product: %04x)",
+                                     product_string.c_str(),
+                                     state->mapper ? L"STANDARD GAMEPAD " : L"",
+                                     vendor_int, product_int));
 
-        if (state->mapper)
-          swprintf(pad.mapping, Gamepad::kMappingLengthCap, L"standard");
-        else
-          pad.mapping[0] = 0;
+        // The mapping is standard if there is a standard mapping function.
+        pad.mapping =
+            state->mapper ? GamepadMapping::kStandard : GamepadMapping::kNone;
       }
 
       enumerated_device_handles.insert(device_handle);

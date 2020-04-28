@@ -12,11 +12,11 @@
 #include "ash/login/ui/non_accessible_view.h"
 #include "ash/login/ui/views_utils.h"
 #include "ash/public/cpp/login_constants.h"
-#include "ash/public/interfaces/login_user_info.mojom.h"
 #include "ash/shell.h"
-#include "ash/wallpaper/wallpaper_controller.h"
+#include "ash/wallpaper/wallpaper_controller_impl.h"
 #include "base/bind.h"
 #include "base/numerics/ranges.h"
+#include "base/optional.h"
 #include "base/timer/timer.h"
 #include "ui/compositor/scoped_layer_animation_settings.h"
 #include "ui/display/screen.h"
@@ -286,7 +286,7 @@ ScrollableUsersListView::TestApi::user_views() const {
 }
 
 ScrollableUsersListView::ScrollableUsersListView(
-    const std::vector<mojom::LoginUserInfoPtr>& users,
+    const std::vector<LoginUserInfo>& users,
     const ActionWithUser& on_tap_user,
     LoginDisplayStyle display_style)
     : display_style_(display_style) {
@@ -296,14 +296,14 @@ ScrollableUsersListView::ScrollableUsersListView(
   user_view_host_ = new NonAccessibleView();
   user_view_host_layout_ =
       user_view_host_->SetLayoutManager(std::make_unique<views::BoxLayout>(
-          views::BoxLayout::kVertical, gfx::Insets(),
+          views::BoxLayout::Orientation::kVertical, gfx::Insets(),
           layout_params.between_child_spacing));
   user_view_host_layout_->set_minimum_cross_axis_size(
       LoginUserView::WidthForLayoutStyle(display_style));
   user_view_host_layout_->set_main_axis_alignment(
-      views::BoxLayout::MAIN_AXIS_ALIGNMENT_CENTER);
+      views::BoxLayout::MainAxisAlignment::kCenter);
   user_view_host_layout_->set_cross_axis_alignment(
-      views::BoxLayout::CROSS_AXIS_ALIGNMENT_CENTER);
+      views::BoxLayout::CrossAxisAlignment::kCenter);
 
   for (std::size_t i = 1u; i < users.size(); ++i) {
     auto* view = new LoginUserView(
@@ -327,16 +327,16 @@ ScrollableUsersListView::ScrollableUsersListView(
   // to be vertically centered when non-scrollable.
   auto ensure_min_height = std::make_unique<EnsureMinHeightView>();
   ensure_min_height
-      ->SetLayoutManager(
-          std::make_unique<views::BoxLayout>(views::BoxLayout::kVertical))
-      ->set_main_axis_alignment(views::BoxLayout::MAIN_AXIS_ALIGNMENT_CENTER);
+      ->SetLayoutManager(std::make_unique<views::BoxLayout>(
+          views::BoxLayout::Orientation::kVertical))
+      ->set_main_axis_alignment(views::BoxLayout::MainAxisAlignment::kCenter);
   ensure_min_height->AddChildView(user_view_host_);
   SetContents(std::move(ensure_min_height));
-  SetBackgroundColor(SK_ColorTRANSPARENT);
-  set_draw_overflow_indicator(false);
+  SetBackgroundColor(base::nullopt);
+  SetDrawOverflowIndicator(false);
 
-  SetVerticalScrollBar(new UsersListScrollBar(false));
-  SetHorizontalScrollBar(new UsersListScrollBar(true));
+  SetVerticalScrollBar(std::make_unique<UsersListScrollBar>(false));
+  SetHorizontalScrollBar(std::make_unique<UsersListScrollBar>(true));
 
   observer_.Add(Shell::Get()->wallpaper_controller());
 }
@@ -346,7 +346,7 @@ ScrollableUsersListView::~ScrollableUsersListView() = default;
 LoginUserView* ScrollableUsersListView::GetUserView(
     const AccountId& account_id) {
   for (auto* view : user_views_) {
-    if (view->current_user()->basic_user_info->account_id == account_id)
+    if (view->current_user().basic_user_info.account_id == account_id)
       return view;
   }
   return nullptr;
@@ -388,11 +388,11 @@ void ScrollableUsersListView::OnPaintBackground(gfx::Canvas* canvas) {
 
   // Only draw a gradient if the wallpaper is blurred. Otherwise, draw a rounded
   // rectangle.
-  if (ash::Shell::Get()->wallpaper_controller()->IsWallpaperBlurred()) {
+  if (Shell::Get()->wallpaper_controller()->IsWallpaperBlurredForLockState()) {
     cc::PaintFlags flags;
 
     // Only draw a gradient if the content can be scrolled.
-    if (vertical_scroll_bar()->visible()) {
+    if (vertical_scroll_bar()->GetVisible()) {
       // Draws symmetrical linear gradient at the top and bottom of the view.
       SkScalar view_height = render_bounds.height();
       SkScalar gradient_height = gradient_params_.height;

@@ -12,6 +12,7 @@
 #include "ios/chrome/browser/chrome_url_constants.h"
 #include "ios/chrome/common/app_group/app_group_constants.h"
 #include "ios/chrome/common/x_callback_url.h"
+#include "ios/components/webui/web_ui_url_constants.h"
 #import "net/base/mac/url_conversions.h"
 #include "url/gurl.h"
 
@@ -312,7 +313,6 @@ enum SearchExtensionAction {
                 completeURL:url];
 
     params.textQuery = externalText;
-    params.postOpeningAction = SEARCH_TEXT;
 
     action = ACTION_SEARCH_TEXT;
   }
@@ -331,7 +331,6 @@ enum SearchExtensionAction {
                 completeURL:url];
 
     params.imageSearchData = externalData;
-    params.postOpeningAction = SEARCH_IMAGE;
 
     action = ACTION_SEARCH_IMAGE;
   }
@@ -385,9 +384,15 @@ enum SearchExtensionAction {
   if ([_secureSourceApp
           isEqualToString:app_group::kOpenCommandSourceContentExtension])
     return CALLER_APP_GOOGLE_CHROME_CONTENT_EXTENSION;
+  if ([_secureSourceApp
+          isEqualToString:app_group::kOpenCommandSourceShareExtension])
+    return CALLER_APP_GOOGLE_CHROME_SHARE_EXTENSION;
 
   if (![_declaredSourceApp length])
     return CALLER_APP_NOT_AVAILABLE;
+  if ([_declaredSourceApp
+          isEqualToString:[[NSBundle mainBundle] bundleIdentifier]])
+    return CALLER_APP_GOOGLE_CHROME;
   if ([_declaredSourceApp isEqualToString:@"com.google.GoogleMobile"])
     return CALLER_APP_GOOGLE_SEARCH;
   if ([_declaredSourceApp isEqualToString:@"com.google.Gmail"])

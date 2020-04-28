@@ -12,14 +12,12 @@
 #include "ash/app_list/views/search_result_view.h"
 #include "base/macros.h"
 #include "base/strings/utf_string_conversions.h"
-#include "mojo/public/cpp/bindings/binding.h"
-#include "mojo/public/cpp/bindings/strong_binding.h"
 #include "services/content/public/cpp/test/fake_navigable_contents.h"
 #include "ui/accessibility/ax_node_data.h"
 #include "ui/views/background.h"
 #include "ui/views/test/views_test_base.h"
 
-namespace app_list {
+namespace ash {
 namespace test {
 
 namespace {
@@ -101,7 +99,8 @@ class SearchResultAnswerCardViewTest : public views::ViewsTestBase {
   }
 
   void GetAccessibleNodeData(ui::AXNodeData* node_data) {
-    result_container_view_->child_at(0)->GetAccessibleNodeData(node_data);
+    result_container_view_->children().front()->GetAccessibleNodeData(
+        node_data);
   }
 
   AppListTestViewDelegate& view_delegate() { return view_delegate_; }
@@ -125,7 +124,7 @@ class SearchResultAnswerCardViewTest : public views::ViewsTestBase {
 TEST_F(SearchResultAnswerCardViewTest, Basic) {
   EXPECT_EQ(kDisplayScore, GetContainerScore());
   EXPECT_EQ(1, GetResultCountFromView());
-  ASSERT_TRUE(search_card_view()->visible());
+  ASSERT_TRUE(search_card_view()->GetVisible());
   EXPECT_EQ(1, GetYSize());
 }
 
@@ -146,8 +145,8 @@ TEST_F(SearchResultAnswerCardViewTest, DeleteResult) {
   DeleteResult();
   EXPECT_EQ(0UL, GetResults()->item_count());
   EXPECT_EQ(0, GetYSize());
-  ASSERT_FALSE(search_card_view()->visible());
-  EXPECT_EQ(0, GetContainerScore());
+  ASSERT_FALSE(search_card_view()->GetVisible());
+  EXPECT_EQ(-1, GetContainerScore());
 }
 
 TEST_F(SearchResultAnswerCardViewTest, RemoveEquivalent) {
@@ -181,4 +180,4 @@ TEST_F(SearchResultAnswerCardViewTest, RemoveEquivalent) {
 }
 
 }  // namespace test
-}  // namespace app_list
+}  // namespace ash

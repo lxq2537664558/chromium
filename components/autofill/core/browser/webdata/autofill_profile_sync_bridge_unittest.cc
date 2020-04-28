@@ -18,17 +18,17 @@
 #include "base/run_loop.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/bind_test_util.h"
-#include "base/test/scoped_task_environment.h"
+#include "base/test/task_environment.h"
 #include "base/time/time.h"
-#include "components/autofill/core/browser/autofill_profile.h"
 #include "components/autofill/core/browser/autofill_profile_sync_util.h"
-#include "components/autofill/core/browser/country_names.h"
+#include "components/autofill/core/browser/data_model/autofill_profile.h"
+#include "components/autofill/core/browser/geo/country_names.h"
 #include "components/autofill/core/browser/test_autofill_clock.h"
 #include "components/autofill/core/browser/webdata/autofill_change.h"
 #include "components/autofill/core/browser/webdata/autofill_table.h"
 #include "components/autofill/core/browser/webdata/mock_autofill_webdata_backend.h"
 #include "components/autofill/core/common/autofill_constants.h"
-#include "components/sync/base/hash_util.h"
+#include "components/sync/base/client_tag_hash.h"
 #include "components/sync/model/data_batch.h"
 #include "components/sync/model/data_type_activation_request.h"
 #include "components/sync/model/entity_data.h"
@@ -292,19 +292,18 @@ class AutofillProfileSyncBridgeTest : public testing::Test {
     return data;
   }
 
-  std::unique_ptr<EntityData> SpecificsToEntity(
-      const AutofillProfileSpecifics& specifics) {
-    auto data = std::make_unique<EntityData>();
-    *data->specifics.mutable_autofill_profile() = specifics;
-    data->client_tag_hash = syncer::GenerateSyncableHash(
-        syncer::AUTOFILL_PROFILE, bridge()->GetClientTag(*data));
+  EntityData SpecificsToEntity(const AutofillProfileSpecifics& specifics) {
+    EntityData data;
+    *data.specifics.mutable_autofill_profile() = specifics;
+    data.client_tag_hash = syncer::ClientTagHash::FromUnhashed(
+        syncer::AUTOFILL_PROFILE, bridge()->GetClientTag(data));
     return data;
   }
 
-  std::unique_ptr<syncer::UpdateResponseData> SpecificsToUpdateResponse(
+  syncer::UpdateResponseData SpecificsToUpdateResponse(
       const AutofillProfileSpecifics& specifics) {
-    auto data = std::make_unique<syncer::UpdateResponseData>();
-    data->entity = SpecificsToEntity(specifics);
+    syncer::UpdateResponseData data;
+    data.entity = SpecificsToEntity(specifics);
     return data;
   }
 
@@ -321,7 +320,7 @@ class AutofillProfileSyncBridgeTest : public testing::Test {
  private:
   autofill::TestAutofillClock test_clock_;
   ScopedTempDir temp_dir_;
-  base::test::ScopedTaskEnvironment scoped_task_environment_;
+  base::test::SingleThreadTaskEnvironment task_environment_;
   testing::NiceMock<MockAutofillWebDataBackend> backend_;
   AutofillTable table_;
   WebDatabase db_;
@@ -653,7 +652,8 @@ TEST_F(AutofillProfileSyncBridgeTest, MergeSyncData_SimilarProfiles) {
   AddAutofillProfilesToTable({local1, local2});
 
   // The synced profiles are identical to the local ones, except that the guids
-  // and use_count values are different.
+  // and use_count values are different. Remote ones have additional company
+  // name which makes them not be identical.
   AutofillProfileSpecifics remote1 =
       CreateAutofillProfileSpecifics(kGuidC, kHttpsOrigin);
   remote1.add_name_first("John");
@@ -672,10 +672,7 @@ TEST_F(AutofillProfileSyncBridgeTest, MergeSyncData_SimilarProfiles) {
   // should never overwrite a verified one.
   AutofillProfileSpecifics merged1(remote1);
   merged1.set_origin(kHttpOrigin);
-  // TODO(jkrcal): This is taken over from the previous test suite without any
-  // reasoning why this happens. This indeed happens, deep in
-  // AutofillProfileComparator when merging profiles both without NAME_FULL, we
-  // obtain a profile with NAME_FULL. Not sure if intended.
+  // When merging, full name gets populated.
   merged1.add_name_full("John");
   // Merging two profile takes their max use count.
   merged1.set_use_count(27);
@@ -695,11 +692,6 @@ TEST_F(AutofillProfileSyncBridgeTest, MergeSyncData_SimilarProfiles) {
                   WithUsageStats(CreateAutofillProfile(merged1)), local2,
                   WithUsageStats(CreateAutofillProfile(remote2))));
 }
-
-// TODO(jkrcal): All the MergeSimilarProfiles_* tests need some diff in Info to
-// trigger the merge similar code path (we create the diff using phone number).
-// Otherwise, we trigger the merge same code path and none of the tests pass. Is
-// it desired?
 
 // Tests that MergeSimilarProfiles keeps the most recent use date of the two
 // profiles being merged.

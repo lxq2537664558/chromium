@@ -45,6 +45,10 @@ class QuicSimpleClient : public quic::QuicSpdyClientBase {
 
   ~QuicSimpleClient() override;
 
+  std::unique_ptr<quic::QuicSession> CreateQuicClientSession(
+      const quic::ParsedQuicVersionVector& supported_versions,
+      quic::QuicConnection* connection) override;
+
  private:
   friend class net::test::QuicClientPeer;
 
@@ -57,7 +61,7 @@ class QuicSimpleClient : public quic::QuicSpdyClientBase {
   // Tracks if the client is initialized to connect.
   bool initialized_;
 
-  base::WeakPtrFactory<QuicSimpleClient> weak_factory_;
+  base::WeakPtrFactory<QuicSimpleClient> weak_factory_{this};
 
   DISALLOW_COPY_AND_ASSIGN(QuicSimpleClient);
 };

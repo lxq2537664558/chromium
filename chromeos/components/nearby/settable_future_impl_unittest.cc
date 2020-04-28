@@ -12,7 +12,8 @@
 #include "base/stl_util.h"
 #include "base/synchronization/lock.h"
 #include "base/task/post_task.h"
-#include "base/test/scoped_task_environment.h"
+#include "base/task/thread_pool.h"
+#include "base/test/task_environment.h"
 #include "base/test/test_timeouts.h"
 #include "base/threading/platform_thread.h"
 #include "base/threading/thread_restrictions.h"
@@ -49,7 +50,7 @@ class SettableFutureImplTest : public testing::Test {
 
   base::UnguessableToken PostGetAsyncResult() {
     base::UnguessableToken id = base::UnguessableToken::Create();
-    base::PostTaskWithTraits(
+    base::ThreadPool::PostTask(
         FROM_HERE, {base::MayBlock()},
         base::BindOnce(&SettableFutureImplTest::GetAsyncResult,
                        base::Unretained(this), id));
@@ -64,7 +65,7 @@ class SettableFutureImplTest : public testing::Test {
   void VerifyAsyncResultForId(const base::UnguessableToken& id,
                               bool expected_result) {
     base::AutoLock al(map_lock_);
-    EXPECT_TRUE(base::ContainsKey(id_to_async_result_map_, id));
+    EXPECT_TRUE(base::Contains(id_to_async_result_map_, id));
     EXPECT_TRUE(id_to_async_result_map_[id]);
     EXPECT_TRUE(id_to_async_result_map_[id]->ok());
     EXPECT_EQ(expected_result, id_to_async_result_map_[id]->result());
@@ -80,7 +81,7 @@ class SettableFutureImplTest : public testing::Test {
     base::PlatformThread::Sleep(TestTimeouts::tiny_timeout());
   }
 
-  base::test::ScopedTaskEnvironment scoped_task_environment_;
+  base::test::TaskEnvironment task_environment_;
 
  private:
   void GetAsyncResult(const base::UnguessableToken& id) {

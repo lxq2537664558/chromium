@@ -75,9 +75,6 @@ class MockDelegate : public LocalSessionEventHandlerImpl::Delegate {
   MOCK_METHOD1(IsTabNodeUnsynced, bool(int tab_node_id));
   MOCK_METHOD2(TrackLocalNavigationId,
                void(base::Time timestamp, int unique_id));
-  MOCK_METHOD1(OnPageFaviconUpdated, void(const GURL& page_url));
-  MOCK_METHOD2(OnFaviconVisited,
-               void(const GURL& page_url, const GURL& favicon_url));
 };
 
 class LocalSessionEventHandlerImplTest : public testing::Test {
@@ -143,6 +140,9 @@ TEST_F(LocalSessionEventHandlerImplTest, GetTabSpecificsFromDelegate) {
   TestSyncedTabDelegate* tab = AddTabWithTime(kWindowId1, kFoo1, kTime1);
   tab->Navigate(kBar1, kTime2);
   tab->Navigate(kBaz1, kTime3);
+  tab->SetPageLanguageAtIndex(0, "en");
+  tab->SetPageLanguageAtIndex(1, "fr");
+  tab->SetPageLanguageAtIndex(2, "in");
   InitHandler();
 
   const sync_pb::SessionTab session_tab =
@@ -171,6 +171,9 @@ TEST_F(LocalSessionEventHandlerImplTest, GetTabSpecificsFromDelegate) {
   EXPECT_FALSE(session_tab.navigation(0).has_blocked_state());
   EXPECT_FALSE(session_tab.navigation(1).has_blocked_state());
   EXPECT_FALSE(session_tab.navigation(2).has_blocked_state());
+  EXPECT_EQ("en", session_tab.navigation(0).page_language());
+  EXPECT_EQ("fr", session_tab.navigation(1).page_language());
+  EXPECT_EQ("in", session_tab.navigation(2).page_language());
 }
 
 // Ensure the current_navigation_index gets set properly when the navigation
@@ -275,8 +278,6 @@ TEST_F(LocalSessionEventHandlerImplTest, BlockedNavigations) {
 // open tabs or windows.
 TEST_F(LocalSessionEventHandlerImplTest, AssociateWindowsAndTabsIfEmpty) {
   EXPECT_CALL(mock_delegate_, CreateLocalSessionWriteBatch()).Times(0);
-  EXPECT_CALL(mock_delegate_, OnPageFaviconUpdated(_)).Times(0);
-  EXPECT_CALL(mock_delegate_, OnFaviconVisited(_, _)).Times(0);
 
   auto mock_batch = std::make_unique<StrictMock<MockWriteBatch>>();
   EXPECT_CALL(*mock_batch,
@@ -299,12 +300,6 @@ TEST_F(LocalSessionEventHandlerImplTest, AssociateWindowsAndTabs) {
   AddTab(kWindowId2, kBar2, kTabId3)->Navigate(kBaz1);
 
   EXPECT_CALL(mock_delegate_, CreateLocalSessionWriteBatch()).Times(0);
-  EXPECT_CALL(mock_delegate_, OnPageFaviconUpdated(_)).Times(0);
-  EXPECT_CALL(mock_delegate_, OnFaviconVisited(GURL(kBar2), _)).Times(0);
-
-  EXPECT_CALL(mock_delegate_, OnFaviconVisited(GURL(kFoo1), _));
-  EXPECT_CALL(mock_delegate_, OnFaviconVisited(GURL(kBar1), _));
-  EXPECT_CALL(mock_delegate_, OnFaviconVisited(GURL(kBaz1), _));
 
   auto mock_batch = std::make_unique<StrictMock<MockWriteBatch>>();
   EXPECT_CALL(*mock_batch,

@@ -8,7 +8,6 @@
 #include <utility>
 
 #include "base/bind.h"
-#include "base/callback_helpers.h"
 #include "base/lazy_instance.h"
 #include "base/stl_util.h"
 #include "extensions/browser/api/api_resource.h"
@@ -32,15 +31,15 @@ ApiResourceManager<ResumableUDPSocket>::GetFactoryInstance() {
   return g_factory.Pointer();
 }
 
-UDPSocket::UDPSocket(network::mojom::UDPSocketPtrInfo socket,
-                     network::mojom::UDPSocketReceiverRequest receiver_request,
-                     const std::string& owner_extension_id)
+UDPSocket::UDPSocket(
+    mojo::PendingRemote<network::mojom::UDPSocket> socket,
+    mojo::PendingReceiver<network::mojom::UDPSocketListener> listener_receiver,
+    const std::string& owner_extension_id)
     : Socket(owner_extension_id),
       socket_(std::move(socket)),
       socket_options_(network::mojom::UDPSocketOptions::New()),
-      is_bound_(false),
-      receiver_binding_(this) {
-  receiver_binding_.Bind(std::move(receiver_request));
+      is_bound_(false) {
+  listener_receiver_.Bind(std::move(listener_receiver));
 }
 
 UDPSocket::~UDPSocket() {
@@ -89,7 +88,7 @@ void UDPSocket::Disconnect(bool socket_destroying) {
   read_callback_.Reset();
   // TODO(devlin): Should we do this for all callbacks?
   if (!recv_from_callback_.is_null()) {
-    base::ResetAndReturn(&recv_from_callback_)
+    std::move(recv_from_callback_)
         .Run(net::ERR_CONNECTION_CLOSED, nullptr, true /* socket_destroying */,
              std::string(), 0);
   }
@@ -227,7 +226,7 @@ void UDPSocket::OnReceived(int32_t result,
           .Run(result, nullptr, false /* socket_destroying */);
       return;
     }
-    base::ResetAndReturn(&recv_from_callback_)
+    std::move(recv_from_callback_)
         .Run(result, nullptr, false /* socket_destroying */, ip, port);
     return;
   }
@@ -242,7 +241,7 @@ void UDPSocket::OnReceived(int32_t result,
   }
 
   IPEndPointToStringAndPort(src_addr.value(), &ip, &port);
-  base::ResetAndReturn(&recv_from_callback_)
+  std::move(recv_from_callback_)
       .Run(data.value().size(), io_buffer, false /* socket_destroying */, ip,
            port);
 }
@@ -324,7 +323,7 @@ void UDPSocket::JoinGroup(const std::string& address,
   }
 
   std::string normalized_address = ip.ToString();
-  if (base::ContainsValue(multicast_groups_, normalized_address)) {
+  if (base::Contains(multicast_groups_, normalized_address)) {
     std::move(callback).Run(net::ERR_ADDRESS_INVALID);
     return;
   }
@@ -387,11 +386,11 @@ const std::vector<std::string>& UDPSocket::GetJoinedGroups() const {
 }
 
 ResumableUDPSocket::ResumableUDPSocket(
-    network::mojom::UDPSocketPtrInfo socket,
-    network::mojom::UDPSocketReceiverRequest receiver_request,
+    mojo::PendingRemote<network::mojom::UDPSocket> socket,
+    mojo::PendingReceiver<network::mojom::UDPSocketListener> listener_receiver,
     const std::string& owner_extension_id)
     : UDPSocket(std::move(socket),
-                std::move(receiver_request),
+                std::move(listener_receiver),
                 owner_extension_id),
       persistent_(false),
       buffer_size_(0),

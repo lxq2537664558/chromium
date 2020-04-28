@@ -70,6 +70,8 @@ class COMPONENT_EXPORT(CRYPTOHOME_CLIENT) FakeCryptohomeClient
   void MountGuestEx(
       const cryptohome::MountGuestRequest& request,
       DBusMethodCallback<cryptohome::BaseReply> callback) override;
+  void GetRsuDeviceId(
+      DBusMethodCallback<cryptohome::BaseReply> callback) override;
   void TpmIsReady(DBusMethodCallback<bool> callback) override;
   void TpmIsEnabled(DBusMethodCallback<bool> callback) override;
   bool CallTpmIsEnabledAndBlock(bool* enabled) override;
@@ -148,6 +150,7 @@ class COMPONENT_EXPORT(CRYPTOHOME_CLIENT) FakeCryptohomeClient
       const std::string& device_id,
       attestation::AttestationChallengeOptions options,
       const std::string& challenge,
+      const std::string& key_name_for_spkac,
       AsyncMethodCallback callback) override;
   void TpmAttestationSignSimpleChallenge(
       attestation::AttestationKeyType key_type,
@@ -166,10 +169,15 @@ class COMPONENT_EXPORT(CRYPTOHOME_CLIENT) FakeCryptohomeClient
       const std::string& key_name,
       const std::string& payload,
       DBusMethodCallback<bool> callback) override;
-  void TpmAttestationDeleteKeys(
+  void TpmAttestationDeleteKeysByPrefix(
       attestation::AttestationKeyType key_type,
       const cryptohome::AccountIdentifier& cryptohome_id,
       const std::string& key_prefix,
+      DBusMethodCallback<bool> callback) override;
+  void TpmAttestationDeleteKey(
+      attestation::AttestationKeyType key_type,
+      const cryptohome::AccountIdentifier& cryptohome_id,
+      const std::string& key_name,
       DBusMethodCallback<bool> callback) override;
   void TpmGetVersion(DBusMethodCallback<TpmVersionInfo> callback) override;
   void GetKeyDataEx(
@@ -192,6 +200,10 @@ class COMPONENT_EXPORT(CRYPTOHOME_CLIENT) FakeCryptohomeClient
                 const cryptohome::AuthorizationRequest& auth,
                 const cryptohome::AddKeyRequest& request,
                 DBusMethodCallback<cryptohome::BaseReply> callback) override;
+  void AddDataRestoreKey(
+      const cryptohome::AccountIdentifier& cryptohome_id,
+      const cryptohome::AuthorizationRequest& auth,
+      DBusMethodCallback<cryptohome::BaseReply> callback) override;
   void UpdateKeyEx(const cryptohome::AccountIdentifier& cryptohome_id,
                    const cryptohome::AuthorizationRequest& auth,
                    const cryptohome::UpdateKeyRequest& request,
@@ -200,6 +212,11 @@ class COMPONENT_EXPORT(CRYPTOHOME_CLIENT) FakeCryptohomeClient
                    const cryptohome::AuthorizationRequest& auth,
                    const cryptohome::RemoveKeyRequest& request,
                    DBusMethodCallback<cryptohome::BaseReply> callback) override;
+  void MassRemoveKeys(
+      const cryptohome::AccountIdentifier& cryptohome_id,
+      const cryptohome::AuthorizationRequest& auth,
+      const cryptohome::MassRemoveKeysRequest& request,
+      DBusMethodCallback<cryptohome::BaseReply> callback) override;
   void GetBootAttribute(
       const cryptohome::GetBootAttributeRequest& request,
       DBusMethodCallback<cryptohome::BaseReply> callback) override;
@@ -232,12 +249,31 @@ class COMPONENT_EXPORT(CRYPTOHOME_CLIENT) FakeCryptohomeClient
                              DBusMethodCallback<int64_t> callback) override;
   void GetCurrentSpaceForGid(gid_t android_gid,
                              DBusMethodCallback<int64_t> callback) override;
+  void CheckHealth(const cryptohome::CheckHealthRequest& request,
+                   DBusMethodCallback<cryptohome::BaseReply> callback) override;
 
   /////////// Test helpers ////////////
 
   // Changes the behavior of WaitForServiceToBeAvailable(). This method runs
   // pending callbacks if is_available is true.
   void SetServiceIsAvailable(bool is_available);
+
+  // Runs pending availability callbacks reporting that the service is
+  // unavailable. Expects service not to be available when called.
+  void ReportServiceIsNotAvailable();
+
+  // Changes the behavior of TpmIsReady().
+  void set_tpm_is_ready(bool value) { tpm_is_ready_ = value; }
+
+  // Changes the behavior of TpmIsEnabled().
+  void set_tpm_is_enabled(bool value) { tpm_is_enabled_ = value; }
+
+  // Sets whether the MountEx() call should fail when the |create| field is not
+  // provided (the error code will be CRYPTOHOME_ERROR_ACCOUNT_NOT_FOUND).
+  // This allows to simulate the behavior during the new user profile creation.
+  void set_mount_create_required(bool mount_create_required) {
+    mount_create_required_ = mount_create_required;
+  }
 
   // Sets the unmount result of Unmount() call.
   void set_unmount_result(bool result) { unmount_result_ = result; }
@@ -256,6 +292,14 @@ class COMPONENT_EXPORT(CRYPTOHOME_CLIENT) FakeCryptohomeClient
   // Sets the needs dircrypto migration value.
   void set_needs_dircrypto_migration(bool needs_migration) {
     needs_dircrypto_migration_ = needs_migration;
+  }
+
+  // Sets whether dircrypto migration update should be run automatically.
+  // If set to false, the client will not send any dircrypto migration progress
+  // updates on its own - a test that sets this will have to call
+  // NotifyDircryptoMigrationProgress() for the progress to update.
+  void set_run_default_dircrypto_migration(bool value) {
+    run_default_dircrypto_migration_ = value;
   }
 
   // Sets the CryptohomeError value to return.
@@ -284,12 +328,21 @@ class COMPONENT_EXPORT(CRYPTOHOME_CLIENT) FakeCryptohomeClient
     tpm_attestation_does_key_exist_should_succeed_ = should_succeed;
   }
 
+  void set_tpm_attestation_public_key(
+      base::Optional<TpmAttestationDataResult> value) {
+    tpm_attestation_public_key_ = value;
+  }
+
   void set_supports_low_entropy_credentials(bool supports) {
     supports_low_entropy_credentials_ = supports;
   }
 
   void set_enable_auth_check(bool enable_auth_check) {
     enable_auth_check_ = enable_auth_check;
+  }
+
+  void set_rsu_device_id(const std::string& rsu_device_id) {
+    rsu_device_id_ = rsu_device_id;
   }
 
   void SetTpmAttestationUserCertificate(
@@ -306,6 +359,11 @@ class COMPONENT_EXPORT(CRYPTOHOME_CLIENT) FakeCryptohomeClient
   void SetTpmAttestationDeviceKeyPayload(const std::string& key_name,
                                          const std::string& payload);
 
+  // Calls TpmInitStatusUpdated() on Observer instances.
+  void NotifyTpmInitStatusUpdated(bool ready,
+                                  bool owned,
+                                  bool was_owned_this_boot);
+
   // Calls DircryptoMigrationProgress() on Observer instances.
   void NotifyDircryptoMigrationProgress(
       cryptohome::DircryptoMigrationStatus status,
@@ -316,11 +374,18 @@ class COMPONENT_EXPORT(CRYPTOHOME_CLIENT) FakeCryptohomeClient
   void NotifyLowDiskSpace(uint64_t disk_free_bytes);
 
   // MountEx getters.
+  const cryptohome::MountRequest& get_last_mount_request() const {
+    return last_mount_request_;
+  }
   bool to_migrate_from_ecryptfs() const {
     return last_mount_request_.to_migrate_from_ecryptfs();
   }
   bool hidden_mount() const { return last_mount_request_.hidden_mount(); }
   bool public_mount() const { return last_mount_request_.public_mount(); }
+  const cryptohome::AuthorizationRequest& get_last_mount_authentication()
+      const {
+    return last_mount_auth_request_;
+  }
   const std::string& get_secret_for_last_mount_authentication() const {
     return last_mount_auth_request_.key().secret();
   }
@@ -340,6 +405,10 @@ class COMPONENT_EXPORT(CRYPTOHOME_CLIENT) FakeCryptohomeClient
 
   bool is_device_locked_to_single_user() const {
     return is_device_locked_to_single_user_;
+  }
+
+  void set_requires_powerwash(bool requires_powerwash) {
+    requires_powerwash_ = requires_powerwash;
   }
 
  private:
@@ -381,14 +450,18 @@ class COMPONENT_EXPORT(CRYPTOHOME_CLIENT) FakeCryptohomeClient
       const std::map<std::string, cryptohome::Key>& keys,
       const std::string& label);
 
-  bool service_is_available_;
+  bool service_is_available_ = true;
+  // If set, WaitForServiceToBeAvailable will run the callback, even if service
+  // is not available (instead of adding the callback to pending callback list).
+  bool service_reported_not_available_ = false;
   base::ObserverList<Observer>::Unchecked observer_list_;
 
-  int remove_firmware_management_parameters_from_tpm_call_count_;
+  int remove_firmware_management_parameters_from_tpm_call_count_ = 0;
 
-  int async_call_id_;
-  bool unmount_result_;
-  std::vector<uint8_t> system_salt_;
+  int async_call_id_ = 1;
+  bool mount_create_required_ = false;
+  bool unmount_result_ = true;
+  std::vector<uint8_t> system_salt_{GetStubSystemSalt()};
 
   std::vector<WaitForServiceToBeAvailableCallback>
       pending_wait_for_service_to_be_available_callbacks_;
@@ -413,9 +486,10 @@ class COMPONENT_EXPORT(CRYPTOHOME_CLIENT) FakeCryptohomeClient
   std::map<std::string, std::string> device_key_payload_map_;
 
   base::RepeatingTimer dircrypto_migration_progress_timer_;
-  uint64_t dircrypto_migration_progress_;
+  uint64_t dircrypto_migration_progress_ = 0;
 
   bool needs_dircrypto_migration_ = false;
+  bool run_default_dircrypto_migration_ = true;
   std::string tpm_attestation_enrollment_id_ignore_cache_ =
       "6fcc0ebddec3db95cdcf82476d594f4d60db934c5b47fa6085c707b2a93e205b";
   std::string tpm_attestation_enrollment_id_ =
@@ -426,6 +500,12 @@ class COMPONENT_EXPORT(CRYPTOHOME_CLIENT) FakeCryptohomeClient
   bool supports_low_entropy_credentials_ = false;
   // Controls if CheckKeyEx actually checks the key.
   bool enable_auth_check_ = false;
+  bool tpm_is_ready_ = true;
+  bool tpm_is_enabled_ = true;
+  base::Optional<TpmAttestationDataResult> tpm_attestation_public_key_;
+
+  // Reply to GetRsuDeviceId().
+  std::string rsu_device_id_;
 
   // MountEx fields.
   cryptohome::CryptohomeErrorCode cryptohome_error_ =
@@ -440,7 +520,10 @@ class COMPONENT_EXPORT(CRYPTOHOME_CLIENT) FakeCryptohomeClient
   // Used by LockToSingleUserMountUntilReboot.
   bool is_device_locked_to_single_user_ = false;
 
-  base::WeakPtrFactory<FakeCryptohomeClient> weak_ptr_factory_;
+  // Used by GetStateRequiresPowerwash
+  bool requires_powerwash_ = false;
+
+  base::WeakPtrFactory<FakeCryptohomeClient> weak_ptr_factory_{this};
 
   DISALLOW_COPY_AND_ASSIGN(FakeCryptohomeClient);
 };

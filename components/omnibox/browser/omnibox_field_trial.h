@@ -14,12 +14,15 @@
 #include <vector>
 
 #include "base/macros.h"
+#include "base/optional.h"
 #include "components/omnibox/browser/autocomplete_input.h"
 #include "components/omnibox/browser/autocomplete_match_type.h"
+#include "components/omnibox/browser/autocomplete_provider.h"
 #include "third_party/metrics_proto/omnibox_event.pb.h"
 
 namespace base {
 class TimeDelta;
+struct Feature;
 }
 
 // The set of parameters customizing the HUP scoring.
@@ -156,29 +159,10 @@ base::TimeDelta StopTimerFieldTrialDuration();
 // ---------------------------------------------------------
 // For the ZeroSuggestProvider field trial.
 
-// Returns whether the user is in a ZeroSuggest field trial, which shows
-// most visited URLs. This is true for both "MostVisited" and
-// "MostVisitedWithoutSERP" trials.
-bool InZeroSuggestMostVisitedFieldTrial();
-
-// Returns whether the user is in ZeroSuggest field trial showing most
-// visited URLs except it doesn't show suggestions on Google search result
-// pages.
-bool InZeroSuggestMostVisitedWithoutSerpFieldTrial();
-
-// Returns whether the user is in a ZeroSuggest field trial, but should
-// show recently searched-for queries instead.
-bool InZeroSuggestPersonalizedFieldTrial();
-
-// ---------------------------------------------------------
-// For the Zero Suggest Redirect to Chrome field trial.
-
-// Returns the server-side experiment ID to use for contextual suggestions.
-// Returns -1 if there is no associated experiment ID.
-int GetZeroSuggestRedirectToChromeExperimentId();
-
-// Returns the server address associated with the current field trial.
-std::string GetZeroSuggestRedirectToChromeServerAddress();
+// Returns the configured "ZeroSuggestVariant" parameter values for
+// |page_classification|.
+std::vector<std::string> GetZeroSuggestVariants(
+    metrics::OmniboxEventProto::PageClassification page_classification);
 
 // ---------------------------------------------------------
 // For the ShortcutsScoringMaxRelevance experiment that's part of the
@@ -226,6 +210,14 @@ bool SearchHistoryDisable(
 void GetDemotionsByType(
     metrics::OmniboxEventProto::PageClassification current_page_classification,
     DemotionMultipliers* demotions_by_type);
+
+// ---------------------------------------------------------
+// For the UIMaxAutocompleteMatchesByProvider experiment that's part of the
+// bundled omnibox field trial.
+
+// If the user is in an experiment group that specifies the max results for a
+// particular provider, returns the limit. Otherwise returns the default limit.
+size_t GetProviderMaxMatches(AutocompleteProvider::Type provider);
 
 // ---------------------------------------------------------
 // For the HistoryURL provider new scoring experiment that is part of the
@@ -376,20 +368,34 @@ int KeywordScoreForSufficientlyCompleteMatch();
 EmphasizeTitlesCondition GetEmphasizeTitlesConditionForInput(
     const AutocompleteInput& input);
 
+// Returns the maximum number of URL matches that should be allowed within
+// the Omnibox if there are search-type matches available to replace them.
+// If the capping feature is not enabled, or the parameter cannot be
+// parsed, it returns 0.
+size_t GetMaxURLMatches();
+
 // ---------------------------------------------------------
 // For UI experiments.
-
-// Returns true if the rich entities flag is enabled.
-bool IsRichEntitySuggestionsEnabled();
 
 // Returns true if the reverse answers flag is enabled.
 bool IsReverseAnswersEnabled();
 
+// Returns true if the short bookmark suggestions flag is enabled.
+bool IsShortBookmarkSuggestionsEnabled();
+
+// Whether a single row of buttons is shown on suggestions with actionable
+// elements like keywords, tab-switch buttons, and Pedals.
+bool IsSuggestionButtonRowEnabled();
+
 // Returns true if either the tab switch suggestions flag is enabled.
 bool IsTabSwitchSuggestionsEnabled();
 
-// Returns true if the feature of reversing the tab switch logic is enabled.
-bool IsTabSwitchLogicReversed();
+// Returns true if dedicated rows for tab switch suggestions is enabled.
+bool IsTabSwitchSuggestionsDedicatedRowEnabled();
+
+// Returns true if feature is enabled to not count submatches towards the
+// max suggestion limit.
+bool IsLooseMaxLimitOnDedicatedRowsEnabled();
 
 // Returns true if the #omnibox-pedal-suggestions feature is enabled.
 bool IsPedalSuggestionsEnabled();
@@ -401,13 +407,33 @@ bool IsHideSteadyStateUrlSchemeEnabled();
 // subdomains is enabled.
 bool IsHideSteadyStateUrlTrivialSubdomainsEnabled();
 
-// Returns the size of the vertical margin that should be used in the
-// suggestion view.
-int GetSuggestionVerticalMargin();
-
 // Simply a convenient wrapper for testing a flag. Used downstream for an
 // assortment of keyword mode experiments.
 bool IsExperimentalKeywordModeEnabled();
+
+// Returns whether the feature to limit the number of shown URL matches
+// is enabled.
+bool IsMaxURLMatchesFeatureEnabled();
+
+// Rich autocompletion.
+bool IsRichAutocompletionEnabled();
+bool RichAutocompletionAutocompleteTitles();
+bool RichAutocompletionTwoLineOmnibox();
+bool RichAutocompletionShowTitles();
+bool RichAutocompletionAutocompleteNonPrefix();
+
+// On Device Head Suggestions feature and its helper functions.
+bool IsOnDeviceHeadSuggestEnabledForIncognito();
+bool IsOnDeviceHeadSuggestEnabledForNonIncognito();
+bool IsOnDeviceHeadSuggestEnabledForAnyMode();
+// Functions can be used in both non-incognito and incognito.
+std::string OnDeviceHeadModelLocaleConstraint(bool is_incognito);
+int OnDeviceHeadSuggestMaxScoreForNonUrlInput(bool is_incognito,
+                                              const int default_score);
+int OnDeviceSearchProviderDefaultLoaderTimeoutMs(bool is_incognito);
+int OnDeviceHeadSuggestDelaySuggestRequestMs(bool is_incognito);
+// Function only works in non-incognito when server suggestions are available.
+std::string OnDeviceHeadSuggestDemoteMode();
 
 // ---------------------------------------------------------
 // Clipboard URL suggestions:
@@ -446,6 +472,9 @@ extern const char kKeywordScoreForSufficientlyCompleteMatchRule[];
 extern const char kHQPAllowDupMatchesForScoringRule[];
 extern const char kEmphasizeTitlesRule[];
 
+// Parameter name used by the Omnibox match capping experiment.
+extern const char kOmniboxMaxURLMatchesParam[];
+
 // Parameter names used by the HUP new scoring experiments.
 extern const char kHUPNewScoringTypedCountRelevanceCapParam[];
 extern const char kHUPNewScoringTypedCountHalfLifeTimeParam[];
@@ -467,23 +496,28 @@ extern const char kMaxNumHQPUrlsIndexedAtStartupOnNonLowEndDevicesParam[];
 
 // Parameter names used by UI experiments.
 extern const char kUIMaxAutocompleteMatchesParam[];
-extern const char kUIVerticalMarginParam[];
+extern const char kUIMaxAutocompleteMatchesByProviderParam[];
 
-// Parameter name and values used by the Simplify HTTPS experiment.
-extern const char kSimplifyHttpsIndicatorParameterName[];
-extern const char kSimplifyHttpsIndicatorParameterEvToSecure[];
-extern const char kSimplifyHttpsIndicatorParameterSecureToLock[];
-extern const char kSimplifyHttpsIndicatorParameterBothToLock[];
-extern const char kSimplifyHttpsIndicatorParameterKeepSecureChip[];
-
-// Parameter names used by Zero Suggest Redirect to Chrome.
-extern const char kZeroSuggestRedirectToChromeExperimentIdParam[];
-extern const char kZeroSuggestRedirectToChromeServerAddressParam[];
+// Parameter names used by on device head provider.
+// These four parameters are shared by both non-incognito and incognito.
+extern const char kOnDeviceHeadModelLocaleConstraint[];
+extern const char kOnDeviceHeadSuggestMaxScoreForNonUrlInput[];
+extern const char kOnDeviceHeadSuggestDelaySuggestRequestMs[];
+extern const char kOnDeviceSearchProviderDefaultLoaderTimeoutMs[];
+// This parameter is for non-incognito which are only useful when server
+// suggestions are available.
+extern const char kOnDeviceHeadSuggestDemoteMode[];
 
 // The amount of time to wait before sending a new suggest request after the
 // previous one unless overridden by a field trial parameter.
 // Non-const because some unittests modify this value.
 extern int kDefaultMinimumTimeBetweenSuggestQueriesMs;
+
+// Parameter names used for rich autocompletion variations.
+extern const char kRichAutocompletionAutocompleteTitlesParam[];
+extern const char kRichAutocompletionTwoLineOmniboxParam[];
+extern const char kRichAutocompletionShowTitlesParam[];
+extern const char kRichAutocompletionAutocompleteNonPrefix[];
 
 namespace internal {
 // The bundled omnibox experiment comes with a set of parameters
@@ -501,9 +535,21 @@ namespace internal {
 // context, returns the empty string.  For more details, including how we
 // prioritize different wildcard contexts, see the implementation.  How to
 // interpret the value is left to the caller; this is rule-dependent.
+//
+// Deprecated. Use GetValueForRuleInContextByFeature instead.
 std::string GetValueForRuleInContext(
     const std::string& rule,
     metrics::OmniboxEventProto::PageClassification page_classification);
+
+// Same as GetValueForRuleInContext, but by |feature| instead of the bundled
+// omnibox experiment.  Prefer to use this method over GetValueForRuleInContext
+// when possible, as it can be useful to configure parameters outside of the
+// omnibox bundled experiment.
+std::string GetValueForRuleInContextByFeature(
+    const base::Feature& feature,
+    const std::string& rule,
+    metrics::OmniboxEventProto::PageClassification page_classification);
+
 }  // namespace internal
 
 }  // namespace OmniboxFieldTrial

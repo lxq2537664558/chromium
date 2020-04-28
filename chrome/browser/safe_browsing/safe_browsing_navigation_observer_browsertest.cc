@@ -2,17 +2,16 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <memory>
 #include "base/run_loop.h"
 #include "base/strings/stringprintf.h"
 #include "build/build_config.h"
-#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/download/download_prefs.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/safe_browsing/download_protection/download_protection_service.h"
 #include "chrome/browser/safe_browsing/safe_browsing_navigation_observer.h"
 #include "chrome/browser/safe_browsing/safe_browsing_navigation_observer_manager.h"
 #include "chrome/browser/safe_browsing/test_safe_browsing_service.h"
-#include "chrome/browser/sessions/session_tab_helper.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/pref_names.h"
@@ -20,11 +19,11 @@
 #include "chrome/test/base/ui_test_utils.h"
 #include "components/download/public/common/download_item.h"
 #include "components/prefs/pref_service.h"
-#include "components/safe_browsing/features.h"
+#include "components/safe_browsing/core/features.h"
+#include "components/sessions/content/session_tab_helper.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/download_item_utils.h"
 #include "content/public/browser/download_manager.h"
-#include "content/public/browser/notification_service.h"
 #include "content/public/test/browser_test_utils.h"
 #include "content/public/test/test_navigation_observer.h"
 #include "content/public/test/test_utils.h"
@@ -148,33 +147,37 @@ class DownloadItemCreatedObserver : public DownloadManager::Observer {
 // WebContents before they are actually installed through AttachTabHelper.
 class TestNavigationObserverManager
     : public SafeBrowsingNavigationObserverManager,
-      public content::NotificationObserver {
+      public TabStripModelObserver {
  public:
-  TestNavigationObserverManager() : SafeBrowsingNavigationObserverManager() {
-    registrar_.Add(this, chrome::NOTIFICATION_TAB_ADDED,
-                   content::NotificationService::AllSources());
+  explicit TestNavigationObserverManager(Browser* browser) {
+    browser->tab_strip_model()->AddObserver(this);
   }
 
-  void Observe(int type,
-               const content::NotificationSource& source,
-               const content::NotificationDetails& details) override {
-    if (type == chrome::NOTIFICATION_TAB_ADDED) {
-      content::WebContents* dest_content =
-          content::Details<content::WebContents>(details).ptr();
+  // TabStripModelObserver:
+  void OnTabStripModelChanged(
+      TabStripModel* tab_strip_model,
+      const TabStripModelChange& change,
+      const TabStripSelectionChange& selection) override {
+    if (change.type() != TabStripModelChange::kInserted)
+      return;
+
+    for (const TabStripModelChange::ContentsWithIndex& tab :
+         change.GetInsert()->contents) {
+      content::WebContents* dest_content = tab.contents;
       DCHECK(dest_content);
       observer_list_.push_back(
-          new SafeBrowsingNavigationObserver(dest_content, this));
+          std::make_unique<SafeBrowsingNavigationObserver>(dest_content, this));
       DCHECK(observer_list_.back());
     }
   }
 
  protected:
-  ~TestNavigationObserverManager() override { observer_list_.clear(); }
+  ~TestNavigationObserverManager() override = default;
 
  private:
-  std::vector<SafeBrowsingNavigationObserver*> observer_list_;
+  std::vector<std::unique_ptr<SafeBrowsingNavigationObserver>> observer_list_;
 
-  content::NotificationRegistrar registrar_;
+  DISALLOW_COPY_AND_ASSIGN(TestNavigationObserverManager);
 };
 
 class SBNavigationObserverBrowserTest : public InProcessBrowserTest {
@@ -189,7 +192,7 @@ class SBNavigationObserverBrowserTest : public InProcessBrowserTest {
                                                  false);
     ASSERT_TRUE(embedded_test_server()->Start());
     host_resolver()->AddRule("*", "127.0.0.1");
-    observer_manager_ = new TestNavigationObserverManager();
+    observer_manager_ = new TestNavigationObserverManager(browser());
     observer_ = new SafeBrowsingNavigationObserver(
         browser()->tab_strip_model()->GetActiveWebContents(),
         observer_manager_);
@@ -376,7 +379,7 @@ class SBNavigationObserverBrowserTest : public InProcessBrowserTest {
   void IdentifyReferrerChainForDownload(
       DownloadItem* download,
       ReferrerChain* referrer_chain) {
-    SessionID download_tab_id = SessionTabHelper::IdForTab(
+    SessionID download_tab_id = sessions::SessionTabHelper::IdForTab(
         content::DownloadItemUtils::GetWebContents(download));
     auto result = observer_manager_->IdentifyReferrerChainByEventURL(
         download->GetURL(), download_tab_id,
@@ -405,7 +408,7 @@ class SBNavigationObserverBrowserTest : public InProcessBrowserTest {
       const GURL& initiating_frame_url,
       content::WebContents* web_contents,
       ReferrerChain* referrer_chain) {
-    SessionID tab_id = SessionTabHelper::IdForTab(web_contents);
+    SessionID tab_id = sessions::SessionTabHelper::IdForTab(web_contents);
     bool has_user_gesture = observer_manager_->HasUserGesture(web_contents);
     observer_manager_->OnUserGestureConsumed(web_contents, base::Time::Now());
     EXPECT_LE(observer_manager_->IdentifyReferrerChainByHostingPage(
@@ -449,6 +452,8 @@ class SBNavigationObserverBrowserTest : public InProcessBrowserTest {
       SafeBrowsingNavigationObserverManager::AttributionResult result) {
     SetExtendedReportingPref(browser()->profile()->GetPrefs(),
                              extended_reporting_enabled);
+    browser()->profile()->GetPrefs()->SetBoolean(prefs::kSafeBrowsingEnabled,
+                                                 extended_reporting_enabled);
     return SafeBrowsingNavigationObserverManager::
         CountOfRecentNavigationsToAppend(
             is_incognito ? *browser()->profile()->GetOffTheRecordProfile()
@@ -2333,8 +2338,9 @@ IN_PROC_BROWSER_TEST_F(SBNavigationObserverBrowserTest,
           SafeBrowsingNavigationObserverManager::NAVIGATION_EVENT_NOT_FOUND));
 }
 
+// Disabled due to flake: https://crbug.com/1048623
 IN_PROC_BROWSER_TEST_F(SBNavigationObserverBrowserTest,
-                       AppendRecentNavigationsToEmptyReferrerChain) {
+                       DISABLED_AppendRecentNavigationsToEmptyReferrerChain) {
   ui_test_utils::NavigateToURL(
       browser(), embedded_test_server()->GetURL(kSingleFrameTestURL));
   GURL initial_url = embedded_test_server()->GetURL(kSingleFrameTestURL);

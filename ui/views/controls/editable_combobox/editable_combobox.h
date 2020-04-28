@@ -8,6 +8,7 @@
 #include <memory>
 
 #include "base/macros.h"
+#include "base/scoped_observer.h"
 #include "base/strings/string16.h"
 #include "build/build_config.h"
 #include "ui/base/ui_base_types.h"
@@ -26,12 +27,12 @@ class Range;
 namespace ui {
 class ComboboxModel;
 class Event;
-class NativeTheme;
 }  // namespace ui
 
 namespace views {
 class EditableComboboxMenuModel;
 class EditableComboboxListener;
+class EditableComboboxPreTargetHandler;
 class MenuRunner;
 class Textfield;
 
@@ -41,13 +42,13 @@ class VIEWS_EXPORT EditableCombobox : public View,
                                       public ViewObserver,
                                       public ButtonListener {
  public:
+  METADATA_HEADER(EditableCombobox);
+
   enum class Type {
     kRegular,
     kPassword,
   };
 
-  // The class name.
-  static const char kViewClassName[];
   static constexpr int kDefaultTextContext = style::CONTEXT_BUTTON;
   static constexpr int kDefaultTextStyle = style::STYLE_PRIMARY;
 
@@ -81,10 +82,6 @@ class VIEWS_EXPORT EditableCombobox : public View,
     listener_ = listener;
   }
 
-  void set_show_menu_on_next_focus(bool show_menu_on_next_focus) {
-    show_menu_on_next_focus_ = show_menu_on_next_focus;
-  }
-
   // Selects the specified logical text range for the textfield.
   void SelectRange(const gfx::Range& range);
 
@@ -109,6 +106,7 @@ class VIEWS_EXPORT EditableCombobox : public View,
 
  private:
   class EditableComboboxMenuModel;
+  class EditableComboboxPreTargetHandler;
 
   void CloseMenu();
 
@@ -122,29 +120,34 @@ class VIEWS_EXPORT EditableCombobox : public View,
   void ShowDropDownMenu(ui::MenuSourceType source_type = ui::MENU_SOURCE_NONE);
 
   // Overridden from View:
-  const char* GetClassName() const override;
   void Layout() override;
-  void OnNativeThemeChanged(const ui::NativeTheme* theme) override;
+  void OnThemeChanged() override;
+  void GetAccessibleNodeData(ui::AXNodeData* node_data) override;
+  void RequestFocus() override;
 
   // Overridden from TextfieldController:
   void ContentsChanged(Textfield* sender,
                        const base::string16& new_contents) override;
+  bool HandleKeyEvent(Textfield* sender,
+                      const ui::KeyEvent& key_event) override;
 
   // Overridden from ViewObserver:
-  void OnViewFocused(View* observed_view) override;
   void OnViewBlurred(View* observed_view) override;
 
   // Overridden from ButtonListener:
   void ButtonPressed(Button* sender, const ui::Event& event) override;
 
   Textfield* textfield_;
-
   Button* arrow_ = nullptr;
-
   std::unique_ptr<ui::ComboboxModel> combobox_model_;
 
   // The EditableComboboxMenuModel used by |menu_runner_|.
   std::unique_ptr<EditableComboboxMenuModel> menu_model_;
+
+  // Pre-target handler that closes the menu when press events happen in the
+  // root view (outside of the open menu's boundaries) but not inside the
+  // textfield.
+  std::unique_ptr<EditableComboboxPreTargetHandler> pre_target_handler_;
 
   // Typography context for the text written in the textfield and the options
   // shown in the drop-down menu.
@@ -156,10 +159,6 @@ class VIEWS_EXPORT EditableCombobox : public View,
 
   const Type type_;
 
-  // If false, then the menu won't be shown the next time the View is focused.
-  // Set false on creation to avoid showing the menu on the first focus event.
-  bool show_menu_on_next_focus_ = true;
-
   // Set while the drop-down is showing.
   std::unique_ptr<MenuRunner> menu_runner_;
 
@@ -169,6 +168,8 @@ class VIEWS_EXPORT EditableCombobox : public View,
   // Whether we are currently showing the passwords for type
   // Type::kPassword.
   bool showing_password_text_;
+
+  ScopedObserver<View, ViewObserver> observer_{this};
 
   DISALLOW_COPY_AND_ASSIGN(EditableCombobox);
 };

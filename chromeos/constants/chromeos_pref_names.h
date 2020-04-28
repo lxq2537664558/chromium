@@ -17,12 +17,19 @@ COMPONENT_EXPORT(CHROMEOS_CONSTANTS) extern const char kAudioMute[];
 COMPONENT_EXPORT(CHROMEOS_CONSTANTS) extern const char kAudioOutputAllowed[];
 COMPONENT_EXPORT(CHROMEOS_CONSTANTS) extern const char kAudioVolumePercent[];
 COMPONENT_EXPORT(CHROMEOS_CONSTANTS) extern const char kAudioDevicesState[];
+COMPONENT_EXPORT(CHROMEOS_CONSTANTS) extern const char kEduCoexistenceId[];
 COMPONENT_EXPORT(CHROMEOS_CONSTANTS)
 extern const char kQuirksClientLastServerCheck[];
 COMPONENT_EXPORT(CHROMEOS_CONSTANTS)
 extern const char kDeviceWiFiFastTransitionEnabled[];
 COMPONENT_EXPORT(CHROMEOS_CONSTANTS)
 extern const char kSecondaryGoogleAccountSigninAllowed[];
+COMPONENT_EXPORT(CHROMEOS_CONSTANTS)
+extern const char kSamlPasswordModifiedTime[];
+COMPONENT_EXPORT(CHROMEOS_CONSTANTS)
+extern const char kSamlPasswordExpirationTime[];
+COMPONENT_EXPORT(CHROMEOS_CONSTANTS)
+extern const char kSamlPasswordChangeUrl[];
 
 }  // namespace prefs
 }  // namespace chromeos

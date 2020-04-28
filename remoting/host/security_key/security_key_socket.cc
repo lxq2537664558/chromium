@@ -7,7 +7,6 @@
 #include <utility>
 
 #include "base/bind.h"
-#include "base/callback_helpers.h"
 #include "base/stl_util.h"
 #include "base/timer/timer.h"
 #include "net/base/io_buffer.h"
@@ -136,7 +135,7 @@ void SecurityKeySocket::DoWrite() {
         })");
   int result = socket_->Write(
       write_buffer_.get(), write_buffer_->BytesRemaining(),
-      base::Bind(&SecurityKeySocket::OnDataWritten, base::Unretained(this)),
+      base::BindOnce(&SecurityKeySocket::OnDataWritten, base::Unretained(this)),
       traffic_annotation);
   if (result != net::ERR_IO_PENDING) {
     OnDataWritten(result);
@@ -152,7 +151,7 @@ void SecurityKeySocket::OnDataRead(int result) {
       socket_read_error_ = true;
     }
     waiting_for_request_ = false;
-    base::ResetAndReturn(&request_received_callback_).Run();
+    std::move(request_received_callback_).Run();
     return;
   }
 
@@ -165,7 +164,7 @@ void SecurityKeySocket::OnDataRead(int result) {
                        read_buffer_->data() + result);
   if (IsRequestComplete()) {
     waiting_for_request_ = false;
-    base::ResetAndReturn(&request_received_callback_).Run();
+    std::move(request_received_callback_).Run();
     return;
   }
 
@@ -177,7 +176,7 @@ void SecurityKeySocket::DoRead() {
 
   int result = socket_->Read(
       read_buffer_.get(), kRequestReadBufferLength,
-      base::Bind(&SecurityKeySocket::OnDataRead, base::Unretained(this)));
+      base::BindOnce(&SecurityKeySocket::OnDataRead, base::Unretained(this)));
   if (result != net::ERR_IO_PENDING) {
     OnDataRead(result);
   }

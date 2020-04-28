@@ -17,6 +17,8 @@
 #include "components/cast_channel/cast_message_util.h"
 #include "components/cast_channel/cast_socket.h"
 
+using cast_channel::ReceiverAppType;
+
 namespace media_router {
 
 static constexpr char kCastStreamingAppId[] = "0F5096E8";
@@ -73,14 +75,18 @@ struct CastAppInfo {
 // Auto-join policy determines when the SDK will automatically connect a sender
 // application to an existing session after API initialization.
 enum class AutoJoinPolicy {
-  // No automatic connection.
+  // No automatic connection.  This is the default when no policy is specified.
   kPageScoped,
+
   // Automatically connects when the session was started with the same app ID,
   // in the same tab and page origin.
   kTabAndOriginScoped,
+
   // Automatically connects when the session was started with the same app ID
   // and the same page origin (regardless of tab).
   kOriginScoped,
+
+  kMaxValue = kOriginScoped,
 };
 
 // Default action policy determines when the SDK will automatically create a
@@ -96,7 +102,17 @@ enum class DefaultActionPolicy {
   // being cast.  The Cast dialog prompts the user to mirror the tab (mirror,
   // not cast, despite the name).
   kCastThisTab,
+
+  kMaxValue = kCastThisTab,
 };
+
+// Tests whether a sender specified by (origin1, tab_id1) is allowed by |policy|
+// to join (origin2, tab_id2).
+bool IsAutoJoinAllowed(AutoJoinPolicy policy,
+                       const url::Origin& origin1,
+                       int tab_id1,
+                       const url::Origin& origin2,
+                       int tab_id2);
 
 // Represents a MediaSource parsed into structured, Cast specific data. The
 // following MediaSources can be parsed into CastMediaSource:
@@ -106,6 +122,8 @@ enum class DefaultActionPolicy {
 class CastMediaSource {
  public:
   // Returns the parsed form of |source|, or nullptr if it cannot be parsed.
+  static std::unique_ptr<CastMediaSource> FromMediaSource(
+      const MediaSource& source);
   static std::unique_ptr<CastMediaSource> FromMediaSourceId(
       const MediaSource::Id& source);
 
@@ -119,9 +137,11 @@ class CastMediaSource {
   CastMediaSource(const CastMediaSource& other);
   ~CastMediaSource();
 
-  // Returns |true| if |app_infos| contain |app_id|.
+  // Returns true if |app_infos_| contain |app_id|.
   bool ContainsApp(const std::string& app_id) const;
   bool ContainsAnyAppFrom(const std::vector<std::string>& app_ids) const;
+  // Returns true if |app_infos_| contain streaming or audio streaming app ID.
+  bool ContainsStreamingApp() const;
 
   // Returns a list of App IDs in this CastMediaSource.
   std::vector<std::string> GetAppIds() const;
@@ -142,7 +162,13 @@ class CastMediaSource {
     broadcast_request_ = request;
   }
   AutoJoinPolicy auto_join_policy() const { return auto_join_policy_; }
-  DefaultActionPolicy default_action_policy() { return default_action_policy_; }
+  DefaultActionPolicy default_action_policy() const {
+    return default_action_policy_;
+  }
+  const std::vector<ReceiverAppType>& supported_app_types() const {
+    return supported_app_types_;
+  }
+  void set_supported_app_types(const std::vector<ReceiverAppType>& types);
 
  private:
   MediaSource::Id source_id_;
@@ -153,6 +179,7 @@ class CastMediaSource {
   // Empty if not set.
   std::string client_id_;
   base::Optional<cast_channel::BroadcastRequest> broadcast_request_;
+  std::vector<ReceiverAppType> supported_app_types_ = {ReceiverAppType::kWeb};
 };
 
 }  // namespace media_router

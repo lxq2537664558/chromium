@@ -44,6 +44,7 @@ typedef std::vector<metrics::OmniboxEventProto_ProviderInfo> ProvidersInfo;
 // Clipboard URL                                                       |  800
 // Zero Suggest (most visited, Android only)                           |  600--
 // Zero Suggest (default, may be overridden by server)                 |  100
+// Local History Zero Suggest                                          |  500--
 //
 // UNKNOWN input type:
 // --------------------------------------------------------------------|-----
@@ -65,7 +66,8 @@ typedef std::vector<metrics::OmniboxEventProto_ProviderInfo> ProvidersInfo;
 // Search Secondary Provider (past query in history)                   |  200*
 // Search Secondary Provider (navigational suggestion)                 |  150++
 // Search Secondary Provider (suggestion)                              |  100++
-// Non Personalized On Device Head Suggest Provider                    |   99--
+// Non Personalized On Device Head Suggest Provider                    |    *
+//                  (default value 99--, can be changed by Finch)
 // Document Suggestions (*experimental): value controlled by Finch     |    *
 //
 // URL input type:
@@ -86,6 +88,7 @@ typedef std::vector<metrics::OmniboxEventProto_ProviderInfo> ProvidersInfo;
 // Search Secondary Provider (past query in history)                   |  200*
 // Search Secondary Provider (navigational suggestion)                 |  150++
 // Search Secondary Provider (suggestion)                              |  100++
+// Non Personalized On Device Head Suggest Provider                    |   99--
 //
 // QUERY input type:
 // --------------------------------------------------------------------|-----
@@ -104,7 +107,8 @@ typedef std::vector<metrics::OmniboxEventProto_ProviderInfo> ProvidersInfo;
 // Search Secondary Provider (past query in history)                   |  200*
 // Search Secondary Provider (navigational suggestion)                 |  150++
 // Search Secondary Provider (suggestion)                              |  100++
-// Non Personalized On Device Head Suggest Provider                    |   99--
+// Non Personalized On Device Head Suggest Provider                    |    *
+//                  (default value 99--, can be changed by Finch)
 //
 // (A search keyword is a keyword with a replacement string; a bookmark keyword
 // is a keyword with no replacement string, that is, a shortcut for a URL.)
@@ -146,6 +150,7 @@ class AutocompleteProvider
     TYPE_CLIPBOARD = 1 << 8,
     TYPE_DOCUMENT = 1 << 9,
     TYPE_ON_DEVICE_HEAD = 1 << 10,
+    TYPE_ZERO_SUGGEST_LOCAL_HISTORY = 1 << 11,
   };
 
   explicit AutocompleteProvider(Type type);
@@ -219,6 +224,10 @@ class AutocompleteProvider
   // method and include the response in their estimate.
   virtual size_t EstimateMemoryUsage() const;
 
+  // Returns a suggested upper bound for how many matches this provider should
+  // return.
+  size_t provider_max_matches() const { return provider_max_matches_; }
+
   // Returns the set of matches for the current query.
   const ACMatches& matches() const { return matches_; }
 
@@ -273,15 +282,24 @@ class AutocompleteProvider
       const bool text_is_search_query,
       const ACMatchClassifications& original_class = ACMatchClassifications());
 
-  // A suggested upper bound for how many matches a provider should return.
-  // TODO(pkasting): http://b/1111299 , http://b/933133 This should go away once
-  // we have good relevance heuristics; the controller should handle all
-  // culling.
-  static const size_t kMaxMatches;
+  // Used to determine if we're in keyword mode, if experimental keyword
+  // mode is enabled, and if we're confident that the user is intentionally
+  // (not accidentally) in keyword mode. Combined, this method returns
+  // whether the caller should perform steps that are only valid in this state.
+  static bool InExplicitExperimentalKeywordMode(const AutocompleteInput& input,
+                                                const base::string16& keyword);
+
+  // Uses the keyword entry mode in |input| (and possibly compare the length
+  // of the user input vs |keyword|) to decide if the user intentionally
+  // entered keyword mode.
+  static bool IsExplicitlyInKeywordMode(const AutocompleteInput& input,
+                                        const base::string16& keyword);
 
  protected:
   friend class base::RefCountedThreadSafe<AutocompleteProvider>;
   FRIEND_TEST_ALL_PREFIXES(BookmarkProviderTest, InlineAutocompletion);
+  FRIEND_TEST_ALL_PREFIXES(AutocompleteResultTest,
+                           DemoteOnDeviceSearchSuggestions);
 
   typedef std::pair<bool, base::string16> FixupReturn;
 
@@ -308,6 +326,8 @@ class AutocompleteProvider
   // NOTE: For a view-source: URL, this will trim from after "view-source:" and
   // return 0.
   static size_t TrimHttpPrefix(base::string16* url);
+
+  const size_t provider_max_matches_;
 
   ACMatches matches_;
   bool done_;

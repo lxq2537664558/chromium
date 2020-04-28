@@ -26,6 +26,7 @@ class COMPONENT_EXPORT(CHROMEOS_NETWORK) DeviceState : public ManagedState {
   // ManagedState overrides
   bool PropertyChanged(const std::string& key,
                        const base::Value& value) override;
+  bool IsActive() const override;
 
   void IPConfigPropertiesChanged(const std::string& ip_config_path,
                                  const base::Value& properties);
@@ -43,7 +44,7 @@ class COMPONENT_EXPORT(CHROMEOS_NETWORK) DeviceState : public ManagedState {
   bool provider_requires_roaming() const { return provider_requires_roaming_; }
   bool support_network_scan() const { return support_network_scan_; }
   const std::string& technology_family() const { return technology_family_; }
-  const std::string& carrier() const { return carrier_; }
+  bool sim_present() const { return sim_present_; }
   const std::string& sim_lock_type() const { return sim_lock_type_; }
   int sim_retries_left() const { return sim_retries_left_; }
   bool sim_lock_enabled() const { return sim_lock_enabled_; }
@@ -64,6 +65,9 @@ class COMPONENT_EXPORT(CHROMEOS_NETWORK) DeviceState : public ManagedState {
   bool eap_authentication_completed() const {
     return eap_authentication_completed_;
   }
+  bool link_up() const { return link_up_; }
+  const std::string& device_bus_type() const { return device_bus_type_; }
+  const std::string& mac_address_source() const { return mac_address_source_; }
 
   // WiFi specific accessors
   const std::string& available_managed_network_path() const {
@@ -92,16 +96,15 @@ class COMPONENT_EXPORT(CHROMEOS_NETWORK) DeviceState : public ManagedState {
   // Cellular specific properties
   std::string operator_name_;
   std::string country_code_;
-  bool allow_roaming_;
-  bool provider_requires_roaming_;
-  bool support_network_scan_;
-  bool scanning_;
+  bool allow_roaming_ = false;
+  bool provider_requires_roaming_ = false;
+  bool support_network_scan_ = false;
+  bool scanning_ = false;
   std::string technology_family_;
-  std::string carrier_;
   std::string sim_lock_type_;
-  int sim_retries_left_;
-  bool sim_lock_enabled_;
-  bool sim_present_;
+  int sim_retries_left_ = 0;
+  bool sim_lock_enabled_ = false;
+  bool sim_present_ = true;
   std::string meid_;
   std::string imei_;
   std::string iccid_;
@@ -109,7 +112,10 @@ class COMPONENT_EXPORT(CHROMEOS_NETWORK) DeviceState : public ManagedState {
   CellularScanResults scan_results_;
 
   // Ethernet specific properties
-  bool eap_authentication_completed_;
+  bool eap_authentication_completed_ = false;
+  bool link_up_ = false;
+  std::string device_bus_type_;
+  std::string mac_address_source_;
 
   // WiFi specific properties
   std::string available_managed_network_path_;

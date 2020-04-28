@@ -25,16 +25,6 @@ void SerializationContext::AddHandle(mojo::ScopedHandle handle,
     DCHECK_LT(handles_.size(), std::numeric_limits<uint32_t>::max());
     out_data->value = static_cast<uint32_t>(handles_.size());
     handles_.emplace_back(std::move(handle));
-
-    MojoAppendMessageDataHandleOptions options = {0};
-    options.struct_size = sizeof(options);
-    options.flags = share_message_order_for_new_handles_
-                        ? MOJO_APPEND_MESSAGE_DATA_HANDLE_FLAG_SPLICE
-                        : MOJO_APPEND_MESSAGE_DATA_HANDLE_FLAG_NONE;
-    handle_options_.push_back(options);
-
-    if (share_message_order_for_new_handles_)
-      has_handles_with_shared_message_order_ = true;
   }
 }
 
@@ -69,6 +59,9 @@ void SerializationContext::AddAssociatedInterfaceInfo(
 }
 
 void SerializationContext::TakeHandlesFromMessage(Message* message) {
+  if (!message->is_serialized())
+    return;
+  receiver_connection_group_ = message->receiver_connection_group();
   handles_.swap(*message->mutable_handles());
   associated_endpoint_handles_.swap(
       *message->mutable_associated_endpoint_handles());
@@ -80,6 +73,14 @@ mojo::ScopedHandle SerializationContext::TakeHandle(
     return mojo::ScopedHandle();
   DCHECK_LT(encoded_handle.value, handles_.size());
   return std::move(handles_[encoded_handle.value]);
+}
+
+void SerializationContext::TakeHandleAsReceiver(
+    const Handle_Data& encoded_handle,
+    PendingReceiverState* receiver_state) {
+  receiver_state->pipe = TakeHandleAs<MessagePipeHandle>(encoded_handle);
+  if (receiver_connection_group_)
+    receiver_state->connection_group = *receiver_connection_group_;
 }
 
 mojo::ScopedInterfaceEndpointHandle

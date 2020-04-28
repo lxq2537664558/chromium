@@ -35,8 +35,6 @@ class SVGFEDisplacementMapElement final
   DEFINE_WRAPPERTYPEINFO();
 
  public:
-  DECLARE_NODE_FACTORY(SVGFEDisplacementMapElement);
-
   explicit SVGFEDisplacementMapElement(Document&);
 
   static ChannelSelectorType StringToChannel(const String&);
@@ -51,7 +49,7 @@ class SVGFEDisplacementMapElement final
     return y_channel_selector_.Get();
   }
 
-  void Trace(blink::Visitor*) override;
+  void Trace(Visitor*) override;
 
  private:
   bool SetFilterEffectAttribute(FilterEffect*,

@@ -15,7 +15,6 @@
 #include "components/sync/model/model_error.h"
 #include "components/sync/model/model_type_store.h"
 #include "components/sync/model/model_type_sync_bridge.h"
-#include "components/sync_sessions/favicon_cache.h"
 #include "components/sync_sessions/local_session_event_handler_impl.h"
 #include "components/sync_sessions/open_tabs_ui_delegate_impl.h"
 #include "components/sync_sessions/session_store.h"
@@ -45,7 +44,6 @@ class SessionSyncBridge : public syncer::ModelTypeSyncBridge,
       std::unique_ptr<syncer::ModelTypeChangeProcessor> change_processor);
   ~SessionSyncBridge() override;
 
-  FaviconCache* GetFaviconCache();
   SessionsGlobalIdMapper* GetGlobalIdMapper();
   OpenTabsUIDelegate* GetOpenTabsUIDelegate();
 
@@ -72,8 +70,6 @@ class SessionSyncBridge : public syncer::ModelTypeSyncBridge,
   CreateLocalSessionWriteBatch() override;
   bool IsTabNodeUnsynced(int tab_node_id) override;
   void TrackLocalNavigationId(base::Time timestamp, int unique_id) override;
-  void OnPageFaviconUpdated(const GURL& page_url) override;
-  void OnFaviconVisited(const GURL& page_url, const GURL& favicon_url) override;
 
  private:
   void OnStoreInitialized(
@@ -93,7 +89,6 @@ class SessionSyncBridge : public syncer::ModelTypeSyncBridge,
   SyncSessionsClient* const sessions_client_;
   LocalSessionEventRouter* const local_session_event_router_;
 
-  FaviconCache favicon_cache_;
   SessionsGlobalIdMapper global_id_mapper_;
   std::unique_ptr<SessionStore> store_;
 
@@ -118,7 +113,7 @@ class SessionSyncBridge : public syncer::ModelTypeSyncBridge,
   // TODO(mastiz): We should rather rename this to |syncing_state_|.
   base::Optional<SyncingState> syncing_;
 
-  base::WeakPtrFactory<SessionSyncBridge> weak_ptr_factory_;
+  base::WeakPtrFactory<SessionSyncBridge> weak_ptr_factory_{this};
 
   DISALLOW_COPY_AND_ASSIGN(SessionSyncBridge);
 };

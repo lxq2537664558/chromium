@@ -6,9 +6,10 @@ package org.chromium.chrome.browser.compositor.animation;
 
 import android.animation.Animator;
 import android.animation.AnimatorListenerAdapter;
-import android.support.annotation.NonNull;
 
-import org.chromium.base.VisibleForTesting;
+import androidx.annotation.NonNull;
+import androidx.annotation.VisibleForTesting;
+
 import org.chromium.chrome.browser.compositor.layouts.LayoutUpdateHost;
 
 import java.util.ArrayList;
@@ -56,7 +57,7 @@ public class CompositorAnimationHandler {
      * Add an animator to the list of known animators to start receiving updates.
      * @param animator The animator to start.
      */
-    public final void registerAndStartAnimator(final CompositorAnimator animator) {
+    final void registerAndStartAnimator(final CompositorAnimator animator) {
         // If animations are currently running, the last updated time is being updated. If not,
         // reset the value here. This prevents gaps in animations from breaking timing.
         if (getActiveAnimationCount() <= 0) mLastUpdateTimeMs = System.currentTimeMillis();
@@ -76,7 +77,7 @@ public class CompositorAnimationHandler {
         }
 
         // If in testing mode, immediately push an update and end the animation.
-        if (sIsInTestingMode) pushUpdate(animator.getDuration());
+        if (sIsInTestingMode) pushUpdate(Long.MAX_VALUE);
     }
 
     /**
@@ -129,7 +130,7 @@ public class CompositorAnimationHandler {
      * @return The number of animations that are active inside this handler.
      */
     @VisibleForTesting
-    public int getActiveAnimationCount() {
+    int getActiveAnimationCount() {
         return mAnimators.size();
     }
 
@@ -155,7 +156,7 @@ public class CompositorAnimationHandler {
      * @return Whether update was successful or not.
      */
     @VisibleForTesting
-    public final boolean pushUpdateInTestingMode(long deltaTimeMs) {
+    final boolean pushUpdateInTestingMode(long deltaTimeMs) {
         return sIsInTestingMode ? pushUpdate(deltaTimeMs) : false;
     }
 }

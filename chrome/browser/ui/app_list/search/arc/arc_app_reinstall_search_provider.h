@@ -80,9 +80,10 @@ class ArcAppReinstallSearchProvider
   void SetTimerForTesting(std::unique_ptr<base::RepeatingTimer> timer);
 
   // ArcAppReinstallAppResult::Observer:
-  void OnOpened(const std::string& id) override;
+  void OnOpened(const std::string& package_name) override;
 
-  void OnVisibilityChanged(const std::string& id, bool visibility) override;
+  void OnVisibilityChanged(const std::string& package_name,
+                           bool visibility) override;
 
   static void RegisterProfilePrefs(PrefRegistrySimple* registry);
  private:
@@ -162,7 +163,7 @@ class ArcAppReinstallSearchProvider
   // url to imageskia of icons being loaded.
   std::unordered_map<std::string, gfx::ImageSkia> loading_icon_urls_;
 
-  base::WeakPtrFactory<ArcAppReinstallSearchProvider> weak_ptr_factory_;
+  base::WeakPtrFactory<ArcAppReinstallSearchProvider> weak_ptr_factory_{this};
   DISALLOW_COPY_AND_ASSIGN(ArcAppReinstallSearchProvider);
 };
 

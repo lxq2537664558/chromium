@@ -7,7 +7,6 @@
 #include <utility>
 
 #include "ash/public/cpp/ash_switches.h"
-#include "ash/public/interfaces/constants.mojom.h"
 #include "base/bind.h"
 #include "base/command_line.h"
 #include "base/files/file_path.h"
@@ -18,6 +17,7 @@
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "chrome/browser/chrome_notification_types.h"
+#include "chrome/browser/chromeos/arc/fileapi/arc_file_system_bridge.h"
 #include "chrome/browser/chromeos/file_manager/path_util.h"
 #include "chrome/browser/chromeos/note_taking_controller_client.h"
 #include "chrome/browser/extensions/extension_service.h"
@@ -33,10 +33,12 @@
 #include "components/arc/arc_prefs.h"
 #include "components/arc/arc_service_manager.h"
 #include "components/arc/arc_util.h"
-#include "components/arc/common/intent_helper.mojom.h"
 #include "components/arc/intent_helper/arc_intent_helper_bridge.h"
+#include "components/arc/mojom/file_system.mojom.h"
+#include "components/arc/mojom/intent_helper.mojom.h"
 #include "components/arc/session/arc_bridge_service.h"
 #include "components/arc/test/connection_holder_util.h"
+#include "components/arc/test/fake_file_system_instance.h"
 #include "components/arc/test/fake_intent_helper_instance.h"
 #include "components/crx_file/id_util.h"
 #include "components/sync_preferences/testing_pref_service_syncable.h"
@@ -47,9 +49,6 @@
 #include "extensions/common/extension_builder.h"
 #include "extensions/common/extension_id.h"
 #include "extensions/common/value_builder.h"
-#include "services/service_manager/public/cpp/service.h"
-#include "services/service_manager/public/cpp/service_binding.h"
-#include "services/service_manager/public/cpp/test/test_connector_factory.h"
 #include "url/gurl.h"
 
 namespace app_runtime = extensions::api::app_runtime;
@@ -84,21 +83,6 @@ std::string GetAppString(const std::string& id,
 std::string GetAppString(const NoteTakingAppInfo& info) {
   return GetAppString(info.app_id, info.name, info.preferred,
                       info.lock_screen_support);
-}
-
-// Helper functions returning strings that can be used to compare launched
-// intents.
-std::string GetIntentString(const std::string& package,
-                            const std::string& clip_data_uri) {
-  return base::StringPrintf(
-      "%s %s", package.c_str(),
-      clip_data_uri.empty() ? "[unset]" : clip_data_uri.c_str());
-}
-std::string GetIntentString(const HandledIntent& intent) {
-  EXPECT_EQ(NoteTakingHelper::kIntentAction, intent.intent->action);
-  return GetIntentString(
-      intent.activity->package_name,
-      (intent.intent->clip_data_uri ? *intent.intent->clip_data_uri : ""));
 }
 
 // Creates an ARC IntentHandlerInfo object.
@@ -148,53 +132,6 @@ class TestObserver : public NoteTakingHelper::Observer {
   DISALLOW_COPY_AND_ASSIGN(TestObserver);
 };
 
-class TestNoteTakingController : public ash::mojom::NoteTakingController,
-                                 public service_manager::Service {
- public:
-  explicit TestNoteTakingController(
-      service_manager::mojom::ServiceRequest request)
-      : service_binding_(this, std::move(request)) {}
-
-  ~TestNoteTakingController() override = default;
-
-  void CallCreateNote() {
-    client_->CreateNote();
-    client_.FlushForTesting();
-  }
-
-  bool client_attached() const { return static_cast<bool>(client_); }
-
-  // ash::mojom::NoteTakingController:
-  void SetClient(ash::mojom::NoteTakingControllerClientPtr client) override {
-    DCHECK(!client_);
-    client_ = std::move(client);
-    client_.set_connection_error_handler(
-        base::Bind(&TestNoteTakingController::OnClientConnectionLost,
-                   base::Unretained(this)));
-  }
-
-  // service_manager::Service:
-  void OnBindInterface(const service_manager::BindSourceInfo& source_info,
-                       const std::string& interface_name,
-                       mojo::ScopedMessagePipeHandle interface_pipe) override {
-    DCHECK(interface_name == ash::mojom::NoteTakingController::Name_);
-    binding_.Bind(
-        ash::mojom::NoteTakingControllerRequest(std::move(interface_pipe)));
-  }
-
- private:
-  void OnClientConnectionLost() {
-    client_.reset();
-    binding_.Close();
-  }
-
-  service_manager::ServiceBinding service_binding_;
-  mojo::Binding<ash::mojom::NoteTakingController> binding_{this};
-  ash::mojom::NoteTakingControllerClientPtr client_;
-
-  DISALLOW_COPY_AND_ASSIGN(TestNoteTakingController);
-};
-
 }  // namespace
 
 class NoteTakingHelperTest : public BrowserWithTestWindowTest {
@@ -216,8 +153,13 @@ class NoteTakingHelperTest : public BrowserWithTestWindowTest {
           ->arc_bridge_service()
           ->intent_helper()
           ->CloseInstance(&intent_helper_);
+      arc::ArcServiceManager::Get()
+          ->arc_bridge_service()
+          ->file_system()
+          ->CloseInstance(file_system_.get());
       NoteTakingHelper::Shutdown();
       intent_helper_bridge_.reset();
+      file_system_bridge_.reset();
       arc_test_.TearDown();
     }
     extensions::ExtensionSystem::Get(profile())->Shutdown();
@@ -240,10 +182,6 @@ class NoteTakingHelperTest : public BrowserWithTestWindowTest {
 
   static NoteTakingHelper* helper() { return NoteTakingHelper::Get(); }
 
-  TestNoteTakingController* test_note_taking_controller() {
-    return test_note_taking_controller_.get();
-  }
-
   NoteTakingControllerClient* note_taking_client() {
     return helper()->GetNoteTakingControllerClientForTesting();
   }
@@ -251,12 +189,6 @@ class NoteTakingHelperTest : public BrowserWithTestWindowTest {
   void SetNoteTakingClientProfile(Profile* profile) {
     if (note_taking_client())
       note_taking_client()->SetProfileForTesting(profile);
-    FlushNoteTakingClientMojo();
-  }
-
-  void FlushNoteTakingClientMojo() {
-    if (note_taking_client())
-      note_taking_client()->FlushMojoForTesting();
   }
 
   // Initializes ARC and NoteTakingHelper. |flags| contains OR-ed together
@@ -279,6 +211,18 @@ class NoteTakingHelperTest : public BrowserWithTestWindowTest {
     WaitForInstanceReady(
         arc::ArcServiceManager::Get()->arc_bridge_service()->intent_helper());
 
+    file_system_bridge_ = std::make_unique<arc::ArcFileSystemBridge>(
+        profile(), arc::ArcServiceManager::Get()->arc_bridge_service());
+    file_system_ = std::make_unique<arc::FakeFileSystemInstance>();
+
+    arc::ArcServiceManager::Get()
+        ->arc_bridge_service()
+        ->file_system()
+        ->SetInstance(file_system_.get());
+    WaitForInstanceReady(
+        arc::ArcServiceManager::Get()->arc_bridge_service()->file_system());
+    ASSERT_TRUE(file_system_->InitCalled());
+
     if (flags & ENABLE_PALETTE) {
       base::CommandLine::ForCurrentProcess()->AppendSwitch(
           ash::switches::kAshForceEnableStylusTools);
@@ -291,11 +235,6 @@ class NoteTakingHelperTest : public BrowserWithTestWindowTest {
     NoteTakingHelper::Get()->SetProfileWithEnabledLockScreenApps(profile());
     NoteTakingHelper::Get()->set_launch_chrome_app_callback_for_test(base::Bind(
         &NoteTakingHelperTest::LaunchChromeApp, base::Unretained(this)));
-
-    test_note_taking_controller_ = std::make_unique<TestNoteTakingController>(
-        connector_factory_.RegisterInstance(ash::mojom::kServiceName));
-    note_taking_client()->SetConnectorForTesting(
-        connector_factory_.GetDefaultConnector());
   }
 
   // Creates an extension.
@@ -355,7 +294,6 @@ class NoteTakingHelperTest : public BrowserWithTestWindowTest {
     extensions::ExtensionSystem::Get(profile)
         ->extension_service()
         ->AddExtension(extension);
-    FlushNoteTakingClientMojo();
   }
   void UninstallExtension(const extensions::Extension* extension,
                           Profile* profile) {
@@ -365,7 +303,6 @@ class NoteTakingHelperTest : public BrowserWithTestWindowTest {
         ->UninstallExtension(
             extension->id(),
             extensions::UninstallReason::UNINSTALL_REASON_FOR_TESTING, &error);
-    FlushNoteTakingClientMojo();
   }
 
   scoped_refptr<const extensions::Extension> CreateAndInstallLockScreenApp(
@@ -473,6 +410,10 @@ class NoteTakingHelperTest : public BrowserWithTestWindowTest {
 
   arc::FakeIntentHelperInstance intent_helper_;
 
+  std::unique_ptr<arc::ArcFileSystemBridge> file_system_bridge_;
+
+  std::unique_ptr<arc::FakeFileSystemInstance> file_system_;
+
   // Pointer to the primary profile (returned by |profile()|) prefs - owned by
   // the profile.
   sync_preferences::TestingPrefServiceSyncable* profile_prefs_ = nullptr;
@@ -494,8 +435,6 @@ class NoteTakingHelperTest : public BrowserWithTestWindowTest {
 
   ArcAppTest arc_test_;
   std::unique_ptr<arc::ArcIntentHelperBridge> intent_helper_bridge_;
-  service_manager::TestConnectorFactory connector_factory_;
-  std::unique_ptr<TestNoteTakingController> test_note_taking_controller_;
 
   DISALLOW_COPY_AND_ASSIGN(NoteTakingHelperTest);
 };
@@ -867,7 +806,7 @@ TEST_F(NoteTakingHelperTest, PlayStoreInitiallyDisabled) {
 
   // After the callback to receive intent handlers has run, the "apps received"
   // member should be updated (even if there aren't any apps).
-  helper()->OnIntentFiltersUpdated();
+  helper()->OnIntentFiltersUpdated(base::nullopt);
   base::RunLoop().RunUntilIdle();
   EXPECT_TRUE(helper()->play_store_enabled());
   EXPECT_TRUE(helper()->android_apps_received());
@@ -903,7 +842,7 @@ TEST_F(NoteTakingHelperTest, AddProfileWithPlayStoreEnabled) {
 
   // Notification of updated intent filters should result in the apps being
   // refreshed.
-  helper()->OnIntentFiltersUpdated();
+  helper()->OnIntentFiltersUpdated(base::nullopt);
   base::RunLoop().RunUntilIdle();
   EXPECT_TRUE(helper()->play_store_enabled());
   EXPECT_TRUE(helper()->android_apps_received());
@@ -973,9 +912,16 @@ TEST_F(NoteTakingHelperTest, LaunchAndroidApp) {
   // The installed app should be launched.
   std::unique_ptr<HistogramTester> histogram_tester(new HistogramTester());
   helper()->LaunchAppForNewNote(profile(), base::FilePath());
-  ASSERT_EQ(1u, intent_helper_.handled_intents().size());
-  EXPECT_EQ(GetIntentString(kPackage1, ""),
-            GetIntentString(intent_helper_.handled_intents()[0]));
+  ASSERT_EQ(1u, file_system_->handledUrlRequests().size());
+  EXPECT_EQ(arc::mojom::ActionType::CREATE_NOTE,
+            file_system_->handledUrlRequests().at(0)->action_type);
+  EXPECT_EQ(
+      kPackage1,
+      file_system_->handledUrlRequests().at(0)->activity_name->package_name);
+  EXPECT_EQ(
+      std::string(),
+      file_system_->handledUrlRequests().at(0)->activity_name->activity_name);
+  ASSERT_EQ(0u, file_system_->handledUrlRequests().at(0)->urls.size());
 
   histogram_tester->ExpectUniqueSample(
       NoteTakingHelper::kPreferredLaunchResultHistogramName,
@@ -990,17 +936,25 @@ TEST_F(NoteTakingHelperTest, LaunchAndroidApp) {
   handlers.emplace_back(CreateIntentHandlerInfo("App 2", kPackage2));
   intent_helper_.SetIntentHandlers(NoteTakingHelper::kIntentAction,
                                    std::move(handlers));
-  helper()->OnIntentFiltersUpdated();
+  helper()->OnIntentFiltersUpdated(base::nullopt);
   base::RunLoop().RunUntilIdle();
   helper()->SetPreferredApp(profile(), kPackage2);
 
   // The second app should be launched now.
   intent_helper_.clear_handled_intents();
+  file_system_->clear_handled_requests();
   histogram_tester.reset(new HistogramTester());
   helper()->LaunchAppForNewNote(profile(), base::FilePath());
-  ASSERT_EQ(1u, intent_helper_.handled_intents().size());
-  EXPECT_EQ(GetIntentString(kPackage2, ""),
-            GetIntentString(intent_helper_.handled_intents()[0]));
+  ASSERT_EQ(1u, file_system_->handledUrlRequests().size());
+  EXPECT_EQ(arc::mojom::ActionType::CREATE_NOTE,
+            file_system_->handledUrlRequests().at(0)->action_type);
+  EXPECT_EQ(
+      kPackage2,
+      file_system_->handledUrlRequests().at(0)->activity_name->package_name);
+  EXPECT_EQ(
+      std::string(),
+      file_system_->handledUrlRequests().at(0)->activity_name->activity_name);
+  ASSERT_EQ(0u, file_system_->handledUrlRequests().at(0)->urls.size());
 
   histogram_tester->ExpectUniqueSample(
       NoteTakingHelper::kPreferredLaunchResultHistogramName,
@@ -1024,25 +978,45 @@ TEST_F(NoteTakingHelperTest, LaunchAndroidAppWithPath) {
       file_manager::util::GetDownloadsFolderForProfile(profile()).Append(
           "image.jpg"));
   helper()->LaunchAppForNewNote(profile(), kDownloadedPath);
-  ASSERT_EQ(1u, intent_helper_.handled_intents().size());
-  EXPECT_EQ(GetIntentString(kPackage, GetArcUrl(kDownloadedPath)),
-            GetIntentString(intent_helper_.handled_intents()[0]));
+  ASSERT_EQ(1u, file_system_->handledUrlRequests().size());
+  EXPECT_EQ(arc::mojom::ActionType::CREATE_NOTE,
+            file_system_->handledUrlRequests().at(0)->action_type);
+  EXPECT_EQ(
+      kPackage,
+      file_system_->handledUrlRequests().at(0)->activity_name->package_name);
+  EXPECT_EQ(
+      std::string(),
+      file_system_->handledUrlRequests().at(0)->activity_name->activity_name);
+  ASSERT_EQ(1u, file_system_->handledUrlRequests().at(0)->urls.size());
+  ASSERT_EQ(GetArcUrl(kDownloadedPath),
+            file_system_->handledUrlRequests().at(0)->urls.at(0)->content_url);
 
   const base::FilePath kRemovablePath =
       base::FilePath(file_manager::util::kRemovableMediaPath)
           .Append("image.jpg");
   intent_helper_.clear_handled_intents();
+  file_system_->clear_handled_requests();
   helper()->LaunchAppForNewNote(profile(), kRemovablePath);
-  ASSERT_EQ(1u, intent_helper_.handled_intents().size());
-  EXPECT_EQ(GetIntentString(kPackage, GetArcUrl(kRemovablePath)),
-            GetIntentString(intent_helper_.handled_intents()[0]));
+  ASSERT_EQ(1u, file_system_->handledUrlRequests().size());
+  EXPECT_EQ(arc::mojom::ActionType::CREATE_NOTE,
+            file_system_->handledUrlRequests().at(0)->action_type);
+  EXPECT_EQ(
+      kPackage,
+      file_system_->handledUrlRequests().at(0)->activity_name->package_name);
+  EXPECT_EQ(
+      std::string(),
+      file_system_->handledUrlRequests().at(0)->activity_name->activity_name);
+  ASSERT_EQ(1u, file_system_->handledUrlRequests().at(0)->urls.size());
+  ASSERT_EQ(GetArcUrl(kRemovablePath),
+            file_system_->handledUrlRequests().at(0)->urls.at(0)->content_url);
 
   // When a path that isn't accessible to ARC is passed, the request should be
   // dropped.
   HistogramTester histogram_tester;
   intent_helper_.clear_handled_intents();
+  file_system_->clear_handled_requests();
   helper()->LaunchAppForNewNote(profile(), base::FilePath("/bad/path.jpg"));
-  EXPECT_TRUE(intent_helper_.handled_intents().empty());
+  EXPECT_TRUE(file_system_->handledUrlRequests().empty());
 
   histogram_tester.ExpectUniqueSample(
       NoteTakingHelper::kPreferredLaunchResultHistogramName,
@@ -1086,7 +1060,7 @@ TEST_F(NoteTakingHelperTest, NotifyObserverAboutAndroidApps) {
 
   // Update intent filters and check that the observer is notified again after
   // apps are received.
-  helper()->OnIntentFiltersUpdated();
+  helper()->OnIntentFiltersUpdated(base::nullopt);
   EXPECT_EQ(3, observer.num_updates());
   base::RunLoop().RunUntilIdle();
   EXPECT_EQ(4, observer.num_updates());
@@ -1501,7 +1475,8 @@ TEST_F(NoteTakingHelperTest, NoteTakingControllerClient) {
   Init(ENABLE_PALETTE);
 
   auto has_note_taking_apps = [&]() {
-    return test_note_taking_controller()->client_attached();
+    auto* client = ash::NoteTakingClient::GetInstance();
+    return client && client->CanCreateNote();
   };
 
   EXPECT_FALSE(has_note_taking_apps());
@@ -1543,7 +1518,7 @@ TEST_F(NoteTakingHelperTest, NoteTakingControllerClient) {
   SetNoteTakingClientProfile(profile());
   EXPECT_TRUE(has_note_taking_apps());
 
-  test_note_taking_controller()->CallCreateNote();
+  ash::NoteTakingClient::GetInstance()->CreateNote();
   ASSERT_EQ(1u, launched_chrome_apps_.size());
   ASSERT_EQ(NoteTakingHelper::kProdKeepExtensionId,
             launched_chrome_apps_[0].id);

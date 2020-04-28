@@ -79,6 +79,11 @@ class CONTENT_EXPORT SiteInstance : public base::RefCounted<SiteInstance> {
   // Returns a unique ID for this SiteInstance.
   virtual int32_t GetId() = 0;
 
+  // Returns a unique ID for the BrowsingInstance (i.e., group of related
+  // browsing contexts) to which this SiteInstance belongs. This allows callers
+  // to identify which SiteInstances can asynchronously script each other.
+  virtual int32_t GetBrowsingInstanceId() = 0;
+
   // Whether this SiteInstance has a running process associated with it.
   // This may return true before the first call to GetProcess(), in cases where
   // we use process-per-site and there is an existing process available.
@@ -91,14 +96,14 @@ class CONTENT_EXPORT SiteInstance : public base::RefCounted<SiteInstance> {
   // RenderProcessHost (and a new ID).  Note that renderer process crashes leave
   // the current RenderProcessHost (and ID) in place.
   //
-  // For sites that require process-per-site mode (e.g., WebUI), this will
+  // For sites that require process-per-site mode (e.g., NTP), this will
   // ensure only one RenderProcessHost for the site exists within the
   // BrowserContext.
   virtual content::RenderProcessHost* GetProcess() = 0;
 
   // Browser context to which this SiteInstance (and all related
   // SiteInstances) belongs.
-  virtual content::BrowserContext* GetBrowserContext() const = 0;
+  virtual content::BrowserContext* GetBrowserContext() = 0;
 
   // Get the web site that this SiteInstance is rendering pages for. This
   // includes the scheme and registered domain, but not the port.
@@ -114,7 +119,7 @@ class CONTENT_EXPORT SiteInstance : public base::RefCounted<SiteInstance> {
   //   derived from the origin, it only contains the scheme and the eTLD + 1,
   //   i.e. an origin with the host "deeply.nested.subdomain.example.com"
   //   corresponds to a site URL with the host "example.com".
-  virtual const GURL& GetSiteURL() const = 0;
+  virtual const GURL& GetSiteURL() = 0;
 
   // Gets a SiteInstance for the given URL that shares the current
   // BrowsingInstance, creating a new SiteInstance if necessary.  This ensures
@@ -148,6 +153,9 @@ class CONTENT_EXPORT SiteInstance : public base::RefCounted<SiteInstance> {
   // assignment.
   virtual bool IsSameSiteWithURL(const GURL& url) = 0;
 
+  // Returns true if this object is used for a <webview> guest.
+  virtual bool IsGuest() = 0;
+
   // Factory method to create a new SiteInstance.  This will create a new
   // new BrowsingInstance, so it should only be used when creating a new tab
   // from scratch (or similar circumstances).
@@ -159,11 +167,20 @@ class CONTENT_EXPORT SiteInstance : public base::RefCounted<SiteInstance> {
 
   // Factory method to get the appropriate SiteInstance for the given URL, in
   // a new BrowsingInstance.  Use this instead of Create when you know the URL,
-  // since it allows special site grouping rules to be applied (for example,
-  // to group chrome-ui pages into the same instance).
+  // since it allows special site grouping rules to be applied (for example, to
+  // obey process-per-site for sites that require it, such as NTP, or to use a
+  // default SiteInstance for sites that don't require a dedicated process on
+  // Android).
   static scoped_refptr<SiteInstance> CreateForURL(
       content::BrowserContext* browser_context,
       const GURL& url);
+
+  // Factory method to create a SiteInstance for a <webview> guest in a new
+  // BrowsingInstance.
+  // TODO(734722): Replace this method once SecurityPrincipal is available.
+  static scoped_refptr<SiteInstance> CreateForGuest(
+      content::BrowserContext* browser_context,
+      const GURL& guest_site_url);
 
   // Determine if a URL should "use up" a site.  URLs such as about:blank or
   // chrome-native:// leave the site unassigned.
@@ -187,6 +204,12 @@ class CONTENT_EXPORT SiteInstance : public base::RefCounted<SiteInstance> {
   // Note that this has no effect if site isolation is turned off, such as via
   // the kDisableSiteIsolation cmdline flag or enterprise policy -- see also
   // SiteIsolationPolicy::AreDynamicIsolatedOriginsEnabled().
+  //
+  // Currently this function assumes that the site is added *persistently*: it
+  // will ask the embedder to save the site as part of profile data for
+  // |context|, so that it survives restarts.  The site will be cleared from
+  // profile data if the user clears browsing data.  Future uses of this
+  // function may want to avoid persistence by passing in a new flag.
   static void StartIsolatingSite(BrowserContext* context, const GURL& url);
 
  protected:

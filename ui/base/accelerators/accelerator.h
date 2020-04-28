@@ -42,8 +42,6 @@ class UI_BASE_EXPORT Accelerator {
   // for example:
   //     Accelerator(ui::VKEY_Z, ui::EF_SHIFT_DOWN | ui::EF_CONTROL_DOWN)
   // would correspond to the shortcut "ctrl + shift + z".
-  //
-  // NOTE: this constructor strips out non key related flags.
   Accelerator(KeyboardCode key_code,
               int modifiers,
               KeyState key_state = KeyState::PRESSED,
@@ -83,11 +81,17 @@ class UI_BASE_EXPORT Accelerator {
   bool IsShiftDown() const;
   bool IsCtrlDown() const;
   bool IsAltDown() const;
+  bool IsAltGrDown() const;
   bool IsCmdDown() const;
   bool IsRepeat() const;
 
   // Returns a string with the localized shortcut if any.
   base::string16 GetShortcutText() const;
+
+#if defined(OS_MACOSX)
+  base::string16 KeyCodeToMacSymbol() const;
+#endif
+  base::string16 KeyCodeToName() const;
 
   void set_interrupted_by_mouse_event(bool interrupted_by_mouse_event) {
     interrupted_by_mouse_event_ = interrupted_by_mouse_event;
@@ -100,11 +104,6 @@ class UI_BASE_EXPORT Accelerator {
  private:
   base::string16 ApplyLongFormModifiers(base::string16 shortcut) const;
   base::string16 ApplyShortFormModifiers(base::string16 shortcut) const;
-
-#if defined(OS_MACOSX)
-  base::string16 KeyCodeToMacSymbol(KeyboardCode key_code) const;
-#endif
-  base::string16 KeyCodeToName(KeyboardCode key_code) const;
 
   // The keycode (VK_...).
   KeyboardCode key_code_;
@@ -125,7 +124,7 @@ class UI_BASE_EXPORT Accelerator {
   bool interrupted_by_mouse_event_;
 
   // The |source_device_id_| of the KeyEvent.
-  int source_device_id_ = -1;
+  int source_device_id_ = ui::ED_UNKNOWN_DEVICE;
 };
 
 // An interface that classes that want to register for keyboard accelerators

@@ -11,10 +11,9 @@
 #include "base/bind.h"
 #include "base/run_loop.h"
 #include "base/stl_util.h"
-#include "base/test/scoped_feature_list.h"
 #include "chrome/browser/chromeos/crostini/crostini_manager.h"
 #include "chrome/browser/chromeos/crostini/crostini_pref_names.h"
-#include "chrome/browser/chromeos/crostini/crostini_util.h"
+#include "chrome/browser/chromeos/crostini/fake_crostini_features.h"
 #include "chrome/browser/chromeos/drive/drivefs_test_support.h"
 #include "chrome/browser/chromeos/extensions/file_manager/event_router.h"
 #include "chrome/browser/chromeos/extensions/file_manager/event_router_factory.h"
@@ -30,29 +29,28 @@
 #include "chrome/common/chrome_features.h"
 #include "chrome/common/extensions/api/file_system_provider_capabilities/file_system_provider_capabilities_handler.h"
 #include "chromeos/constants/chromeos_features.h"
-#include "chromeos/dbus/concierge/service.pb.h"
+#include "chromeos/dbus/concierge/concierge_service.pb.h"
 #include "chromeos/dbus/cros_disks_client.h"
 #include "chromeos/disks/disk.h"
 #include "chromeos/disks/mock_disk_mount_manager.h"
 #include "components/drive/drive_pref_names.h"
-#include "components/drive/file_change.h"
 #include "components/prefs/pref_service.h"
+#include "components/signin/public/identity_manager/identity_test_utils.h"
 #include "extensions/common/extension.h"
 #include "extensions/common/install_warning.h"
 #include "google_apis/drive/test_util.h"
-#include "services/identity/public/cpp/identity_test_utils.h"
-#include "storage/browser/fileapi/external_mount_points.h"
+#include "storage/browser/file_system/external_mount_points.h"
 
 using ::testing::_;
 using ::testing::ReturnRef;
 
 using chromeos::disks::Disk;
 using chromeos::disks::DiskMountManager;
+using chromeos::disks::FormatFileSystemType;
 
 namespace {
 
 struct TestDiskInfo {
-  const char* system_path;
   const char* file_path;
   bool write_disabled_by_policy;
   const char* device_label;
@@ -62,7 +60,7 @@ struct TestDiskInfo {
   const char* product_id;
   const char* product_name;
   const char* fs_uuid;
-  const char* system_path_prefix;
+  const char* storage_device_path;
   chromeos::DeviceType device_type;
   uint64_t size_in_bytes;
   bool is_parent;
@@ -85,8 +83,7 @@ struct TestMountPoint {
   int disk_info_index;
 };
 
-TestDiskInfo kTestDisks[] = {{"system_path1",
-                              "file_path1",
+TestDiskInfo kTestDisks[] = {{"file_path1",
                               false,
                               "device_label1",
                               "drive_label1",
@@ -95,7 +92,7 @@ TestDiskInfo kTestDisks[] = {{"system_path1",
                               "abcd",
                               "product1",
                               "FFFF-FFFF",
-                              "system_path_prefix1",
+                              "storage_device_path1",
                               chromeos::DEVICE_TYPE_USB,
                               1073741824,
                               false,
@@ -106,8 +103,7 @@ TestDiskInfo kTestDisks[] = {{"system_path1",
                               false,
                               "exfat",
                               ""},
-                             {"system_path2",
-                              "file_path2",
+                             {"file_path2",
                               false,
                               "device_label2",
                               "drive_label2",
@@ -116,7 +112,7 @@ TestDiskInfo kTestDisks[] = {{"system_path1",
                               "cdef",
                               "product2",
                               "0FFF-FFFF",
-                              "system_path_prefix2",
+                              "storage_device_path2",
                               chromeos::DEVICE_TYPE_MOBILE,
                               47723,
                               true,
@@ -127,8 +123,7 @@ TestDiskInfo kTestDisks[] = {{"system_path1",
                               false,
                               "exfat",
                               ""},
-                             {"system_path3",
-                              "file_path3",
+                             {"file_path3",
                               true,  // write_disabled_by_policy
                               "device_label3",
                               "drive_label3",
@@ -137,7 +132,7 @@ TestDiskInfo kTestDisks[] = {{"system_path1",
                               "ef01",
                               "product3",
                               "00FF-FFFF",
-                              "system_path_prefix3",
+                              "storage_device_path3",
                               chromeos::DEVICE_TYPE_OPTICAL_DISC,
                               0,
                               true,
@@ -148,17 +143,6 @@ TestDiskInfo kTestDisks[] = {{"system_path1",
                               false,
                               "exfat",
                               ""}};
-
-void DispatchDirectoryChangeEventImpl(
-    int* counter,
-    const base::FilePath& virtual_path,
-    const drive::FileChange* list,
-    bool got_error,
-    const std::vector<std::string>& extension_ids) {
-  ++(*counter);
-}
-
-void AddFileWatchCallback(bool success) {}
 
 void AddLocalFileSystem(Profile* profile, base::FilePath root) {
   const char kLocalMountPointName[] = "local";
@@ -294,7 +278,6 @@ class FileManagerPrivateApiTest : public extensions::ExtensionApiTest {
                 .SetMountPath(kTestMountPoints[i].mount_path)
                 .SetWriteDisabledByPolicy(
                     kTestDisks[disk_info_index].write_disabled_by_policy)
-                .SetSystemPath(kTestDisks[disk_info_index].system_path)
                 .SetFilePath(kTestDisks[disk_info_index].file_path)
                 .SetDeviceLabel(kTestDisks[disk_info_index].device_label)
                 .SetDriveLabel(kTestDisks[disk_info_index].drive_label)
@@ -303,8 +286,8 @@ class FileManagerPrivateApiTest : public extensions::ExtensionApiTest {
                 .SetProductId(kTestDisks[disk_info_index].product_id)
                 .SetProductName(kTestDisks[disk_info_index].product_name)
                 .SetFileSystemUUID(kTestDisks[disk_info_index].fs_uuid)
-                .SetSystemPathPrefix(
-                    kTestDisks[disk_info_index].system_path_prefix)
+                .SetStorageDevicePath(
+                    kTestDisks[disk_info_index].storage_device_path)
                 .SetDeviceType(kTestDisks[disk_info_index].device_type)
                 .SetSizeInBytes(kTestDisks[disk_info_index].size_in_bytes)
                 .SetIsParent(kTestDisks[disk_info_index].is_parent)
@@ -344,20 +327,6 @@ class FileManagerPrivateApiTest : public extensions::ExtensionApiTest {
             source_path, "/media/fuse/" + mount_label,
             chromeos::MountType::MOUNT_TYPE_NETWORK_STORAGE,
             chromeos::disks::MountCondition::MOUNT_CONDITION_NONE));
-  }
-
-  void EnableCrostiniForProfile(
-      base::test::ScopedFeatureList* scoped_feature_list) {
-    // TODO(joelhockey): Setting prefs and features to allow crostini is not
-    // ideal.  It would be better if the crostini interface allowed for testing
-    // without such tight coupling.
-    browser()->profile()->GetPrefs()->SetBoolean(
-        crostini::prefs::kCrostiniEnabled, true);
-    scoped_feature_list->InitWithFeatures({features::kCrostini}, {});
-    // Profile must be signed in with email for crostini.
-    identity::SetPrimaryAccount(
-        IdentityManagerFactory::GetForProfileIfExists(browser()->profile()),
-        "testuser@gmail.com");
   }
 
   void ExpectCrostiniMount() {
@@ -405,24 +374,53 @@ IN_PROC_BROWSER_TEST_F(FileManagerPrivateApiTest, Mount) {
 
   // We will call fileManagerPrivate.unmountVolume once. To test that method, we
   // check that UnmountPath is really called with the same value.
-  EXPECT_CALL(*disk_mount_manager_mock_, UnmountPath(_, _, _))
-      .Times(0);
+  EXPECT_CALL(*disk_mount_manager_mock_, UnmountPath(_, _)).Times(0);
   EXPECT_CALL(
       *disk_mount_manager_mock_,
       UnmountPath(chromeos::CrosDisksClient::GetRemovableDiskMountPoint()
                       .AppendASCII("mount_path1")
                       .AsUTF8Unsafe(),
-                  chromeos::UNMOUNT_OPTIONS_NONE, _))
+                  _))
       .Times(1);
   EXPECT_CALL(*disk_mount_manager_mock_,
               UnmountPath(chromeos::CrosDisksClient::GetArchiveMountPoint()
                               .AppendASCII("archive_mount_path")
                               .AsUTF8Unsafe(),
-                          chromeos::UNMOUNT_OPTIONS_LAZY, _))
+                          _))
       .Times(1);
 
   ASSERT_TRUE(RunComponentExtensionTest("file_browser/mount_test"))
       << message_;
+}
+
+IN_PROC_BROWSER_TEST_F(FileManagerPrivateApiTest, FormatVolume) {
+  // Catch-all rule to ensure that FormatMountedDevice does not get called with
+  // other arguments that don't match the rules below.
+  EXPECT_CALL(*disk_mount_manager_mock_, FormatMountedDevice(_, _, _)).Times(0);
+
+  EXPECT_CALL(*disk_mount_manager_mock_,
+              FormatMountedDevice(
+                  chromeos::CrosDisksClient::GetRemovableDiskMountPoint()
+                      .AppendASCII("mount_path1")
+                      .AsUTF8Unsafe(),
+                  FormatFileSystemType::kVfat, "NEWLABEL1"))
+      .Times(1);
+  EXPECT_CALL(*disk_mount_manager_mock_,
+              FormatMountedDevice(
+                  chromeos::CrosDisksClient::GetRemovableDiskMountPoint()
+                      .AppendASCII("mount_path2")
+                      .AsUTF8Unsafe(),
+                  FormatFileSystemType::kExfat, "NEWLABEL2"))
+      .Times(1);
+  EXPECT_CALL(*disk_mount_manager_mock_,
+              FormatMountedDevice(
+                  chromeos::CrosDisksClient::GetRemovableDiskMountPoint()
+                      .AppendASCII("mount_path3")
+                      .AsUTF8Unsafe(),
+                  FormatFileSystemType::kNtfs, "NEWLABEL3"))
+      .Times(1);
+
+  ASSERT_TRUE(RunComponentExtensionTest("file_browser/format_test"));
 }
 
 IN_PROC_BROWSER_TEST_F(FileManagerPrivateApiTest, Permissions) {
@@ -433,81 +431,6 @@ IN_PROC_BROWSER_TEST_F(FileManagerPrivateApiTest, Permissions) {
   ASSERT_EQ(1u, extension->install_warnings().size());
   const extensions::InstallWarning& warning = extension->install_warnings()[0];
   EXPECT_EQ("fileManagerPrivate", warning.key);
-}
-
-IN_PROC_BROWSER_TEST_F(FileManagerPrivateApiTest, OnFileChanged) {
-  // In drive volume, deletion of a directory is notified via OnFileChanged.
-  // Local changes directly come to HandleFileWatchNotification from
-  // FileWatcher.
-  typedef drive::FileChange FileChange;
-  typedef drive::FileChange::FileType FileType;
-  typedef drive::FileChange::ChangeType ChangeType;
-
-  int counter = 0;
-  event_router_->SetDispatchDirectoryChangeEventImplForTesting(
-      base::Bind(&DispatchDirectoryChangeEventImpl, &counter));
-
-  // /a/b/c and /a/d/e are being watched.
-  event_router_->AddFileWatch(
-      base::FilePath(FILE_PATH_LITERAL("/no-existing-fs/root/a/b/c")),
-      base::FilePath(FILE_PATH_LITERAL("/no-existing-fs-virtual/root/a/b/c")),
-      "extension_1", base::Bind(&AddFileWatchCallback));
-
-  event_router_->AddFileWatch(
-      base::FilePath(FILE_PATH_LITERAL("/no-existing-fs/root/a/d/e")),
-      base::FilePath(FILE_PATH_LITERAL("/no-existing-fs-hash/root/a/d/e")),
-      "extension_2", base::Bind(&AddFileWatchCallback));
-
-  event_router_->AddFileWatch(
-      base::FilePath(FILE_PATH_LITERAL("/no-existing-fs/root/aaa")),
-      base::FilePath(FILE_PATH_LITERAL("/no-existing-fs-hash/root/aaa")),
-      "extension_3", base::Bind(&AddFileWatchCallback));
-
-  // event_router->addFileWatch create some tasks which are performed on
-  // ThreadPool. Wait until they are done.
-  base::ThreadPool::GetInstance()->FlushForTesting();
-  // We also wait the UI thread here, since some tasks which are performed
-  // above message loop back results to the UI thread.
-  base::RunLoop().RunUntilIdle();
-
-  // When /a is deleted (1 and 2 is notified).
-  FileChange first_change;
-  first_change.Update(
-      base::FilePath(FILE_PATH_LITERAL("/no-existing-fs/root/a")),
-      FileType::FILE_TYPE_DIRECTORY, ChangeType::CHANGE_TYPE_DELETE);
-  event_router_->OnFileChanged(first_change);
-  EXPECT_EQ(2, counter);
-
-  // When /a/b/c is deleted (1 is notified).
-  FileChange second_change;
-  second_change.Update(
-      base::FilePath(FILE_PATH_LITERAL("/no-existing-fs/root/a/b/c")),
-      FileType::FILE_TYPE_DIRECTORY, ChangeType::CHANGE_TYPE_DELETE);
-  event_router_->OnFileChanged(second_change);
-  EXPECT_EQ(3, counter);
-
-  // When /z/y is deleted (Not notified).
-  FileChange third_change;
-  third_change.Update(
-      base::FilePath(FILE_PATH_LITERAL("/no-existing-fs/root/z/y")),
-      FileType::FILE_TYPE_DIRECTORY, ChangeType::CHANGE_TYPE_DELETE);
-  event_router_->OnFileChanged(third_change);
-  EXPECT_EQ(3, counter);
-
-  // Remove file watchers.
-  event_router_->RemoveFileWatch(
-      base::FilePath(FILE_PATH_LITERAL("/no-existing-fs/root/a/b/c")),
-      "extension_1");
-  event_router_->RemoveFileWatch(
-      base::FilePath(FILE_PATH_LITERAL("/no-existing-fs/root/a/d/e")),
-      "extension_2");
-  event_router_->RemoveFileWatch(
-      base::FilePath(FILE_PATH_LITERAL("/no-existing-fs/root/aaa")),
-      "extension_3");
-
-  // event_router->addFileWatch create some tasks which are performed on
-  // ThreadPool. Wait until they are done.
-  base::ThreadPool::GetInstance()->FlushForTesting();
 }
 
 IN_PROC_BROWSER_TEST_F(FileManagerPrivateApiTest, ContentChecksum) {
@@ -522,20 +445,27 @@ IN_PROC_BROWSER_TEST_F(FileManagerPrivateApiTest, Recent) {
   ASSERT_TRUE(file_manager::VolumeManager::Get(browser()->profile())
                   ->RegisterDownloadsDirectoryForTesting(downloads_dir));
 
-  // Create an empty file.
+  // Create test files.
   {
     base::ScopedAllowBlockingForTesting allow_io;
-    base::File file(downloads_dir.Append("all-justice.jpg"),
-                    base::File::FLAG_CREATE | base::File::FLAG_WRITE);
-    ASSERT_TRUE(file.IsValid());
+    base::File image_file(downloads_dir.Append("all-justice.jpg"),
+                          base::File::FLAG_CREATE | base::File::FLAG_WRITE);
+    ASSERT_TRUE(image_file.IsValid());
+    base::File audio_file(downloads_dir.Append("all-justice.mp3"),
+                          base::File::FLAG_CREATE | base::File::FLAG_WRITE);
+    ASSERT_TRUE(audio_file.IsValid());
+    base::File video_file(downloads_dir.Append("all-justice.mp4"),
+                          base::File::FLAG_CREATE | base::File::FLAG_WRITE);
+    ASSERT_TRUE(video_file.IsValid());
   }
 
   ASSERT_TRUE(RunComponentExtensionTest("file_browser/recent_test"));
 }
 
 IN_PROC_BROWSER_TEST_F(FileManagerPrivateApiTest, Crostini) {
-  base::test::ScopedFeatureList scoped_feature_list;
-  EnableCrostiniForProfile(&scoped_feature_list);
+  crostini::FakeCrostiniFeatures crostini_features;
+  crostini_features.set_ui_allowed(true);
+  crostini_features.set_enabled(true);
 
   // Setup CrostiniManager for testing.
   crostini::CrostiniManager* crostini_manager =
@@ -545,7 +475,7 @@ IN_PROC_BROWSER_TEST_F(FileManagerPrivateApiTest, Crostini) {
   crostini_manager->AddRunningContainerForTesting(
       crostini::kCrostiniDefaultVmName,
       crostini::ContainerInfo(crostini::kCrostiniDefaultContainerName,
-                              "testuser", "/home/testuser"));
+                              "testuser", "/home/testuser", "PLACEHOLDER_IP"));
 
   ExpectCrostiniMount();
 
@@ -565,19 +495,20 @@ IN_PROC_BROWSER_TEST_F(FileManagerPrivateApiTest, Crostini) {
     ASSERT_TRUE(base::CreateDirectory(shared1));
     ASSERT_TRUE(base::CreateDirectory(shared2));
   }
-  crostini::CrostiniSharePath* crostini_share_path =
-      crostini::CrostiniSharePath::GetForProfile(browser()->profile());
-  crostini_share_path->RegisterPersistedPath(crostini::kCrostiniDefaultVmName,
+  guest_os::GuestOsSharePath* guest_os_share_path =
+      guest_os::GuestOsSharePath::GetForProfile(browser()->profile());
+  guest_os_share_path->RegisterPersistedPath(crostini::kCrostiniDefaultVmName,
                                              shared1);
-  crostini_share_path->RegisterPersistedPath(crostini::kCrostiniDefaultVmName,
+  guest_os_share_path->RegisterPersistedPath(crostini::kCrostiniDefaultVmName,
                                              shared2);
 
   ASSERT_TRUE(RunComponentExtensionTest("file_browser/crostini_test"));
 }
 
 IN_PROC_BROWSER_TEST_F(FileManagerPrivateApiTest, CrostiniIncognito) {
-  base::test::ScopedFeatureList scoped_feature_list;
-  EnableCrostiniForProfile(&scoped_feature_list);
+  crostini::FakeCrostiniFeatures crostini_features;
+  crostini_features.set_ui_allowed(true);
+  crostini_features.set_enabled(true);
 
   // Setup CrostiniManager for testing.
   crostini::CrostiniManager* crostini_manager =
@@ -587,7 +518,7 @@ IN_PROC_BROWSER_TEST_F(FileManagerPrivateApiTest, CrostiniIncognito) {
   crostini_manager->AddRunningContainerForTesting(
       crostini::kCrostiniDefaultVmName,
       crostini::ContainerInfo(crostini::kCrostiniDefaultContainerName,
-                              "testuser", "/home/testuser"));
+                              "testuser", "/home/testuser", "PLACEHOLDER_IP"));
 
   ExpectCrostiniMount();
 

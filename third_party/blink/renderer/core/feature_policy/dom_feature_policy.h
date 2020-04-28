@@ -9,6 +9,7 @@
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/platform/bindings/script_wrappable.h"
 #include "third_party/blink/renderer/platform/heap/member.h"
+#include "third_party/blink/renderer/platform/weborigin/security_origin.h"
 
 namespace blink {
 
@@ -48,7 +49,7 @@ class CORE_EXPORT DOMFeaturePolicy : public ScriptWrappable {
       const ParsedFeaturePolicy& container_policy = {},
       scoped_refptr<const SecurityOrigin> src_origin = nullptr);
 
-  void Trace(blink::Visitor*) override;
+  void Trace(Visitor*) override;
 
  protected:
   virtual const FeaturePolicy* GetPolicy() const = 0;

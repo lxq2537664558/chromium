@@ -9,14 +9,30 @@ class LocationLine extends cr.EventTarget {
   /**
    * @param {!Element} breadcrumbs Container element for breadcrumbs.
    * @param {!VolumeManager} volumeManager Volume manager.
+   * @param {!ListContainer} listContainer List Container.
    */
-  constructor(breadcrumbs, volumeManager) {
+  constructor(breadcrumbs, volumeManager, listContainer) {
     super();
 
     this.breadcrumbs_ = breadcrumbs;
     this.volumeManager_ = volumeManager;
+    /** @private {!ListContainer} */
+    this.listContainer_ = listContainer;
     this.entry_ = null;
     this.components_ = [];
+
+    /** @private {?FilesTooltip} */
+    this.filesTooltip_ = null;
+  }
+
+  /**
+   * @param {?FilesTooltip} filesTooltip
+   * */
+  set filesTooltip(filesTooltip) {
+    this.filesTooltip_ = filesTooltip;
+
+    this.filesTooltip_.addTargets(
+        this.breadcrumbs_.querySelectorAll('[has-tooltip]'));
   }
 
   /**
@@ -29,7 +45,12 @@ class LocationLine extends cr.EventTarget {
       return;
     }
 
-    this.update_(this.getComponents_(entry));
+    const components = this.getComponents_(entry);
+    if (util.isFilesNg()) {
+      this.updateNg_(components);
+    } else {
+      this.update_(components);
+    }
   }
 
   /**
@@ -147,10 +168,46 @@ class LocationLine extends cr.EventTarget {
     const paths = relativePath.split('/');
     for (let i = 0; i < paths.length; i++) {
       currentUrl += '/' + encodeURIComponent(paths[i]);
-      components.push(new LocationLine.PathComponent(paths[i], currentUrl));
+      let path = paths[i];
+      if (i === 0 &&
+          locationInfo.rootType === VolumeManagerCommon.RootType.DOWNLOADS) {
+        if (path === 'Downloads') {
+          path = str('DOWNLOADS_DIRECTORY_LABEL');
+        }
+        if (path === 'PvmDefault') {
+          path = str('PLUGIN_VM_DIRECTORY_LABEL');
+        }
+      }
+      components.push(new LocationLine.PathComponent(path, currentUrl));
     }
 
     return components;
+  }
+
+  /**
+   * Updates the breadcrumb display for files-ng.
+   * @param {!Array<!LocationLine.PathComponent>} components Components to the
+   *     target path.
+   * @private
+   */
+  updateNg_(components) {
+    this.components_ = components;
+
+    let breadcrumbs = document.querySelector('bread-crumb');
+    if (!breadcrumbs) {
+      breadcrumbs = document.createElement('bread-crumb');
+      breadcrumbs.id = 'breadcrumbs';
+      this.breadcrumbs_.appendChild(breadcrumbs);
+      breadcrumbs.setSignalCallback(this.breadCrumbSignal_.bind(this));
+    }
+
+    let crumbPath = components[0].name;
+    for (let i = 1; i < components.length; i++) {
+      crumbPath += '/' + components[i].name;
+    }
+    breadcrumbs.path = crumbPath;
+
+    this.breadcrumbs_.hidden = false;
   }
 
   /**
@@ -171,10 +228,17 @@ class LocationLine extends cr.EventTarget {
       button.id = 'breadcrumb-path-' + i;
       button.classList.add(
           'breadcrumb-path', 'entry-name', 'imitate-paper-button');
+      button.setAttribute('aria-label', component.name);
+      button.setAttribute('has-tooltip', '');
+      if (this.filesTooltip_) {
+        this.filesTooltip_.addTarget(button);
+      }
+
       const nameElement = document.createElement('div');
       nameElement.classList.add('name');
       nameElement.textContent = component.name;
       button.appendChild(nameElement);
+
       button.addEventListener('click', this.onClick_.bind(this, i));
       newBreadcrumbs.appendChild(button);
 
@@ -354,23 +418,16 @@ class LocationLine extends cr.EventTarget {
   }
 
   /**
-   * Execute an element.
+   * Navigate to a Path component.
    * @param {number} index The index of clicked path component.
-   * @param {!Event} event The MouseEvent object.
-   * @private
    */
-  onClick_(index, event) {
+  navigateToIndex_(index) {
+    // Last breadcrumb component is the currently selected folder, skip
+    // navigation and just move the focus to file list.
+    // TODO(files-ng): this if clause is not used or needed by files-ng.
     if (index >= this.components_.length - 1) {
+      this.listContainer_.focus();
       return;
-    }
-
-    // Remove 'focused' state from the clicked button.
-    let button = event.target;
-    while (button && !button.classList.contains('breadcrumb-path')) {
-      button = button.parentElement;
-    }
-    if (button) {
-      button.blur();
     }
 
     const pathComponent = this.components_[index];
@@ -380,6 +437,35 @@ class LocationLine extends cr.EventTarget {
       this.dispatchEvent(pathClickEvent);
     });
     metrics.recordUserAction('ClickBreadcrumbs');
+  }
+
+  /**
+   * Signal handler for the bread-crumb element.
+   * @param {string} signal Identifier of which bread crumb was activated.
+   */
+  breadCrumbSignal_(signal) {
+    if (typeof signal === 'number') {
+      this.navigateToIndex_(Number(signal));
+    }
+  }
+
+  /**
+   * Execute an element.
+   * @param {number} index The index of clicked path component.
+   * @param {!Event} event The MouseEvent object.
+   * @private
+   */
+  onClick_(index, event) {
+    let button = event.target;
+
+    // Remove 'focused' state from the clicked button.
+    while (button && !button.classList.contains('breadcrumb-path')) {
+      button = button.parentElement;
+    }
+    if (button) {
+      button.blur();
+    }
+    this.navigateToIndex_(index);
   }
 }
 

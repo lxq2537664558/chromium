@@ -12,7 +12,7 @@
 #include "base/json/json_writer.h"
 #include "base/macros.h"
 #include "base/memory/ptr_util.h"
-#include "base/memory/shared_memory.h"
+#include "base/memory/unsafe_shared_memory_region.h"
 #include "base/no_destructor.h"
 #include "base/single_thread_task_runner.h"
 #include "base/time/time.h"
@@ -47,10 +47,6 @@
 
 #if defined(OS_WIN)
 #include "base/win/win_util.h"
-#endif
-
-#if defined(OS_ANDROID)
-#include "gpu/ipc/service/stream_texture_android.h"
 #endif
 
 namespace gpu {
@@ -101,7 +97,6 @@ DevToolsChannelData::CreateForChannel(GpuChannel* channel) {
 }
 
 }  // namespace
-
 
 CommandBufferStub::CommandBufferStub(
     GpuChannel* channel,
@@ -661,9 +656,9 @@ std::unique_ptr<MemoryTracker> CommandBufferStub::CreateMemoryTracker(
     return current_factory.Run(init_params);
 
   return std::make_unique<GpuCommandBufferMemoryTracker>(
-      channel_->client_id(), channel_->client_tracing_id(),
-      command_buffer_id_.GetUnsafeValue(), init_params.attribs.context_type,
-      channel_->task_runner());
+      command_buffer_id_, channel_->client_tracing_id(),
+      init_params.attribs.context_type, channel_->task_runner(),
+      channel_->gpu_channel_manager()->peak_memory_monitor());
 }
 
 // static
@@ -711,8 +706,9 @@ void CommandBufferStub::UpdateActiveUrl() {
 
 void CommandBufferStub::MarkContextLost() {
   if (!command_buffer_ ||
-      command_buffer_->GetState().error == error::kLostContext)
+      command_buffer_->GetState().error == error::kLostContext) {
     return;
+  }
 
   command_buffer_->SetContextLostReason(error::kUnknown);
   if (decoder_context_)

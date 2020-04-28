@@ -26,9 +26,7 @@ class ObservableAuthenticatorList {
 
   void AddAuthenticator(AuthenticatorReference authenticator);
   void RemoveAuthenticator(base::StringPiece authenticator_id);
-  void ChangeAuthenticatorId(base::StringPiece previous_id, std::string new_id);
-  void ChangeAuthenticatorPairingMode(base::StringPiece authenticator_id,
-                                      bool is_in_pairing_mode);
+  void RemoveAllAuthenticators();
   AuthenticatorReference* GetAuthenticator(base::StringPiece authenticator_id);
 
   void SetObserver(AuthenticatorListObserver* observer);

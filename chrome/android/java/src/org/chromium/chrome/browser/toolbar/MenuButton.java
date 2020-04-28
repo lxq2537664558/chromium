@@ -10,23 +10,24 @@ import android.animation.AnimatorSet;
 import android.animation.ObjectAnimator;
 import android.content.Context;
 import android.content.res.ColorStateList;
-import android.support.annotation.DrawableRes;
-import android.support.v4.view.ViewCompat;
 import android.util.AttributeSet;
 import android.view.View;
-import android.view.animation.LinearInterpolator;
 import android.widget.FrameLayout;
 import android.widget.ImageButton;
 import android.widget.ImageView;
+
+import androidx.annotation.DrawableRes;
+import androidx.core.view.ViewCompat;
 
 import org.chromium.base.ApiCompatibilityUtils;
 import org.chromium.chrome.R;
 import org.chromium.chrome.browser.ThemeColorProvider;
 import org.chromium.chrome.browser.ThemeColorProvider.TintObserver;
-import org.chromium.chrome.browser.appmenu.AppMenuButtonHelper;
 import org.chromium.chrome.browser.omaha.UpdateMenuItemHelper;
 import org.chromium.chrome.browser.omaha.UpdateMenuItemHelper.MenuButtonState;
-import org.chromium.chrome.browser.widget.PulseDrawable;
+import org.chromium.chrome.browser.ui.appmenu.AppMenuButtonHelper;
+import org.chromium.components.browser_ui.widget.animation.Interpolators;
+import org.chromium.components.browser_ui.widget.highlight.PulseDrawable;
 import org.chromium.ui.interpolators.BakedBezierInterpolator;
 
 /**
@@ -66,7 +67,7 @@ public class MenuButton extends FrameLayout implements TintObserver {
     public void setAppMenuButtonHelper(AppMenuButtonHelper appMenuButtonHelper) {
         mAppMenuButtonHelper = appMenuButtonHelper;
         mMenuImageButton.setOnTouchListener(mAppMenuButtonHelper);
-        mMenuImageButton.setAccessibilityDelegate(mAppMenuButtonHelper);
+        mMenuImageButton.setAccessibilityDelegate(mAppMenuButtonHelper.getAccessibilityDelegate());
     }
 
     public AppMenuButtonHelper getAppMenuButtonHelper() {
@@ -293,14 +294,14 @@ public class MenuButton extends FrameLayout implements TintObserver {
         badgeFadeAnimator.setInterpolator(BakedBezierInterpolator.FADE_IN_CURVE);
 
         int pixelTranslation = menuBadge.getResources().getDimensionPixelSize(
-                R.dimen.menu_badge_translation_y_distance);
+                R.dimen.menu_badge_translation_y);
         ObjectAnimator badgeTranslateYAnimator =
                 ObjectAnimator.ofFloat(menuBadge, View.TRANSLATION_Y, pixelTranslation, 0.f);
         badgeTranslateYAnimator.setInterpolator(BakedBezierInterpolator.TRANSFORM_CURVE);
 
         // Create menu button ObjectAnimator.
         ObjectAnimator menuButtonFadeAnimator = ObjectAnimator.ofFloat(menuButton, View.ALPHA, 0.f);
-        menuButtonFadeAnimator.setInterpolator(new LinearInterpolator());
+        menuButtonFadeAnimator.setInterpolator(Interpolators.LINEAR_INTERPOLATOR);
 
         // Create AnimatorSet and listeners.
         AnimatorSet set = new AnimatorSet();

@@ -12,14 +12,15 @@ import sys
 import run_gpu_integration_test
 import gpu_project_config
 
-
-from telemetry.testing import browser_test_runner
-from telemetry.internal.platform import system_info
-
 from gpu_tests import context_lost_integration_test
+from gpu_tests import gpu_helper
 from gpu_tests import gpu_integration_test
 from gpu_tests import path_util
 from gpu_tests import webgl_conformance_integration_test
+
+from telemetry.testing import browser_test_runner
+from telemetry.testing import fakes
+from telemetry.internal.platform import system_info
 
 path_util.AddDirToPathIfNeeded(path_util.GetChromiumSrcDir(), 'tools', 'perf')
 from chrome_telemetry_build import chromium_config
@@ -31,107 +32,47 @@ VENDOR_INTEL = 0x8086
 VENDOR_STRING_IMAGINATION = 'Imagination Technologies'
 DEVICE_STRING_SGX = 'PowerVR SGX 554'
 
-class MockPlatform(object):
-  def __init__(self, os_name, os_version_name=None):
-    self.os_name = os_name
-    self.os_version_name = os_version_name
 
-  def GetOSName(self):
-    return self.os_name
-
-  def GetOSVersionName(self):
-    return self.os_version_name
-
-
-class MockBrowser(object):
-  def __init__(self, platform, gpu='', device='', vendor_string='',
-               device_string='', browser_type=None, gl_renderer=None,
-               passthrough=False):
-    self.platform = platform
-    self.browser_type = browser_type
-    sys_info = {
-      'model_name': '',
-      'gpu': {
-        'devices': [
-          {'vendor_id': gpu, 'device_id': device,
-           'vendor_string': vendor_string, 'device_string': device_string},
-        ],
-       'aux_attributes': {'passthrough_cmd_decoder': passthrough}
-      }
+def _GetSystemInfo(
+    gpu='', device='', vendor_string='',
+    device_string='', passthrough=False, gl_renderer=''):
+  sys_info = {
+    'model_name': '',
+    'gpu': {
+      'devices': [
+        {'vendor_id': gpu, 'device_id': device,
+         'vendor_string': vendor_string, 'device_string': device_string},
+      ],
+     'aux_attributes': {'passthrough_cmd_decoder': passthrough}
     }
-    if gl_renderer:
-      sys_info['gpu']['aux_attributes']['gl_renderer'] = gl_renderer
-    self.system_info = system_info.SystemInfo.FromDict(sys_info)
-
-  def GetSystemInfo(self):
-    return self.system_info
-
-  def __enter__(self):
-    return self
-
-  def __exit__(self, *args):
-    pass
+  }
+  if gl_renderer:
+    sys_info['gpu']['aux_attributes']['gl_renderer'] = gl_renderer
+  return system_info.SystemInfo.FromDict(sys_info)
 
 
-class MockArgs(object):
+def _GetTagsToTest(browser, test_class=None, args=None):
+  test_class = test_class or gpu_integration_test.GpuIntegrationTest
+  tags = None
+  with mock.patch.object(
+      test_class, 'ExpectationsFiles', return_value=['exp.txt']):
+    possible_browser = fakes.FakePossibleBrowser()
+    possible_browser._returned_browser = browser
+    args = args or gpu_helper.GetMockArgs()
+    tags = set(test_class.GenerateTags(args, possible_browser))
+  return tags
 
-  def __init__(self, is_asan=False, webgl_version='1.0.0'):
-    self.is_asan = is_asan
-    self.webgl_conformance_version = webgl_version
-    self.webgl2_only = False
-    self.browser_options = []
-
-
-class MockAbstractGpuTestClass(gpu_integration_test.GpuIntegrationTest):
-
-  @classmethod
-  def GenerateGpuTests(cls, options):
-    pass
-
-  def RunActualGpuTest(self, test_path, *args):
-    pass
-
-  @classmethod
-  def _CreateExpectations(cls):
-    pass
-
-
-class MockTestCaseWithoutExpectationsFile(MockAbstractGpuTestClass):
-  pass
-
-
-class MockTestCaseWithExpectationsFile(MockAbstractGpuTestClass):
-
-  @classmethod
-  def ExpectationsFiles(cls):
-    return ['example_test_expectations.txt']
-
-
-class MockPossibleBrowser(object):
-
-  def __init__(self, browser=None):
-    self._returned_browser = browser
-
-  def BrowserSession(self, options):
-    del options
-    return self._returned_browser
-
-
-def _generateNvidiaExampleTagsForTestClassAndArgs(test_class, args):
-  class MockTestCase(test_class, MockAbstractGpuTestClass):
-
-    @classmethod
-    def ExpectationsFiles(cls):
-      return ['example_test_expectations.txt']
-
-  _ = [_ for _ in MockTestCase.GenerateGpuTests(args)]
-  platform = MockPlatform('win', 'win10')
-  browser = MockBrowser(
-      platform, VENDOR_NVIDIA, 0x1cb3, browser_type='release',
-      gl_renderer='ANGLE Direct3D9')
-  possible_browser = MockPossibleBrowser(browser)
-  return set(MockTestCase.GenerateTags(args, possible_browser))
-
+def _GenerateNvidiaExampleTagsForTestClassAndArgs(test_class, args):
+  tags = None
+  with mock.patch.object(
+      test_class, 'ExpectationsFiles', return_value=['exp.txt']):
+    _ = [_ for _ in test_class.GenerateGpuTests(args)]
+    platform = fakes.FakePlatform('win', 'win10')
+    browser = fakes.FakeBrowser(platform, 'release')
+    browser._returned_system_info = _GetSystemInfo(
+        gpu=VENDOR_NVIDIA, device=0x1cb3, gl_renderer='ANGLE Direct3D9')
+    tags = _GetTagsToTest(browser, test_class)
+  return tags
 
 class GpuIntegrationTestUnittest(unittest.TestCase):
   def setUp(self):
@@ -142,21 +83,21 @@ class GpuIntegrationTestUnittest(unittest.TestCase):
     extra_args = extra_args or []
     temp_file = tempfile.NamedTemporaryFile(delete=False)
     temp_file.close()
-    try:
-      sys.argv = [
-          run_gpu_integration_test.__file__,
-          test_name,
-          '--write-full-results-to=%s' % temp_file.name,
-          ] + extra_args
-      gpu_project_config.CONFIG = chromium_config.ChromiumConfig(
-          top_level_dir=path_util.GetGpuTestDir(),
-          benchmark_dirs=[
-              os.path.join(path_util.GetGpuTestDir(), 'unittest_data')])
-      run_gpu_integration_test.main()
-      with open(temp_file.name) as f:
-        self._test_result = json.load(f)
-    finally:
-      temp_file.close()
+    test_argv = [
+        run_gpu_integration_test.__file__, test_name,
+        '--write-full-results-to=%s' % temp_file.name] + extra_args
+    unittest_config = chromium_config.ChromiumConfig(
+        top_level_dir=path_util.GetGpuTestDir(),
+        benchmark_dirs=[
+            os.path.join(path_util.GetGpuTestDir(), 'unittest_data')])
+    with mock.patch.object(sys, 'argv', test_argv):
+      with mock.patch.object(gpu_project_config, 'CONFIG', unittest_config):
+        try:
+          run_gpu_integration_test.main()
+          with open(temp_file.name) as f:
+            self._test_result = json.load(f)
+        finally:
+          temp_file.close()
 
   def testOverrideDefaultRetryArgumentsinRunGpuIntegrationTests(self):
     self._RunGpuIntegrationTests(
@@ -180,13 +121,13 @@ class GpuIntegrationTestUnittest(unittest.TestCase):
     # we need to make sure that GenerateTags() returns an empty list if
     # there are no expectations files returned from ExpectationsFiles() or
     # else Typ will raise an exception
-    args = MockArgs()
-    possible_browser = MockPossibleBrowser()
-    self.assertFalse(MockTestCaseWithoutExpectationsFile.GenerateTags(
+    args = gpu_helper.GetMockArgs()
+    possible_browser = mock.MagicMock()
+    self.assertFalse(gpu_integration_test.GpuIntegrationTest.GenerateTags(
         args, possible_browser))
 
   def _TestTagGenerationForMockPlatform(self, test_class, args):
-    tag_set = _generateNvidiaExampleTagsForTestClassAndArgs(
+    tag_set = _GenerateNvidiaExampleTagsForTestClassAndArgs(
         webgl_conformance_integration_test.WebGLConformanceIntegrationTest,
         args)
     self.assertTrue(
@@ -195,7 +136,7 @@ class GpuIntegrationTestUnittest(unittest.TestCase):
     return tag_set
 
   def testGenerateContextLostExampleTagsForAsan(self):
-    args = MockArgs(is_asan=True)
+    args = gpu_helper.GetMockArgs(is_asan=True)
     tag_set = self._TestTagGenerationForMockPlatform(
         context_lost_integration_test.ContextLostIntegrationTest,
         args)
@@ -203,7 +144,7 @@ class GpuIntegrationTestUnittest(unittest.TestCase):
     self.assertNotIn('no-asan', tag_set)
 
   def testGenerateContextLostExampleTagsForNoAsan(self):
-    args = MockArgs()
+    args = gpu_helper.GetMockArgs()
     tag_set = self._TestTagGenerationForMockPlatform(
         context_lost_integration_test.ContextLostIntegrationTest,
         args)
@@ -211,7 +152,7 @@ class GpuIntegrationTestUnittest(unittest.TestCase):
     self.assertNotIn('asan', tag_set)
 
   def testGenerateWebglConformanceExampleTagsForWebglVersion1andAsan(self):
-    args = MockArgs(is_asan=True, webgl_version='1.0.0')
+    args = gpu_helper.GetMockArgs(is_asan=True, webgl_version='1.0.0')
     tag_set = self._TestTagGenerationForMockPlatform(
         webgl_conformance_integration_test.WebGLConformanceIntegrationTest,
         args)
@@ -219,7 +160,7 @@ class GpuIntegrationTestUnittest(unittest.TestCase):
     self.assertFalse(set(['no-asan', 'webgl-version-2']) & tag_set)
 
   def testGenerateWebglConformanceExampleTagsForWebglVersion2andNoAsan(self):
-    args = MockArgs(is_asan=False, webgl_version='2.0.0')
+    args = gpu_helper.GetMockArgs(is_asan=False, webgl_version='2.0.0')
     tag_set = self._TestTagGenerationForMockPlatform(
         webgl_conformance_integration_test.WebGLConformanceIntegrationTest,
         args)
@@ -227,60 +168,53 @@ class GpuIntegrationTestUnittest(unittest.TestCase):
     self.assertFalse(set(['asan', 'webgl-version-1']) & tag_set)
 
   def testGenerateNvidiaExampleTags(self):
-    args = MockArgs()
-    platform = MockPlatform('win', 'win10')
-    browser = MockBrowser(
-        platform, VENDOR_NVIDIA, 0x1cb3, browser_type='release',
-        gl_renderer='ANGLE Direct3D9')
-    possible_browser = MockPossibleBrowser(browser)
+    platform = fakes.FakePlatform('win', 'win10')
+    browser = fakes.FakeBrowser(platform, 'release')
+    browser._returned_system_info = _GetSystemInfo(
+        gpu=VENDOR_NVIDIA, device=0x1cb3, gl_renderer='ANGLE Direct3D9')
     self.assertEqual(
-        set(MockTestCaseWithExpectationsFile.GenerateTags(
-            args, possible_browser)),
+        _GetTagsToTest(browser),
         set(['win', 'win10', 'release', 'nvidia', 'nvidia-0x1cb3',
-             'd3d9', 'no-passthrough']))
+             'd3d9', 'no-passthrough', 'no-swiftshader-gl']))
 
   def testGenerateVendorTagUsingVendorString(self):
-    args = MockArgs()
-    platform = MockPlatform('mac', 'mojave')
-    browser = MockBrowser(
-        platform, browser_type='release',
-        gl_renderer='ANGLE OpenGL ES', passthrough=True,
+    platform = fakes.FakePlatform('mac', 'mojave')
+    browser = fakes.FakeBrowser(platform, 'release')
+    browser._returned_system_info = _GetSystemInfo(
         vendor_string=VENDOR_STRING_IMAGINATION,
-        device_string=DEVICE_STRING_SGX)
-    possible_browser = MockPossibleBrowser(browser)
+        device_string=DEVICE_STRING_SGX,
+        passthrough=True, gl_renderer='ANGLE OpenGL ES')
     self.assertEqual(
-        set(MockTestCaseWithExpectationsFile.GenerateTags(
-            args, possible_browser)),
+        _GetTagsToTest(browser),
         set(['mac', 'mojave', 'release', 'imagination',
-             'imagination-powervr-sgx-554',
-             'opengles', 'passthrough']))
+             'imagination-PowerVR-SGX-554',
+             'opengles', 'passthrough', 'no-swiftshader-gl']))
 
   def testGenerateVendorTagUsingDeviceString(self):
-    args = MockArgs()
-    platform = MockPlatform('mac', 'mojave')
-    browser = MockBrowser(
-        platform, browser_type='release',
+    platform = fakes.FakePlatform('mac', 'mojave')
+    browser = fakes.FakeBrowser(platform, 'release')
+    browser._returned_system_info = _GetSystemInfo(
         vendor_string='illegal vendor string',
         device_string='ANGLE (Imagination, Triangle Monster 3000, 1.0)')
-    possible_browser = MockPossibleBrowser(browser)
     self.assertEqual(
-        set(MockTestCaseWithExpectationsFile.GenerateTags(
-            args, possible_browser)),
+        _GetTagsToTest(browser),
         set(['mac', 'mojave', 'release', 'imagination',
-             'imagination-triangle-monster-3000',
-             'no-angle', 'no-passthrough']))
+             'imagination-Triangle-Monster-3000',
+             'no-angle', 'no-passthrough', 'no-swiftshader-gl']))
 
   def testSimpleIntegrationTest(self):
     self._RunIntegrationTest(
       'simple_integration_unittest',
-      ['unittest_data.integration_tests.SimpleTest.unexpected_error',
-       'unittest_data.integration_tests.SimpleTest.unexpected_failure'],
-      ['unittest_data.integration_tests.SimpleTest.expected_flaky',
-       'unittest_data.integration_tests.SimpleTest.expected_failure'],
-      ['unittest_data.integration_tests.SimpleTest.expected_skip'],
-      [])
-    # It might be nice to be more precise about the order of operations
-    # with these browser restarts, but this is at least a start.
+      ['unexpected_error',
+       'unexpected_failure'],
+      ['expected_flaky',
+       'expected_failure'],
+      ['expected_skip'],
+      ['--retry-only-retry-on-failure', '--retry-limit=3',
+      '--test-name-prefix=unittest_data.integration_tests.SimpleTest.'])
+    # The number of browser starts include the one call to StartBrowser at the
+    # beginning of the run of the test suite and for each RestartBrowser call
+    # which happens after every failure
     self.assertEquals(self._test_state['num_browser_starts'], 6)
 
   def testIntegrationTesttWithBrowserFailure(self):
@@ -312,17 +246,28 @@ class GpuIntegrationTestUnittest(unittest.TestCase):
   def _RunTestsWithExpectationsFiles(self):
     self._RunIntegrationTest(
       'run_tests_with_expectations_files',
-      [('a/b/unexpected-fail.html')],
-      [('a/b/expected-fail.html'),
-       ('a/b/expected-flaky.html')],
-      [('a/b/expected-skip.html')],
+      ['a/b/unexpected-fail.html'],
+      ['a/b/expected-fail.html', 'a/b/expected-flaky.html'],
+      ['should_skip'],
       ['--retry-limit=3', '--retry-only-retry-on-failure-tests',
+       ('--test-name-prefix=unittest_data.integration_tests.'
+        'RunTestsWithExpectationsFiles.')])
+
+  def testTestFilterCommandLineArg(self):
+    self._RunIntegrationTest(
+      'run_tests_with_expectations_files',
+      ['a/b/unexpected-fail.html'],
+      ['a/b/expected-fail.html'],
+      ['should_skip'],
+      ['--retry-limit=3', '--retry-only-retry-on-failure-tests',
+       ('--test-filter=a/b/unexpected-fail.html::a/b/expected-fail.html::'
+        'should_skip'),
        ('--test-name-prefix=unittest_data.integration_tests.'
         'RunTestsWithExpectationsFiles.')])
 
   def testUseTestExpectationsFileToHandleExpectedSkip(self):
     self._RunTestsWithExpectationsFiles()
-    results = self._test_result['tests']['a']['b']['expected-skip.html']
+    results = self._test_result['tests']['should_skip']
     self.assertEqual(results['expected'], 'SKIP')
     self.assertEqual(results['actual'], 'SKIP')
     self.assertNotIn('is_regression', results)
@@ -360,13 +305,13 @@ class GpuIntegrationTestUnittest(unittest.TestCase):
   def testAlsoRunDisabledTests(self):
     self._RunIntegrationTest(
       'test_also_run_disabled_tests',
-      ['unittest_data.integration_tests.TestAlsoRunDisabledTests.skip',
-       'unittest_data.integration_tests.TestAlsoRunDisabledTests.flaky'],
+      ['skip', 'flaky'],
       # Tests that are expected to fail and do fail are treated as test passes
-      [('unittest_data.integration_tests.'
-        'TestAlsoRunDisabledTests.expected_failure')],
+      ['expected_failure'],
       [],
-      ['--also-run-disabled-tests'])
+      ['--all', '--test-name-prefix',
+      'unittest_data.integration_tests.TestAlsoRunDisabledTests.',
+      '--retry-limit=3', '--retry-only-retry-on-failure'])
     self.assertEquals(self._test_state['num_flaky_test_runs'], 4)
     self.assertEquals(self._test_state['num_test_runs'], 6)
 

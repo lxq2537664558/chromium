@@ -15,6 +15,7 @@
 #include "base/callback.h"
 #include "base/macros.h"
 #include "base/memory/weak_ptr.h"
+#include "components/autofill_assistant/browser/client_status.h"
 #include "components/autofill_assistant/browser/selector.h"
 
 namespace autofill_assistant {
@@ -30,7 +31,7 @@ class BatchElementChecker {
   // Callback for AddElementCheck. Argument is true if the check passed.
   //
   // An ElementCheckCallback must not delete its calling BatchElementChecker.
-  using ElementCheckCallback = base::OnceCallback<void(bool)>;
+  using ElementCheckCallback = base::OnceCallback<void(const ClientStatus&)>;
 
   // Callback for AddFieldValueCheck. Argument is true is the element exists.
   // The string contains the field value, or an empty string if accessing the
@@ -38,9 +39,9 @@ class BatchElementChecker {
   //
   // An ElementCheckCallback must not delete its calling BatchElementChecker.
   using GetFieldValueCallback =
-      base::OnceCallback<void(bool, const std::string&)>;
+      base::OnceCallback<void(const ClientStatus&, const std::string&)>;
 
-  // Checks an an element.
+  // Checks an element.
   //
   // New element checks cannot be added once Run has been called.
   void AddElementCheck(const Selector& selector, ElementCheckCallback callback);
@@ -52,17 +53,25 @@ class BatchElementChecker {
   void AddFieldValueCheck(const Selector& selector,
                           GetFieldValueCallback callback);
 
+  // A callback to call once all the elements have been checked. These callbacks
+  // are guaranteed to be called in order, finishing with the callback passed to
+  // Run().
+  //
+  // These callback are allowed to delete the current instance.
+  void AddAllDoneCallback(base::OnceCallback<void()> all_done);
+
   // Returns true if all there are no checks to run.
   bool empty() const;
 
-  // Runs the checks. Call |all_done| once all the results have been reported.
-  void Run(WebController* web_controller, base::OnceCallback<void()> all_done);
+  // Runs the checks. Once all checks are done, calls the callbacks registered
+  // to AddAllDoneCallback().
+  void Run(WebController* web_controller);
 
  private:
   void OnElementChecked(std::vector<ElementCheckCallback>* callbacks,
-                        bool exists);
+                        const ClientStatus& element_status);
   void OnGetFieldValue(std::vector<GetFieldValueCallback>* callbacks,
-                       bool exists,
+                       const ClientStatus& element_status,
                        const std::string& value);
   void CheckDone();
 
@@ -80,9 +89,9 @@ class BatchElementChecker {
   // Run() was called. Checking elements might or might not have finished yet.
   bool started_ = false;
 
-  base::OnceCallback<void()> all_done_;
+  std::vector<base::OnceCallback<void()>> all_done_;
 
-  base::WeakPtrFactory<BatchElementChecker> weak_ptr_factory_;
+  base::WeakPtrFactory<BatchElementChecker> weak_ptr_factory_{this};
 
   DISALLOW_COPY_AND_ASSIGN(BatchElementChecker);
 };

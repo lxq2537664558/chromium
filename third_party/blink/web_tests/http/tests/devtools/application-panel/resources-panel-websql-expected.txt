@@ -17,6 +17,13 @@ Storage
 Cache
   Cache Storage
   Application Cache
+Background Services
+  Background Fetch
+  Background Sync
+  Notifications
+  Payment Handler
+  Periodic Background Sync
+  Push Messaging
 Frames
   top
 Found: true
@@ -38,6 +45,13 @@ Storage
 Cache
   Cache Storage
   Application Cache
+Background Services
+  Background Fetch
+  Background Sync
+  Notifications
+  Payment Handler
+  Periodic Background Sync
+  Push Messaging
 Frames
   top
 Table added:
@@ -59,6 +73,13 @@ Storage
 Cache
   Cache Storage
   Application Cache
+Background Services
+  Background Fetch
+  Background Sync
+  Notifications
+  Payment Handler
+  Periodic Background Sync
+  Push Messaging
 Frames
   top
 

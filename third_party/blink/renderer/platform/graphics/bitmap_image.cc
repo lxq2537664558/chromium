@@ -50,6 +50,12 @@
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
 
 namespace blink {
+namespace {
+
+const int kMinImageSizeForClassification1D = 24;
+const int kMaxImageSizeForClassification1D = 100;
+
+}  // namespace
 
 int GetRepetitionCountWithPolicyOverride(int actual_count,
                                          ImageAnimationPolicy policy) {
@@ -109,8 +115,7 @@ PaintImage BitmapImage::PaintImageForTesting() {
 
 PaintImage BitmapImage::CreatePaintImage() {
   sk_sp<PaintImageGenerator> generator =
-      decoder_ ? decoder_->CreateGenerator(PaintImage::kDefaultFrameIndex)
-               : nullptr;
+      decoder_ ? decoder_->CreateGenerator() : nullptr;
   if (!generator)
     return PaintImage();
 
@@ -151,8 +156,26 @@ IntSize BitmapImage::SizeRespectingOrientation() const {
   return size_respecting_orientation_;
 }
 
+bool BitmapImage::HasDefaultOrientation() const {
+  ImageOrientation orientation = CurrentFrameOrientation();
+  return orientation == kDefaultImageOrientation;
+}
+
 bool BitmapImage::GetHotSpot(IntPoint& hot_spot) const {
   return decoder_ && decoder_->HotSpot(hot_spot);
+}
+
+// We likely don't need to confirm that this is the first time all data has
+// been received as a way to avoid reporting the UMA multiple times for the
+// same image. However, we err on the side of caution.
+bool BitmapImage::ShouldReportByteSizeUMAs(bool data_now_completely_received) {
+  if (!decoder_)
+    return false;
+  // Ensures that refactoring to check truthiness of ByteSize() method is
+  // equivalent to the previous use of Data() and does not mess up UMAs.
+  DCHECK_EQ(!decoder_->ByteSize(), !decoder_->Data());
+  return !all_data_received_ && data_now_completely_received &&
+         decoder_->ByteSize() && IsSizeAvailable();
 }
 
 Image::SizeAvailability BitmapImage::SetData(scoped_refptr<SharedBuffer> data,
@@ -199,14 +222,13 @@ Image::SizeAvailability BitmapImage::DataChanged(bool all_data_received) {
 
   // Report the image density metric right after we received all the data. The
   // SetData() call on the decoder_ (if there is one) should have decoded the
-  // images and we should know the image size at this point. We still check it
-  // here as a sanity check.
-  if (!all_data_received_ && all_data_received && decoder_ &&
-      decoder_->Data() && decoder_->FilenameExtension() == "jpg" &&
-      IsSizeAvailable()) {
+  // images and we should know the image size at this point.
+  if (ShouldReportByteSizeUMAs(all_data_received) &&
+      decoder_->FilenameExtension() == "jpg") {
     BitmapImageMetrics::CountImageJpegDensity(
         std::min(Size().Width(), Size().Height()),
-        ImageDensityInCentiBpp(Size(), decoder_->Data()->size()));
+        ImageDensityInCentiBpp(Size(), decoder_->ByteSize()),
+        decoder_->ByteSize());
   }
 
   // Feed all the data we've seen so far to the image decoder.
@@ -321,7 +343,8 @@ bool BitmapImage::IsSizeAvailable() {
 }
 
 PaintImage BitmapImage::PaintImageForCurrentFrame() {
-  if (cached_frame_)
+  auto alpha_type = decoder_ ? decoder_->AlphaType() : kUnknown_SkAlphaType;
+  if (cached_frame_ && cached_frame_.GetAlphaType() == alpha_type)
     return cached_frame_;
 
   cached_frame_ = CreatePaintImage();
@@ -358,20 +381,7 @@ scoped_refptr<Image> BitmapImage::ImageForDefaultFrame() {
 }
 
 bool BitmapImage::CurrentFrameKnownToBeOpaque() {
-  // If the image is animated, it is being animated by the compositor and we
-  // don't know what the current frame is.
-  // TODO(khushalsagar): We could say the image is opaque if none of the frames
-  // have alpha.
-  if (MaybeAnimated())
-    return false;
-
-  // We ask the decoder whether the image has alpha because in some cases the
-  // the correct value is known after decoding. The DeferredImageDecoder caches
-  // the accurate value from the decoded result.
-  const bool frame_has_alpha =
-      decoder_ ? decoder_->FrameHasAlphaAtIndex(PaintImage::kDefaultFrameIndex)
-               : true;
-  return !frame_has_alpha;
+  return decoder_ ? decoder_->AlphaType() == kOpaque_SkAlphaType : false;
 }
 
 bool BitmapImage::CurrentFrameIsComplete() {
@@ -432,11 +442,21 @@ void BitmapImage::SetAnimationPolicy(ImageAnimationPolicy policy) {
   ResetAnimation();
 }
 
-DarkModeClassification BitmapImage::ClassifyImageForDarkMode(
-    const FloatRect& src_rect) {
-  DarkModeImageClassifier dark_mode_image_classifier;
-  return dark_mode_image_classifier.ClassifyBitmapImageForDarkMode(*this,
-                                                                   src_rect);
+DarkModeClassification BitmapImage::CheckTypeSpecificConditionsForDarkMode(
+    const FloatRect& dest_rect,
+    DarkModeImageClassifier* classifier) {
+  if (dest_rect.Width() < kMinImageSizeForClassification1D ||
+      dest_rect.Height() < kMinImageSizeForClassification1D)
+    return DarkModeClassification::kApplyFilter;
+
+  if (dest_rect.Width() > kMaxImageSizeForClassification1D ||
+      dest_rect.Height() > kMaxImageSizeForClassification1D) {
+    return DarkModeClassification::kDoNotApplyFilter;
+  }
+
+  classifier->SetImageType(DarkModeImageClassifier::ImageType::kBitmap);
+
+  return DarkModeClassification::kNotClassified;
 }
 
 }  // namespace blink

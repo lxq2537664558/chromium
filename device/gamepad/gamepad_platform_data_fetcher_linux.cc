@@ -17,6 +17,7 @@
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/trace_event/trace_event.h"
+#include "device/gamepad/gamepad_blocklist.h"
 #include "device/gamepad/gamepad_id_list.h"
 #include "device/gamepad/gamepad_uma.h"
 #include "device/gamepad/nintendo_controller.h"
@@ -60,8 +61,8 @@ GamepadSource GamepadPlatformDataFetcherLinux::source() {
 
 void GamepadPlatformDataFetcherLinux::OnAddedToProvider() {
   std::vector<UdevWatcher::Filter> filters;
-  filters.emplace_back(UdevGamepadLinux::kInputSubsystem, nullptr);
-  filters.emplace_back(UdevGamepadLinux::kHidrawSubsystem, nullptr);
+  filters.emplace_back(UdevGamepadLinux::kInputSubsystem, "");
+  filters.emplace_back(UdevGamepadLinux::kHidrawSubsystem, "");
   udev_watcher_ = UdevWatcher::StartWatching(this, filters);
 
   for (auto it = devices_.begin(); it != devices_.end(); ++it)
@@ -81,12 +82,19 @@ void GamepadPlatformDataFetcherLinux::OnDeviceRemoved(
   RefreshDevice(device.get());
 }
 
+void GamepadPlatformDataFetcherLinux::OnDeviceChanged(
+    ScopedUdevDevicePtr device) {
+  RefreshDevice(device.get());
+}
+
 void GamepadPlatformDataFetcherLinux::GetGamepadData(bool) {
   TRACE_EVENT0("GAMEPAD", "GetGamepadData");
 
   // Update our internal state.
-  for (size_t i = 0; i < Gamepads::kItemsLengthCap; ++i)
-    ReadDeviceData(i);
+  for (const auto& device : devices_) {
+    if (device->GetJoydevIndex() >= 0)
+      ReadDeviceData(device->GetJoydevIndex());
+  }
 }
 
 // Used during enumeration, and monitor notifications.
@@ -98,7 +106,7 @@ void GamepadPlatformDataFetcherLinux::RefreshDevice(udev_device* dev) {
     if (pad_info.type == UdevGamepadLinux::Type::JOYDEV) {
       // If |syspath_prefix| is empty, the device was already disconnected.
       if (pad_info.syspath_prefix.empty())
-        RemoveDeviceAtIndex(pad_info.index);
+        DisconnectUnrecognizedGamepad(pad_info.index);
       else
         RefreshJoydevDevice(dev, pad_info);
     } else if (pad_info.type == UdevGamepadLinux::Type::EVDEV) {
@@ -130,15 +138,16 @@ void GamepadPlatformDataFetcherLinux::RemoveDevice(GamepadDeviceLinux* device) {
   }
 }
 
-void GamepadPlatformDataFetcherLinux::RemoveDeviceAtIndex(int index) {
+bool GamepadPlatformDataFetcherLinux::DisconnectUnrecognizedGamepad(int index) {
   for (auto it = devices_.begin(); it != devices_.end(); ++it) {
     const auto& device = *it;
     if (device->GetJoydevIndex() == index) {
       device->Shutdown();
       devices_.erase(it);
-      return;
+      return true;
     }
   }
+  return false;
 }
 
 GamepadDeviceLinux* GamepadPlatformDataFetcherLinux::GetOrCreateMatchingDevice(
@@ -158,8 +167,6 @@ void GamepadPlatformDataFetcherLinux::RefreshJoydevDevice(
     udev_device* dev,
     const UdevGamepadLinux& pad_info) {
   const int joydev_index = pad_info.index;
-  if (joydev_index < 0 || joydev_index >= (int)Gamepads::kItemsLengthCap)
-    return;
 
   GamepadDeviceLinux* device = GetOrCreateMatchingDevice(pad_info);
   if (device == nullptr)
@@ -174,6 +181,14 @@ void GamepadPlatformDataFetcherLinux::RefreshJoydevDevice(
 
   uint16_t vendor_id = device->GetVendorId();
   uint16_t product_id = device->GetProductId();
+
+  // Filter out devices that have gamepad-like HID usages but aren't gamepads.
+  if (GamepadIsExcluded(vendor_id, product_id)) {
+    device->CloseJoydevNode();
+    RemoveDevice(device);
+    return;
+  }
+
   if (NintendoController::IsNintendoController(vendor_id, product_id)) {
     // Nintendo devices are handled by the Nintendo data fetcher.
     device->CloseJoydevNode();
@@ -181,7 +196,10 @@ void GamepadPlatformDataFetcherLinux::RefreshJoydevDevice(
     return;
   }
 
-  PadState* state = GetPadState(joydev_index);
+  bool is_recognized = GamepadIdList::Get().GetGamepadId(
+                           vendor_id, product_id) != GamepadId::kUnknownGamepad;
+
+  PadState* state = GetPadState(joydev_index, is_recognized);
   if (!state) {
     // No slot available for device, don't use.
     device->CloseJoydevNode();
@@ -203,12 +221,10 @@ void GamepadPlatformDataFetcherLinux::RefreshJoydevDevice(
     return;
   }
 
-  // Joydev uses its own internal list of device IDs to identify known gamepads.
   // If the device is on our list, record it by ID. If the device is unknown,
   // record that an unknown gamepad was enumerated.
-  GamepadId gamepad_id =
-      GamepadIdList::Get().GetGamepadId(vendor_id, product_id);
-  if (gamepad_id == GamepadId::kUnknownGamepad)
+
+  if (is_recognized)
     RecordUnknownGamepad(source());
   else
     RecordConnectedGamepad(vendor_id, product_id);
@@ -302,8 +318,6 @@ void GamepadPlatformDataFetcherLinux::OnHidrawDeviceOpened(
 }
 
 void GamepadPlatformDataFetcherLinux::ReadDeviceData(size_t index) {
-  CHECK_LT(index, Gamepads::kItemsLengthCap);
-
   GamepadDeviceLinux* device = GetDeviceWithJoydevIndex(index);
   if (!device)
     return;

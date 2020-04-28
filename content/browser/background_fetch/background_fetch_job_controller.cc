@@ -87,9 +87,8 @@ BackgroundFetchJobController::BackgroundFetchJobController(
       complete_requests_uploaded_bytes_cache_(bytes_uploaded),
       upload_total_(upload_total),
       progress_callback_(std::move(progress_callback)),
-      finished_callback_(std::move(finished_callback)),
-      weak_ptr_factory_(this) {
-  DCHECK_CURRENTLY_ON(BrowserThread::IO);
+      finished_callback_(std::move(finished_callback)) {
+  DCHECK_CURRENTLY_ON(ServiceWorkerContext::GetCoreThreadId());
 }
 
 void BackgroundFetchJobController::InitializeRequestStatus(
@@ -98,7 +97,7 @@ void BackgroundFetchJobController::InitializeRequestStatus(
     std::vector<scoped_refptr<BackgroundFetchRequestInfo>>
         active_fetch_requests,
     bool start_paused) {
-  DCHECK_CURRENTLY_ON(BrowserThread::IO);
+  DCHECK_CURRENTLY_ON(ServiceWorkerContext::GetCoreThreadId());
 
   // Don't allow double initialization.
   DCHECK_GT(total_downloads, 0);
@@ -128,7 +127,7 @@ void BackgroundFetchJobController::InitializeRequestStatus(
 }
 
 BackgroundFetchJobController::~BackgroundFetchJobController() {
-  DCHECK_CURRENTLY_ON(BrowserThread::IO);
+  DCHECK_CURRENTLY_ON(ServiceWorkerContext::GetCoreThreadId());
 }
 
 bool BackgroundFetchJobController::HasMoreRequests() {
@@ -138,7 +137,7 @@ bool BackgroundFetchJobController::HasMoreRequests() {
 void BackgroundFetchJobController::StartRequest(
     scoped_refptr<BackgroundFetchRequestInfo> request,
     RequestFinishedCallback request_finished_callback) {
-  DCHECK_CURRENTLY_ON(BrowserThread::IO);
+  DCHECK_CURRENTLY_ON(ServiceWorkerContext::GetCoreThreadId());
   DCHECK_LT(completed_downloads_, total_downloads_);
   DCHECK(request_finished_callback);
   DCHECK(request);
@@ -163,7 +162,7 @@ void BackgroundFetchJobController::StartRequest(
 void BackgroundFetchJobController::DidStartRequest(
     const std::string& guid,
     std::unique_ptr<BackgroundFetchResponse> response) {
-  DCHECK_CURRENTLY_ON(BrowserThread::IO);
+  DCHECK_CURRENTLY_ON(ServiceWorkerContext::GetCoreThreadId());
 
   DCHECK(active_request_map_.count(guid));
   const auto& request = active_request_map_[guid];
@@ -179,7 +178,7 @@ void BackgroundFetchJobController::DidStartRequest(
 void BackgroundFetchJobController::DidUpdateRequest(const std::string& guid,
                                                     uint64_t bytes_uploaded,
                                                     uint64_t bytes_downloaded) {
-  DCHECK_CURRENTLY_ON(BrowserThread::IO);
+  DCHECK_CURRENTLY_ON(ServiceWorkerContext::GetCoreThreadId());
 
   DCHECK(active_request_map_.count(guid));
   const auto& request = active_request_map_[guid];
@@ -208,7 +207,7 @@ void BackgroundFetchJobController::DidUpdateRequest(const std::string& guid,
 void BackgroundFetchJobController::DidCompleteRequest(
     const std::string& guid,
     std::unique_ptr<BackgroundFetchResult> result) {
-  DCHECK_CURRENTLY_ON(BrowserThread::IO);
+  DCHECK_CURRENTLY_ON(ServiceWorkerContext::GetCoreThreadId());
 
   DCHECK(active_request_map_.count(guid));
   const auto& request = active_request_map_[guid];
@@ -236,8 +235,8 @@ BackgroundFetchJobController::NewRegistrationData() const {
 
 uint64_t BackgroundFetchJobController::GetInProgressDownloadedBytes() {
   uint64_t bytes = 0u;
-  for (const std::pair<std::string, InProgressRequestBytes>& in_progress_bytes :
-       active_bytes_map_) {
+  for (const std::pair<const std::string, InProgressRequestBytes>&
+           in_progress_bytes : active_bytes_map_) {
     bytes += in_progress_bytes.second.downloaded;
   }
   return bytes;
@@ -245,8 +244,8 @@ uint64_t BackgroundFetchJobController::GetInProgressDownloadedBytes() {
 
 uint64_t BackgroundFetchJobController::GetInProgressUploadedBytes() {
   uint64_t bytes = 0u;
-  for (const std::pair<std::string, InProgressRequestBytes>& in_progress_bytes :
-       active_bytes_map_) {
+  for (const std::pair<const std::string, InProgressRequestBytes>&
+           in_progress_bytes : active_bytes_map_) {
     bytes += in_progress_bytes.second.uploaded;
   }
   return bytes;

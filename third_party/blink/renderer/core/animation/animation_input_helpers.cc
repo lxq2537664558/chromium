@@ -79,7 +79,7 @@ CSSPropertyID AnimationInputHelpers::KeyframeAttributeToCSSProperty(
       builder.Append('-');
     builder.Append(property[i]);
   }
-  return cssPropertyID(builder.ToString());
+  return cssPropertyID(document.GetExecutionContext(), builder.ToString());
 }
 
 CSSPropertyID AnimationInputHelpers::KeyframeAttributeToPresentationAttribute(
@@ -91,9 +91,9 @@ CSSPropertyID AnimationInputHelpers::KeyframeAttributeToPresentationAttribute(
 
   String unprefixed_property = RemoveSVGPrefix(property);
   if (SVGElement::IsAnimatableCSSProperty(QualifiedName(
-          g_null_atom, AtomicString(unprefixed_property), g_null_atom)))
-    return cssPropertyID(unprefixed_property);
-
+          g_null_atom, AtomicString(unprefixed_property), g_null_atom))) {
+    return cssPropertyID(element->GetExecutionContext(), unprefixed_property);
+  }
   return CSSPropertyID::kInvalid;
 }
 
@@ -217,12 +217,12 @@ QualifiedName SvgAttributeName(const String& property) {
 const QualifiedName* AnimationInputHelpers::KeyframeAttributeToSVGAttribute(
     const String& property,
     Element* element) {
-  if (!RuntimeEnabledFeatures::WebAnimationsSVGEnabled() || !element ||
-      !element->IsSVGElement() || !IsSVGPrefixed(property))
+  auto* svg_element = DynamicTo<SVGElement>(element);
+  if (!RuntimeEnabledFeatures::WebAnimationsSVGEnabled() || !svg_element ||
+      !IsSVGPrefixed(property))
     return nullptr;
 
-  SVGElement* svg_element = ToSVGElement(element);
-  if (IsSVGSMILElement(svg_element))
+  if (IsA<SVGSMILElement>(svg_element))
     return nullptr;
 
   String unprefixed_property = RemoveSVGPrefix(property);

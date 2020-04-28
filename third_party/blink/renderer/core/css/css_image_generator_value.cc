@@ -45,39 +45,32 @@ Image* GeneratedImageCache::GetImage(const FloatSize& size) const {
   GeneratedImageMap::const_iterator image_iter = images_.find(size);
   if (image_iter == images_.end())
     return nullptr;
-  return image_iter->second.get();
+  return image_iter->value.get();
 }
 
 void GeneratedImageCache::PutImage(const FloatSize& size,
                                    scoped_refptr<Image> image) {
   DCHECK(!size.IsEmpty());
-  images_.insert(
-      std::pair<FloatSize, scoped_refptr<Image>>(size, std::move(image)));
+  images_.insert(size, std::move(image));
 }
 
 void GeneratedImageCache::AddSize(const FloatSize& size) {
   DCHECK(!size.IsEmpty());
-  ImageSizeCountMap::iterator size_entry = sizes_.find(size);
-  if (size_entry == sizes_.end())
-    sizes_.insert(std::pair<FloatSize, unsigned>(size, 1));
-  else
-    size_entry->second++;
+  sizes_.insert(size);
 }
 
 void GeneratedImageCache::RemoveSize(const FloatSize& size) {
   DCHECK(!size.IsEmpty());
   SECURITY_DCHECK(sizes_.find(size) != sizes_.end());
-  unsigned& count = sizes_[size];
-  count--;
-  if (count == 0) {
+  bool fully_erased = sizes_.erase(size);
+  if (fully_erased) {
     DCHECK(images_.find(size) != images_.end());
-    sizes_.erase(sizes_.find(size));
     images_.erase(images_.find(size));
   }
 }
 
 CSSImageGeneratorValue::CSSImageGeneratorValue(ClassType class_type)
-    : CSSValue(class_type) {}
+    : CSSValue(class_type), keep_alive_(PERSISTENT_FROM_HERE) {}
 
 CSSImageGeneratorValue::~CSSImageGeneratorValue() = default;
 
@@ -91,12 +84,6 @@ void CSSImageGeneratorValue::AddClient(const ImageResourceObserver* client) {
   SizeAndCount& size_count =
       clients_.insert(client, SizeAndCount()).stored_value->value;
   size_count.count++;
-}
-
-CSSImageGeneratorValue* CSSImageGeneratorValue::ValueWithURLsMadeAbsolute() {
-  if (auto* crossface_value = DynamicTo<CSSCrossfadeValue>(this))
-    return crossface_value->ValueWithURLsMadeAbsolute();
-  return this;
 }
 
 void CSSImageGeneratorValue::RemoveClient(const ImageResourceObserver* client) {
@@ -170,6 +157,16 @@ scoped_refptr<Image> CSSImageGeneratorValue::GetImage(
       NOTREACHED();
   }
   return nullptr;
+}
+
+bool CSSImageGeneratorValue::IsUsingCustomProperty(
+    const AtomicString& custom_property_name,
+    const Document& document) const {
+  if (GetClassType() == kPaintClass) {
+    return To<CSSPaintValue>(this)->IsUsingCustomProperty(custom_property_name,
+                                                          document);
+  }
+  return false;
 }
 
 bool CSSImageGeneratorValue::IsFixedSize() const {
@@ -268,6 +265,31 @@ void CSSImageGeneratorValue::LoadSubimages(const Document& document) {
     default:
       NOTREACHED();
   }
+}
+
+CSSImageGeneratorValue* CSSImageGeneratorValue::ComputedCSSValue(
+    const ComputedStyle& style,
+    bool allow_visited_style) {
+  switch (GetClassType()) {
+    case kCrossfadeClass:
+      return To<CSSCrossfadeValue>(this)->ComputedCSSValue(style,
+                                                           allow_visited_style);
+    case kLinearGradientClass:
+      return To<CSSLinearGradientValue>(this)->ComputedCSSValue(
+          style, allow_visited_style);
+    case kPaintClass:
+      return To<CSSPaintValue>(this)->ComputedCSSValue(style,
+                                                       allow_visited_style);
+    case kRadialGradientClass:
+      return To<CSSRadialGradientValue>(this)->ComputedCSSValue(
+          style, allow_visited_style);
+    case kConicGradientClass:
+      return To<CSSConicGradientValue>(this)->ComputedCSSValue(
+          style, allow_visited_style);
+    default:
+      NOTREACHED();
+  }
+  return nullptr;
 }
 
 }  // namespace blink

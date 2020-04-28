@@ -2,11 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "ui/views/controls/button/image_button.h"
 #include "base/macros.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/base/layout.h"
 #include "ui/views/border.h"
-#include "ui/views/controls/button/image_button.h"
 #include "ui/views/test/views_test_base.h"
 
 namespace {
@@ -25,9 +25,7 @@ class Parent : public views::View {
     pref_size_changed_calls_++;
   }
 
-  int pref_size_changed_calls() const {
-    return pref_size_changed_calls_;
-  }
+  int pref_size_changed_calls() const { return pref_size_changed_calls_; }
 
  private:
   int pref_size_changed_calls_ = 0;
@@ -39,13 +37,6 @@ class Parent : public views::View {
 
 namespace views {
 
-namespace {
-const ImageButton::HorizontalAlignment kDefaultHorizontalAlignment =
-    ImageButton::ALIGN_LEFT;
-const ImageButton::VerticalAlignment kDefaultVerticalAlignment =
-    ImageButton::ALIGN_TOP;
-}  // namespace
-
 using ImageButtonTest = ViewsTestBase;
 
 TEST_F(ImageButtonTest, Basics) {
@@ -55,12 +46,12 @@ TEST_F(ImageButtonTest, Basics) {
   EXPECT_TRUE(button.GetImageToPaint().isNull());
 
   // Without an image, buttons are 16x14 by default.
-  EXPECT_EQ("16x14", button.GetPreferredSize().ToString());
+  EXPECT_EQ(gfx::Size(16, 14), button.GetPreferredSize());
 
   // The minimum image size should be applied even when there is no image.
   button.SetMinimumImageSize(gfx::Size(5, 15));
-  EXPECT_EQ("5x15", button.minimum_image_size().ToString());
-  EXPECT_EQ("16x15", button.GetPreferredSize().ToString());
+  EXPECT_EQ(gfx::Size(5, 15), button.GetMinimumImageSize());
+  EXPECT_EQ(gfx::Size(16, 15), button.GetPreferredSize());
 
   // Set a normal image.
   gfx::ImageSkia normal_image = CreateTestImage(10, 20);
@@ -72,7 +63,7 @@ TEST_F(ImageButtonTest, Basics) {
   EXPECT_EQ(20, button.GetImageToPaint().height());
 
   // Preferred size is the normal button size.
-  EXPECT_EQ("10x20", button.GetPreferredSize().ToString());
+  EXPECT_EQ(gfx::Size(10, 20), button.GetPreferredSize());
 
   // Set a pushed image.
   gfx::ImageSkia pushed_image = CreateTestImage(11, 21);
@@ -80,7 +71,7 @@ TEST_F(ImageButtonTest, Basics) {
 
   // By convention, preferred size doesn't change, even though pushed image
   // is bigger.
-  EXPECT_EQ("10x20", button.GetPreferredSize().ToString());
+  EXPECT_EQ(gfx::Size(10, 20), button.GetPreferredSize());
 
   // We're still painting the normal image.
   EXPECT_FALSE(button.GetImageToPaint().isNull());
@@ -89,11 +80,11 @@ TEST_F(ImageButtonTest, Basics) {
 
   // The minimum image size should make the preferred size bigger.
   button.SetMinimumImageSize(gfx::Size(15, 5));
-  EXPECT_EQ("15x5", button.minimum_image_size().ToString());
-  EXPECT_EQ("15x20", button.GetPreferredSize().ToString());
+  EXPECT_EQ(gfx::Size(15, 5), button.GetMinimumImageSize());
+  EXPECT_EQ(gfx::Size(15, 20), button.GetPreferredSize());
   button.SetMinimumImageSize(gfx::Size(15, 25));
-  EXPECT_EQ("15x25", button.minimum_image_size().ToString());
-  EXPECT_EQ("15x25", button.GetPreferredSize().ToString());
+  EXPECT_EQ(gfx::Size(15, 25), button.GetMinimumImageSize());
+  EXPECT_EQ(gfx::Size(15, 25), button.GetPreferredSize());
 }
 
 TEST_F(ImageButtonTest, SetAndGetImage) {
@@ -128,47 +119,27 @@ TEST_F(ImageButtonTest, ImagePositionWithBorder) {
   button.SetImage(Button::STATE_NORMAL, &image);
 
   // The image should be painted at the top-left corner.
-  EXPECT_EQ(gfx::Point().ToString(),
-            button
-                .ComputeImagePaintPosition(image, kDefaultHorizontalAlignment,
-                                           kDefaultVerticalAlignment)
-                .ToString());
+  EXPECT_EQ(gfx::Point(), button.ComputeImagePaintPosition(image));
 
   button.SetBorder(views::CreateEmptyBorder(10, 5, 0, 0));
-  EXPECT_EQ(gfx::Point(5, 10).ToString(),
-            button
-                .ComputeImagePaintPosition(image, kDefaultHorizontalAlignment,
-                                           kDefaultVerticalAlignment)
-                .ToString());
+  EXPECT_EQ(gfx::Point(5, 10), button.ComputeImagePaintPosition(image));
 
   button.SetBorder(NullBorder());
   button.SetBounds(0, 0, 50, 50);
-  EXPECT_EQ(gfx::Point().ToString(),
-            button
-                .ComputeImagePaintPosition(image, kDefaultHorizontalAlignment,
-                                           kDefaultVerticalAlignment)
-                .ToString());
+  EXPECT_EQ(gfx::Point(), button.ComputeImagePaintPosition(image));
 
-  button.SetImageAlignment(ImageButton::ALIGN_CENTER,
-                           ImageButton::ALIGN_MIDDLE);
-  EXPECT_EQ(gfx::Point(15, 10).ToString(),
-            button
-                .ComputeImagePaintPosition(image, ImageButton::ALIGN_CENTER,
-                                           ImageButton::ALIGN_MIDDLE)
-                .ToString());
+  button.SetImageHorizontalAlignment(ImageButton::ALIGN_CENTER);
+  button.SetImageVerticalAlignment(ImageButton::ALIGN_MIDDLE);
+  EXPECT_EQ(gfx::Point(15, 10), button.ComputeImagePaintPosition(image));
   button.SetBorder(views::CreateEmptyBorder(10, 10, 0, 0));
-  EXPECT_EQ(gfx::Point(20, 15).ToString(),
-            button
-                .ComputeImagePaintPosition(image, ImageButton::ALIGN_CENTER,
-                                           ImageButton::ALIGN_MIDDLE)
-                .ToString());
+  EXPECT_EQ(gfx::Point(20, 15), button.ComputeImagePaintPosition(image));
 
   // The entire button's size should take the border into account.
-  EXPECT_EQ(gfx::Size(30, 40).ToString(), button.GetPreferredSize().ToString());
+  EXPECT_EQ(gfx::Size(30, 40), button.GetPreferredSize());
 
   // The border should be added on top of the minimum image size.
   button.SetMinimumImageSize(gfx::Size(30, 5));
-  EXPECT_EQ(gfx::Size(40, 40).ToString(), button.GetPreferredSize().ToString());
+  EXPECT_EQ(gfx::Size(40, 40), button.GetPreferredSize());
 }
 
 TEST_F(ImageButtonTest, LeftAlignedMirrored) {
@@ -176,17 +147,12 @@ TEST_F(ImageButtonTest, LeftAlignedMirrored) {
   gfx::ImageSkia image = CreateTestImage(20, 30);
   button.SetImage(Button::STATE_NORMAL, &image);
   button.SetBounds(0, 0, 50, 30);
-  button.SetImageAlignment(ImageButton::ALIGN_LEFT,
-                           ImageButton::ALIGN_BOTTOM);
+  button.SetImageVerticalAlignment(ImageButton::ALIGN_BOTTOM);
   button.SetDrawImageMirrored(true);
 
   // Because the coordinates are flipped, we should expect this to draw as if
   // it were ALIGN_RIGHT.
-  EXPECT_EQ(gfx::Point(30, 0).ToString(),
-            button
-                .ComputeImagePaintPosition(image, ImageButton::ALIGN_LEFT,
-                                           ImageButton::ALIGN_BOTTOM)
-                .ToString());
+  EXPECT_EQ(gfx::Point(30, 0), button.ComputeImagePaintPosition(image));
 }
 
 TEST_F(ImageButtonTest, RightAlignedMirrored) {
@@ -194,17 +160,13 @@ TEST_F(ImageButtonTest, RightAlignedMirrored) {
   gfx::ImageSkia image = CreateTestImage(20, 30);
   button.SetImage(Button::STATE_NORMAL, &image);
   button.SetBounds(0, 0, 50, 30);
-  button.SetImageAlignment(ImageButton::ALIGN_RIGHT,
-                           ImageButton::ALIGN_BOTTOM);
+  button.SetImageHorizontalAlignment(ImageButton::ALIGN_RIGHT);
+  button.SetImageVerticalAlignment(ImageButton::ALIGN_BOTTOM);
   button.SetDrawImageMirrored(true);
 
   // Because the coordinates are flipped, we should expect this to draw as if
   // it were ALIGN_LEFT.
-  EXPECT_EQ(gfx::Point(0, 0).ToString(),
-            button
-                .ComputeImagePaintPosition(image, ImageButton::ALIGN_RIGHT,
-                                           ImageButton::ALIGN_BOTTOM)
-                .ToString());
+  EXPECT_EQ(gfx::Point(0, 0), button.ComputeImagePaintPosition(image));
 }
 
 TEST_F(ImageButtonTest, PreferredSizeInvalidation) {

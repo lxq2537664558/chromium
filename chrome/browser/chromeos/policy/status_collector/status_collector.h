@@ -6,12 +6,30 @@
 #define CHROME_BROWSER_CHROMEOS_POLICY_STATUS_COLLECTOR_STATUS_COLLECTOR_H_
 
 #include <memory>
+#include <string>
 
 #include "base/callback.h"
+#include "base/optional.h"
+#include "base/threading/thread_checker.h"
+#include "base/time/clock.h"
+#include "base/time/default_clock.h"
+#include "base/time/time.h"
+#include "chrome/browser/chromeos/settings/cros_settings.h"
 #include "components/policy/proto/device_management_backend.pb.h"
+
+class PrefRegistrySimple;
+class Profile;
+
+namespace chromeos {
+class CrosSettings;
+namespace system {
+class StatisticsProvider;
+}
+}  // namespace chromeos
 
 namespace policy {
 
+class ActivityStorage;
 struct DeviceLocalAccount;
 
 // Groups parameters that are necessary either directly in the
@@ -49,8 +67,27 @@ using StatusCollectorCallback =
 // Defines the API for a status collector.
 class StatusCollector {
  public:
-  StatusCollector() = default;
-  virtual ~StatusCollector() = default;
+  // Passed into asynchronous mojo interface for communicating with Android.
+  using AndroidStatusReceiver =
+      base::Callback<void(const std::string&, const std::string&)>;
+  // Calls the enterprise reporting mojo interface, passing over the
+  // AndroidStatusReceiver. Returns false if the mojo interface isn't available,
+  // in which case no asynchronous query is emitted and the android status query
+  // fails synchronously. The |AndroidStatusReceiver| is not called in this
+  // case.
+  using AndroidStatusFetcher =
+      base::Callback<bool(const AndroidStatusReceiver&)>;
+
+  static void RegisterProfilePrefs(PrefRegistrySimple* registry);
+
+  // Simplifies filling the boot mode for any of the relevant status report
+  // requests.
+  static base::Optional<std::string> GetBootMode(
+      chromeos::system::StatisticsProvider* statistics_provider);
+
+  StatusCollector(chromeos::system::StatisticsProvider* provider,
+                  chromeos::CrosSettings* cros_settings);
+  virtual ~StatusCollector();
 
   // Gathers status information and calls the passed response callback.
   virtual void GetStatusAsync(const StatusCollectorCallback& callback) = 0;
@@ -66,12 +103,49 @@ class StatusCollector {
   virtual bool ShouldReportNetworkInterfaces() const = 0;
   virtual bool ShouldReportUsers() const = 0;
   virtual bool ShouldReportHardwareStatus() const = 0;
+  virtual bool ShouldReportCrashReportInfo() const = 0;
 
   // Returns the DeviceLocalAccount associated with the currently active kiosk
   // session, if the session was auto-launched with zero delay (this enables
   // functionality such as network reporting). If it isn't a kiosk session,
   // nullptr is returned.
   virtual std::unique_ptr<DeviceLocalAccount> GetAutoLaunchedKioskSessionInfo();
+
+ protected:
+  // Gets the DMToken associated with a profile. Returns an empty string if no
+  // DMToken could be retrieved. Virtual to allow mocking.
+  virtual std::string GetDMTokenForProfile(Profile* profile) const;
+
+  // The timeout in the past to store activity.
+  // This is kept in case status uploads fail for a number of days.
+  base::TimeDelta max_stored_past_activity_interval_;
+
+  // The timeout in the future to store activity.
+  // When changing the system time and/or timezones, it's possible to record
+  // activity time that is slightly in the future.
+  base::TimeDelta max_stored_future_activity_interval_;
+
+  chromeos::system::StatisticsProvider* const statistics_provider_;
+
+  chromeos::CrosSettings* const cros_settings_;
+
+  // Cached values of the reporting settings.
+  bool report_version_info_ = false;
+  bool report_activity_times_ = false;
+  bool report_boot_mode_ = false;
+
+  std::unique_ptr<chromeos::CrosSettings::ObserverSubscription>
+      version_info_subscription_;
+  std::unique_ptr<chromeos::CrosSettings::ObserverSubscription>
+      boot_mode_subscription_;
+
+  base::Clock* clock_ = base::DefaultClock::GetInstance();
+
+  // Task runner in the creation thread where responses are sent to.
+  scoped_refptr<base::SequencedTaskRunner> task_runner_ = nullptr;
+  // TODO(crbug.com/827386): check if it is possible to use the SequenceChecker
+  // instead.
+  base::ThreadChecker thread_checker_;
 };
 
 }  // namespace policy

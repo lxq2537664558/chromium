@@ -15,7 +15,7 @@ class GURL;
 class HostContentSettingsMap;
 
 namespace content {
-class ResourceContext;
+class BrowserContext;
 struct WebPluginInfo;
 }
 
@@ -62,13 +62,13 @@ class PluginUtils {
   // If there's an extension that is allowed to handle |mime_type|, returns its
   // ID. Otherwise returns an empty string.
   static std::string GetExtensionIdForMimeType(
-      content::ResourceContext* resource_context,
+      content::BrowserContext* browser_context,
       const std::string& mime_type);
 
   // Returns a map populated with MIME types that are handled by an extension as
   // keys and the corresponding extensions Ids as values.
   static base::flat_map<std::string, std::string> GetMimeTypeToExtensionIdMap(
-      content::ResourceContext* resource_context);
+      content::BrowserContext* browser_context);
 
  private:
   DISALLOW_IMPLICIT_CONSTRUCTORS(PluginUtils);

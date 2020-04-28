@@ -4,8 +4,11 @@
 
 #include <string>
 
+#include "base/strings/stringprintf.h"
+#include "build/build_config.h"
 #include "chrome/browser/search/search.h"
 #include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/search/instant_test_utils.h"
 #include "chrome/browser/ui/search/local_ntp_test_utils.h"
 #include "chrome/common/url_constants.h"
@@ -13,6 +16,10 @@
 #include "net/test/embedded_test_server/embedded_test_server.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "url/gurl.h"
+
+#if defined(OS_WIN)
+#include "base/win/windows_version.h"
+#endif  // defined(OS_WIN)
 
 // A test class that sets up a local HTML file as the NTP URL.
 class LocalNTPJavascriptTestBase : public InProcessBrowserTest {
@@ -45,6 +52,14 @@ class LocalNTPJavascriptTest : public LocalNTPJavascriptTestBase {
  public:
   LocalNTPJavascriptTest()
       : LocalNTPJavascriptTestBase("/local_ntp_browsertest.html") {}
+
+  bool ShouldRunRealboxTest() const {
+#if defined(OS_WIN)
+    return base::win::GetVersion() > base::win::Version::WIN7;
+#else
+    return true;
+#endif
+  }
 };
 
 // This runs a bunch of pure JS-side tests, i.e. those that don't require any
@@ -61,17 +76,85 @@ IN_PROC_BROWSER_TEST_F(LocalNTPJavascriptTest, LocalNTPTests) {
   EXPECT_TRUE(success);
 }
 
-// This runs a bunch of pure JS-side tests for custom backgrounds, i.e. those
-// that don't require any interaction from the native side.
+// This runs a bunch of pure JS-side tests for the original custom backgrounds
+// menu (i.e. before the richer picker).
 IN_PROC_BROWSER_TEST_F(LocalNTPJavascriptTest, CustomBackgroundsTests) {
   content::WebContents* active_tab = local_ntp_test_utils::OpenNewTab(
       browser(), GURL(chrome::kChromeUINewTabURL));
   ASSERT_TRUE(search::IsInstantNTP(active_tab));
 
+  // Ensure the window is big enough the the customize button is visible.
+  browser()->window()->SetBounds(gfx::Rect(0, 0, 1000, 1000));
+
   // Run the tests.
   bool success = false;
   ASSERT_TRUE(instant_test_utils::GetBoolFromJS(
       active_tab, "!!runSimpleTests('customBackgrounds')", &success));
+  EXPECT_TRUE(success);
+}
+
+// TODO(crbug.com/1038385): This test is flaky.
+// This runs a bunch of pure JS-side tests for the richer picker.
+IN_PROC_BROWSER_TEST_F(LocalNTPJavascriptTest, DISABLED_CustomizeMenuTests) {
+  content::WebContents* active_tab = local_ntp_test_utils::OpenNewTab(
+      browser(), GURL(chrome::kChromeUINewTabURL));
+  ASSERT_TRUE(search::IsInstantNTP(active_tab));
+
+  // Ensure the window is big enough the the customize button is visible.
+  browser()->window()->SetBounds(gfx::Rect(0, 0, 1000, 1000));
+
+  // Run the tests.
+  bool success = false;
+  ASSERT_TRUE(instant_test_utils::GetBoolFromJS(
+      active_tab, "!!runSimpleTests('customizeMenu')", &success));
+  EXPECT_TRUE(success);
+}
+
+#if !(defined(LEAK_SANITIZER) || defined(ADDRESS_SANITIZER))
+#define REALBOX_SUITE(suite_number)                                        \
+  IN_PROC_BROWSER_TEST_F(LocalNTPJavascriptTest,                           \
+                         Realbox##suite_number##Tests) {                   \
+    if (!ShouldRunRealboxTest())                                           \
+      return;                                                              \
+    content::WebContents* active_tab = local_ntp_test_utils::OpenNewTab(   \
+        browser(), GURL(chrome::kChromeUINewTabURL));                      \
+    ASSERT_TRUE(search::IsInstantNTP(active_tab));                         \
+                                                                           \
+    bool success = false;                                                  \
+    ASSERT_TRUE(instant_test_utils::GetBoolFromJS(                         \
+        active_tab,                                                        \
+        base::StringPrintf("!!runSimpleTests('realbox%d')", suite_number), \
+        &success));                                                        \
+    EXPECT_TRUE(success);                                                  \
+  }
+
+REALBOX_SUITE(1)
+REALBOX_SUITE(2)
+REALBOX_SUITE(3)
+REALBOX_SUITE(4)
+
+#undef REALBOX_SUITE
+#endif
+
+// A test class that sets up most_visited_browsertest.html as the NTP URL. It's
+// mostly a copy of the real most_visited_single.html, but it adds some testing
+// JS.
+class LocalNTPMostVisitedJavascriptTest : public LocalNTPJavascriptTestBase {
+ public:
+  LocalNTPMostVisitedJavascriptTest()
+      : LocalNTPJavascriptTestBase("/most_visited_browsertest.html") {}
+};
+
+// This runs a bunch of pure JS-side tests for the most visited iframe, i.e.
+// those that don't require any interaction from the native side.
+IN_PROC_BROWSER_TEST_F(LocalNTPMostVisitedJavascriptTest, MostVistedTests) {
+  content::WebContents* active_tab = local_ntp_test_utils::OpenNewTab(
+      browser(), GURL(chrome::kChromeUINewTabURL));
+
+  // Run the tests.
+  bool success = false;
+  ASSERT_TRUE(instant_test_utils::GetBoolFromJS(
+      active_tab, "!!runSimpleTests('mostVisited')", &success));
   EXPECT_TRUE(success);
 }
 

@@ -12,6 +12,7 @@
 #include "build/build_config.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/chrome_content_browser_client.h"
+#include "chrome/browser/data_use_measurement/chrome_data_use_measurement.h"
 #include "chrome/browser/profiles/profile_shortcut_manager.h"
 #include "chrome/browser/ui/webui/chrome_web_ui_controller_factory.h"
 #include "chrome/browser/update_client/chrome_update_query_params_delegate.h"
@@ -20,6 +21,7 @@
 #include "chrome/test/base/testing_browser_process.h"
 #include "chrome/utility/chrome_content_utility_client.h"
 #include "components/component_updater/component_updater_paths.h"
+#include "components/startup_metric_utils/browser/startup_metric_utils.h"
 #include "components/update_client/update_query_params.h"
 #include "content/public/common/content_paths.h"
 #include "extensions/buildflags/buildflags.h"
@@ -42,6 +44,15 @@
 
 namespace {
 
+class ChromeContentBrowserClientWithoutNetworkServiceInitialization
+    : public ChromeContentBrowserClient {
+ public:
+  // content::ContentBrowserClient:
+  // Skip some production Network Service code that doesn't work in unit tests.
+  void OnNetworkServiceCreated(
+      network::mojom::NetworkService* network_service) override {}
+};
+
 // Creates a TestingBrowserProcess for each test.
 class ChromeUnitTestSuiteInitializer : public testing::EmptyTestEventListener {
  public:
@@ -52,7 +63,8 @@ class ChromeUnitTestSuiteInitializer : public testing::EmptyTestEventListener {
     content_client_.reset(new ChromeContentClient);
     content::SetContentClient(content_client_.get());
 
-    browser_content_client_.reset(new ChromeContentBrowserClient());
+    browser_content_client_.reset(
+        new ChromeContentBrowserClientWithoutNetworkServiceInitialization());
     content::SetBrowserClientForTesting(browser_content_client_.get());
     utility_content_client_.reset(new ChromeContentUtilityClient());
     content::SetUtilityClientForTesting(utility_content_client_.get());
@@ -61,6 +73,10 @@ class ChromeUnitTestSuiteInitializer : public testing::EmptyTestEventListener {
   }
 
   void OnTestEnd(const testing::TestInfo& test_info) override {
+    // To ensure that NetworkConnectionTracker doesn't complain in unit_tests
+    // about outstanding listeners.
+    data_use_measurement::ChromeDataUseMeasurement::DeleteInstance();
+
     browser_content_client_.reset();
     utility_content_client_.reset();
     content_client_.reset();
@@ -93,6 +109,10 @@ void ChromeUnitTestSuite::Initialize() {
       testing::UnitTest::GetInstance()->listeners();
   listeners.Append(new ChromeUnitTestSuiteInitializer);
 
+  {
+    ChromeContentClient content_client;
+    RegisterContentSchemes(&content_client);
+  }
   InitializeProviders();
   RegisterInProcessThreads();
 
@@ -104,6 +124,12 @@ void ChromeUnitTestSuite::Initialize() {
 
   base::DiscardableMemoryAllocator::SetInstance(&discardable_memory_allocator_);
   ProfileShortcutManager::DisableForUnitTests();
+
+  // BrowserView assumes that application start time is set when it is painted.
+  // Since RecordApplicationStartTime() would DCHECK if it was invoked from
+  // multiple tests in the same process, invoke it once in test suite
+  // initialization.
+  startup_metric_utils::RecordApplicationStartTime(base::TimeTicks::Now());
 }
 
 void ChromeUnitTestSuite::Shutdown() {
@@ -112,11 +138,6 @@ void ChromeUnitTestSuite::Shutdown() {
 }
 
 void ChromeUnitTestSuite::InitializeProviders() {
-  {
-    ChromeContentClient content_client;
-    RegisterContentSchemes(&content_client);
-  }
-
   chrome::RegisterPathProvider();
   content::RegisterPathProvider();
   ui::RegisterPathProvider();

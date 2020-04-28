@@ -7,7 +7,6 @@
 #include "base/macros.h"
 #include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/content_settings/host_content_settings_map_factory.h"
-#include "chrome/browser/media/webrtc/media_stream_devices_controller.h"
 #include "chrome/browser/media/webrtc/webrtc_browsertest_base.h"
 #include "chrome/browser/media/webrtc/webrtc_browsertest_common.h"
 #include "chrome/browser/profiles/profile.h"
@@ -28,6 +27,7 @@
 #include "net/dns/mock_host_resolver.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
 #include "third_party/blink/public/common/mediastream/media_stream_request.h"
+#include "third_party/blink/public/mojom/mediastream/media_stream.mojom-shared.h"
 
 // MediaStreamPermissionTest ---------------------------------------------------
 
@@ -37,9 +37,12 @@ class MediaStreamPermissionTest : public WebRtcTestBase {
   ~MediaStreamPermissionTest() override {}
 
   // InProcessBrowserTest:
-  void SetUpCommandLine(base::CommandLine* command_line) override {
+  void SetUp() override {
+    WebRtcTestBase::SetUp();
+    base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
     // This test expects to run with fake devices but real UI.
-    command_line->AppendSwitch(switches::kUseFakeDeviceForMediaStream);
+    EXPECT_TRUE(
+        command_line->HasSwitch(switches::kUseFakeDeviceForMediaStream));
     EXPECT_FALSE(command_line->HasSwitch(switches::kUseFakeUIForMediaStream))
         << "Since this test tests the UI we want the real UI!";
   }
@@ -75,7 +78,7 @@ class MediaStreamPermissionTest : public WebRtcTestBase {
   // Dummy callback for when we deny the current request directly.
   static void OnMediaStreamResponse(
       const blink::MediaStreamDevices& devices,
-      blink::MediaStreamRequestResult result,
+      blink::mojom::MediaStreamRequestResult result,
       std::unique_ptr<content::MediaStreamUI> ui) {}
 
   DISALLOW_COPY_AND_ASSIGN(MediaStreamPermissionTest);
@@ -139,9 +142,9 @@ IN_PROC_BROWSER_TEST_F(MediaStreamPermissionTest,
   HostContentSettingsMap* settings_map =
       HostContentSettingsMapFactory::GetForProfile(browser()->profile());
 
-  settings_map->ClearSettingsForOneType(CONTENT_SETTINGS_TYPE_MEDIASTREAM_MIC);
+  settings_map->ClearSettingsForOneType(ContentSettingsType::MEDIASTREAM_MIC);
   settings_map->ClearSettingsForOneType(
-      CONTENT_SETTINGS_TYPE_MEDIASTREAM_CAMERA);
+      ContentSettingsType::MEDIASTREAM_CAMERA);
 
   GetUserMediaAndDeny(tab_contents);
 }

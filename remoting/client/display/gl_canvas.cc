@@ -4,7 +4,7 @@
 
 #include "remoting/client/display/gl_canvas.h"
 
-#include "base/logging.h"
+#include "base/check.h"
 #include "remoting/client/display/gl_helpers.h"
 #include "remoting/client/display/gl_math.h"
 
@@ -65,8 +65,7 @@ const char kDrawTexFrag[] =
 
 namespace remoting {
 
-GlCanvas::GlCanvas(int gl_version)
-    : gl_version_(gl_version), weak_factory_(this) {
+GlCanvas::GlCanvas(int gl_version) : gl_version_(gl_version) {
   glGetIntegerv(GL_MAX_TEXTURE_SIZE, &max_texture_size_);
 
   vertex_shader_ = CompileShader(GL_VERTEX_SHADER, kTexCoordToViewVert);

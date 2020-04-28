@@ -18,8 +18,8 @@
 #include "cc/raster/playback_image_provider.h"
 #include "cc/raster/raster_source.h"
 #include "cc/test/pixel_test_utils.h"
-#include "cc/test/test_in_process_context_provider.h"
 #include "cc/tiles/gpu_image_decode_cache.h"
+#include "components/viz/test/test_in_process_context_provider.h"
 #include "gpu/command_buffer/client/gles2_implementation.h"
 #include "gpu/command_buffer/client/gles2_interface.h"
 #include "gpu/command_buffer/client/raster_implementation.h"
@@ -33,6 +33,7 @@
 #include "gpu/ipc/gl_in_process_context.h"
 #include "gpu/skia_bindings/grcontext_for_gles2_interface.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/khronos/GLES2/gl2ext.h"
 #include "third_party/skia/include/core/SkFontLCDConfig.h"
 #include "third_party/skia/include/core/SkGraphics.h"
 #include "third_party/skia/include/core/SkSurface.h"
@@ -78,12 +79,21 @@ class OopPixelTest : public testing::Test,
   void SetUp() override {
     InitializeOOPContext();
     gles2_context_provider_ =
-        base::MakeRefCounted<TestInProcessContextProvider>(
+        base::MakeRefCounted<viz::TestInProcessContextProvider>(
+            /*enable_gpu_rasterization=*/false,
             /*enable_oop_rasterization=*/false, /*support_locking=*/true);
     gpu::ContextResult result = gles2_context_provider_->BindToCurrentThread();
     DCHECK_EQ(result, gpu::ContextResult::kSuccess);
-    CHECK_EQ(gles2_context_provider_->ContextCapabilities().max_texture_size,
-             raster_context_provider_->ContextCapabilities().max_texture_size);
+    const int gles2_max_texture_size =
+        gles2_context_provider_->ContextCapabilities().max_texture_size;
+    gpu_image_cache_.reset(new GpuImageDecodeCache(
+        gles2_context_provider_.get(), false, kRGBA_8888_SkColorType,
+        kWorkingSetSize, gles2_max_texture_size,
+        PaintImage::kDefaultGeneratorClientId));
+
+    const int raster_max_texture_size =
+        raster_context_provider_->ContextCapabilities().max_texture_size;
+    ASSERT_EQ(raster_max_texture_size, gles2_max_texture_size);
   }
 
   // gpu::raster::GrShaderCache::Client implementation.
@@ -95,29 +105,18 @@ class OopPixelTest : public testing::Test,
       oop_image_cache_.reset();
 
     raster_context_provider_ =
-        base::MakeRefCounted<TestInProcessContextProvider>(
+        base::MakeRefCounted<viz::TestInProcessContextProvider>(
+            /*enable_gpu_rasterization=*/false,
             /*enable_oop_rasterization=*/true, /*support_locking=*/true,
             &gr_shader_cache_, &activity_flags_);
     gpu::ContextResult result = raster_context_provider_->BindToCurrentThread();
     DCHECK_EQ(result, gpu::ContextResult::kSuccess);
-  }
-
-  void CreateGpuImageCache(const gfx::ColorSpace& color_space) {
-    const int gles2_max_texture_size =
-        raster_context_provider_->ContextCapabilities().max_texture_size;
-    gpu_image_cache_.reset(new GpuImageDecodeCache(
-        gles2_context_provider_.get(), false, kRGBA_8888_SkColorType,
-        kWorkingSetSize, gles2_max_texture_size,
-        PaintImage::kDefaultGeneratorClientId, color_space.ToSkColorSpace()));
-  }
-
-  void CreateOopImageCache(const gfx::ColorSpace& color_space) {
     const int raster_max_texture_size =
         raster_context_provider_->ContextCapabilities().max_texture_size;
     oop_image_cache_.reset(new GpuImageDecodeCache(
         raster_context_provider_.get(), true, kRGBA_8888_SkColorType,
         kWorkingSetSize, raster_max_texture_size,
-        PaintImage::kDefaultGeneratorClientId, color_space.ToSkColorSpace()));
+        PaintImage::kDefaultGeneratorClientId));
   }
 
   class RasterOptions {
@@ -156,16 +155,14 @@ class OopPixelTest : public testing::Test,
 
   SkBitmap Raster(scoped_refptr<DisplayItemList> display_item_list,
                   const RasterOptions& options) {
-    CreateOopImageCache(options.color_space);
-
     GURL url("https://example.com/foo");
-    TestInProcessContextProvider::ScopedRasterContextLock lock(
+    viz::TestInProcessContextProvider::ScopedRasterContextLock lock(
         raster_context_provider_.get(), url.possibly_invalid_spec().c_str());
 
     PlaybackImageProvider image_provider(oop_image_cache_.get(),
+                                         options.color_space,
                                          PlaybackImageProvider::Settings());
 
-    gpu::gles2::GLES2Interface* gl = gles2_context_provider_->ContextGL();
     int width = options.resource_size.width();
     int height = options.resource_size.height();
 
@@ -212,6 +209,17 @@ class OopPixelTest : public testing::Test,
     EXPECT_EQ(raster_implementation->GetError(),
               static_cast<unsigned>(GL_NO_ERROR));
 
+    gpu::gles2::GLES2Interface* gl = gles2_context_provider_->ContextGL();
+    SkBitmap result = ReadbackMailbox(gl, mailbox, options);
+    gpu::SyncToken sync_token;
+    gl->GenUnverifiedSyncTokenCHROMIUM(sync_token.GetData());
+    sii->DestroySharedImage(sync_token, mailbox);
+    return result;
+  }
+
+  SkBitmap ReadbackMailbox(gpu::gles2::GLES2Interface* gl,
+                           const gpu::Mailbox& mailbox,
+                           const RasterOptions& options) {
     // Import the texture in gl, create an fbo and bind the texture to it.
     GLuint gl_texture_id = gl->CreateAndConsumeTextureCHROMIUM(mailbox.name);
     GLuint fbo_id;
@@ -221,6 +229,8 @@ class OopPixelTest : public testing::Test,
                              GL_TEXTURE_2D, gl_texture_id, 0);
 
     // Read the data back.
+    int width = options.resource_size.width();
+    int height = options.resource_size.height();
     std::unique_ptr<unsigned char[]> data(
         new unsigned char[width * height * 4]);
     gl->ReadPixels(0, 0, width, height, GL_RGBA, GL_UNSIGNED_BYTE, data.get());
@@ -228,11 +238,7 @@ class OopPixelTest : public testing::Test,
     gl->DeleteTextures(1, &gl_texture_id);
     gl->DeleteFramebuffers(1, &fbo_id);
 
-    gpu::SyncToken sync_token;
-    gl->GenUnverifiedSyncTokenCHROMIUM(sync_token.GetData());
-    sii->DestroySharedImage(sync_token, mailbox);
-
-    // Swizzle rgba->bgra if needed.
+    // Swizzle rgba->bgra
     std::vector<SkPMColor> colors;
     colors.reserve(width * height);
     for (int h = 0; h < height; ++h) {
@@ -245,12 +251,24 @@ class OopPixelTest : public testing::Test,
 
     SkBitmap bitmap;
     bitmap.allocN32Pixels(width, height);
-    SkPixmap pixmap(SkImageInfo::MakeN32Premul(options.resource_size.width(),
-                                               options.resource_size.height()),
-                    colors.data(),
-                    options.resource_size.width() * sizeof(SkColor));
+    SkPixmap pixmap(SkImageInfo::MakeN32Premul(width, height), colors.data(),
+                    width * sizeof(SkColor));
     bitmap.writePixels(pixmap);
     return bitmap;
+  }
+
+  gpu::Mailbox CreateMailboxSharedImage(gpu::raster::RasterInterface* ri,
+                                        gpu::SharedImageInterface* sii,
+                                        const RasterOptions& options,
+                                        viz::ResourceFormat image_format) {
+    uint32_t flags = gpu::SHARED_IMAGE_USAGE_RASTER |
+                     gpu::SHARED_IMAGE_USAGE_OOP_RASTERIZATION;
+    gpu::Mailbox mailbox = sii->CreateSharedImage(
+        image_format, options.resource_size, options.color_space, flags);
+    EXPECT_TRUE(mailbox.Verify());
+    ri->WaitSyncTokenCHROMIUM(sii->GenUnverifiedSyncToken().GetConstData());
+
+    return mailbox;
   }
 
   SkBitmap RasterExpectedBitmap(
@@ -263,9 +281,7 @@ class OopPixelTest : public testing::Test,
   SkBitmap RasterExpectedBitmap(
       scoped_refptr<DisplayItemList> display_item_list,
       const RasterOptions& options) {
-    CreateGpuImageCache(options.color_space);
-
-    TestInProcessContextProvider::ScopedRasterContextLock lock(
+    viz::TestInProcessContextProvider::ScopedRasterContextLock lock(
         gles2_context_provider_.get());
     gles2_context_provider_->GrContext()->resetContext();
 
@@ -286,6 +302,7 @@ class OopPixelTest : public testing::Test,
       options.shader_with_animated_images->set_has_animated_images(true);
 
     PlaybackImageProvider image_provider(gpu_image_cache_.get(),
+                                         options.color_space,
                                          PlaybackImageProvider::Settings());
 
     auto raster_source = recording.CreateRasterSource();
@@ -350,8 +367,8 @@ class OopPixelTest : public testing::Test,
 
  protected:
   enum { kWorkingSetSize = 64 * 1024 * 1024 };
-  scoped_refptr<TestInProcessContextProvider> raster_context_provider_;
-  scoped_refptr<TestInProcessContextProvider> gles2_context_provider_;
+  scoped_refptr<viz::TestInProcessContextProvider> raster_context_provider_;
+  scoped_refptr<viz::TestInProcessContextProvider> gles2_context_provider_;
   std::unique_ptr<GpuImageDecodeCache> gpu_image_cache_;
   std::unique_ptr<GpuImageDecodeCache> oop_image_cache_;
   gl::DisableNullDrawGLBindings enable_pixel_output_;
@@ -1614,6 +1631,146 @@ TEST_F(OopPixelTest, DrawTextBlobPersistentShaderCache) {
   InitializeOOPContext();
   actual = Raster(display_item_list, options);
   ExpectEquals(actual, expected);
+}
+
+TEST_F(OopPixelTest, WritePixels) {
+  gfx::Size dest_size(10, 10);
+  RasterOptions options(dest_size);
+  auto* ri = raster_context_provider_->RasterInterface();
+  auto* sii = raster_context_provider_->SharedImageInterface();
+  gpu::Mailbox dest_mailbox = CreateMailboxSharedImage(
+      ri, sii, options, viz::ResourceFormat::RGBA_8888);
+  std::vector<SkPMColor> expected_pixels(dest_size.width() * dest_size.height(),
+                                         SkPreMultiplyARGB(255, 0, 0, 255));
+  SkBitmap expected;
+  expected.installPixels(
+      SkImageInfo::MakeN32Premul(dest_size.width(), dest_size.height()),
+      expected_pixels.data(), dest_size.width() * sizeof(SkColor));
+
+  ri->WritePixels(dest_mailbox, 0, 0, 0, expected.info().minRowBytes(),
+                  expected.info(), expected.getPixels());
+  ri->OrderingBarrierCHROMIUM();
+  EXPECT_EQ(ri->GetError(), static_cast<unsigned>(GL_NO_ERROR));
+
+  gpu::gles2::GLES2Interface* gl = gles2_context_provider_->ContextGL();
+  SkBitmap actual = ReadbackMailbox(gl, dest_mailbox, options);
+  gpu::SyncToken sync_token;
+  gl->GenUnverifiedSyncTokenCHROMIUM(sync_token.GetData());
+  sii->DestroySharedImage(sync_token, dest_mailbox);
+  ExpectEquals(actual, expected);
+}
+
+namespace {
+void UploadPixels(gpu::gles2::GLES2Interface* gl,
+                  const gpu::Mailbox& mailbox,
+                  const gfx::Size& size,
+                  GLenum format,
+                  GLenum type,
+                  const void* data) {
+  GLuint texture = gl->CreateAndTexStorage2DSharedImageCHROMIUM(mailbox.name);
+  gl->BindTexture(GL_TEXTURE_2D, texture);
+  gl->TexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, size.width(), size.height(), format,
+                    type, data);
+  gl->BindTexture(GL_TEXTURE_2D, 0);
+  gl->DeleteTextures(1, &texture);
+}
+}  // namespace
+
+TEST_F(OopPixelTest, ConvertYUVToRGB) {
+  RasterOptions options(gfx::Size(16, 16));
+  RasterOptions uv_options(gfx::Size(options.resource_size.width() / 2,
+                                     options.resource_size.height() / 2));
+  auto* ri = raster_context_provider_->RasterInterface();
+  auto* sii = raster_context_provider_->SharedImageInterface();
+  gpu::Mailbox dest_mailbox = CreateMailboxSharedImage(
+      ri, sii, options, viz::ResourceFormat::RGBA_8888);
+  gpu::Mailbox y_mailbox = CreateMailboxSharedImage(
+      ri, sii, options, viz::ResourceFormat::LUMINANCE_8);
+  gpu::Mailbox u_mailbox = CreateMailboxSharedImage(
+      ri, sii, uv_options, viz::ResourceFormat::LUMINANCE_8);
+  gpu::Mailbox v_mailbox = CreateMailboxSharedImage(
+      ri, sii, uv_options, viz::ResourceFormat::LUMINANCE_8);
+
+  size_t y_pixels_size = options.resource_size.GetArea();
+  size_t uv_pixels_size = uv_options.resource_size.GetArea();
+  auto y_pix = std::make_unique<uint8_t[]>(y_pixels_size);
+  auto u_pix = std::make_unique<uint8_t[]>(uv_pixels_size);
+  auto v_pix = std::make_unique<uint8_t[]>(uv_pixels_size);
+
+  // Create a blue image
+  memset(y_pix.get(), 0x1d, y_pixels_size);
+  memset(u_pix.get(), 0xff, uv_pixels_size);
+  memset(v_pix.get(), 0x6b, uv_pixels_size);
+
+  // Upload initial yuv image data
+  gpu::gles2::GLES2Interface* gl = gles2_context_provider_->ContextGL();
+  UploadPixels(gl, y_mailbox, options.resource_size, GL_LUMINANCE,
+               GL_UNSIGNED_BYTE, y_pix.get());
+  UploadPixels(gl, u_mailbox, uv_options.resource_size, GL_LUMINANCE,
+               GL_UNSIGNED_BYTE, u_pix.get());
+  UploadPixels(gl, v_mailbox, uv_options.resource_size, GL_LUMINANCE,
+               GL_UNSIGNED_BYTE, v_pix.get());
+  gl->OrderingBarrierCHROMIUM();
+
+  ri->ConvertYUVMailboxesToRGB(dest_mailbox, kJPEG_SkYUVColorSpace, y_mailbox,
+                               u_mailbox, v_mailbox);
+  ri->OrderingBarrierCHROMIUM();
+  SkBitmap actual_bitmap = ReadbackMailbox(gl, dest_mailbox, options);
+
+  // Create the expected result using SkImage::MakeFromYUVTextures
+  GrGLTextureInfo backend_info[3];
+  backend_info[0] = {
+      GL_TEXTURE_2D,
+      gl->CreateAndTexStorage2DSharedImageCHROMIUM(y_mailbox.name),
+      GL_LUMINANCE8_EXT};
+  backend_info[1] = {
+      GL_TEXTURE_2D,
+      gl->CreateAndTexStorage2DSharedImageCHROMIUM(u_mailbox.name),
+      GL_LUMINANCE8_EXT};
+  backend_info[2] = {
+      GL_TEXTURE_2D,
+      gl->CreateAndTexStorage2DSharedImageCHROMIUM(v_mailbox.name),
+      GL_LUMINANCE8_EXT};
+
+  GrBackendTexture backend_textures[3];
+  backend_textures[0] = GrBackendTexture(options.resource_size.width(),
+                                         options.resource_size.height(),
+                                         GrMipMapped::kNo, backend_info[0]);
+  backend_textures[1] = GrBackendTexture(uv_options.resource_size.width(),
+                                         uv_options.resource_size.height(),
+                                         GrMipMapped::kNo, backend_info[1]);
+  backend_textures[2] = GrBackendTexture(uv_options.resource_size.width(),
+                                         uv_options.resource_size.height(),
+                                         GrMipMapped::kNo, backend_info[2]);
+
+  SkYUVAIndex yuva_indices[4];
+  yuva_indices[SkYUVAIndex::kY_Index] = {0, SkColorChannel::kR};
+  yuva_indices[SkYUVAIndex::kU_Index] = {1, SkColorChannel::kR};
+  yuva_indices[SkYUVAIndex::kV_Index] = {2, SkColorChannel::kR};
+  yuva_indices[SkYUVAIndex::kA_Index] = {-1, SkColorChannel::kA};
+
+  auto expected_image = SkImage::MakeFromYUVATextures(
+      gles2_context_provider_->GrContext(), kJPEG_SkYUVColorSpace,
+      backend_textures, yuva_indices,
+      {options.resource_size.width(), options.resource_size.height()},
+      kTopLeft_GrSurfaceOrigin, nullptr);
+
+  SkBitmap expected_bitmap;
+  expected_bitmap.allocN32Pixels(options.resource_size.width(),
+                                 options.resource_size.height());
+  expected_image->readPixels(expected_bitmap.pixmap(), 0, 0);
+  ExpectEquals(actual_bitmap, expected_bitmap);
+
+  for (auto& backend : backend_info) {
+    gl->DeleteTextures(1, &backend.fID);
+  }
+
+  gpu::SyncToken sync_token;
+  gl->GenUnverifiedSyncTokenCHROMIUM(sync_token.GetData());
+  sii->DestroySharedImage(sync_token, dest_mailbox);
+  sii->DestroySharedImage(sync_token, y_mailbox);
+  sii->DestroySharedImage(sync_token, u_mailbox);
+  sii->DestroySharedImage(sync_token, v_mailbox);
 }
 
 class OopPathPixelTest : public OopPixelTest,

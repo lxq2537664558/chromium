@@ -33,12 +33,11 @@ Polymer({
     delegate_: Object,
 
     /**
-     * Text to be shown on the forward navigation button.
+     * ID of loadTimeData string to be shown on the forward navigation button.
      * @private {string|undefined}
      */
-    forwardButtonText: {
+    forwardButtonTextId_: {
       type: String,
-      value: '',
     },
 
     /**
@@ -51,37 +50,37 @@ Polymer({
     },
 
     /**
-     * Text to be shown on the cancel navigation button.
+     * ID of loadTimeData string to be shown on the cancel navigation button.
      * @private {string|undefined}
      */
-    cancelButtonText_: {
+    cancelButtonTextId_: {
       type: String,
-      value: '',
     },
 
     /**
-     * Text to be shown on the backward navigation button.
+     * ID of loadTimeData string to be shown on the backward navigation button.
      * @private {string|undefined}
      */
-    backwardButtonText_: {
+    backwardButtonTextId_: {
       type: String,
-      value: '',
     },
   },
 
+  behaviors: [I18nBehavior],
+
   /** @override */
-  attached: function() {
+  attached() {
     this.delegate_ = new multidevice_setup.PostOobeDelegate();
     this.$$('multidevice-setup').initializeSetupFlow();
   },
 
   /** @private */
-  onExitRequested_: function() {
+  onExitRequested_() {
     chrome.send('dialogClose');
   },
 
   /** @private */
-  onForwardButtonFocusRequested_: function() {
+  onForwardButtonFocusRequested_() {
     this.$$('#forward-button').focus();
   },
 
@@ -89,7 +88,7 @@ Polymer({
    * @param {!CustomEvent<!{value: multidevice_setup.PageName}>} event
    * @private
    */
-  onVisiblePageNameChanged_: function(event) {
+  onVisiblePageNameChanged_(event) {
     let pageNameValue;
     switch (event.detail.value) {
       case multidevice_setup.PageName.START:

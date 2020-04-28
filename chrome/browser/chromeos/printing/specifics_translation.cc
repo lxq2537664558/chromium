@@ -2,17 +2,16 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include <memory>
+#include "chrome/browser/chromeos/printing/specifics_translation.h"
+
 #include <string>
 #include <vector>
 
-#include "base/logging.h"
+#include "base/check_op.h"
 #include "base/strings/string_piece.h"
 #include "base/strings/string_util.h"
 #include "base/time/time.h"
-#include "chrome/browser/chromeos/printing/specifics_translation.h"
 #include "chromeos/printing/printer_configuration.h"
-#include "components/sync/protocol/printer_specifics.pb.h"
 
 namespace chromeos {
 
@@ -49,14 +48,6 @@ void MergeReferenceToSpecifics(sync_pb::PrinterPPDReference* specifics,
   }
 }
 
-// Combines |make| and |model| with a space to generate a make and model string.
-// If |model| already represents the make and model, the string is just |model|.
-// This is to prevent strings of the form '<make> <make> <model>'.
-std::string MakeAndModel(base::StringPiece make, base::StringPiece model) {
-  return model.starts_with(make) ? model.as_string()
-                                 : base::JoinString({make, model}, " ");
-}
-
 }  // namespace
 
 std::unique_ptr<Printer> SpecificsToPrinter(
@@ -76,6 +67,7 @@ std::unique_ptr<Printer> SpecificsToPrinter(
   }
   printer->set_uri(specifics.uri());
   printer->set_uuid(specifics.uuid());
+  printer->set_print_server_uri(specifics.print_server_uri());
 
   *printer->mutable_ppd_reference() = SpecificsToPpd(specifics.ppd_reference());
 
@@ -118,8 +110,16 @@ void MergePrinterToSpecifics(const Printer& printer,
   if (!printer.uuid().empty())
     specifics->set_uuid(printer.uuid());
 
+  if (!printer.print_server_uri().empty())
+    specifics->set_print_server_uri(printer.print_server_uri());
+
   MergeReferenceToSpecifics(specifics->mutable_ppd_reference(),
                             printer.ppd_reference());
+}
+
+std::string MakeAndModel(base::StringPiece make, base::StringPiece model) {
+  return model.starts_with(make) ? model.as_string()
+                                 : base::JoinString({make, model}, " ");
 }
 
 }  // namespace chromeos

@@ -55,7 +55,7 @@ base::FilePath::StringType GetCorrectedExtensionUnsafe(
   // "foo.jpg" to "foo.jpeg".
   std::vector<base::FilePath::StringType> all_mime_extensions;
   GetExtensionsForMimeType(mime_type, &all_mime_extensions);
-  if (base::ContainsValue(all_mime_extensions, extension))
+  if (base::Contains(all_mime_extensions, extension))
     return extension;
 
   // Get the "final" extension. In most cases, this is the same as the
@@ -69,7 +69,7 @@ base::FilePath::StringType GetCorrectedExtensionUnsafe(
   // If there's a double extension, and the second extension is in the
   // list of valid extensions for the given type, keep the double extension.
   // This avoids renaming things like "foo.tar.gz" to "foo.gz".
-  if (base::ContainsValue(all_mime_extensions, final_extension))
+  if (base::Contains(all_mime_extensions, final_extension))
     return extension;
   return preferred_mime_extension;
 }
@@ -125,9 +125,8 @@ std::string GetFileNameFromURL(const GURL& url,
   if (!url.is_valid() || url.SchemeIs("about") || url.SchemeIs("data"))
     return std::string();
 
-  std::string unescaped_url_filename;
-  UnescapeBinaryURLComponent(url.ExtractFileName(), UnescapeRule::NORMAL,
-                             &unescaped_url_filename);
+  std::string unescaped_url_filename =
+      UnescapeBinaryURLComponent(url.ExtractFileName(), UnescapeRule::NORMAL);
 
   // The URL's path should be escaped UTF-8, but may not be.
   std::string decoded_filename = unescaped_url_filename;
@@ -156,14 +155,15 @@ std::string GetFileNameFromURL(const GURL& url,
 bool IsShellIntegratedExtension(const base::FilePath::StringType& extension) {
   base::FilePath::StringType extension_lower = base::ToLowerASCII(extension);
 
-  // http://msdn.microsoft.com/en-us/library/ms811694.aspx
-  // Right-clicking on shortcuts can be magical.
+  // .lnk files may be used to execute arbitrary code (see
+  // https://nvd.nist.gov/vuln/detail/CVE-2010-2568). .local files are used by
+  // Windows to determine which DLLs to load for an application.
   if ((extension_lower == FILE_PATH_LITERAL("local")) ||
       (extension_lower == FILE_PATH_LITERAL("lnk")))
     return true;
 
-  // http://www.juniper.net/security/auto/vulnerabilities/vuln2612.html
-  // Files become magical if they end in a CLSID, so block such extensions.
+  // Setting a file's extension to a CLSID may conceal its actual file type on
+  // some Windows versions (see https://nvd.nist.gov/vuln/detail/CVE-2004-0420).
   if (!extension_lower.empty() &&
       (extension_lower.front() == FILE_PATH_LITERAL('{')) &&
       (extension_lower.back() == FILE_PATH_LITERAL('}')))

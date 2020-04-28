@@ -21,6 +21,7 @@
 #include "base/strings/string_split.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/test/bind_test_util.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/mock_entropy_provider.h"
 #include "base/test/scoped_feature_list.h"
@@ -28,13 +29,12 @@
 #include "build/build_config.h"
 #include "chrome/browser/autofill/autofill_uitest.h"
 #include "chrome/browser/autofill/autofill_uitest_util.h"
-#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/metrics/subprocess_metrics_provider.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_io_data.h"
-#include "chrome/browser/ssl/chrome_mock_cert_verifier.h"
 #include "chrome/browser/translate/chrome_translate_client.h"
 #include "chrome/browser/translate/translate_service.h"
+#include "chrome/browser/translate/translate_test_utils.h"
 #include "chrome/browser/ui/autofill/chrome_autofill_client.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
@@ -49,8 +49,8 @@
 #include "components/autofill/content/browser/content_autofill_driver_factory.h"
 #include "components/autofill/core/browser/autofill_manager.h"
 #include "components/autofill/core/browser/autofill_manager_test_delegate.h"
-#include "components/autofill/core/browser/autofill_profile.h"
 #include "components/autofill/core/browser/autofill_test_utils.h"
+#include "components/autofill/core/browser/data_model/autofill_profile.h"
 #include "components/autofill/core/browser/validation.h"
 #include "components/autofill/core/common/autofill_features.h"
 #include "components/autofill/core/common/autofill_util.h"
@@ -58,23 +58,23 @@
 #include "components/translate/core/browser/translate_manager.h"
 #include "components/translate/core/common/translate_switches.h"
 #include "content/public/browser/navigation_controller.h"
-#include "content/public/browser/notification_observer.h"
-#include "content/public/browser/notification_registrar.h"
 #include "content/public/browser/notification_service.h"
+#include "content/public/browser/notification_types.h"
 #include "content/public/browser/render_view_host.h"
 #include "content/public/browser/render_widget_host.h"
 #include "content/public/browser/render_widget_host_view.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/content_switches.h"
 #include "content/public/test/browser_test_utils.h"
+#include "content/public/test/content_mock_cert_verifier.h"
 #include "content/public/test/test_renderer_host.h"
 #include "content/public/test/test_utils.h"
+#include "content/public/test/url_loader_interceptor.h"
 #include "net/base/net_errors.h"
 #include "net/cert/mock_cert_verifier.h"
 #include "net/dns/mock_host_resolver.h"
 #include "net/test/embedded_test_server/controllable_http_response.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
-#include "net/url_request/test_url_fetcher_factory.h"
 #include "net/url_request/url_request_status.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -84,6 +84,7 @@
 #include "ui/events/keycodes/keyboard_codes.h"
 
 using base::ASCIIToUTF16;
+using content::URLLoaderInterceptor;
 
 namespace autofill {
 
@@ -269,11 +270,16 @@ class AutofillInteractiveTestBase : public AutofillUiTest {
 
   // InProcessBrowserTest:
   void SetUp() override {
+    LOG(ERROR) << "crbug/967588: AutofillInteractiveTestBase::SetUp() entered";
     ASSERT_TRUE(embedded_test_server()->InitializeAndListen());
+    LOG(ERROR) << "crbug/967588: embedded_test_server InitializeAndListen";
     InProcessBrowserTest::SetUp();
+    LOG(ERROR) << "crbug/967588: AutofillInteractiveTestBase::SetUp() exited";
   }
 
   void SetUpOnMainThread() override {
+    LOG(ERROR) << "crbug/967588: "
+                  "AutofillInteractiveTestBase::SetUpOnMainThread() entered";
     AutofillUiTest::SetUpOnMainThread();
 
     https_server_.SetSSLConfig(net::EmbeddedTestServer::CERT_OK);
@@ -282,6 +288,7 @@ class AutofillInteractiveTestBase : public AutofillUiTest {
         &AutofillInteractiveTestBase::HandleTestURL, base::Unretained(this)));
     ASSERT_TRUE(https_server_.InitializeAndListen());
     https_server_.StartAcceptingConnections();
+    LOG(ERROR) << "crbug/967588: https_server started accepting connections";
 
     controllable_http_response_ =
         std::make_unique<net::test_server::ControllableHttpResponse>(
@@ -293,10 +300,14 @@ class AutofillInteractiveTestBase : public AutofillUiTest {
     embedded_test_server()->RegisterRequestHandler(base::BindRepeating(
         &AutofillInteractiveTestBase::HandleTestURL, base::Unretained(this)));
     embedded_test_server()->StartAcceptingConnections();
+    LOG(ERROR)
+        << "crbug/967588: embedded_test_server started accepting connections";
 
     // By default, all SSL cert checks are valid. Can be overriden in tests if
     // needed.
     cert_verifier_.mock_cert_verifier()->set_default_result(net::OK);
+    LOG(ERROR) << "crbug/967588: "
+                  "AutofillInteractiveTestBase::SetUpOnMainThread() exited";
   }
 
   void SetUpCommandLine(base::CommandLine* command_line) override {
@@ -511,6 +522,7 @@ class AutofillInteractiveTestBase : public AutofillUiTest {
     ExpectFieldValue("zip", "78744");
     ExpectFieldValue("country", "US");
     ExpectFieldValue("phone", "15125551234");
+    LOG(ERROR) << "crbug/967588: Verified form was filled as expected";
   }
 
   void ExpectClearedForm() {
@@ -554,16 +566,21 @@ class AutofillInteractiveTestBase : public AutofillUiTest {
 
   void TryBasicFormFill() {
     FocusFirstNameField();
+    LOG(ERROR) << "crbug/967588: Focussed first name field";
 
     // Start filling the first name field with "M" and wait for the popup to be
     // shown.
     SendKeyToPageAndWait(ui::DomKey::FromCharacter('M'), ui::DomCode::US_M,
                          ui::VKEY_M, {ObservedUiEvents::kSuggestionShown});
 
+    LOG(ERROR) << "crbug/967588: Sent 'M' and saw suggestion";
+
     // Press the down arrow to select the suggestion and preview the autofilled
     // form.
     SendKeyToPopupAndWait(ui::DomKey::ARROW_DOWN,
                           {ObservedUiEvents::kPreviewFormData});
+
+    LOG(ERROR) << "crbug/967588: Sent '<down arrow>' and saw preview";
 
     // The previewed values should not be accessible to JavaScript.
     ExpectFieldValue("firstname", "M");
@@ -578,9 +595,14 @@ class AutofillInteractiveTestBase : public AutofillUiTest {
     // TODO(isherman): It would be nice to test that the previewed values are
     // displayed: http://crbug.com/57220
 
+    LOG(ERROR)
+        << "crbug/967588: Verified field contents remain unfilled for preview";
+
     // Press Enter to accept the autofill suggestions.
     SendKeyToPopupAndWait(ui::DomKey::ENTER,
                           {ObservedUiEvents::kFormDataFilled});
+
+    LOG(ERROR) << "crbug/967588: Form was filled after pressing enter";
 
     // The form should be filled.
     ExpectFilledTestForm();
@@ -661,11 +683,8 @@ class AutofillInteractiveTestBase : public AutofillUiTest {
   net::EmbeddedTestServer https_server_;
 
   // Similar to net::MockCertVerifier, but also updates the CertVerifier
-  // used by the NetworkService. This is needed for when tests run with
-  // the NetworkService enabled.
-  ChromeMockCertVerifier cert_verifier_;
-
-  net::TestURLFetcherFactory url_fetcher_factory_;
+  // used by the NetworkService.
+  content::ContentMockCertVerifier cert_verifier_;
 
   // KeyPressEventCallback that serves as a sink to ensure that every key press
   // event the tests create and have the WebContents forward is handled by some
@@ -705,17 +724,73 @@ class AutofillInteractiveTest : public AutofillInteractiveTestBase {
   }
 };
 
+class AutofillInteractiveTestWithHistogramTester
+    : public AutofillInteractiveTest {
+ public:
+  void SetUp() override {
+    // Only allow requests to be loaded that are necessary for the test. This
+    // allows a histogram to test properties of some specific requests.
+    std::vector<std::string> allowlist = {
+        "/internal/test_url_path", "https://clients1.google.com/tbproxy",
+        "https://content-autofill.googleapis.com/"};
+    url_loader_interceptor_ =
+        std::make_unique<URLLoaderInterceptor>(base::BindLambdaForTesting(
+            [&](URLLoaderInterceptor::RequestParams* params) {
+              for (const auto& s : allowlist) {
+                const bool is_match =
+                    params->url_request.url.spec().find(s) != std::string::npos;
+                if (is_match)
+                  return false;  // Do not intercept.
+              }
+              return true;  // Intercept
+            }));
+    AutofillInteractiveTest::SetUp();
+  }
+
+  void TearDownOnMainThread() override {
+    url_loader_interceptor_.reset();
+    AutofillInteractiveTest::TearDownOnMainThread();
+  }
+
+  base::HistogramTester& histogram_tester() { return histogram_tester_; }
+
+ private:
+  base::HistogramTester histogram_tester_;
+  std::unique_ptr<URLLoaderInterceptor> url_loader_interceptor_;
+};
+
+// Test is flaky on Linux TSAN, see http://crbug.com/1045709.
+#if defined(THREAD_SANITIZER)
+#define MAYBE_BasicFormFill DISABLED_BasicFormFill
+#else
+#define MAYBE_BasicFormFill BasicFormFill
+#endif  // THREAD_SANITIZER
 // Test that basic form fill is working.
-IN_PROC_BROWSER_TEST_F(AutofillInteractiveTest, BasicFormFill) {
+IN_PROC_BROWSER_TEST_F(AutofillInteractiveTestWithHistogramTester,
+                       MAYBE_BasicFormFill) {
+  LOG(ERROR) << "crbug/967588: In case of flakes, report log statements to "
+                "crbug.com/967588";
   CreateTestProfile();
+  LOG(ERROR) << "crbug/967588: Test profile created";
 
   // Load the test page.
   SetTestUrlResponse(kTestShippingFormString);
   ASSERT_NO_FATAL_FAILURE(
       ui_test_utils::NavigateToURL(browser(), GetTestUrl()));
+  LOG(ERROR) << "crbug/967588: Loaded test page";
 
   // Invoke Autofill.
   TryBasicFormFill();
+  LOG(ERROR) << "crbug/967588: Basic form filling completed";
+
+  SubprocessMetricsProvider::MergeHistogramDeltasForTesting();
+  // Assert that the network isolation key is populated for 2 requests:
+  // - Navigation: /internal/test_url_path
+  // - Autofill query: https://clients1.google.com/tbproxy/af/query?...
+  //   or "https://content-autofill.googleapis.com/..." (depending on the
+  //   finch configuration of the AutofillUseApi feature).
+  histogram_tester().ExpectBucketCount("HttpCache.NetworkIsolationKeyPresent2",
+                                       2 /*kPresent*/, 2 /*count*/);
 }
 
 IN_PROC_BROWSER_TEST_F(AutofillInteractiveTest, BasicClear) {
@@ -826,7 +901,13 @@ IN_PROC_BROWSER_TEST_F(AutofillInteractiveTest, ModifySelectFieldAndFill) {
 }
 
 // Test that autofill works when the website prefills the form.
-IN_PROC_BROWSER_TEST_F(AutofillInteractiveTest, PrefillFormAndFill) {
+#if defined(OS_MACOSX)
+// Flaky on Mac https://crbug.com/1045545
+#define MAYBE_PrefillFormAndFill DISABLED_PrefillFormAndFill
+#else
+#define MAYBE_PrefillFormAndFill PrefillFormAndFill
+#endif
+IN_PROC_BROWSER_TEST_F(AutofillInteractiveTest, MAYBE_PrefillFormAndFill) {
   const char kPrefillScript[] =
       "<script>"
       "document.getElementById('firstname').value = 'Seb';"
@@ -914,9 +995,18 @@ IN_PROC_BROWSER_TEST_F(AutofillInteractiveTest,
   ExpectFieldValue("phone", "");
 }
 
+#if defined(OS_MACOSX)
+// https://crbug.com/1045545
+#define MAYBE_FillChangeSecondFieldRefillAndClearSecondField \
+  DISABLED_FillChangeSecondFieldRefillAndClearSecondField
+#else
+#define MAYBE_FillChangeSecondFieldRefillAndClearSecondField \
+  FillChangeSecondFieldRefillAndClearSecondField
+#endif
+
 // Test that multiple autofillings work.
 IN_PROC_BROWSER_TEST_F(AutofillInteractiveTest,
-                       FillChangeSecondFieldRefillAndClearSecondField) {
+                       MAYBE_FillChangeSecondFieldRefillAndClearSecondField) {
   CreateTestProfile();
 
   // Load the test page.
@@ -955,9 +1045,11 @@ IN_PROC_BROWSER_TEST_F(AutofillInteractiveTest,
   TryClearForm();
 }
 
+// TODO(crbug.com/967588): Disabled due to flakiness
 // Test that multiple autofillings work.
-IN_PROC_BROWSER_TEST_F(AutofillInteractiveTest,
-                       FillChangeSecondFieldRefillSecondFieldClearFirst) {
+IN_PROC_BROWSER_TEST_F(
+    AutofillInteractiveTest,
+    DISABLED_FillChangeSecondFieldRefillSecondFieldClearFirst) {
   CreateTestProfile();
 
   // Load the test page.
@@ -997,9 +1089,18 @@ IN_PROC_BROWSER_TEST_F(AutofillInteractiveTest,
   TryClearForm();
 }
 
+#if defined(OS_MACOSX)
+// https://crbug.com/1045545
+#define MAYBE_FillThenFillSomeWithAnotherProfileThenClear \
+  DISABLED_FillThenFillSomeWithAnotherProfileThenClear
+#else
+#define MAYBE_FillThenFillSomeWithAnotherProfileThenClear \
+  FillThenFillSomeWithAnotherProfileThenClear
+#endif
+
 // Test that multiple autofillings work.
 IN_PROC_BROWSER_TEST_F(AutofillInteractiveTest,
-                       FillThenFillSomeWithAnotherProfileThenClear) {
+                       MAYBE_FillThenFillSomeWithAnotherProfileThenClear) {
   CreateTestProfile();
   CreateSecondTestProfile();
 
@@ -1080,9 +1181,9 @@ IN_PROC_BROWSER_TEST_F(AutofillInteractiveTest, AutofillViaClick) {
   ASSERT_NO_FATAL_FAILURE(FocusFirstNameField());
 
   // Now click it.
-  test_delegate()->Reset();
+  test_delegate()->SetExpectations({ObservedUiEvents::kSuggestionShown});
   ASSERT_NO_FATAL_FAILURE(ClickFirstNameField());
-  test_delegate()->Wait({ObservedUiEvents::kSuggestionShown});
+  EXPECT_TRUE(test_delegate()->Wait());
 
   // Press the down arrow to select the suggestion and preview the autofilled
   // form.
@@ -1133,9 +1234,9 @@ IN_PROC_BROWSER_TEST_F(AutofillInteractiveTest, Click) {
       ui_test_utils::NavigateToURL(browser(), GetTestUrl()));
 
   // This click should activate the autofill popup.
-  test_delegate()->Reset();
+  test_delegate()->SetExpectations({ObservedUiEvents::kSuggestionShown});
   ASSERT_NO_FATAL_FAILURE(ClickFirstNameField());
-  test_delegate()->Wait({ObservedUiEvents::kSuggestionShown});
+  EXPECT_TRUE(test_delegate()->Wait());
 
   // Press the down arrow to select the suggestion and preview the autofilled
   // form.
@@ -1170,9 +1271,9 @@ IN_PROC_BROWSER_TEST_F(AutofillInteractiveTest, DontAutofillForOutsideClick) {
   ASSERT_NO_FATAL_FAILURE(ClickElementWithId("disabled-button"));
   ASSERT_NO_FATAL_FAILURE(MakeSurePopupDoesntAppear());
 
-  test_delegate()->Reset();
+  test_delegate()->SetExpectations({ObservedUiEvents::kSuggestionShown});
   ASSERT_NO_FATAL_FAILURE(ClickFirstNameField());
-  test_delegate()->Wait({ObservedUiEvents::kSuggestionShown});
+  EXPECT_TRUE(test_delegate()->Wait());
 }
 
 // Test that a field is still autofillable after the previously autofilled
@@ -1718,8 +1819,14 @@ IN_PROC_BROWSER_TEST_F(AutofillInteractiveTest, DynamicFormFill) {
   TryBasicFormFill();
 }
 
+#if defined(OS_MACOSX)
+// Flaky on Mac OS. See crbug.com/967588.
+#define MAYBE_AutofillAfterReload DISABLED_AutofillAfterReload
+#else
+#define MAYBE_AutofillAfterReload AutofillAfterReload
+#endif
 // Test that form filling works after reloading the current page.
-IN_PROC_BROWSER_TEST_F(AutofillInteractiveTest, AutofillAfterReload) {
+IN_PROC_BROWSER_TEST_F(AutofillInteractiveTest, MAYBE_AutofillAfterReload) {
   CreateTestProfile();
 
   // Load the test page.
@@ -1887,16 +1994,15 @@ IN_PROC_BROWSER_TEST_F(AutofillInteractiveTest, MAYBE_AutofillAfterTranslate) {
       "利";
 
   // Set up an observer to be able to wait for the bubble to be shown.
-  content::Source<content::WebContents> source(GetWebContents());
-  content::WindowedNotificationObserver language_detected_signal(
-      chrome::NOTIFICATION_TAB_LANGUAGE_DETERMINED, source);
+  auto language_waiter = translate::CreateTranslateWaiter(
+      GetWebContents(),
+      translate::TranslateWaiter::WaitEvent::kLanguageDetermined);
 
   SetTestUrlResponse(kForm);
   ASSERT_NO_FATAL_FAILURE(
       ui_test_utils::NavigateToURL(browser(), GetTestUrl()));
 
-  // Wait for the translate bubble to appear.
-  language_detected_signal.Wait();
+  language_waiter->Wait();
 
   // Verify current translate step.
   const TranslateBubbleModel* model =
@@ -1908,16 +2014,14 @@ IN_PROC_BROWSER_TEST_F(AutofillInteractiveTest, MAYBE_AutofillAfterTranslate) {
   translate::test_utils::PressTranslate(browser());
 
   // Wait for translation.
-  content::WindowedNotificationObserver translation_observer(
-      chrome::NOTIFICATION_PAGE_TRANSLATED,
-      content::NotificationService::AllSources());
+  auto translate_waiter = translate::CreateTranslateWaiter(
+      GetWebContents(), translate::TranslateWaiter::WaitEvent::kPageTranslated);
 
   // Simulate the translate script being retrieved.
   // Pass fake google.translate lib as the translate script.
   SimulateURLFetch();
 
-  // Simulate the render notifying the translation has been done.
-  translation_observer.Wait();
+  translate_waiter->Wait();
 
   TryBasicFormFill();
 }
@@ -2017,11 +2121,11 @@ IN_PROC_BROWSER_TEST_P(AutofillCompanyInteractiveTest,
   FocusFieldByName("company");
 
   // Now click it.
-  test_delegate()->Reset();
+  test_delegate()->SetExpectations({ObservedUiEvents::kSuggestionShown},
+                                   base::TimeDelta::FromSeconds(3));
   ASSERT_NO_FATAL_FAILURE(ClickElementWithId("company"));
 
-  bool found = test_delegate()->Wait({ObservedUiEvents::kSuggestionShown},
-                                     base::TimeDelta::FromSeconds(3));
+  bool found = test_delegate()->Wait();
 
   if (!company_name_enabled_) {
     EXPECT_FALSE(found);

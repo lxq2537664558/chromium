@@ -32,6 +32,7 @@
 #include "extensions/browser/runtime_data.h"
 #include "extensions/browser/service_worker_manager.h"
 #include "extensions/browser/shared_user_script_master.h"
+#include "extensions/browser/unloaded_extension_reason.h"
 #include "extensions/browser/value_store/value_store_factory_impl.h"
 #include "extensions/common/api/app_runtime.h"
 #include "extensions/common/constants.h"
@@ -108,14 +109,21 @@ const Extension* CastExtensionSystem::LoadExtensionByManifest(
 
 const Extension* CastExtensionSystem::LoadExtension(
     const base::FilePath& extension_dir) {
+  return LoadExtension(kManifestFilename, extension_dir);
+}
+
+const Extension* CastExtensionSystem::LoadExtension(
+    const base::FilePath::CharType* manifest_file,
+    const base::FilePath& extension_dir) {
   // cast_shell only supports unpacked extensions.
   // NOTE: If you add packed extension support consider removing the flag
   // FOLLOW_SYMLINKS_ANYWHERE below. Packed extensions should not have symlinks.
   CHECK(base::DirectoryExists(extension_dir)) << extension_dir.AsUTF8Unsafe();
   int load_flags = Extension::FOLLOW_SYMLINKS_ANYWHERE;
   std::string load_error;
-  scoped_refptr<Extension> extension = file_util::LoadExtension(
-      extension_dir, Manifest::COMMAND_LINE, load_flags, &load_error);
+  scoped_refptr<Extension> extension =
+      file_util::LoadExtension(extension_dir, manifest_file, std::string(),
+                               Manifest::COMPONENT, load_flags, &load_error);
   if (!extension.get()) {
     LOG(ERROR) << "Loading extension at " << extension_dir.value()
                << " failed with: " << load_error;
@@ -130,10 +138,9 @@ const Extension* CastExtensionSystem::LoadExtension(
       LOG(WARNING) << warning.message;
   }
 
-  base::PostTaskWithTraits(
-      FROM_HERE, {content::BrowserThread::UI},
-      base::BindOnce(&CastExtensionSystem::PostLoadExtension,
-                     base::Unretained(this), extension));
+  base::PostTask(FROM_HERE, {content::BrowserThread::UI},
+                 base::BindOnce(&CastExtensionSystem::PostLoadExtension,
+                                base::Unretained(this), extension));
 
   return extension.get();
 }
@@ -174,8 +181,8 @@ void CastExtensionSystem::LaunchApp(const ExtensionId& extension_id) {
   const Extension* extension = ExtensionRegistry::Get(browser_context_)
                                    ->enabled_extensions()
                                    .GetByID(extension_id);
-  AppRuntimeEventRouter::DispatchOnLaunchedEvent(browser_context_, extension,
-                                                 SOURCE_UNTRACKED, nullptr);
+  AppRuntimeEventRouter::DispatchOnLaunchedEvent(
+      browser_context_, extension, AppLaunchSource::kSourceUntracked, nullptr);
 }
 
 void CastExtensionSystem::Shutdown() {}
@@ -195,10 +202,6 @@ void CastExtensionSystem::InitForRegularProfile(bool extensions_enabled) {
 
   extension_registrar_ =
       std::make_unique<ExtensionRegistrar>(browser_context_, this);
-}
-
-void CastExtensionSystem::InitForIncognitoProfile() {
-  NOTREACHED();
 }
 
 ExtensionService* CastExtensionSystem::extension_service() {
@@ -249,13 +252,12 @@ AppSorting* CastExtensionSystem::app_sorting() {
 
 void CastExtensionSystem::RegisterExtensionWithRequestContexts(
     const Extension* extension,
-    const base::Closure& callback) {
-  base::PostTaskWithTraitsAndReply(
-      FROM_HERE, {BrowserThread::IO},
-      base::BindOnce(&InfoMap::AddExtension, info_map(),
-                     base::RetainedRef(extension), base::Time::Now(), false,
-                     false),
-      callback);
+    base::OnceClosure callback) {
+  base::PostTaskAndReply(FROM_HERE, {BrowserThread::IO},
+                         base::BindOnce(&InfoMap::AddExtension, info_map(),
+                                        base::RetainedRef(extension),
+                                        base::Time::Now(), false, false),
+                         std::move(callback));
 }
 
 void CastExtensionSystem::UnregisterExtensionWithRequestContexts(
@@ -281,6 +283,12 @@ void CastExtensionSystem::InstallUpdate(
     const base::FilePath& unpacked_dir,
     bool install_immediately,
     InstallUpdateCallback install_update_callback) {
+  NOTREACHED();
+}
+
+void CastExtensionSystem::PerformActionBasedOnOmahaAttributes(
+    const std::string& extension_id,
+    const base::Value& attributes) {
   NOTREACHED();
 }
 

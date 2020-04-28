@@ -65,7 +65,7 @@ void PaymentRequestItemList::Item::Init() {
       CreateContentView(&accessible_item_description_);
 
   views::GridLayout* layout =
-      SetLayoutManager(std::make_unique<views::GridLayout>(this));
+      SetLayoutManager(std::make_unique<views::GridLayout>());
 
   // Add a column for the item's content view.
   views::ColumnSet* columns = layout->AddColumnSet(0);
@@ -96,15 +96,15 @@ void PaymentRequestItemList::Item::Init() {
 
   layout->StartRow(views::GridLayout::kFixedSize, 0);
   content->set_can_process_events_within_subtree(false);
-  layout->AddView(content.release());
+  layout->AddView(std::move(content));
 
-  layout->AddView(CreateCheckmark(selected() && clickable()).release());
+  layout->AddView(CreateCheckmark(selected() && clickable()));
 
   if (extra_view)
-    layout->AddView(extra_view.release());
+    layout->AddView(std::move(extra_view));
 
   if (show_edit_button_) {
-    views::ImageButton* edit_button = views::CreateVectorImageButton(this);
+    auto edit_button = views::CreateVectorImageButton(this);
     const SkColor icon_color =
         color_utils::DeriveDefaultIconColor(SK_ColorBLACK);
     edit_button->SetImage(views::Button::STATE_NORMAL,
@@ -112,10 +112,10 @@ void PaymentRequestItemList::Item::Init() {
                                                 kEditIconSize, icon_color));
     edit_button->set_ink_drop_base_color(icon_color);
     edit_button->SetFocusBehavior(views::View::FocusBehavior::ALWAYS);
-    edit_button->set_id(static_cast<int>(DialogViewID::EDIT_ITEM_BUTTON));
+    edit_button->SetID(static_cast<int>(DialogViewID::EDIT_ITEM_BUTTON));
     edit_button->SetAccessibleName(
         l10n_util::GetStringUTF16(IDS_PAYMENTS_EDIT));
-    layout->AddView(edit_button);
+    layout->AddView(std::move(edit_button));
   }
 
   UpdateAccessibleName();
@@ -125,7 +125,7 @@ void PaymentRequestItemList::Item::SetSelected(bool selected, bool notify) {
   selected_ = selected;
 
   for (views::View* child : children())
-    if (child->id() == static_cast<int>(DialogViewID::CHECKMARK_VIEW)) {
+    if (child->GetID() == static_cast<int>(DialogViewID::CHECKMARK_VIEW)) {
       child->SetVisible(selected);
       break;
     }
@@ -140,7 +140,7 @@ std::unique_ptr<views::ImageView> PaymentRequestItemList::Item::CreateCheckmark(
     bool selected) {
   std::unique_ptr<views::ImageView> checkmark =
       std::make_unique<views::ImageView>();
-  checkmark->set_id(static_cast<int>(DialogViewID::CHECKMARK_VIEW));
+  checkmark->SetID(static_cast<int>(DialogViewID::CHECKMARK_VIEW));
   checkmark->set_can_process_events_within_subtree(false);
   checkmark->SetImage(
       gfx::CreateVectorIcon(views::kMenuCheckIcon, kCheckmarkColor));
@@ -155,7 +155,7 @@ std::unique_ptr<views::View> PaymentRequestItemList::Item::CreateExtraView() {
 
 void PaymentRequestItemList::Item::ButtonPressed(views::Button* sender,
                                                  const ui::Event& event) {
-  if (sender->id() == static_cast<int>(DialogViewID::EDIT_ITEM_BUTTON)) {
+  if (sender->GetID() == static_cast<int>(DialogViewID::EDIT_ITEM_BUTTON)) {
     EditButtonPressed();
   } else if (selected_) {
     // |dialog()| may be null in tests
@@ -206,7 +206,7 @@ std::unique_ptr<views::View> PaymentRequestItemList::CreateListView() {
   std::unique_ptr<views::View> content_view = std::make_unique<views::View>();
 
   content_view->SetLayoutManager(std::make_unique<views::BoxLayout>(
-      views::BoxLayout::kVertical,
+      views::BoxLayout::Orientation::kVertical,
       gfx::Insets(kPaymentRequestRowVerticalInsets, 0), 0));
 
   for (auto& item : items_)

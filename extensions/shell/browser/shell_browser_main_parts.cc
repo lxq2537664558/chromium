@@ -9,6 +9,7 @@
 #include "apps/browser_context_keyed_service_factories.h"
 #include "base/bind.h"
 #include "base/command_line.h"
+#include "base/memory/ref_counted.h"
 #include "base/task/post_task.h"
 #include "build/build_config.h"
 #include "components/keyed_service/content/browser_context_dependency_manager.h"
@@ -21,23 +22,21 @@
 #include "content/public/browser/child_process_security_policy.h"
 #include "content/public/browser/context_factory.h"
 #include "content/public/browser/devtools_agent_host.h"
+#include "content/public/browser/media_session_service.h"
 #include "content/public/common/content_switches.h"
 #include "content/public/common/result_codes.h"
-#include "content/public/common/service_manager_connection.h"
 #include "content/shell/browser/shell_devtools_manager_delegate.h"
 #include "extensions/browser/browser_context_keyed_service_factories.h"
 #include "extensions/browser/extension_system.h"
 #include "extensions/browser/updater/update_service.h"
 #include "extensions/common/constants.h"
+#include "extensions/shell/browser/desktop_controller.h"
 #include "extensions/shell/browser/shell_browser_context.h"
 #include "extensions/shell/browser/shell_browser_context_keyed_service_factories.h"
 #include "extensions/shell/browser/shell_browser_main_delegate.h"
-#include "extensions/shell/browser/shell_desktop_controller_aura.h"
-#include "extensions/shell/browser/shell_device_client.h"
 #include "extensions/shell/browser/shell_extension_system.h"
 #include "extensions/shell/browser/shell_extension_system_factory.h"
 #include "extensions/shell/browser/shell_extensions_browser_client.h"
-#include "extensions/shell/browser/shell_oauth2_token_service.h"
 #include "extensions/shell/browser/shell_prefs.h"
 #include "extensions/shell/browser/shell_update_query_params_delegate.h"
 #include "extensions/shell/common/shell_extensions_client.h"
@@ -127,16 +126,16 @@ void ShellBrowserMainParts::PostMainMessageLoopStart() {
   chromeos::DBusThreadManager::Initialize();
   dbus::Bus* bus = chromeos::DBusThreadManager::Get()->GetSystemBus();
   if (bus) {
+    bluez::BluezDBusManager::Initialize(bus);
     chromeos::CrasAudioClient::Initialize(bus);
     chromeos::PowerManagerClient::Initialize(bus);
   } else {
+    bluez::BluezDBusManager::InitializeFake();
     chromeos::CrasAudioClient::InitializeFake();
     chromeos::PowerManagerClient::InitializeFake();
   }
 
   chromeos::disks::DiskMountManager::Initialize();
-
-  bluez::BluezDBusManager::Initialize();
 
   chromeos::NetworkHandler::Initialize();
   network_controller_.reset(new ShellNetworkController(
@@ -153,8 +152,7 @@ void ShellBrowserMainParts::PostMainMessageLoopStart() {
   // TODO(michaelpg): Verify this works for target environments.
   ui::InitializeInputMethodForTesting();
 
-  bluez::BluezDBusThreadManager::Initialize();
-  bluez::BluezDBusManager::Initialize();
+  bluez::BluezDBusManager::Initialize(nullptr /* system_bus */);
 #else
   ui::InitializeInputMethodForTesting();
 #endif
@@ -187,7 +185,7 @@ void ShellBrowserMainParts::PreMainMessageLoopRun() {
   shell::EnsureBrowserContextKeyedServiceFactoriesBuilt();
 
   // Initialize our "profile" equivalent.
-  browser_context_ = std::make_unique<ShellBrowserContext>(this);
+  browser_context_ = std::make_unique<ShellBrowserContext>();
 
   // app_shell only supports a single user, so all preferences live in the user
   // data directory, including the device-wide local state.
@@ -199,8 +197,14 @@ void ShellBrowserMainParts::PreMainMessageLoopRun() {
                                                      user_pref_service_.get());
 
 #if defined(OS_CHROMEOS)
+  mojo::PendingRemote<media_session::mojom::MediaControllerManager>
+      media_controller_manager;
+  content::GetMediaSessionService().BindMediaControllerManager(
+      media_controller_manager.InitWithNewPipeAndPassReceiver());
   chromeos::CrasAudioHandler::Initialize(
-      new chromeos::AudioDevicesPrefHandlerImpl(local_state_.get()));
+      std::move(media_controller_manager),
+      base::MakeRefCounted<chromeos::AudioDevicesPrefHandlerImpl>(
+          local_state_.get()));
   audio_controller_.reset(new ShellAudioController());
 #endif
 
@@ -211,21 +215,14 @@ void ShellBrowserMainParts::PreMainMessageLoopRun() {
 
 #if defined(USE_AURA)
   aura::Env::GetInstance()->set_context_factory(content::GetContextFactory());
-  aura::Env::GetInstance()->set_context_factory_private(
-      content::GetContextFactoryPrivate());
 #endif
 
-  storage_monitor::StorageMonitor::Create(
-      content::ServiceManagerConnection::GetForProcess()
-          ->GetConnector()
-          ->Clone());
+  storage_monitor::StorageMonitor::Create();
 
   desktop_controller_.reset(
       browser_main_delegate_->CreateDesktopController(browser_context_.get()));
 
   // TODO(jamescook): Initialize user_manager::UserManager.
-
-  device_client_.reset(new ShellDeviceClient);
 
   update_query_params_delegate_.reset(new ShellUpdateQueryParamsDelegate);
   update_client::UpdateQueryParams::SetDelegate(
@@ -233,31 +230,26 @@ void ShellBrowserMainParts::PreMainMessageLoopRun() {
 
   InitExtensionSystem();
 
-  // Initialize OAuth2 support from command line.
-  base::CommandLine* cmd = base::CommandLine::ForCurrentProcess();
-  oauth2_token_service_.reset(new ShellOAuth2TokenService(
-      cmd->GetSwitchValueASCII(switches::kAppShellUser),
-      cmd->GetSwitchValueASCII(switches::kAppShellRefreshToken)));
-
 #if BUILDFLAG(ENABLE_NACL)
   nacl::NaClBrowser::SetDelegate(
       std::make_unique<ShellNaClBrowserDelegate>(browser_context_.get()));
   // Track the task so it can be canceled if app_shell shuts down very quickly,
   // such as in browser tests.
   task_tracker_.PostTask(
-      base::CreateSingleThreadTaskRunnerWithTraits({BrowserThread::IO}).get(),
-      FROM_HERE, base::Bind(nacl::NaClProcessHost::EarlyStartup));
+      base::CreateSingleThreadTaskRunner({BrowserThread::IO}).get(), FROM_HERE,
+      base::BindOnce(nacl::NaClProcessHost::EarlyStartup));
 #endif
 
   content::ShellDevToolsManagerDelegate::StartHttpHandler(
       browser_context_.get());
 
-  if (cmd->HasSwitch(::switches::kBrowserCrashTest))
+  if (base::CommandLine::ForCurrentProcess()->HasSwitch(
+          ::switches::kBrowserCrashTest))
     CrashForTest();
 
   if (parameters_.ui_task) {
     // For running browser tests.
-    parameters_.ui_task->Run();
+    std::move(*parameters_.ui_task).Run();
     delete parameters_.ui_task;
     run_message_loop_ = false;
   } else {
@@ -285,7 +277,6 @@ void ShellBrowserMainParts::PostMainMessageLoopRun() {
   task_tracker_.TryCancelAll();
 #endif
 
-  oauth2_token_service_.reset();
   BrowserContextDependencyManager::GetInstance()->DestroyBrowserContextServices(
       browser_context_.get());
   extension_system_ = NULL;

@@ -10,11 +10,8 @@
 #include "build/build_config.h"
 #include "components/viz/common/features.h"
 #include "components/viz/host/host_frame_sink_manager.h"
-#include "components/viz/service/frame_sinks/frame_sink_manager_impl.h"
-#include "components/viz/service/surfaces/surface_hittest.h"
 #include "content/browser/accessibility/browser_accessibility_manager.h"
 #include "content/browser/compositor/surface_utils.h"
-#include "content/browser/frame_host/render_widget_host_view_guest.h"
 #include "content/browser/gpu/gpu_data_manager_impl.h"
 #include "content/browser/renderer_host/delegated_frame_host.h"
 #include "content/browser/renderer_host/display_util.h"
@@ -31,7 +28,6 @@
 #include "content/browser/renderer_host/text_input_manager.h"
 #include "content/common/content_switches_internal.h"
 #include "ui/base/layout.h"
-#include "ui/base/ui_base_features.h"
 #include "ui/base/ui_base_types.h"
 #include "ui/display/screen.h"
 #include "ui/events/event.h"
@@ -41,17 +37,10 @@
 #include "ui/gfx/geometry/size_conversions.h"
 #include "ui/gfx/geometry/size_f.h"
 
-#if defined(USE_AURA)
-#include "base/unguessable_token.h"
-#include "content/common/render_widget_window_tree_client_factory.mojom.h"
-#endif
-
 namespace content {
 
 RenderWidgetHostViewBase::RenderWidgetHostViewBase(RenderWidgetHost* host)
-    : use_viz_hit_test_(features::IsVizHitTestingEnabled()),
-      host_(RenderWidgetHostImpl::From(host)),
-      weak_factory_(this) {
+    : host_(RenderWidgetHostImpl::From(host)) {
   host_->render_frame_metadata_provider()->AddObserver(this);
 }
 
@@ -62,9 +51,9 @@ RenderWidgetHostViewBase::~RenderWidgetHostViewBase() {
   // away. However, some subclasses may wish to call this earlier in their
   // shutdown process, e.g. to force removal from
   // RenderWidgetHostInputEventRouter's surface map before relinquishing a
-  // host pointer, as in RenderWidgetHostViewGuest. There is no harm in calling
-  // NotifyObserversAboutShutdown() twice, as the observers are required to
-  // de-register on the first call, and so the second call does nothing.
+  // host pointer. There is no harm in calling NotifyObserversAboutShutdown()
+  // twice, as the observers are required to de-register on the first call, and
+  // so the second call does nothing.
   NotifyObserversAboutShutdown();
   // If we have a live reference to |text_input_manager_|, we should unregister
   // so that the |text_input_manager_| will free its state.
@@ -107,18 +96,18 @@ MouseWheelPhaseHandler* RenderWidgetHostViewBase::GetMouseWheelPhaseHandler() {
 
 void RenderWidgetHostViewBase::StopFlingingIfNecessary(
     const blink::WebGestureEvent& event,
-    InputEventAckState ack_result) {
+    blink::mojom::InputEventResultState ack_result) {
   // Reset view_stopped_flinging_for_test_ at the beginning of the scroll
   // sequence.
-  if (event.GetType() == blink::WebInputEvent::kGestureScrollBegin)
+  if (event.GetType() == blink::WebInputEvent::Type::kGestureScrollBegin)
     view_stopped_flinging_for_test_ = false;
 
-  bool processed = INPUT_EVENT_ACK_STATE_CONSUMED == ack_result;
+  bool processed = blink::mojom::InputEventResultState::kConsumed == ack_result;
   if (!processed &&
-      event.GetType() == blink::WebInputEvent::kGestureScrollUpdate &&
+      event.GetType() == blink::WebInputEvent::Type::kGestureScrollUpdate &&
       event.data.scroll_update.inertial_phase ==
-          blink::WebGestureEvent::kMomentumPhase &&
-      event.SourceDevice() != blink::kWebGestureDeviceSyntheticAutoscroll) {
+          blink::WebGestureEvent::InertialPhaseState::kMomentum &&
+      event.SourceDevice() != blink::WebGestureDevice::kSyntheticAutoscroll) {
     StopFling();
     view_stopped_flinging_for_test_ = true;
   }
@@ -340,6 +329,10 @@ bool RenderWidgetHostViewBase::IsMouseLocked() {
   return false;
 }
 
+bool RenderWidgetHostViewBase::GetIsMouseLockedUnadjustedMovementForTesting() {
+  return false;
+}
+
 bool RenderWidgetHostViewBase::LockKeyboard(
     base::Optional<base::flat_set<ui::DomCode>> codes) {
   NOTIMPLEMENTED_LOG_ONCE();
@@ -360,58 +353,41 @@ RenderWidgetHostViewBase::GetKeyboardLayoutMap() {
   return base::flat_map<std::string, std::string>();
 }
 
-InputEventAckState RenderWidgetHostViewBase::FilterInputEvent(
+blink::mojom::InputEventResultState RenderWidgetHostViewBase::FilterInputEvent(
     const blink::WebInputEvent& input_event) {
   // By default, input events are simply forwarded to the renderer.
-  return INPUT_EVENT_ACK_STATE_NOT_CONSUMED;
-}
-
-InputEventAckState RenderWidgetHostViewBase::FilterChildGestureEvent(
-    const blink::WebGestureEvent& gesture_event) {
-  // By default, do nothing with the child's gesture events.
-  return INPUT_EVENT_ACK_STATE_NOT_CONSUMED;
+  return blink::mojom::InputEventResultState::kNotConsumed;
 }
 
 void RenderWidgetHostViewBase::WheelEventAck(
     const blink::WebMouseWheelEvent& event,
-    InputEventAckState ack_result) {
-}
+    blink::mojom::InputEventResultState ack_result) {}
 
 void RenderWidgetHostViewBase::GestureEventAck(
     const blink::WebGestureEvent& event,
-    InputEventAckState ack_result) {
-}
+    blink::mojom::InputEventResultState ack_result) {}
 
-bool RenderWidgetHostViewBase::OnUnconsumedKeyboardEventAck(
-    const NativeWebKeyboardEventWithLatencyInfo& event) {
-  return false;
-}
-
-void RenderWidgetHostViewBase::FallbackCursorModeLockCursor(bool left,
-                                                            bool right,
-                                                            bool up,
-                                                            bool down) {}
-
-void RenderWidgetHostViewBase::FallbackCursorModeSetCursorVisibility(
-    bool visible) {}
+void RenderWidgetHostViewBase::ChildDidAckGestureEvent(
+    const blink::WebGestureEvent& event,
+    blink::mojom::InputEventResultState ack_result) {}
 
 void RenderWidgetHostViewBase::ForwardTouchpadZoomEventIfNecessary(
     const blink::WebGestureEvent& event,
-    InputEventAckState ack_result) {
+    blink::mojom::InputEventResultState ack_result) {
   if (!event.IsTouchpadZoomEvent())
     return;
   if (!event.NeedsWheelEvent())
     return;
 
   switch (event.GetType()) {
-    case blink::WebInputEvent::kGesturePinchBegin:
+    case blink::WebInputEvent::Type::kGesturePinchBegin:
       // Don't send the begin event until we get the first unconsumed update, so
       // that we elide pinch gesture steams consisting of only a begin and end.
       pending_touchpad_pinch_begin_ = event;
       pending_touchpad_pinch_begin_->SetNeedsWheelEvent(false);
       break;
-    case blink::WebInputEvent::kGesturePinchUpdate:
-      if (ack_result != INPUT_EVENT_ACK_STATE_CONSUMED &&
+    case blink::WebInputEvent::Type::kGesturePinchUpdate:
+      if (ack_result != blink::mojom::InputEventResultState::kConsumed &&
           !event.data.pinch_update.zoom_disabled) {
         if (pending_touchpad_pinch_begin_) {
           host()->ForwardGestureEvent(*pending_touchpad_pinch_begin_);
@@ -424,7 +400,7 @@ void RenderWidgetHostViewBase::ForwardTouchpadZoomEventIfNecessary(
         host()->ForwardGestureEvent(pinch_event);
       }
       break;
-    case blink::WebInputEvent::kGesturePinchEnd:
+    case blink::WebInputEvent::Type::kGesturePinchEnd:
       if (pending_touchpad_pinch_begin_) {
         pending_touchpad_pinch_begin_.reset();
       } else {
@@ -433,8 +409,8 @@ void RenderWidgetHostViewBase::ForwardTouchpadZoomEventIfNecessary(
         host()->ForwardGestureEvent(pinch_end_event);
       }
       break;
-    case blink::WebInputEvent::kGestureDoubleTap:
-      if (ack_result != INPUT_EVENT_ACK_STATE_CONSUMED) {
+    case blink::WebInputEvent::Type::kGestureDoubleTap:
+      if (ack_result != blink::mojom::InputEventResultState::kConsumed) {
         blink::WebGestureEvent double_tap(event);
         double_tap.SetNeedsWheelEvent(false);
         // TODO(mcnee): Support double-tap zoom gesture for OOPIFs. For now,
@@ -465,7 +441,8 @@ WidgetType RenderWidgetHostViewBase::GetWidgetType() {
 
 BrowserAccessibilityManager*
 RenderWidgetHostViewBase::CreateBrowserAccessibilityManager(
-    BrowserAccessibilityDelegate* delegate, bool for_root_frame) {
+    BrowserAccessibilityDelegate* delegate,
+    bool for_root_frame) {
   NOTREACHED();
   return nullptr;
 }
@@ -496,7 +473,7 @@ bool RenderWidgetHostViewBase::RequestRepaintForTesting() {
 
 void RenderWidgetHostViewBase::ProcessAckedTouchEvent(
     const TouchEventWithLatencyInfo& touch,
-    InputEventAckState ack_result) {
+    blink::mojom::InputEventResultState ack_result) {
   NOTREACHED();
 }
 
@@ -516,14 +493,14 @@ bool RenderWidgetHostViewBase::HasDisplayPropertyChanged(gfx::NativeView view) {
   if (current_display_area_ == display.work_area() &&
       current_device_scale_factor_ == display.device_scale_factor() &&
       current_display_rotation_ == display.rotation() &&
-      current_display_color_space_ == display.color_space()) {
+      current_display_color_spaces_ == display.color_spaces()) {
     return false;
   }
 
   current_display_area_ = display.work_area();
   current_device_scale_factor_ = display.device_scale_factor();
   current_display_rotation_ = display.rotation();
-  current_display_color_space_ = display.color_space();
+  current_display_color_spaces_ = display.color_spaces();
   return true;
 }
 
@@ -543,10 +520,6 @@ void RenderWidgetHostViewBase::EnableAutoResize(const gfx::Size& min_size,
 void RenderWidgetHostViewBase::DisableAutoResize(const gfx::Size& new_size) {
   if (!new_size.IsEmpty())
     SetSize(new_size);
-  // This clears the cached value in the WebContents, so that OOPIFs will
-  // stop using it.
-  if (host()->delegate())
-    host()->delegate()->ResetAutoResizeSize();
   host()->SetAutoResize(false, gfx::Size(), gfx::Size());
   host()->SynchronizeVisualProperties();
 }
@@ -568,11 +541,6 @@ RenderWidgetHostViewBase::DidUpdateVisualProperties(
 
 base::WeakPtr<RenderWidgetHostViewBase> RenderWidgetHostViewBase::GetWeakPtr() {
   return weak_factory_.GetWeakPtr();
-}
-
-void RenderWidgetHostViewBase::FocusedNodeTouched(
-    bool editable) {
-  DVLOG(1) << "FocusedNodeTouched: " << editable;
 }
 
 void RenderWidgetHostViewBase::GetScreenInfo(ScreenInfo* screen_info) {
@@ -630,40 +598,9 @@ void RenderWidgetHostViewBase::OnFrameTokenChangedForView(
     host()->DidProcessFrame(frame_token);
 }
 
-viz::FrameSinkId RenderWidgetHostViewBase::FrameSinkIdAtPoint(
-    viz::SurfaceHittestDelegate* delegate,
-    const gfx::PointF& point,
-    gfx::PointF* transformed_point,
-    bool* out_query_renderer) {
-  float device_scale_factor = ui::GetScaleFactorForNativeView(GetNativeView());
-  DCHECK(device_scale_factor != 0.0f);
-
-  // The surface hittest happens in device pixels, so we need to convert the
-  // |point| from DIPs to pixels before hittesting.
-  gfx::PointF point_in_pixels =
-      gfx::ConvertPointToPixel(device_scale_factor, point);
-  viz::SurfaceId surface_id = GetCurrentSurfaceId();
-  if (!surface_id.is_valid()) {
-    // Force a query of the renderer if we don't have a surface id yet.
-    *out_query_renderer = true;
-    return GetFrameSinkId();
-  }
-  viz::SurfaceHittest hittest(delegate,
-                              GetFrameSinkManager()->surface_manager());
-  gfx::Transform target_transform;
-  viz::SurfaceId target_local_surface_id = hittest.GetTargetSurfaceAtPoint(
-      surface_id, gfx::ToFlooredPoint(point_in_pixels), &target_transform,
-      out_query_renderer);
-  *transformed_point = point_in_pixels;
-  if (target_local_surface_id.is_valid()) {
-    target_transform.TransformPoint(transformed_point);
-  }
-  *transformed_point =
-      gfx::ConvertPointToDIP(device_scale_factor, *transformed_point);
-  // It is possible that the renderer has not yet produced a surface, in which
-  // case we return our current FrameSinkId.
-  auto frame_sink_id = target_local_surface_id.frame_sink_id();
-  return frame_sink_id.is_valid() ? frame_sink_id : GetFrameSinkId();
+bool RenderWidgetHostViewBase::ScreenRectIsUnstableFor(
+    const blink::WebInputEvent& event) {
+  return false;
 }
 
 void RenderWidgetHostViewBase::ProcessMouseEvent(
@@ -714,36 +651,12 @@ gfx::PointF RenderWidgetHostViewBase::TransformRootPointToViewCoordSpace(
   return point;
 }
 
-bool RenderWidgetHostViewBase::TransformPointToLocalCoordSpace(
-    const gfx::PointF& point,
-    const viz::SurfaceId& original_surface,
-    gfx::PointF* transformed_point) {
-  if (use_viz_hit_test_) {
-    return TransformPointToLocalCoordSpaceViz(point, original_surface,
-                                              transformed_point);
-  }
-  return TransformPointToLocalCoordSpaceLegacy(point, original_surface,
-                                               transformed_point);
-}
-
-bool RenderWidgetHostViewBase::TransformPointToLocalCoordSpaceLegacy(
-    const gfx::PointF& point,
-    const viz::SurfaceId& original_surface,
-    gfx::PointF* transformed_point) {
-  *transformed_point = point;
-  return true;
-}
-
 bool RenderWidgetHostViewBase::TransformPointToCoordSpaceForView(
     const gfx::PointF& point,
     RenderWidgetHostViewBase* target_view,
     gfx::PointF* transformed_point) {
   NOTREACHED();
   return true;
-}
-
-bool RenderWidgetHostViewBase::IsRenderWidgetHostViewGuest() {
-  return false;
 }
 
 bool RenderWidgetHostViewBase::IsRenderWidgetHostViewChildFrame() {
@@ -763,6 +676,11 @@ void RenderWidgetHostViewBase::Destroy() {
 
 bool RenderWidgetHostViewBase::CanSynchronizeVisualProperties() {
   return true;
+}
+
+std::vector<std::unique_ptr<ui::TouchEvent>>
+RenderWidgetHostViewBase::ExtractAndCancelActiveTouches() {
+  return {};
 }
 
 void RenderWidgetHostViewBase::TextInputStateChanged(
@@ -829,90 +747,38 @@ RenderWidgetHostViewBase::GetTouchSelectionControllerClientManager() {
   return nullptr;
 }
 
-void RenderWidgetHostViewBase::SetLastTabChangeStartTime(
-    base::TimeTicks start_time) {
-  last_tab_switch_start_time_ = start_time;
+void RenderWidgetHostViewBase::SetRecordContentToVisibleTimeRequest(
+    base::TimeTicks start_time,
+    base::Optional<bool> destination_is_loaded,
+    base::Optional<bool> destination_is_frozen,
+    bool show_reason_tab_switching,
+    bool show_reason_unoccluded,
+    bool show_reason_bfcache_restore) {
+  if (last_record_tab_switch_time_request_.has_value()) {
+    last_record_tab_switch_time_request_.value().UpdateRequest(
+        RecordContentToVisibleTimeRequest(
+            start_time, destination_is_loaded, destination_is_frozen,
+            show_reason_tab_switching, show_reason_unoccluded,
+            show_reason_bfcache_restore));
+  } else {
+    last_record_tab_switch_time_request_.emplace(
+        start_time, destination_is_loaded, destination_is_frozen,
+        show_reason_tab_switching, show_reason_unoccluded,
+        show_reason_bfcache_restore);
+  }
 }
 
-base::TimeTicks RenderWidgetHostViewBase::GetAndResetLastTabChangeStartTime() {
-  auto stored_time = last_tab_switch_start_time_;
-  last_tab_switch_start_time_ = base::TimeTicks();
-  return stored_time;
+base::Optional<RecordContentToVisibleTimeRequest>
+RenderWidgetHostViewBase::TakeRecordContentToVisibleTimeRequest() {
+  auto stored_state = std::move(last_record_tab_switch_time_request_);
+  last_record_tab_switch_time_request_.reset();
+  return stored_state;
 }
-
-#if defined(USE_AURA)
-void RenderWidgetHostViewBase::EmbedChildFrameRendererWindowTreeClient(
-    RenderWidgetHostViewBase* root_view,
-    int routing_id,
-    ws::mojom::WindowTreeClientPtr renderer_window_tree_client) {
-  RenderWidgetHost* render_widget_host = GetRenderWidgetHost();
-  if (!render_widget_host)
-    return;
-  const int embed_id = ++next_embed_id_;
-  pending_embeds_[routing_id] = embed_id;
-  root_view->ScheduleEmbed(
-      std::move(renderer_window_tree_client),
-      base::BindOnce(&RenderWidgetHostViewBase::OnDidScheduleEmbed,
-                     GetWeakPtr(), routing_id, embed_id));
-}
-
-void RenderWidgetHostViewBase::OnChildFrameDestroyed(int routing_id) {
-  pending_embeds_.erase(routing_id);
-  // Tests may not create |render_widget_window_tree_client_| (tests don't
-  // necessarily create RenderWidgetHostViewAura).
-  if (render_widget_window_tree_client_)
-    render_widget_window_tree_client_->DestroyFrame(routing_id);
-}
-#endif
 
 void RenderWidgetHostViewBase::SynchronizeVisualProperties() {
   if (host())
     host()->SynchronizeVisualProperties();
 }
-
-#if defined(USE_AURA)
-void RenderWidgetHostViewBase::OnDidScheduleEmbed(
-    int routing_id,
-    int embed_id,
-    const base::UnguessableToken& token) {
-  auto iter = pending_embeds_.find(routing_id);
-  if (iter == pending_embeds_.end() || iter->second != embed_id)
-    return;
-  pending_embeds_.erase(iter);
-  // Tests may not create |render_widget_window_tree_client_| (tests don't
-  // necessarily create RenderWidgetHostViewAura).
-  if (render_widget_window_tree_client_)
-    render_widget_window_tree_client_->Embed(routing_id, token);
-}
-
-void RenderWidgetHostViewBase::ScheduleEmbed(
-    ws::mojom::WindowTreeClientPtr client,
-    base::OnceCallback<void(const base::UnguessableToken&)> callback) {
-  NOTREACHED();
-}
-
-ws::mojom::WindowTreeClientPtr
-RenderWidgetHostViewBase::GetWindowTreeClientFromRenderer() {
-  // NOTE: this function may be called multiple times.
-  RenderWidgetHost* render_widget_host = GetRenderWidgetHost();
-  mojom::RenderWidgetWindowTreeClientFactoryPtr factory;
-  BindInterface(render_widget_host->GetProcess(), &factory);
-
-  ws::mojom::WindowTreeClientPtr window_tree_client;
-  factory->CreateWindowTreeClientForRenderWidget(
-      render_widget_host->GetRoutingID(),
-      mojo::MakeRequest(&window_tree_client),
-      mojo::MakeRequest(&render_widget_window_tree_client_));
-  return window_tree_client;
-}
-
-#endif
-
-#if defined(OS_MACOSX)
-bool RenderWidgetHostViewBase::ShouldContinueToPauseForFrame() {
-  return false;
-}
-#endif
 
 void RenderWidgetHostViewBase::DidNavigate() {
   if (host())
@@ -926,7 +792,8 @@ bool RenderWidgetHostViewBase::TransformPointToTargetCoordSpace(
     RenderWidgetHostViewBase* target_view,
     const gfx::PointF& point,
     gfx::PointF* transformed_point) const {
-  DCHECK(use_viz_hit_test_);
+  DCHECK(original_view);
+  DCHECK(target_view);
   viz::FrameSinkId root_frame_sink_id = original_view->GetRootFrameSinkId();
   if (!root_frame_sink_id.is_valid())
     return false;
@@ -940,36 +807,22 @@ bool RenderWidgetHostViewBase::TransformPointToTargetCoordSpace(
   std::vector<viz::FrameSinkId> target_ancestors;
   target_ancestors.push_back(target_view->GetFrameSinkId());
 
-  // Optimization using |target_ancestors| does not work with Window Service
-  // because the top-level window's ClientRoot registers a frame sink id that
-  // could not be derived here. HisTestQuery::TransformLocationForTarget fails
-  // because of the missed chain in |target_ancestors|. Passing only the target
-  // if Window Service used and TransformLocationForTarget would fallback to
-  // use GetTransformToTarget.
-  // TODO(crbug.com/895029): Bring back |target_ancestors| optimization for WS.
-  if (!features::IsUsingWindowService()) {
-    RenderWidgetHostViewBase* cur_view = target_view;
-    while (cur_view->IsRenderWidgetHostViewChildFrame()) {
-      if (cur_view->IsRenderWidgetHostViewGuest()) {
-        cur_view = static_cast<RenderWidgetHostViewGuest*>(cur_view)
-                       ->GetOwnerRenderWidgetHostView();
-      } else {
-        cur_view = static_cast<RenderWidgetHostViewChildFrame*>(cur_view)
-                       ->GetParentView();
-      }
-      if (!cur_view)
-        return false;
-      target_ancestors.push_back(cur_view->GetFrameSinkId());
-    }
-    target_ancestors.push_back(root_frame_sink_id);
+  RenderWidgetHostViewBase* cur_view = target_view;
+  while (cur_view->IsRenderWidgetHostViewChildFrame()) {
+    cur_view =
+        static_cast<RenderWidgetHostViewChildFrame*>(cur_view)->GetParentView();
+    if (!cur_view)
+      return false;
+    target_ancestors.push_back(cur_view->GetFrameSinkId());
   }
+  target_ancestors.push_back(root_frame_sink_id);
 
   float device_scale_factor = original_view->GetDeviceScaleFactor();
   DCHECK_GT(device_scale_factor, 0.0f);
   gfx::Point3F point_in_pixels(
       gfx::ConvertPointToPixel(device_scale_factor, point));
-  // TODO(riajiang): Optimize so that |point_in_pixels| doesn't need to be in
-  // the coordinate space of the root surface in HitTestQuery.
+  // TODO(crbug.com/966995): Optimize so that |point_in_pixels| doesn't need to
+  // be in the coordinate space of the root surface in HitTestQuery.
   gfx::Transform transform_root_to_original;
   query->GetTransformToTarget(original_view->GetFrameSinkId(),
                               &transform_root_to_original);
@@ -993,8 +846,6 @@ bool RenderWidgetHostViewBase::GetTransformToViewCoordSpace(
     return true;
   }
 
-  if (!use_viz_hit_test_)
-    return false;
   viz::FrameSinkId root_frame_sink_id = GetRootFrameSinkId();
   if (!root_frame_sink_id.is_valid())
     return false;
@@ -1042,11 +893,10 @@ bool RenderWidgetHostViewBase::GetTransformToViewCoordSpace(
   return true;
 }
 
-bool RenderWidgetHostViewBase::TransformPointToLocalCoordSpaceViz(
+bool RenderWidgetHostViewBase::TransformPointToLocalCoordSpace(
     const gfx::PointF& point,
     const viz::SurfaceId& original_surface,
     gfx::PointF* transformed_point) {
-  DCHECK(use_viz_hit_test_);
   viz::FrameSinkId original_frame_sink_id = original_surface.frame_sink_id();
   viz::FrameSinkId target_frame_sink_id = GetFrameSinkId();
   if (!original_frame_sink_id.is_valid() || !target_frame_sink_id.is_valid())

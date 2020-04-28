@@ -30,6 +30,7 @@ class FilterOperations;
 class Occlusion;
 class LayerImpl;
 class LayerTreeImpl;
+class PictureLayerImpl;
 
 class CC_EXPORT RenderSurfaceImpl {
  public:
@@ -61,7 +62,6 @@ class CC_EXPORT RenderSurfaceImpl {
   }
 
   SkBlendMode BlendMode() const;
-  bool UsesDefaultBlendMode() const;
 
   void SetNearestOcclusionImmuneAncestor(const RenderSurfaceImpl* surface) {
     nearest_occlusion_immune_ancestor_ = surface;
@@ -121,6 +121,15 @@ class CC_EXPORT RenderSurfaceImpl {
     return is_render_surface_list_member_;
   }
 
+  void set_can_use_cached_backdrop_filtered_result(
+      bool can_use_cached_backdrop_filtered_result) {
+    can_use_cached_backdrop_filtered_result_ =
+        can_use_cached_backdrop_filtered_result;
+  }
+  bool can_use_cached_backdrop_filtered_result() const {
+    return can_use_cached_backdrop_filtered_result_;
+  }
+
   void CalculateContentRectFromAccumulatedContentRect(int max_texture_size);
   void SetContentRectToViewport();
   void SetContentRectForTesting(const gfx::Rect& rect);
@@ -153,13 +162,12 @@ class CC_EXPORT RenderSurfaceImpl {
 
   uint64_t id() const { return stable_id_; }
 
-  LayerImpl* MaskLayer();
-  bool HasMask() const;
   bool HasMaskingContributingSurface() const;
 
   const FilterOperations& Filters() const;
   const FilterOperations& BackdropFilters() const;
-  const gfx::RRectF& BackdropFilterBounds() const;
+  base::Optional<gfx::RRectF> BackdropFilterBounds() const;
+  LayerImpl* BackdropMaskLayer() const;
   gfx::PointF FiltersOrigin() const;
   gfx::Transform SurfaceScale() const;
 
@@ -180,6 +188,9 @@ class CC_EXPORT RenderSurfaceImpl {
   gfx::Rect GetDamageRect() const;
 
   std::unique_ptr<viz::RenderPass> CreateRenderPass();
+  viz::ResourceId GetMaskResourceFromLayer(PictureLayerImpl* mask_layer,
+                                           gfx::Size* mask_texture_size,
+                                           gfx::RectF* mask_uv_rect) const;
   void AppendQuads(DrawMode draw_mode,
                    viz::RenderPass* render_pass,
                    AppendQuadsData* append_quads_data);
@@ -246,6 +257,7 @@ class CC_EXPORT RenderSurfaceImpl {
 
   bool contributes_to_drawn_surface_ : 1;
   bool is_render_surface_list_member_ : 1;
+  bool can_use_cached_backdrop_filtered_result_ : 1;
 
   Occlusion occlusion_in_content_space_;
 

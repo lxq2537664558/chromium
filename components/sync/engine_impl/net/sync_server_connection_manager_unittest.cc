@@ -55,8 +55,6 @@ class BlockingHttpPost : public HttpPostProviderInterface {
 class BlockingHttpPostFactory : public HttpPostProviderFactory {
  public:
   ~BlockingHttpPostFactory() override {}
-  void Init(const std::string& user_agent,
-            const BindToTrackerCallback& bind_to_tracker_callback) override {}
 
   HttpPostProviderInterface* Create() override {
     return new BlockingHttpPost();
@@ -72,41 +70,41 @@ class BlockingHttpPostFactory : public HttpPostProviderFactory {
 TEST(SyncServerConnectionManagerTest, VeryEarlyAbortPost) {
   CancelationSignal signal;
   signal.Signal();
-  SyncServerConnectionManager server("server", 0, true,
-                                     new BlockingHttpPostFactory(), &signal);
+  SyncServerConnectionManager server(
+      "server", 0, true, std::make_unique<BlockingHttpPostFactory>(), &signal);
 
-  ServerConnectionManager::PostBufferParams params;
+  std::string buffer_out;
+  HttpResponse http_response = HttpResponse::Uninitialized();
 
-  bool result = server.PostBufferToPath(&params, "/testpath", "testauth");
+  bool result = server.PostBufferToPath("", "/testpath", "testauth",
+                                        &buffer_out, &http_response);
 
   EXPECT_FALSE(result);
-  EXPECT_EQ(HttpResponse::CONNECTION_UNAVAILABLE,
-            params.response.server_status);
+  EXPECT_EQ(HttpResponse::CONNECTION_UNAVAILABLE, http_response.server_status);
 }
 
 // Ask the ServerConnectionManager to stop before its first request is made.
 TEST(SyncServerConnectionManagerTest, EarlyAbortPost) {
   CancelationSignal signal;
-  SyncServerConnectionManager server("server", 0, true,
-                                     new BlockingHttpPostFactory(), &signal);
+  SyncServerConnectionManager server(
+      "server", 0, true, std::make_unique<BlockingHttpPostFactory>(), &signal);
 
-  ServerConnectionManager::PostBufferParams params;
+  std::string buffer_out;
+  HttpResponse http_response = HttpResponse::Uninitialized();
 
   signal.Signal();
-  bool result = server.PostBufferToPath(&params, "/testpath", "testauth");
+  bool result = server.PostBufferToPath("", "/testpath", "testauth",
+                                        &buffer_out, &http_response);
 
   EXPECT_FALSE(result);
-  EXPECT_EQ(HttpResponse::CONNECTION_UNAVAILABLE,
-            params.response.server_status);
+  EXPECT_EQ(HttpResponse::CONNECTION_UNAVAILABLE, http_response.server_status);
 }
 
 // Ask the ServerConnectionManager to stop during a request.
 TEST(SyncServerConnectionManagerTest, AbortPost) {
   CancelationSignal signal;
-  SyncServerConnectionManager server("server", 0, true,
-                                     new BlockingHttpPostFactory(), &signal);
-
-  ServerConnectionManager::PostBufferParams params;
+  SyncServerConnectionManager server(
+      "server", 0, true, std::make_unique<BlockingHttpPostFactory>(), &signal);
 
   base::Thread abort_thread("Test_AbortThread");
   ASSERT_TRUE(abort_thread.Start());
@@ -115,11 +113,14 @@ TEST(SyncServerConnectionManagerTest, AbortPost) {
       base::BindOnce(&CancelationSignal::Signal, base::Unretained(&signal)),
       TestTimeouts::tiny_timeout());
 
-  bool result = server.PostBufferToPath(&params, "/testpath", "testauth");
+  std::string buffer_out;
+  HttpResponse http_response = HttpResponse::Uninitialized();
+
+  bool result = server.PostBufferToPath("", "/testpath", "testauth",
+                                        &buffer_out, &http_response);
 
   EXPECT_FALSE(result);
-  EXPECT_EQ(HttpResponse::CONNECTION_UNAVAILABLE,
-            params.response.server_status);
+  EXPECT_EQ(HttpResponse::CONNECTION_UNAVAILABLE, http_response.server_status);
   abort_thread.Stop();
 }
 
@@ -158,8 +159,6 @@ class FailingHttpPostFactory : public HttpPostProviderFactory {
   explicit FailingHttpPostFactory(int net_error_code)
       : net_error_code_(net_error_code) {}
   ~FailingHttpPostFactory() override {}
-  void Init(const std::string& user_agent,
-            const BindToTrackerCallback& bind_to_tracker_callback) override {}
 
   HttpPostProviderInterface* Create() override {
     return new FailingHttpPost(net_error_code_);
@@ -180,16 +179,17 @@ class FailingHttpPostFactory : public HttpPostProviderFactory {
 TEST(SyncServerConnectionManagerTest, FailPostWithTimedOut) {
   CancelationSignal signal;
   SyncServerConnectionManager server(
-      "server", 0, true, new FailingHttpPostFactory(net::ERR_TIMED_OUT),
-      &signal);
+      "server", 0, true,
+      std::make_unique<FailingHttpPostFactory>(net::ERR_TIMED_OUT), &signal);
 
-  ServerConnectionManager::PostBufferParams params;
+  std::string buffer_out;
+  HttpResponse http_response = HttpResponse::Uninitialized();
 
-  bool result = server.PostBufferToPath(&params, "/testpath", "testauth");
+  bool result = server.PostBufferToPath("", "/testpath", "testauth",
+                                        &buffer_out, &http_response);
 
   EXPECT_FALSE(result);
-  EXPECT_EQ(HttpResponse::CONNECTION_UNAVAILABLE,
-            params.response.server_status);
+  EXPECT_EQ(HttpResponse::CONNECTION_UNAVAILABLE, http_response.server_status);
 }
 
 }  // namespace syncer

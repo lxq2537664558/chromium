@@ -6,7 +6,7 @@
 
 #include <stddef.h>
 
-#include "base/logging.h"
+#include "base/check.h"
 #include "base/run_loop.h"
 #include "base/stl_util.h"
 #include "base/strings/stringprintf.h"
@@ -25,7 +25,6 @@
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_test_utils.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
-#include "ui/base/ui_base_features.h"
 #include "ui/events/keycodes/keyboard_codes.h"
 
 // TODO(kbr): remove: http://crbug.com/222296
@@ -295,13 +294,7 @@ class BrowserKeyEventsTest : public InProcessBrowserTest {
   }
 };
 
-#if defined(OS_MACOSX)
-// http://crbug.com/81451
-#define MAYBE_NormalKeyEvents DISABLED_NormalKeyEvents
-#else
-#define MAYBE_NormalKeyEvents NormalKeyEvents
-#endif
-IN_PROC_BROWSER_TEST_F(BrowserKeyEventsTest, MAYBE_NormalKeyEvents) {
+IN_PROC_BROWSER_TEST_F(BrowserKeyEventsTest, NormalKeyEvents) {
   static const KeyEventTestData kTestNoInput[] = {
     // a
     { ui::VKEY_A, false, false, false, false,
@@ -528,14 +521,6 @@ IN_PROC_BROWSER_TEST_F(BrowserKeyEventsTest, CommandKeyEvents) {
 #define MAYBE_AccessKeys AccessKeys
 #endif
 IN_PROC_BROWSER_TEST_F(BrowserKeyEventsTest, MAYBE_AccessKeys) {
-  // TODO(crbug.com/916379): this test fails in mash because of differences in
-  // timing. In particular, in classic mode an accelerator that moves focus is
-  // processed *after* text is inserted, where as now the accelerator runs
-  // first, resulting in text going to the wrong place. The right fix likely
-  // entails updating the test for mash.
-  if (features::IsSingleProcessMash())
-    return;
-
 #if defined(OS_MACOSX)
   // On Mac, access keys use ctrl+alt modifiers.
   static const KeyEventTestData kTestAccessA = {
@@ -666,9 +651,7 @@ IN_PROC_BROWSER_TEST_F(BrowserKeyEventsTest, ReservedAccelerators) {
 #endif
   };
 
-  content::WindowedNotificationObserver wait_for_new_tab(
-      chrome::NOTIFICATION_TAB_PARENTED,
-      content::NotificationService::AllSources());
+  ui_test_utils::TabAddedWaiter wait_for_new_tab(browser());
 
   // Press Ctrl/Cmd+T, which will open a new tab. It cannot be suppressed.
   EXPECT_NO_FATAL_FAILURE(TestKeyEvent(0, kTestCtrlOrCmdT));
@@ -712,9 +695,6 @@ IN_PROC_BROWSER_TEST_F(BrowserKeyEventsTest, ReservedAccelerators) {
 
 #if defined(OS_MACOSX)
 IN_PROC_BROWSER_TEST_F(BrowserKeyEventsTest, EditorKeyBindings) {
-  // TODO(kbr): re-enable: http://crbug.com/222296
-  return;
-
   static const KeyEventTestData kTestCtrlA = {
     ui::VKEY_A, true, false, false, false,
     false, false, false, false, 4,

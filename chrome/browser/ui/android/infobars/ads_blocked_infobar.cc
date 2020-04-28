@@ -8,7 +8,7 @@
 
 #include "base/android/jni_android.h"
 #include "base/android/jni_string.h"
-#include "jni/AdsBlockedInfoBar_jni.h"
+#include "chrome/android/chrome_jni_headers/AdsBlockedInfoBar_jni.h"
 
 using base::android::JavaParamRef;
 
@@ -35,7 +35,7 @@ AdsBlockedInfoBar::CreateRenderInfoBar(JNIEnv* env) {
 
   ScopedJavaLocalRef<jstring> toggle_text =
       ConvertUTF16ToJavaString(env, ads_blocked_delegate->GetToggleText());
-  return Java_AdsBlockedInfoBar_show(env, GetEnumeratedIconId(), message_text,
+  return Java_AdsBlockedInfoBar_show(env, GetJavaIconId(), message_text,
                                      ok_button_text, reload_button_text,
                                      toggle_text, explanation_message);
 }

@@ -56,8 +56,6 @@ class SVGMarkerElement final : public SVGElement, public SVGFitToViewBox {
     kSvgMarkerOrientAngle = kSVGMarkerOrientAngle
   };
 
-  DECLARE_NODE_FACTORY(SVGMarkerElement);
-
   explicit SVGMarkerElement(Document&);
 
   AffineTransform ViewBoxToViewTransform(float view_width,
@@ -78,7 +76,7 @@ class SVGMarkerElement final : public SVGElement, public SVGFitToViewBox {
     return orient_angle_->OrientType();
   }
 
-  void Trace(blink::Visitor*) override;
+  void Trace(Visitor*) override;
 
  private:
   void SvgAttributeChanged(const QualifiedName&) override;

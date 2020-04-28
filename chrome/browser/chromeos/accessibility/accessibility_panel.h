@@ -7,8 +7,6 @@
 
 #include <stdint.h>
 
-#include "ash/public/interfaces/accessibility_controller.mojom.h"
-#include "ash/public/interfaces/constants.mojom.h"
 #include "base/macros.h"
 #include "content/public/browser/web_contents_delegate.h"
 #include "ui/views/widget/widget_delegate.h"
@@ -39,7 +37,7 @@ class AccessibilityPanel : public views::WidgetDelegate,
   // Closes the panel asynchronously.
   void Close();
 
-  // WidgetDelegate overrides.
+  // WidgetDelegate:
   const views::Widget* GetWidget() const override;
   views::Widget* GetWidget() override;
   void DeleteDelegate() override;
@@ -48,7 +46,6 @@ class AccessibilityPanel : public views::WidgetDelegate,
  protected:
   // Returns the web contents, so subclasses can monitor for changes.
   content::WebContents* GetWebContents();
-  static ash::mojom::AccessibilityControllerPtr GetAccessibilityController();
 
  private:
   class AccessibilityPanelWebContentsObserver;

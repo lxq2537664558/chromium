@@ -13,14 +13,14 @@
 // Asks the presenter to display the reauthenticate signin UI.
 - (void)showReauthenticateSignin;
 
-// Asks the presenter to display the sync settings UI.
-- (void)showSyncSettings;
-
 // Asks the presenter to display the sync encryption passphrase UI.
 - (void)showSyncPassphraseSettings;
 
 // Presents the Google services settings.
 - (void)showGoogleServicesSettings;
+
+// Presents the Trusted Vault reauthentication dialog.
+- (void)showTrustedVaultReauthentication;
 
 @end
 

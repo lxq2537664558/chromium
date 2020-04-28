@@ -16,17 +16,20 @@
 #include "base/strings/string_number_conversions.h"
 #include "build/build_config.h"
 #include "cc/paint/paint_canvas.h"
-#include "content/renderer/compositor/layer_tree_view.h"
+#include "content/common/widget_messages.h"
+#include "content/public/common/isolated_world_ids.h"
+#include "content/public/common/use_zoom_for_dsf_policy.h"
+#include "content/public/renderer/render_frame.h"
+#include "content/shell/common/web_test/web_test_string_util.h"
+#include "content/shell/renderer/web_test/blink_test_runner.h"
 #include "content/shell/test_runner/layout_dump.h"
 #include "content/shell/test_runner/mock_content_settings_client.h"
 #include "content/shell/test_runner/mock_screen_orientation_client.h"
 #include "content/shell/test_runner/pixel_dump.h"
 #include "content/shell/test_runner/spell_check_client.h"
-#include "content/shell/test_runner/test_common.h"
 #include "content/shell/test_runner/test_interfaces.h"
 #include "content/shell/test_runner/test_preferences.h"
 #include "content/shell/test_runner/test_runner.h"
-#include "content/shell/test_runner/web_test_delegate.h"
 #include "content/shell/test_runner/web_view_test_proxy.h"
 #include "content/shell/test_runner/web_widget_test_proxy.h"
 #include "gin/arguments.h"
@@ -35,9 +38,11 @@
 #include "gin/object_template_builder.h"
 #include "gin/wrappable.h"
 #include "third_party/blink/public/mojom/frame/find_in_page.mojom.h"
+#include "third_party/blink/public/platform/scheduler/test/renderer_scheduler_test_support.h"
 #include "third_party/blink/public/platform/web_data.h"
+#include "third_party/blink/public/platform/web_isolated_world_ids.h"
 #include "third_party/blink/public/platform/web_isolated_world_info.h"
-#include "third_party/blink/public/platform/web_point.h"
+#include "third_party/blink/public/platform/web_url.h"
 #include "third_party/blink/public/platform/web_url_response.h"
 #include "third_party/blink/public/web/blink.h"
 #include "third_party/blink/public/web/web_array_buffer.h"
@@ -47,11 +52,12 @@
 #include "third_party/blink/public/web/web_frame_widget.h"
 #include "third_party/blink/public/web/web_input_element.h"
 #include "third_party/blink/public/web/web_local_frame.h"
+#include "third_party/blink/public/web/web_manifest_manager.h"
+#include "third_party/blink/public/web/web_render_theme.h"
 #include "third_party/blink/public/web/web_script_source.h"
 #include "third_party/blink/public/web/web_security_policy.h"
 #include "third_party/blink/public/web/web_serialized_script_value.h"
 #include "third_party/blink/public/web/web_settings.h"
-#include "third_party/blink/public/web/web_surrounding_text.h"
 #include "third_party/blink/public/web/web_view.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 #include "third_party/skia/include/core/SkCanvas.h"
@@ -61,20 +67,15 @@
 #include "ui/gfx/skia_util.h"
 #include "ui/gfx/switches.h"
 
-namespace test_runner {
+namespace content {
 
 TestRunnerForSpecificView::TestRunnerForSpecificView(
     WebViewTestProxy* web_view_test_proxy)
-    : web_view_test_proxy_(web_view_test_proxy), weak_factory_(this) {
+    : web_view_test_proxy_(web_view_test_proxy) {
   Reset();
 }
 
-TestRunnerForSpecificView::~TestRunnerForSpecificView() {}
-
-void TestRunnerForSpecificView::Install(blink::WebLocalFrame* frame) {
-  web_view_test_proxy_->test_interfaces()->GetTestRunner()->Install(
-      frame, weak_factory_.GetWeakPtr());
-}
+TestRunnerForSpecificView::~TestRunnerForSpecificView() = default;
 
 void TestRunnerForSpecificView::Reset() {
   pointer_locked_ = false;
@@ -89,23 +90,24 @@ void TestRunnerForSpecificView::Reset() {
 #if !defined(OS_MACOSX) && !defined(OS_WIN)
   // (Constants copied because we can't depend on the header that defined
   // them from this file.)
-  web_view()->SetSelectionColors(0xff1e90ff, 0xff000000, 0xffc8c8c8,
-                                 0xff323232);
+  blink::SetSelectionColors(0xff1e90ff, 0xff000000, 0xffc8c8c8, 0xff323232);
 #endif
   if (web_view()->MainFrame()->IsWebLocalFrame()) {
     web_view()->MainFrame()->ToWebLocalFrame()->EnableViewSourceMode(false);
     web_view()->SetTextZoomFactor(1);
-    web_view()->SetZoomLevel(0);
     // As would the browser via IPC, set visibility on the RenderWidget then on
     // the Page.
     // TODO(danakj): This should set visibility on all RenderWidgets not just
     // the main frame.
-    // TODO(danakj): This should set visible on the RenderWidget not just the
-    // LayerTreeView.
-    main_frame_render_widget()->layer_tree_view()->SetVisible(true);
+    WidgetMsg_WasShown msg(main_frame_render_widget()->routing_id(),
+                           /*show_request_timestamp=*/base::TimeTicks(),
+                           /*was_evicted=*/false,
+                           /*record_tab_switch_time_request=*/base::nullopt);
+    main_frame_render_widget()->OnMessageReceived(msg);
   }
-  web_view_test_proxy_->ApplyPageHidden(/*hidden=*/false,
-                                        /*initial_setting=*/true);
+  web_view_test_proxy_->ApplyPageVisibilityState(
+      content::PageVisibilityState::kVisible,
+      /*initial_setting=*/true);
 }
 
 bool TestRunnerForSpecificView::RequestPointerLock() {
@@ -138,7 +140,10 @@ bool TestRunnerForSpecificView::isPointerLocked() {
 }
 
 void TestRunnerForSpecificView::PostTask(base::OnceClosure callback) {
-  delegate()->PostTask(std::move(callback));
+  // TODO(danakj): Use the frame that called the JS bindings to post the task.
+  // not the main frame.
+  blink::scheduler::GetSingleThreadTaskRunnerForTesting()->PostTask(
+      FROM_HERE, std::move(callback));
 }
 
 void TestRunnerForSpecificView::PostV8Callback(
@@ -226,14 +231,40 @@ void TestRunnerForSpecificView::CapturePixelsAsyncThen(
       << "Web tests harness doesn't currently support running "
       << "testRuner.capturePixelsAsyncThen from an OOPIF";
 
-  web_view_test_proxy_->test_interfaces()->GetTestRunner()->DumpPixelsAsync(
-      web_view_test_proxy_,
-      base::BindOnce(&TestRunnerForSpecificView::CapturePixelsCallback,
-                     weak_factory_.GetWeakPtr(),
-                     std::move(persistent_callback)));
+  TestInterfaces* interfaces = web_view_test_proxy_->test_interfaces();
+
+  if (interfaces->GetTestRunner()->CanDumpPixelsFromRenderer()) {
+    // If we're grabbing pixels from printing, we do that in the renderer, and
+    // some tests actually look at the results.
+    interfaces->GetTestRunner()->DumpPixelsAsync(
+        web_view_test_proxy_,
+        base::BindOnce(&TestRunnerForSpecificView::RunJSCallbackWithBitmap,
+                       weak_factory_.GetWeakPtr(),
+                       std::move(persistent_callback)));
+  } else {
+    // If we're running the compositor lifecycle then the pixels aren't
+    // available from the renderer, and they don't matter to tests.
+    // TODO(crbug.com/952399): We could stop pretending they matter and split
+    // this into a separate testRunner API that won't act like its returning
+    // pixels.
+    main_frame_render_widget()->RequestPresentation(base::BindOnce(
+        &TestRunnerForSpecificView::RunJSCallbackAfterCompositorLifecycle,
+        weak_factory_.GetWeakPtr(), std::move(persistent_callback)));
+  }
 }
 
-void TestRunnerForSpecificView::CapturePixelsCallback(
+void TestRunnerForSpecificView::RunJSCallbackAfterCompositorLifecycle(
+    v8::UniquePersistent<v8::Function> callback,
+    const gfx::PresentationFeedback&) {
+  // TODO(crbug.com/952399): We're not testing pixels on this path, remove the
+  // SkBitmap plumbing entirely and rename CapturePixels* to RunLifecycle*.
+  SkBitmap bitmap;
+  bitmap.allocN32Pixels(1, 1);
+  bitmap.eraseColor(0);
+  RunJSCallbackWithBitmap(std::move(callback), bitmap);
+}
+
+void TestRunnerForSpecificView::RunJSCallbackWithBitmap(
     v8::UniquePersistent<v8::Function> callback,
     const SkBitmap& snapshot) {
   v8::Isolate* isolate = blink::MainThreadIsolate();
@@ -281,13 +312,15 @@ void TestRunnerForSpecificView::CopyImageAtAndCapturePixelsAsyncThen(
       blink::MainThreadIsolate(), callback);
   CopyImageAtAndCapturePixels(
       web_view()->MainFrame()->ToWebLocalFrame(), x, y,
-      base::BindOnce(&TestRunnerForSpecificView::CapturePixelsCallback,
+      base::BindOnce(&TestRunnerForSpecificView::RunJSCallbackWithBitmap,
                      weak_factory_.GetWeakPtr(),
                      std::move(persistent_callback)));
 }
 
 void TestRunnerForSpecificView::GetManifestThen(
     v8::Local<v8::Function> callback) {
+  // TODO(danakj): Move GetManifestThen method to per-frame TestRunnerBindings,
+  // instead of per-view bindings. Then we don't need to find a (main) frame.
   if (!web_view()->MainFrame()->IsWebLocalFrame()) {
     CHECK(false) << "This function cannot be called if the main frame is not a "
                     "local frame.";
@@ -296,8 +329,8 @@ void TestRunnerForSpecificView::GetManifestThen(
   v8::UniquePersistent<v8::Function> persistent_callback(
       blink::MainThreadIsolate(), callback);
 
-  delegate()->FetchManifest(
-      web_view(),
+  blink::WebManifestManager::RequestManifestForTesting(
+      web_view()->MainFrame()->ToWebLocalFrame(),
       base::BindOnce(&TestRunnerForSpecificView::GetManifestCallback,
                      weak_factory_.GetWeakPtr(),
                      std::move(persistent_callback)));
@@ -305,14 +338,14 @@ void TestRunnerForSpecificView::GetManifestThen(
 
 void TestRunnerForSpecificView::GetManifestCallback(
     v8::UniquePersistent<v8::Function> callback,
-    const GURL& manifest_url,
+    const blink::WebURL& manifest_url,
     const blink::Manifest& manifest) {
   PostV8CallbackWithArgs(std::move(callback), 0, nullptr);
 }
 
 void TestRunnerForSpecificView::GetBluetoothManualChooserEvents(
     v8::Local<v8::Function> callback) {
-  return delegate()->GetBluetoothManualChooserEvents(base::BindOnce(
+  return blink_test_runner()->GetBluetoothManualChooserEvents(base::BindOnce(
       &TestRunnerForSpecificView::GetBluetoothManualChooserEventsCallback,
       weak_factory_.GetWeakPtr(),
       v8::UniquePersistent<v8::Function>(blink::MainThreadIsolate(),
@@ -343,51 +376,24 @@ void TestRunnerForSpecificView::GetBluetoothManualChooserEventsCallback(
 void TestRunnerForSpecificView::SetBluetoothFakeAdapter(
     const std::string& adapter_name,
     v8::Local<v8::Function> callback) {
-  delegate()->SetBluetoothFakeAdapter(
+  blink_test_runner()->SetBluetoothFakeAdapter(
       adapter_name, CreateClosureThatPostsV8Callback(callback));
 }
 
 void TestRunnerForSpecificView::SetBluetoothManualChooser(bool enable) {
-  delegate()->SetBluetoothManualChooser(enable);
+  blink_test_runner()->SetBluetoothManualChooser(enable);
 }
 
 void TestRunnerForSpecificView::SendBluetoothManualChooserEvent(
     const std::string& event,
     const std::string& argument) {
-  delegate()->SendBluetoothManualChooserEvent(event, argument);
-}
-
-void TestRunnerForSpecificView::SetBackingScaleFactor(
-    double value,
-    v8::Local<v8::Function> callback) {
-  delegate()->SetDeviceScaleFactor(value);
-
-  // TODO(oshima): remove this callback argument when all platforms are migrated
-  // to use-zoom-for-dsf by default
-  v8::UniquePersistent<v8::Function> global_callback(blink::MainThreadIsolate(),
-                                                     callback);
-  v8::Local<v8::Value> arg = v8::Boolean::New(
-      blink::MainThreadIsolate(), delegate()->IsUseZoomForDSFEnabled());
-  PostV8CallbackWithArgs(std::move(global_callback), 1, &arg);
-}
-
-void TestRunnerForSpecificView::EnableUseZoomForDSF(
-    v8::Local<v8::Function> callback) {
-  delegate()->EnableUseZoomForDSF();
-  PostV8Callback(callback);
-}
-
-void TestRunnerForSpecificView::SetColorProfile(
-    const std::string& name,
-    v8::Local<v8::Function> callback) {
-  delegate()->SetDeviceColorSpace(name);
-  PostV8Callback(callback);
+  blink_test_runner()->SendBluetoothManualChooserEvent(event, argument);
 }
 
 void TestRunnerForSpecificView::DispatchBeforeInstallPromptEvent(
     const std::vector<std::string>& event_platforms,
     v8::Local<v8::Function> callback) {
-  delegate()->DispatchBeforeInstallPromptEvent(
+  blink_test_runner()->DispatchBeforeInstallPromptEvent(
       event_platforms,
       base::BindOnce(
           &TestRunnerForSpecificView::DispatchBeforeInstallPromptCallback,
@@ -415,7 +421,7 @@ void TestRunnerForSpecificView::DispatchBeforeInstallPromptCallback(
 }
 
 void TestRunnerForSpecificView::RunIdleTasks(v8::Local<v8::Function> callback) {
-  delegate()->RunIdleTasks(CreateClosureThatPostsV8Callback(callback));
+  blink_test_runner()->RunIdleTasks(CreateClosureThatPostsV8Callback(callback));
 }
 
 void TestRunnerForSpecificView::SetTabKeyCyclesThroughElements(
@@ -440,56 +446,59 @@ void TestRunnerForSpecificView::ExecCommand(gin::Arguments* args) {
       blink::WebString::FromUTF8(command), blink::WebString::FromUTF8(value));
 }
 
+void TestRunnerForSpecificView::TriggerTestInspectorIssue() {
+  web_view()->FocusedFrame()->AddInspectorIssue(
+      blink::mojom::InspectorIssueCode::kSameSiteCookieIssue);
+}
+
 bool TestRunnerForSpecificView::IsCommandEnabled(const std::string& command) {
   return web_view()->FocusedFrame()->IsCommandEnabled(
       blink::WebString::FromUTF8(command));
 }
 
-bool TestRunnerForSpecificView::HasCustomPageSizeStyle(int page_index) {
-  // TODO(dcheng): This class has many implicit assumptions that the frames it
-  // operates on are always local.
-  blink::WebFrame* frame = web_view()->MainFrame();
-  if (!frame || frame->IsWebRemoteFrame())
-    return false;
-  return frame->ToWebLocalFrame()->HasCustomPageSizeStyle(page_index);
-}
-
 void TestRunnerForSpecificView::ForceRedSelectionColors() {
-  web_view()->SetSelectionColors(0xffee0000, 0xff00ee00, 0xff000000,
-                                 0xffc0c0c0);
+  blink::SetSelectionColors(0xffee0000, 0xff00ee00, 0xff000000, 0xffc0c0c0);
 }
 
 void TestRunnerForSpecificView::SetPageVisibility(
     const std::string& new_visibility) {
-  bool hidden;
-  if (new_visibility == "visible")
-    hidden = false;
-  else if (new_visibility == "hidden")
-    hidden = true;
-  else
+  content::PageVisibilityState visibility;
+  if (new_visibility == "visible") {
+    visibility = content::PageVisibilityState::kVisible;
+  } else if (new_visibility == "hidden") {
+    visibility = content::PageVisibilityState::kHidden;
+  } else {
     return;
+  }
 
   // As would the browser via IPC, set visibility on the RenderWidget then on
   // the Page.
   // TODO(danakj): This should set visibility on all RenderWidgets not just the
   // main frame.
-  // TODO(danakj): This should set visible on the RenderWidget not just the
-  // LayerTreeView.
-  main_frame_render_widget()->layer_tree_view()->SetVisible(!hidden);
-  web_view_test_proxy_->ApplyPageHidden(/*hidden=*/hidden,
-                                        /*initial_setting=*/false);
+  if (visibility == content::PageVisibilityState::kVisible) {
+    WidgetMsg_WasShown msg(main_frame_render_widget()->routing_id(),
+                           /*show_request_timestamp=*/base::TimeTicks(),
+                           /*was_evicted=*/false,
+                           /*record_tab_switch_time_request=*/base::nullopt);
+    main_frame_render_widget()->OnMessageReceived(msg);
+  } else {
+    WidgetMsg_WasHidden msg(main_frame_render_widget()->routing_id());
+    main_frame_render_widget()->OnMessageReceived(msg);
+  }
+  web_view_test_proxy_->ApplyPageVisibilityState(visibility,
+                                                 /*initial_setting=*/false);
 }
 
 void TestRunnerForSpecificView::SetTextDirection(
     const std::string& direction_name) {
-  // Map a direction name to a WebTextDirection value.
-  blink::WebTextDirection direction;
+  // Map a direction name to a base::i18n::TextDirection value.
+  base::i18n::TextDirection direction;
   if (direction_name == "auto")
-    direction = blink::kWebTextDirectionDefault;
+    direction = base::i18n::UNKNOWN_DIRECTION;
   else if (direction_name == "rtl")
-    direction = blink::kWebTextDirectionRightToLeft;
+    direction = base::i18n::RIGHT_TO_LEFT;
   else if (direction_name == "ltr")
-    direction = blink::kWebTextDirectionLeftToRight;
+    direction = base::i18n::LEFT_TO_RIGHT;
   else
     return;
 
@@ -574,7 +583,7 @@ void TestRunnerForSpecificView::SetDomainRelaxationForbiddenForURLScheme(
 
 v8::Local<v8::Value>
 TestRunnerForSpecificView::EvaluateScriptInIsolatedWorldAndReturnValue(
-    int world_id,
+    int32_t world_id,
     const std::string& script) {
   blink::WebScriptSource source(blink::WebString::FromUTF8(script));
   // This relies on the iframe focusing itself when it loads. This is a bit
@@ -588,35 +597,48 @@ TestRunnerForSpecificView::EvaluateScriptInIsolatedWorldAndReturnValue(
 }
 
 void TestRunnerForSpecificView::EvaluateScriptInIsolatedWorld(
-    int world_id,
+    int32_t world_id,
     const std::string& script) {
   blink::WebScriptSource source(blink::WebString::FromUTF8(script));
   web_view()->FocusedFrame()->ExecuteScriptInIsolatedWorld(world_id, source);
 }
 
 void TestRunnerForSpecificView::SetIsolatedWorldInfo(
-    int world_id,
+    int32_t world_id,
     v8::Local<v8::Value> security_origin,
     v8::Local<v8::Value> content_security_policy) {
-  CHECK(security_origin->IsString() || security_origin->IsNull());
-  CHECK(content_security_policy->IsString() ||
-        content_security_policy->IsNull());
+  if (world_id <= content::ISOLATED_WORLD_ID_GLOBAL ||
+      world_id >= blink::IsolatedWorldId::kEmbedderWorldIdLimit) {
+    return;
+  }
+
+  if (!security_origin->IsString() && !security_origin->IsNull())
+    return;
+
+  if (!content_security_policy->IsString() &&
+      !content_security_policy->IsNull()) {
+    return;
+  }
 
   // If |content_security_policy| is specified, |security_origin| must also be
   // specified.
-  CHECK(content_security_policy->IsNull() || security_origin->IsString());
+  if (content_security_policy->IsString() && security_origin->IsNull())
+    return;
 
   blink::WebIsolatedWorldInfo info;
   if (security_origin->IsString()) {
-    info.security_origin =
-        blink::WebSecurityOrigin::CreateFromString(V8StringToWebString(
+    info.security_origin = blink::WebSecurityOrigin::CreateFromString(
+        web_test_string_util::V8StringToWebString(
             blink::MainThreadIsolate(), security_origin.As<v8::String>()));
   }
 
   if (content_security_policy->IsString()) {
-    info.content_security_policy = V8StringToWebString(
+    info.content_security_policy = web_test_string_util::V8StringToWebString(
         blink::MainThreadIsolate(), content_security_policy.As<v8::String>());
   }
+
+  // Clear the document->isolated world CSP mapping.
+  web_view()->FocusedFrame()->ClearIsolatedWorldCSPForTesting(world_id);
 
   web_view()->FocusedFrame()->SetIsolatedWorldInfo(world_id, info);
 }
@@ -625,6 +647,24 @@ void TestRunner::InsertStyleSheet(const std::string& source_code) {
   blink::WebLocalFrame::FrameForCurrentContext()
       ->GetDocument()
       .InsertStyleSheet(blink::WebString::FromUTF8(source_code));
+}
+
+// Sets the network service-global Trust Tokens key commitments.
+// |raw_commitments| should be JSON-encoded according to the format expected
+// by NetworkService::SetTrustTokenKeyCommitments.
+void TestRunnerForSpecificView::SetTrustTokenKeyCommitments(
+    const std::string& raw_commitments,
+    v8::Local<v8::Function> callback) {
+  blink_test_runner()->SetTrustTokenKeyCommitments(
+      raw_commitments, CreateClosureThatPostsV8Callback(callback));
+}
+
+// Clears persistent Trust Tokens state
+// (https://github.com/wicg/trust-token-api) via a test-only Mojo interface.
+void TestRunnerForSpecificView::ClearTrustTokenState(
+    v8::Local<v8::Function> callback) {
+  blink_test_runner()->ClearTrustTokenState(
+      CreateClosureThatPostsV8Callback(callback));
 }
 
 bool TestRunnerForSpecificView::FindString(
@@ -678,15 +718,16 @@ blink::WebLocalFrame* TestRunnerForSpecificView::GetLocalMainFrame() {
 }
 
 WebWidgetTestProxy* TestRunnerForSpecificView::main_frame_render_widget() {
-  return static_cast<WebWidgetTestProxy*>(web_view_test_proxy_->GetWidget());
+  return static_cast<WebWidgetTestProxy*>(
+      web_view_test_proxy_->GetMainRenderFrame()->GetLocalRootRenderWidget());
 }
 
 blink::WebView* TestRunnerForSpecificView::web_view() {
-  return web_view_test_proxy_->webview();
+  return web_view_test_proxy_->GetWebView();
 }
 
-WebTestDelegate* TestRunnerForSpecificView::delegate() {
-  return web_view_test_proxy_->delegate();
+BlinkTestRunner* TestRunnerForSpecificView::blink_test_runner() {
+  return web_view_test_proxy_->blink_test_runner();
 }
 
-}  // namespace test_runner
+}  // namespace content

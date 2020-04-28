@@ -4,8 +4,9 @@
 
 #include "base/memory/memory_pressure_monitor.h"
 
-#include "base/logging.h"
+#include "base/check.h"
 #include "base/metrics/histogram_macros.h"
+#include "base/notreached.h"
 
 namespace base {
 namespace {
@@ -39,6 +40,9 @@ MemoryPressureLevelUMA MemoryPressureLevelToUmaEnumValue(
 }
 
 }  // namespace
+
+const base::TimeDelta MemoryPressureMonitor::kUMAMemoryPressureLevelPeriod =
+    base::TimeDelta::FromSeconds(5);
 
 MemoryPressureMonitor::MemoryPressureMonitor() {
   DCHECK(!g_monitor);

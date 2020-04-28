@@ -15,9 +15,9 @@
 #include "components/offline_items_collection/core/android/offline_item_bridge.h"
 #include "components/offline_items_collection/core/android/offline_item_share_info_bridge.h"
 #include "components/offline_items_collection/core/android/offline_item_visuals_bridge.h"
+#include "components/offline_items_collection/core/jni_headers/OfflineContentAggregatorBridge_jni.h"
 #include "components/offline_items_collection/core/offline_item.h"
 #include "components/offline_items_collection/core/throttled_offline_content_provider.h"
-#include "jni/OfflineContentAggregatorBridge_jni.h"
 
 using base::android::AttachCurrentThread;
 using base::android::ConvertJavaStringToUTF8;
@@ -27,6 +27,9 @@ using base::android::ScopedJavaGlobalRef;
 using base::android::ScopedJavaLocalRef;
 
 namespace offline_items_collection {
+
+using GetVisualsOptions = OfflineContentProvider::GetVisualsOptions;
+
 namespace android {
 
 namespace {
@@ -128,9 +131,12 @@ void OfflineContentAggregatorBridge::OpenItem(
     JNIEnv* env,
     const JavaParamRef<jobject>& jobj,
     jint launch_location,
+    jboolean j_open_in_incognito,
     const JavaParamRef<jstring>& j_namespace,
     const JavaParamRef<jstring>& j_id) {
-  provider_->OpenItem(static_cast<LaunchLocation>(launch_location),
+  OpenParams open_params(static_cast<LaunchLocation>(launch_location));
+  open_params.open_in_incognito = j_open_in_incognito;
+  provider_->OpenItem(open_params,
                       JNI_OfflineContentAggregatorBridge_CreateContentId(
                           env, j_namespace, j_id));
 }
@@ -207,6 +213,7 @@ void OfflineContentAggregatorBridge::GetVisualsForItem(
   provider_->GetVisualsForItem(
       JNI_OfflineContentAggregatorBridge_CreateContentId(env, j_namespace,
                                                          j_id),
+      GetVisualsOptions::IconOnly(),
       base::BindOnce(&GetVisualsForItemHelperCallback,
                      ScopedJavaGlobalRef<jobject>(env, j_callback)));
 }
@@ -261,13 +268,16 @@ void OfflineContentAggregatorBridge::OnItemRemoved(const ContentId& id) {
       ConvertUTF8ToJavaString(env, id.id));
 }
 
-void OfflineContentAggregatorBridge::OnItemUpdated(const OfflineItem& item) {
+void OfflineContentAggregatorBridge::OnItemUpdated(
+    const OfflineItem& item,
+    const base::Optional<UpdateDelta>& update_delta) {
   if (java_ref_.is_null())
     return;
 
   JNIEnv* env = AttachCurrentThread();
   Java_OfflineContentAggregatorBridge_onItemUpdated(
-      env, java_ref_, OfflineItemBridge::CreateOfflineItem(env, item));
+      env, java_ref_, OfflineItemBridge::CreateOfflineItem(env, item),
+      OfflineItemBridge::CreateUpdateDelta(env, update_delta));
 }
 
 }  // namespace android

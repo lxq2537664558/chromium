@@ -6,7 +6,6 @@ package org.chromium.chrome.browser.login;
 
 import android.content.Context;
 import android.content.DialogInterface;
-import android.support.v7.app.AlertDialog;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.WindowManager;
@@ -14,7 +13,10 @@ import android.view.inputmethod.EditorInfo;
 import android.widget.EditText;
 import android.widget.TextView;
 
+import androidx.appcompat.app.AlertDialog;
+
 import org.chromium.chrome.R;
+import org.chromium.ui.UiUtils;
 
 /**
  * HTTP Authentication Dialog
@@ -50,17 +52,19 @@ public class LoginPrompt implements ChromeHttpAuthHandler.AutofillObserver {
         TextView explanationView = (TextView) v.findViewById(R.id.explanation);
         explanationView.setText(mAuthHandler.getMessageBody());
 
-        mDialog = new AlertDialog.Builder(mContext, R.style.Theme_Chromium_AlertDialog)
-                          .setTitle(R.string.login_dialog_title)
-                          .setView(v)
-                          .setPositiveButton(R.string.login_dialog_ok_button_label,
-                                  (DialogInterface.OnClickListener) (dialog, whichButton)
-                                          -> mAuthHandler.proceed(getUsername(), getPassword()))
-                          .setNegativeButton(R.string.cancel,
-                                  (DialogInterface.OnClickListener) (dialog,
-                                          whichButton) -> mAuthHandler.cancel())
-                          .setOnCancelListener(dialog -> mAuthHandler.cancel())
-                          .create();
+        mDialog =
+                new UiUtils
+                        .CompatibleAlertDialogBuilder(mContext, R.style.Theme_Chromium_AlertDialog)
+                        .setTitle(R.string.login_dialog_title)
+                        .setView(v)
+                        .setPositiveButton(R.string.login_dialog_ok_button_label,
+                                (DialogInterface.OnClickListener) (dialog, whichButton)
+                                        -> mAuthHandler.proceed(getUsername(), getPassword()))
+                        .setNegativeButton(R.string.cancel,
+                                (DialogInterface.OnClickListener) (dialog,
+                                        whichButton) -> mAuthHandler.cancel())
+                        .setOnCancelListener(dialog -> mAuthHandler.cancel())
+                        .create();
         mDialog.getDelegate().setHandleNativeActionModesEnabled(false);
 
         // Make the IME appear when the dialog is displayed if applicable.

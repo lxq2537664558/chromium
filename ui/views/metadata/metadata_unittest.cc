@@ -7,7 +7,8 @@
 #include "base/strings/string_number_conversions.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "testing/platform_test.h"
-#include "ui/views/metadata/metadata_macros.h"
+#include "ui/views/metadata/metadata_header_macros.h"
+#include "ui/views/metadata/metadata_impl_macros.h"
 #include "ui/views/metadata/metadata_types.h"
 #include "ui/views/view.h"
 
@@ -15,8 +16,8 @@ namespace VM = views::metadata;
 
 class MetadataTest : public PlatformTest {
  public:
-  MetadataTest() {}
-  ~MetadataTest() override {}
+  MetadataTest() = default;
+  ~MetadataTest() override = default;
 
   bool float_property_changed() const { return float_property_changed_; }
   void OnFloatPropertyChanged() { float_property_changed_ = true; }
@@ -108,7 +109,6 @@ TEST_F(MetadataTest, TestFloatMetadataPropertyAccess) {
       GetMemberMetaData(&test_obj, "FloatProperty");
 
   ASSERT_TRUE(member_data);
-
   base::string16 member_value = member_data->GetValueAsString(&test_obj);
   CHECK_EQ(member_value, base::NumberToString16(start_value));
 }
@@ -181,4 +181,10 @@ TEST_F(MetadataTest, TestTypeCacheContainsTestClass) {
   const auto& cache_meta = cache->GetCachedTypes();
   CHECK(std::find(cache_meta.begin(), cache_meta.end(), test_class_meta) !=
         cache_meta.end());
+}
+
+TEST_F(MetadataTest, TestMetaDataFile) {
+  VM::ClassMetaData* metadata = MetadataTestBaseView::MetaData();
+
+  CHECK_EQ(metadata->file(), "ui/views/metadata/metadata_unittest.cc");
 }

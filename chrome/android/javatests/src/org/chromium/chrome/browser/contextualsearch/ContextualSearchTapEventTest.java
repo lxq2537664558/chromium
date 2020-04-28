@@ -13,25 +13,30 @@ import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
+import org.mockito.Mock;
+import org.mockito.MockitoAnnotations;
 
 import org.chromium.base.test.util.CommandLineFlags;
 import org.chromium.base.test.util.Feature;
+import org.chromium.base.test.util.JniMocker;
 import org.chromium.base.test.util.Restriction;
 import org.chromium.chrome.browser.ChromeActivity;
-import org.chromium.chrome.browser.ChromeSwitches;
 import org.chromium.chrome.browser.WebContentsFactory;
 import org.chromium.chrome.browser.compositor.bottombar.OverlayPanelManager;
 import org.chromium.chrome.browser.compositor.bottombar.OverlayPanelManagerWrapper;
 import org.chromium.chrome.browser.compositor.bottombar.contextualsearch.ContextualSearchPanel;
 import org.chromium.chrome.browser.compositor.layouts.LayoutUpdateHost;
+import org.chromium.chrome.browser.flags.ChromeSwitches;
 import org.chromium.chrome.test.ChromeActivityTestRule;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
+import org.chromium.chrome.test.util.browser.Features;
 import org.chromium.components.embedder_support.view.ContentView;
 import org.chromium.content_public.browser.SelectionClient;
 import org.chromium.content_public.browser.SelectionPopupController;
 import org.chromium.content_public.browser.WebContents;
 import org.chromium.content_public.browser.test.util.TestSelectionPopupController;
 import org.chromium.content_public.browser.test.util.TestThreadUtils;
+import org.chromium.content_public.browser.test.util.WebContentsUtils;
 import org.chromium.ui.base.ActivityWindowAndroid;
 import org.chromium.ui.base.ViewAndroidDelegate;
 import org.chromium.ui.resources.dynamics.DynamicResourceLoader;
@@ -46,6 +51,12 @@ public class ContextualSearchTapEventTest {
     @Rule
     public ChromeActivityTestRule<ChromeActivity> mActivityTestRule =
             new ChromeActivityTestRule<>(ChromeActivity.class);
+
+    @Rule
+    public JniMocker mocker = new JniMocker();
+
+    @Mock
+    ContextualSearchManager.Natives mContextualSearchManagerJniMock;
 
     private ContextualSearchManagerWrapper mContextualSearchManager;
     private ContextualSearchPanel mPanel;
@@ -88,23 +99,19 @@ public class ContextualSearchTapEventTest {
                     new ActivityWindowAndroid(activity),
                     WebContents.createDefaultInternalsHolder());
             SelectionPopupController selectionPopupController =
-                    SelectionPopupController.createForTesting(webContents);
+                    WebContentsUtils.createSelectionPopupController(webContents);
             selectionPopupController.setSelectionClient(this.getContextualSearchSelectionClient());
             MockContextualSearchPolicy policy = new MockContextualSearchPolicy();
             setContextualSearchPolicy(policy);
-            mTranslateController = new MockedCSTranslateController(policy, null);
+            getSelectionController().setPolicy(policy);
         }
 
         @Override
-        public void startSearchTermResolutionRequest(String selection) {
+        public void startSearchTermResolutionRequest(String selection, boolean isExactResolve) {
             // Skip native calls and immediately "resolve" the search term.
             onSearchTermResolutionResponse(true, 200, selection, selection, "", "", false, 0, 10,
-                    "", "", "", "", QuickActionCategory.NONE, 0, "", "");
+                    "", "", "", "", QuickActionCategory.NONE, 0, "", "", 0);
         }
-
-        @Override
-        protected void nativeGatherSurroundingText(long nativeContextualSearchManager,
-                ContextualSearchContext contextualSearchContext, WebContents baseWebContents) {}
 
         /**
          * @return A stubbed SelectionPopupController for mocking text selection.
@@ -132,31 +139,6 @@ public class ContextualSearchTapEventTest {
         @Override
         protected SelectionPopupController getSelectionPopupController() {
             return mPopupController;
-        }
-    }
-
-    // --------------------------------------------------------------------------------------------
-
-    /**
-     * Translate controller that mocks out native calls.
-     */
-    private static class MockedCSTranslateController extends ContextualSearchTranslateController {
-        private static final String ENGLISH_TARGET_LANGUAGE = "en";
-        private static final String ENGLISH_ACCEPT_LANGUAGES = "en-US,en";
-
-        MockedCSTranslateController(
-                ContextualSearchPolicy policy, ContextualSearchTranslateInterface hostInterface) {
-            super(policy, hostInterface);
-        }
-
-        @Override
-        protected String getNativeAcceptLanguages() {
-            return ENGLISH_ACCEPT_LANGUAGES;
-        }
-
-        @Override
-        protected String getNativeTranslateServiceTargetLanguage() {
-            return ENGLISH_TARGET_LANGUAGE;
         }
     }
 
@@ -244,6 +226,8 @@ public class ContextualSearchTapEventTest {
     public void setUp() throws Exception {
         mActivityTestRule.startMainActivityOnBlankPage();
         final ChromeActivity activity = mActivityTestRule.getActivity();
+        MockitoAnnotations.initMocks(this);
+        mocker.mock(ContextualSearchManagerJni.TEST_HOOKS, mContextualSearchManagerJniMock);
 
         TestThreadUtils.runOnUiThreadBlocking(() -> {
             mPanelManager = new OverlayPanelManagerWrapper();
@@ -318,7 +302,8 @@ public class ContextualSearchTapEventTest {
     @SmallTest
     @Feature({"ContextualSearch"})
     @Restriction(Restriction.RESTRICTION_TYPE_NON_LOW_END_DEVICE)
-    public void testTapProcessIsRobustWhenSelectionGetsCleared() throws InterruptedException {
+    @Features.DisableFeatures("ContextualSearchLongpressResolve")
+    public void testTapProcessIsRobustWhenSelectionGetsCleared() {
         Assert.assertEquals(mPanelManager.getRequestPanelShowCount(), 0);
 
         // Fake a Tap event.

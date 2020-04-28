@@ -24,29 +24,25 @@
 
 #include "third_party/blink/renderer/core/css/css_property_names.h"
 #include "third_party/blink/renderer/core/css_value_keywords.h"
-#include "third_party/blink/renderer/core/frame/use_counter.h"
 #include "third_party/blink/renderer/core/html/list_item_ordinal.h"
 #include "third_party/blink/renderer/core/html/parser/html_parser_idioms.h"
 #include "third_party/blink/renderer/core/html_names.h"
 #include "third_party/blink/renderer/core/layout/layout_list_item.h"
+#include "third_party/blink/renderer/platform/instrumentation/use_counter.h"
 
 namespace blink {
 
-using namespace html_names;
-
-inline HTMLOListElement::HTMLOListElement(Document& document)
-    : HTMLElement(kOlTag, document),
+HTMLOListElement::HTMLOListElement(Document& document)
+    : HTMLElement(html_names::kOlTag, document),
       start_(0xBADBEEF),
       item_count_(0),
       has_explicit_start_(false),
       is_reversed_(false),
       should_recalculate_item_count_(false) {}
 
-DEFINE_NODE_FACTORY(HTMLOListElement)
-
 bool HTMLOListElement::IsPresentationAttribute(
     const QualifiedName& name) const {
-  if (name == kTypeAttr)
+  if (name == html_names::kTypeAttr)
     return true;
   return HTMLElement::IsPresentationAttribute(name);
 }
@@ -55,7 +51,7 @@ void HTMLOListElement::CollectStyleForPresentationAttribute(
     const QualifiedName& name,
     const AtomicString& value,
     MutableCSSPropertyValueSet* style) {
-  if (name == kTypeAttr) {
+  if (name == html_names::kTypeAttr) {
     if (value == "a") {
       AddPropertyToPresentationAttributeStyle(
           style, CSSPropertyID::kListStyleType, CSSValueID::kLowerAlpha);
@@ -79,7 +75,7 @@ void HTMLOListElement::CollectStyleForPresentationAttribute(
 
 void HTMLOListElement::ParseAttribute(
     const AttributeModificationParams& params) {
-  if (params.name == kStartAttr) {
+  if (params.name == html_names::kStartAttr) {
     int old_start = StartConsideringItemCount();
     int parsed_start = 0;
     bool can_parse = ParseHTMLInteger(params.new_value, parsed_start);
@@ -88,7 +84,7 @@ void HTMLOListElement::ParseAttribute(
     if (old_start == StartConsideringItemCount())
       return;
     UpdateItemValues();
-  } else if (params.name == kReversedAttr) {
+  } else if (params.name == html_names::kReversedAttr) {
     bool reversed = !params.new_value.IsNull();
     if (reversed == is_reversed_)
       return;
@@ -100,7 +96,7 @@ void HTMLOListElement::ParseAttribute(
 }
 
 void HTMLOListElement::setStart(int start) {
-  SetIntegralAttribute(kStartAttr, start);
+  SetIntegralAttribute(html_names::kStartAttr, start);
 }
 
 void HTMLOListElement::UpdateItemValues() {

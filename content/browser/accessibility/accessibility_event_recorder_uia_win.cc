@@ -13,7 +13,9 @@
 #include "base/strings/utf_string_conversions.h"
 #include "base/win/scoped_bstr.h"
 #include "base/win/scoped_com_initializer.h"
+#include "base/win/scoped_safearray.h"
 #include "base/win/scoped_variant.h"
+#include "base/win/windows_version.h"
 #include "content/browser/accessibility/accessibility_tree_formatter_utils_win.h"
 #include "content/browser/accessibility/browser_accessibility_com_win.h"
 #include "content/browser/accessibility/browser_accessibility_manager.h"
@@ -157,17 +159,26 @@ void AccessibilityEventRecorderUia::Thread::ThreadMain() {
                                         cache_request_.Get(),
                                         uia_event_handler_.Get());
 
-  // Subscribe to all automation events (except structure-change events, which
-  // are handled above.
+  // Subscribe to all automation events (except structure-change events and
+  // live-region events, which are handled elsewhere).
   static const EVENTID kMinEvent = UIA_ToolTipOpenedEventId;
   static const EVENTID kMaxEvent = UIA_NotificationEventId;
   for (EVENTID event_id = kMinEvent; event_id <= kMaxEvent; ++event_id) {
-    if (event_id != UIA_StructureChangedEventId) {
+    if (event_id != UIA_StructureChangedEventId &&
+        event_id != UIA_LiveRegionChangedEventId) {
       uia_->AddAutomationEventHandler(
           event_id, root_.Get(), TreeScope::TreeScope_Subtree,
           cache_request_.Get(), uia_event_handler_.Get());
     }
   }
+
+  // Subscribe to live-region change events.  This must be the last event we
+  // subscribe to, because |AXFragmentRootWin| will fire events when advised of
+  // the subscription, and this can hang the test-process (on Windows 19H1+) if
+  // we're simultaneously trying to subscribe to other events.
+  uia_->AddAutomationEventHandler(
+      UIA_LiveRegionChangedEventId, root_.Get(), TreeScope::TreeScope_Subtree,
+      cache_request_.Get(), uia_event_handler_.Get());
 
   // Signal that initialization is complete; this will wake the main thread to
   // start executing the test.
@@ -176,11 +187,9 @@ void AccessibilityEventRecorderUia::Thread::ThreadMain() {
   // Wait for shutdown signal
   shutdown_signal_.Wait();
 
-  // Due to a bug in Windows, events are raised exactly twice for any in-proc
-  // off-thread event listeners. (The bug has been acknowledged by the Windows
-  // team, but it's a lower priority since the scenario is rare outside of
-  // testing.) We filter out the duplicate events here, and forward the
-  // remaining events to our owner.
+  // Due to a bug in Windows (fixed in Windows 10 19H1), events are raised
+  // exactly twice for any in-proc off-thread event listeners. We filter out the
+  // duplicate events here, and forward the remaining events to our owner.
   {
     base::AutoLock lock{on_event_lock_};
     if (event_logs_.size() == 1) {
@@ -255,9 +264,10 @@ void AccessibilityEventRecorderUia::Thread::ThreadMain() {
 
 void AccessibilityEventRecorderUia::Thread::SendShutdownSignal() {
   // We expect to see the shutdown sentinel exactly twice (due to the Windows
-  // bug detailed in |ThreadMain|), so don't actually shut down the thread until
-  // the second call.
-  if (shutdown_sentinel_received_)
+  // bug detailed in |ThreadMain| and fixed in 19H1), so don't actually shut
+  // down the thread until the second call.
+  if (shutdown_sentinel_received_ ||
+      base::win::GetVersion() >= base::win::Version::WIN10_19H1)
     shutdown_signal_.Signal();
   else
     shutdown_sentinel_received_ = true;
@@ -292,14 +302,14 @@ AccessibilityEventRecorderUia::Thread::EventHandler::HandleFocusChangedEvent(
   if (!owner_)
     return S_OK;
 
-  base::win::ScopedBstr id;
-  sender->get_CurrentAutomationId(id.Receive());
-  base::win::ScopedVariant id_variant(id, id.Length());
+  base::win::ScopedSafearray id;
+  sender->GetRuntimeId(id.Receive());
+  base::win::ScopedVariant id_variant(id.Release());
 
   Microsoft::WRL::ComPtr<IUIAutomationElement> element_found;
   Microsoft::WRL::ComPtr<IUIAutomationCondition> condition;
 
-  owner_->uia_->CreatePropertyCondition(UIA_AutomationIdPropertyId, id_variant,
+  owner_->uia_->CreatePropertyCondition(UIA_RuntimeIdPropertyId, id_variant,
                                         &condition);
   CHECK(condition);
   root_->FindFirst(TreeScope::TreeScope_Subtree, condition.Get(),
@@ -386,8 +396,16 @@ AccessibilityEventRecorderUia::Thread::EventHandler::HandleAutomationEvent(
         return S_OK;
       }
 
-      std::string log = base::StringPrintf("%s %s", event_str.c_str(),
-                                           GetSenderInfo(sender).c_str());
+      // Remove duplicate menuclosed events with no event data.
+      // The "duplicates" are benign. UIA currently duplicates *all* events for
+      // in-process listeners, and the event-recorder tries to eliminate the
+      // duplicates... but since the recorder sometimes isn't able to retrieve
+      // the role, the duplicate-elimination logic doesn't see them as
+      // duplicates in this case.
+      std::string sender_info =
+          event_id == UIA_MenuClosedEventId ? "" : GetSenderInfo(sender);
+      std::string log =
+          base::StringPrintf("%s %s", event_str.c_str(), sender_info.c_str());
       owner_->OnEvent(log);
     }
   }
@@ -404,7 +422,7 @@ std::string AccessibilityEventRecorderUia::Thread::EventHandler::GetSenderInfo(
     if (bstr.Length() > 0) {
       sender_info +=
           base::StringPrintf("%s%s=%s", sender_info.empty() ? "" : ", ", name,
-                             BstrToUTF8(bstr).c_str());
+                             BstrToUTF8(bstr.Get()).c_str());
     }
   };
 

@@ -5,6 +5,7 @@
 #include "third_party/blink/renderer/modules/encryptedmedia/html_media_element_encrypted_media.h"
 
 #include "base/macros.h"
+#include "media/base/eme_constants.h"
 #include "third_party/blink/public/platform/task_type.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_promise.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_promise_resolver.h"
@@ -20,6 +21,7 @@
 #include "third_party/blink/renderer/platform/bindings/exception_state.h"
 #include "third_party/blink/renderer/platform/bindings/script_state.h"
 #include "third_party/blink/renderer/platform/content_decryption_module_result.h"
+#include "third_party/blink/renderer/platform/heap/heap.h"
 #include "third_party/blink/renderer/platform/wtf/functional.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_builder.h"
 
@@ -35,7 +37,7 @@ class SetMediaKeysHandler : public ScriptPromiseResolver {
   SetMediaKeysHandler(ScriptState*, HTMLMediaElement&, MediaKeys*);
   ~SetMediaKeysHandler() override;
 
-  void Trace(blink::Visitor*) override;
+  void Trace(Visitor*) override;
 
  private:
   void TimerFired(TimerBase*);
@@ -151,7 +153,7 @@ SetMediaKeysHandler::SetMediaKeysHandler(ScriptState* script_state,
   DVLOG(EME_LOG_LEVEL) << __func__;
 
   // 5. Run the following steps in parallel.
-  timer_.StartOneShot(TimeDelta(), FROM_HERE);
+  timer_.StartOneShot(base::TimeDelta(), FROM_HERE);
 }
 
 SetMediaKeysHandler::~SetMediaKeysHandler() = default;
@@ -318,7 +320,7 @@ void SetMediaKeysHandler::SetFailed(ExceptionCode code,
   Fail(code, error_message);
 }
 
-void SetMediaKeysHandler::Trace(blink::Visitor* visitor) {
+void SetMediaKeysHandler::Trace(Visitor* visitor) {
   visitor->Trace(element_);
   visitor->Trace(new_media_keys_);
   ScriptPromiseResolver::Trace(visitor);
@@ -360,7 +362,8 @@ MediaKeys* HTMLMediaElementEncryptedMedia::mediaKeys(
 ScriptPromise HTMLMediaElementEncryptedMedia::setMediaKeys(
     ScriptState* script_state,
     HTMLMediaElement& element,
-    MediaKeys* media_keys) {
+    MediaKeys* media_keys,
+    ExceptionState& exception_state) {
   HTMLMediaElementEncryptedMedia& this_element =
       HTMLMediaElementEncryptedMedia::From(element);
   DVLOG(EME_LOG_LEVEL) << __func__ << ": current("
@@ -372,9 +375,9 @@ ScriptPromise HTMLMediaElementEncryptedMedia::setMediaKeys(
   // 1. If this object's attaching media keys value is true, return a
   //    promise rejected with an InvalidStateError.
   if (this_element.is_attaching_media_keys_) {
-    return ScriptPromise::RejectWithDOMException(
-        script_state, DOMException::Create(DOMExceptionCode::kInvalidStateError,
-                                           "Another request is in progress."));
+    exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError,
+                                      "Another request is in progress.");
+    return ScriptPromise();
   }
 
   // 2. If mediaKeys and the mediaKeys attribute are the same object,
@@ -390,7 +393,7 @@ ScriptPromise HTMLMediaElementEncryptedMedia::setMediaKeys(
 }
 
 // Create a MediaEncryptedEvent for WD EME.
-static Event* CreateEncryptedEvent(WebEncryptedMediaInitDataType init_data_type,
+static Event* CreateEncryptedEvent(media::EmeInitDataType init_data_type,
                                    const unsigned char* init_data,
                                    unsigned init_data_length) {
   MediaEncryptedEventInit* initializer = MediaEncryptedEventInit::Create();
@@ -405,7 +408,7 @@ static Event* CreateEncryptedEvent(WebEncryptedMediaInitDataType init_data_type,
 }
 
 void HTMLMediaElementEncryptedMedia::Encrypted(
-    WebEncryptedMediaInitDataType init_data_type,
+    media::EmeInitDataType init_data_type,
     const unsigned char* init_data,
     unsigned init_data_length) {
   DVLOG(EME_LOG_LEVEL) << __func__;
@@ -416,16 +419,16 @@ void HTMLMediaElementEncryptedMedia::Encrypted(
   } else {
     // Current page is not allowed to see content from the media file,
     // so don't return the initData. However, they still get an event.
-    event = CreateEncryptedEvent(WebEncryptedMediaInitDataType::kUnknown,
-                                 nullptr, 0);
+    event = CreateEncryptedEvent(media::EmeInitDataType::UNKNOWN, nullptr, 0);
     media_element_->GetExecutionContext()->AddConsoleMessage(
-        ConsoleMessage::Create(mojom::ConsoleMessageSource::kJavaScript,
-                               mojom::ConsoleMessageLevel::kWarning,
-                               "Media element must be CORS-same-origin with "
-                               "the embedding page. If cross-origin, you "
-                               "should use the `crossorigin` attribute and "
-                               "make sure CORS headers on the media data "
-                               "response are CORS-same-origin."));
+        MakeGarbageCollected<ConsoleMessage>(
+            mojom::ConsoleMessageSource::kJavaScript,
+            mojom::ConsoleMessageLevel::kWarning,
+            "Media element must be CORS-same-origin with "
+            "the embedding page. If cross-origin, you "
+            "should use the `crossorigin` attribute and "
+            "make sure CORS headers on the media data "
+            "response are CORS-same-origin."));
   }
 
   event->SetTarget(media_element_);
@@ -470,7 +473,7 @@ HTMLMediaElementEncryptedMedia::ContentDecryptionModule() {
   return media_keys_ ? media_keys_->ContentDecryptionModule() : nullptr;
 }
 
-void HTMLMediaElementEncryptedMedia::Trace(blink::Visitor* visitor) {
+void HTMLMediaElementEncryptedMedia::Trace(Visitor* visitor) {
   visitor->Trace(media_element_);
   visitor->Trace(media_keys_);
   Supplement<HTMLMediaElement>::Trace(visitor);

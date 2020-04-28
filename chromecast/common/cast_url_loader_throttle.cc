@@ -8,7 +8,6 @@
 #include "base/callback.h"
 #include "base/logging.h"
 #include "services/network/public/cpp/resource_request.h"
-#include "services/network/public/cpp/resource_response.h"
 
 namespace chromecast {
 
@@ -38,8 +37,15 @@ void CastURLLoaderThrottle::WillStartRequest(
   }
 }
 
-void CastURLLoaderThrottle::ResumeRequest(int error,
-                                          net::HttpRequestHeaders headers) {
+bool CastURLLoaderThrottle::makes_unsafe_redirect() {
+  // Yes, this makes cross-scheme redirects.
+  return true;
+}
+
+void CastURLLoaderThrottle::ResumeRequest(
+    int error,
+    net::HttpRequestHeaders headers,
+    net::HttpRequestHeaders cors_exempt_headers) {
   DCHECK(deferred_);
   if (error != net::OK) {
     NOTREACHED() << "Trying to resume a request with unexpected error: "
@@ -47,7 +53,7 @@ void CastURLLoaderThrottle::ResumeRequest(int error,
     return;
   }
   deferred_ = false;
-  delegate_->UpdateDeferredRequestHeaders(headers);
+  delegate_->UpdateDeferredRequestHeaders(headers, cors_exempt_headers);
   delegate_->Resume();
 }
 

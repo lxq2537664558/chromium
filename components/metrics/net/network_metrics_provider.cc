@@ -6,7 +6,9 @@
 
 #include <stdint.h>
 
+#include <algorithm>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "base/bind.h"
@@ -19,6 +21,7 @@
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
 #include "base/task/post_task.h"
+#include "base/task/thread_pool.h"
 #include "base/threading/thread_task_runner_handle.h"
 #include "build/build_config.h"
 #include "net/base/net_errors.h"
@@ -27,7 +30,6 @@
 
 #if defined(OS_ANDROID)
 #include "base/metrics/histogram_functions.h"
-#include "base/strings/string_number_conversions.h"
 #include "net/android/network_library.h"
 #include "services/network/public/cpp/network_connection_tracker.h"
 #endif
@@ -100,8 +102,7 @@ NetworkMetricsProvider::NetworkMetricsProvider(
           std::move(network_quality_estimator_provider)),
       effective_connection_type_(net::EFFECTIVE_CONNECTION_TYPE_UNKNOWN),
       min_effective_connection_type_(net::EFFECTIVE_CONNECTION_TYPE_UNKNOWN),
-      max_effective_connection_type_(net::EFFECTIVE_CONNECTION_TYPE_UNKNOWN),
-      weak_ptr_factory_(this) {
+      max_effective_connection_type_(net::EFFECTIVE_CONNECTION_TYPE_UNKNOWN) {
   network_connection_tracker_async_getter.Run(
       base::BindOnce(&NetworkMetricsProvider::SetNetworkConnectionTracker,
                      weak_ptr_factory_.GetWeakPtr()));
@@ -301,7 +302,7 @@ NetworkMetricsProvider::GetWifiPHYLayerProtocol() const {
 
 void NetworkMetricsProvider::ProbeWifiPHYLayerProtocol() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  base::PostTaskWithTraitsAndReplyWithResult(
+  base::ThreadPool::PostTaskAndReplyWithResult(
       FROM_HERE,
       {base::MayBlock(), base::TaskPriority::BEST_EFFORT,
        base::TaskShutdownBehavior::CONTINUE_ON_SHUTDOWN},

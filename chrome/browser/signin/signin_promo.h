@@ -8,10 +8,14 @@
 #include <string>
 
 #include "build/build_config.h"
-#include "chrome/browser/ui/profile_chooser_constants.h"
-#include "components/signin/core/browser/signin_metrics.h"
+#include "components/signin/public/base/signin_metrics.h"
 
 class GURL;
+
+namespace content {
+class BrowserContext;
+class StoragePartition;
+}  // namespace content
 
 namespace user_prefs {
 class PrefRegistrySyncable;
@@ -24,11 +28,6 @@ extern const char kSignInPromoQueryKeyAccessPoint[];
 extern const char kSignInPromoQueryKeyAutoClose[];
 extern const char kSignInPromoQueryKeyForceKeepData[];
 extern const char kSignInPromoQueryKeyReason[];
-extern const char kSignInPromoQueryKeySource[];
-extern const char kSigninPromoLandingURLSuccessPage[];
-
-// Gets the sign in landing page URL.
-GURL GetLandingURL(signin_metrics::AccessPoint access_point);
 
 #if !defined(OS_CHROMEOS)
 // These functions are only used to unlock the profile from the desktop user
@@ -64,8 +63,9 @@ GURL GetChromeSyncURLForDice(const std::string& email,
 GURL GetAddAccountURLForDice(const std::string& email,
                              const std::string& continue_url);
 
-// Gets the partition URL for the embedded sign in frame/webview.
-GURL GetSigninPartitionURL();
+// Gets the partition for the embedded sign in frame/webview.
+content::StoragePartition* GetSigninPartition(
+    content::BrowserContext* browser_context);
 
 // Gets the access point from the query portion of the sign in promo URL.
 signin_metrics::AccessPoint GetAccessPointForEmbeddedPromoURL(const GURL& url);

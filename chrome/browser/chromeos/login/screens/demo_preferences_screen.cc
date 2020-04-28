@@ -5,9 +5,9 @@
 #include "chrome/browser/chromeos/login/screens/demo_preferences_screen.h"
 
 #include "chrome/browser/browser_process.h"
-#include "chrome/browser/chromeos/login/screens/demo_preferences_screen_view.h"
 #include "chrome/browser/chromeos/login/screens/welcome_screen.h"
 #include "chrome/browser/chromeos/login/wizard_controller.h"
+#include "chrome/browser/ui/webui/chromeos/login/demo_preferences_screen_handler.h"
 #include "chrome/common/pref_names.h"
 #include "components/prefs/pref_service.h"
 #include "ui/base/ime/chromeos/input_method_descriptor.h"
@@ -37,11 +37,21 @@ void SetApplicationLocaleAndInputMethod(const std::string& locale,
 
 }  // namespace
 
+// static
+std::string DemoPreferencesScreen::GetResultString(Result result) {
+  switch (result) {
+    case Result::COMPLETED:
+      return "Completed";
+    case Result::CANCELED:
+      return "Canceled";
+  }
+}
+
 DemoPreferencesScreen::DemoPreferencesScreen(
     DemoPreferencesScreenView* view,
     const ScreenExitCallback& exit_callback)
-    : BaseScreen(OobeScreen::SCREEN_OOBE_DEMO_PREFERENCES),
-      input_manager_observer_(this),
+    : BaseScreen(DemoPreferencesScreenView::kScreenId,
+                 OobeScreenPriority::DEFAULT),
       view_(view),
       exit_callback_(exit_callback) {
   DCHECK(view_);
@@ -74,7 +84,7 @@ void DemoPreferencesScreen::SetDemoModeCountry(const std::string& country_id) {
                                               country_id);
 }
 
-void DemoPreferencesScreen::Show() {
+void DemoPreferencesScreen::ShowImpl() {
   WelcomeScreen* welcome_screen = GetWelcomeScreen();
   if (welcome_screen) {
     initial_locale_ = welcome_screen->GetApplicationLocale();
@@ -85,7 +95,7 @@ void DemoPreferencesScreen::Show() {
     view_->Show();
 }
 
-void DemoPreferencesScreen::Hide() {
+void DemoPreferencesScreen::HideImpl() {
   initial_locale_.clear();
   initial_input_method_.clear();
 

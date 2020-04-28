@@ -11,7 +11,6 @@
 #include "base/files/file_util.h"
 #include "base/task/post_task.h"
 #include "base/task/task_traits.h"
-#include "base/task/thread_pool/thread_pool.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 #include "net/base/net_errors.h"
@@ -39,26 +38,23 @@ FileStreamForwarder::FileStreamForwarder(
       remaining_size_(size),
       fd_dest_(std::move(fd_dest)),
       callback_(std::move(callback)),
-      task_runner_(
-          base::ThreadPool::GetInstance()->CreateSequencedTaskRunnerWithTraits(
-              // It's safe to shutdown without waiting for the
-              // completion of tasks running with this task runner.
-              {base::TaskShutdownBehavior::CONTINUE_ON_SHUTDOWN,
-               base::MayBlock()})),
-      buf_(base::MakeRefCounted<net::IOBufferWithSize>(kBufSize)),
-      weak_ptr_factory_(this) {
+      task_runner_(base::ThreadPool::CreateSequencedTaskRunner(
+          // It's safe to shutdown without waiting for the
+          // completion of tasks running with this task runner.
+          {base::TaskShutdownBehavior::CONTINUE_ON_SHUTDOWN,
+           base::MayBlock()})),
+      buf_(base::MakeRefCounted<net::IOBufferWithSize>(kBufSize)) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
-  base::PostTaskWithTraits(
+  base::PostTask(
       FROM_HERE, {BrowserThread::IO},
       base::BindOnce(&FileStreamForwarder::Start, base::Unretained(this)));
 }
 
 void FileStreamForwarder::Destroy() {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
-  base::PostTaskWithTraits(
-      FROM_HERE, {BrowserThread::IO},
-      base::BindOnce(&FileStreamForwarder::DestroyOnIOThread,
-                     base::Unretained(this)));
+  base::PostTask(FROM_HERE, {BrowserThread::IO},
+                 base::BindOnce(&FileStreamForwarder::DestroyOnIOThread,
+                                base::Unretained(this)));
 }
 
 FileStreamForwarder::~FileStreamForwarder() {
@@ -95,8 +91,8 @@ void FileStreamForwarder::DoRead() {
   }
   const int result = stream_reader_->Read(
       buf_.get(), std::min<int64_t>(buf_->size(), remaining_size_),
-      base::Bind(&FileStreamForwarder::OnReadCompleted,
-                 weak_ptr_factory_.GetWeakPtr()));
+      base::BindOnce(&FileStreamForwarder::OnReadCompleted,
+                     weak_ptr_factory_.GetWeakPtr()));
   if (result != net::ERR_IO_PENDING) {
     // Read result is returned synchronously.
     OnReadCompleted(result);
@@ -144,8 +140,8 @@ void FileStreamForwarder::OnWriteCompleted(bool result) {
 void FileStreamForwarder::NotifyCompleted(bool result) {
   DCHECK_CURRENTLY_ON(BrowserThread::IO);
   DCHECK(!callback_.is_null());
-  base::PostTaskWithTraits(FROM_HERE, {BrowserThread::UI},
-                           base::BindOnce(std::move(callback_), result));
+  base::PostTask(FROM_HERE, {BrowserThread::UI},
+                 base::BindOnce(std::move(callback_), result));
 }
 
 }  // namespace arc

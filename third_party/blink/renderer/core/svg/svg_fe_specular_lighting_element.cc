@@ -30,8 +30,7 @@
 
 namespace blink {
 
-inline SVGFESpecularLightingElement::SVGFESpecularLightingElement(
-    Document& document)
+SVGFESpecularLightingElement::SVGFESpecularLightingElement(Document& document)
     : SVGFilterPrimitiveStandardAttributes(svg_names::kFESpecularLightingTag,
                                            document),
       specular_constant_(MakeGarbageCollected<SVGAnimatedNumber>(
@@ -58,7 +57,7 @@ inline SVGFESpecularLightingElement::SVGFESpecularLightingElement(
   AddToPropertyMap(in1_);
 }
 
-void SVGFESpecularLightingElement::Trace(blink::Visitor* visitor) {
+void SVGFESpecularLightingElement::Trace(Visitor* visitor) {
   visitor->Trace(specular_constant_);
   visitor->Trace(specular_exponent_);
   visitor->Trace(surface_scale_);
@@ -66,8 +65,6 @@ void SVGFESpecularLightingElement::Trace(blink::Visitor* visitor) {
   visitor->Trace(in1_);
   SVGFilterPrimitiveStandardAttributes::Trace(visitor);
 }
-
-DEFINE_NODE_FACTORY(SVGFESpecularLightingElement)
 
 bool SVGFESpecularLightingElement::SetFilterEffectAttribute(
     FilterEffect* effect,

@@ -10,8 +10,6 @@ namespace prefs {
 
 // Alphabetical list of preference names specific to the metrics
 // component. Document each in the .cc file.
-extern const char kDeprecatedMetricsInitialLogs[];
-extern const char kDeprecatedMetricsOngoingLogs[];
 extern const char kInstallDate[];
 extern const char kMetricsClientID[];
 extern const char kMetricsDefaultOptIn[];
@@ -39,12 +37,10 @@ extern const char kStabilityBrowserLastLiveTimeStamp[];
 extern const char kStabilityChildProcessCrashCount[];
 extern const char kStabilityCrashCount[];
 extern const char kStabilityCrashCountDueToGmsCoreUpdate[];
-extern const char kStabilityCrashCountWithoutGmsCoreUpdateObsolete[];
 extern const char kStabilityDebuggerNotPresent[];
 extern const char kStabilityDebuggerPresent[];
 extern const char kStabilityDeferredCount[];
 extern const char kStabilityDiscardCount[];
-extern const char kStabilityExecutionPhase[];
 extern const char kStabilityExitedCleanly[];
 extern const char kStabilityExtensionRendererCrashCount[];
 extern const char kStabilityExtensionRendererFailedLaunchCount[];

@@ -49,7 +49,7 @@ def build(build_config, target_device, extra_gn_options, extra_ninja_options):
 
   build_dir = os.path.join("out", target_dir_name(build_config, target_device))
   gn_args = ('target_os="ios" enable_websockets=false '
-            'is_component_build=false use_xcode_clang=true '
+            'is_component_build=false use_xcode_clang=false '
             'disable_file_support=true disable_ftp_support=true '
             'disable_brotli_filter=true ios_enable_code_signing=false '
             'enable_dsyms=true '
@@ -186,10 +186,6 @@ def main():
                       help='Additional gn args to pass through to ninja.')
   parser.add_argument('--include_cronet', action='store_true',
                       help='Combines Cronet and ChromeWebView as 1 framework.')
-  parser.add_argument('--enable_sync', action='store_true',
-                      help='Enables public API for sync.')
-  parser.add_argument('--enable_autofill', action='store_true',
-                      help='Enables public API for autofill.')
   build_configs = ['Debug', 'Release']
   target_devices = ['iphonesimulator', 'iphoneos']
   parser.add_argument('--build_configs', nargs='+', default=build_configs,
@@ -221,17 +217,6 @@ def main():
     output_name = 'CronetChromeWebView'
   else:
     extra_gn_options += 'ios_web_view_include_cronet=false '
-  if options.enable_sync:
-    extra_gn_options += 'ios_web_view_enable_sync=true '
-    # Used to differentiate //ios/web_view from //ios/chrome in the user agent
-    # product string passed to sync servers.
-    extra_gn_options += 'sync_user_agent_product="ChromeWebView" '
-  else:
-    extra_gn_options += 'ios_web_view_enable_sync=false '
-  if options.enable_autofill:
-    extra_gn_options += 'ios_web_view_enable_autofill=true '
-  else:
-    extra_gn_options += 'ios_web_view_enable_autofill=false '
   extra_gn_options += 'ios_web_view_output_name="%s" ' % output_name
   # This prevents Breakpad from being included in the final binary to avoid
   # duplicate symbols with the client app.

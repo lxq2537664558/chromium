@@ -12,12 +12,12 @@
 #include "ui/views/controls/button/button.h"
 #include "ui/views/view.h"
 
+namespace views {
+class Label;
+}  // namespace views
+
 class AuthenticatorRequestSheetModel;
 class NonAccessibleImageView;
-
-namespace ui {
-class NativeTheme;
-}
 
 // Defines the basic structure of sheets shown in the authenticator request
 // dialog. Each sheet corresponds to a given step of the authentication flow,
@@ -26,9 +26,10 @@ class NativeTheme;
 //  -- an optional `back icon`,
 //  -- a pretty illustration in the top half of the dialog,
 //  -- the title of the current step,
-//  -- the description of the current step, and
+//  -- the description of the current step,
 //  -- an optional view with step-specific content, added by subclasses, filling
-//     the rest of the space.
+//     the rest of the space, and
+//  -- an optional contextual error.
 //
 // +-------------------------------------------------+
 // |*************************************************|
@@ -47,6 +48,7 @@ class NativeTheme;
 // | |                                             | |
 // | |                                             | |
 // | +---------------------------------------------+ |
+// |  optional contextual error                      |
 // +-------------------------------------------------+
 // |                                   OK   CANCEL   | <- Not part of this view.
 // +-------------------------------------------------+
@@ -91,14 +93,17 @@ class AuthenticatorRequestSheetView : public views::View,
   // and step-specific content, if any.
   std::unique_ptr<views::View> CreateContentsBelowIllustration();
 
+  // Updates the illustration icon shown on the sheet.
+  void UpdateIconImageFromModel();
+
   // views::View:
-  void OnNativeThemeChanged(const ui::NativeTheme* theme) override;
+  void OnThemeChanged() override;
 
   std::unique_ptr<AuthenticatorRequestSheetModel> model_;
-  bool in_dark_mode_;
   views::Button* back_arrow_button_ = nullptr;
   views::View* step_specific_content_ = nullptr;
   NonAccessibleImageView* step_illustration_ = nullptr;
+  views::Label* error_label_ = nullptr;
 
   DISALLOW_COPY_AND_ASSIGN(AuthenticatorRequestSheetView);
 };

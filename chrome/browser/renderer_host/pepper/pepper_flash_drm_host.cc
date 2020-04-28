@@ -9,9 +9,10 @@
 #endif
 
 #include "base/bind.h"
+#include "base/check.h"
 #include "base/compiler_specific.h"
-#include "base/logging.h"
 #include "base/memory/ref_counted.h"
+#include "base/notreached.h"
 #include "base/task/post_task.h"
 #include "build/build_config.h"
 #include "content/public/browser/browser_ppapi_host.h"
@@ -61,7 +62,7 @@ class MonitorFinder : public base::RefCountedThreadSafe<MonitorFinder> {
     // do this because we don't know how often our client is going
     // to call and we can't cache the |monitor_| value.
     if (InterlockedCompareExchange(&request_sent_, 1, 0) == 0) {
-      base::PostTaskWithTraits(
+      base::PostTask(
           FROM_HERE, {content::BrowserThread::UI},
           base::BindOnce(&MonitorFinder::FetchMonitorFromWidget, this));
     }
@@ -115,8 +116,7 @@ class MonitorFinder : public base::RefCountedThreadSafe<MonitorFinder> {
 PepperFlashDRMHost::PepperFlashDRMHost(BrowserPpapiHost* host,
                                        PP_Instance instance,
                                        PP_Resource resource)
-    : ppapi::host::ResourceHost(host->GetPpapiHost(), instance, resource),
-      weak_factory_(this) {
+    : ppapi::host::ResourceHost(host->GetPpapiHost(), instance, resource) {
   // Grant permissions to read the flash voucher file.
   int render_process_id;
   int render_frame_id;

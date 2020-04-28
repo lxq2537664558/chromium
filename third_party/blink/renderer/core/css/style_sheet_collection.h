@@ -35,7 +35,7 @@
 #include "third_party/blink/renderer/core/css/active_style_sheets.h"
 #include "third_party/blink/renderer/platform/bindings/name_client.h"
 #include "third_party/blink/renderer/platform/heap/handle.h"
-#include "third_party/blink/renderer/platform/wtf/allocator.h"
+#include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
 #include "third_party/blink/renderer/platform/wtf/vector.h"
 
 namespace blink {
@@ -50,6 +50,7 @@ class CORE_EXPORT StyleSheetCollection
   friend class ImportedDocumentStyleSheetCollector;
 
   StyleSheetCollection();
+  virtual ~StyleSheetCollection() = default;
 
   const ActiveStyleSheetVector& ActiveAuthorStyleSheets() const {
     return active_author_style_sheets_;
@@ -64,7 +65,7 @@ class CORE_EXPORT StyleSheetCollection
   void AppendSheetForList(StyleSheet*);
   void MarkSheetListDirty() { sheet_list_dirty_ = true; }
 
-  virtual void Trace(blink::Visitor*);
+  virtual void Trace(Visitor*);
   const char* NameInHeapSnapshot() const override {
     return "StyleSheetCollection";
   }

@@ -2,10 +2,10 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
-import logging
-
 from benchmarks import memory
 from core import perf_benchmark
+from core import platforms
+
 from telemetry import benchmark
 from telemetry import story
 from telemetry.timeline import chrome_trace_category_filter
@@ -13,8 +13,6 @@ from telemetry.timeline import chrome_trace_config
 from telemetry.web_perf import timeline_based_measurement
 from contrib.vr_benchmarks import shared_vr_page_state as vr_state
 from contrib.vr_benchmarks import vr_browsing_mode_pages
-from contrib.vr_benchmarks import webvr_sample_pages
-from contrib.vr_benchmarks import webvr_wpr_pages
 from contrib.vr_benchmarks import webxr_sample_pages
 
 
@@ -63,6 +61,13 @@ class _BaseVRBenchmark(perf_benchmark.PerfBenchmark):
              'to use whatever version is already installed on the device '
              'instead of installing whatever is in the test APKs directory.')
     parser.add_option(
+        '--remove-system-vrcore',
+        action='store_true',
+        default=False,
+        help='Removes the system version of VrCore if it is installed. This '
+             'is required if the system version is not already removed and '
+             '--disable-vrcore-install is not passed.')
+    parser.add_option(
         '--recording-wpr',
         action='store_true',
         default=False,
@@ -84,11 +89,16 @@ class _BaseVRBenchmark(perf_benchmark.PerfBenchmark):
     parser.add_option(
         '--mock-runtime-directory',
         help='The directory containing the mock runtime implementation to be '
-             'used.')
+             'used. Defaults to the "mock_vr_clients" subdirectory of the '
+             'output directory.')
 
 
 class _BaseWebVRWebXRBenchmark(_BaseVRBenchmark):
 
+  # TODO(rmhasan): Remove the SUPPORTED_PLATFORMS lists.
+  # SUPPORTED_PLATFORMS is deprecated, please put system specifier tags
+  # from expectations.config in SUPPORTED_PLATFORM_TAGS.
+  SUPPORTED_PLATFORM_TAGS = [platforms.ANDROID, platforms.WIN10]
   SUPPORTED_PLATFORMS = [
       story.expectations.ALL_ANDROID,
       story.expectations.WIN_10
@@ -109,19 +119,6 @@ class _BaseWebVRWebXRBenchmark(_BaseVRBenchmark):
         chrome_trace_config.MemoryDumpConfig())
     return options
 
-  @classmethod
-  def ShouldAddValue(cls, name, from_first_story_run):
-    del from_first_story_run  # unused
-    return memory.DefaultShouldAddValueForMemoryMeasurement(name)
-
-
-class _BaseWebVRBenchmark(_BaseWebVRWebXRBenchmark):
-
-  def SetExtraBrowserOptions(self, options):
-    memory.SetExtraBrowserOptionsForMemoryMeasurement(options)
-    options.AppendExtraBrowserArgs([
-        '--enable-webvr',
-    ])
 
 
 class _BaseWebXRBenchmark(_BaseWebVRWebXRBenchmark):
@@ -131,20 +128,6 @@ class _BaseWebXRBenchmark(_BaseWebVRWebXRBenchmark):
     options.AppendExtraBrowserArgs([
         '--enable-features=WebXR',
     ])
-
-
-@benchmark.Info(emails=['bsheedy@chromium.org', 'leilei@chromium.org'])
-# pylint: disable=too-many-ancestors
-class XrWebVrStatic(_BaseWebVRBenchmark):
-  """Measures WebVR performance with synthetic sample pages."""
-
-  def CreateStorySet(self, options):
-    del options
-    return webvr_sample_pages.WebVrSamplePageSet()
-
-  @classmethod
-  def Name(cls):
-    return 'xr.webvr.static'
 
 
 @benchmark.Info(emails=['bsheedy@chromium.org', 'tiborg@chromium.org'])
@@ -161,48 +144,15 @@ class XrWebXrStatic(_BaseWebXRBenchmark):
     return 'xr.webxr.static'
 
 
-@benchmark.Info(emails=['bsheedy@chromium.org', 'tiborg@chromium.org'])
-# pylint: disable=too-many-ancestors
-class XrWebVrWprStatic(_BaseWebVRBenchmark):
-  """Measures WebVR performance with WPR copies of live websites."""
-
-  def CreateStorySet(self, options):
-    del options
-    return webvr_wpr_pages.WebVrWprPageSet()
-
-  @classmethod
-  def Name(cls):
-    return 'xr.webvr.wpr.static'
-
-
-@benchmark.Info(emails=['bsheedy@chromium.org', 'tiborg@chromium.org'])
-# pylint: disable=too-many-ancestors
-class XrWebVrLiveStatic(_BaseWebVRBenchmark):
-  """Measures WebVR performance with live websites.
-
-  This is a superset of xr.webvr.wpr.static, containing all the pages that it
-  uses plus some that we would like to test with WPR, but behave differently
-  when using WPR compared to the live version.
-  """
-
-  def CreateStorySet(self, options):
-    if not hasattr(options, 'use_live_sites') or not options.use_live_sites:
-      # We log an error instead of raising an exception here because the
-      # Telemetry presubmit unittests fail if we raise.
-      logging.error('Running the live sites benchmark without using live '
-          'sites. Results will likely be incorrect for some sites.')
-    return webvr_wpr_pages.WebVrLivePageSet()
-
-  @classmethod
-  def Name(cls):
-    return 'xr.webvr.live.static'
-
-
 class _BaseBrowsingBenchmark(_BaseVRBenchmark):
 
+  # TODO(rmhasan): Remove the SUPPORTED_PLATFORMS lists.
+  # SUPPORTED_PLATFORMS is deprecated, please put system specifier tags
+  # from expectations.config in SUPPORTED_PLATFORM_TAGS.
+  SUPPORTED_PLATFORM_TAGS = [platforms.ANDROID]
   SUPPORTED_PLATFORMS = [story.expectations.ALL_ANDROID]
 
-  def CreateTimelineBasedMeasurementOptions(self):
+  def CreateCoreTimelineBasedMeasurementOptions(self):
     category_filter = chrome_trace_category_filter.ChromeTraceCategoryFilter()
     for category in self.COMMON_TRACE_CATEGORIES:
       category_filter.AddFilter(category)

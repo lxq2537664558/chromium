@@ -14,15 +14,15 @@
 #include "build/build_config.h"
 #include "content/public/browser/content_browser_client.h"
 #include "content/shell/browser/shell_speech_recognition_manager_delegate.h"
-#include "services/service_manager/public/cpp/binder_registry.h"
+#include "services/network/public/mojom/network_context.mojom-forward.h"
 
 namespace content {
 
-class ResourceDispatcherHostDelegate;
 class ShellBrowserContext;
 class ShellBrowserMainParts;
 
 std::string GetShellUserAgent();
+std::string GetShellLanguage();
 blink::UserAgentMetadata GetShellUserAgentMetadata();
 
 class ShellContentBrowserClient : public ContentBrowserClient {
@@ -33,51 +33,52 @@ class ShellContentBrowserClient : public ContentBrowserClient {
   ShellContentBrowserClient();
   ~ShellContentBrowserClient() override;
 
+  // The value supplied here is set when creating the NetworkContext.
+  // Specifically
+  // network::mojom::NetworkContext::allow_any_cors_exempt_header_for_browser.
+  static void set_allow_any_cors_exempt_header_for_browser(bool value) {
+    allow_any_cors_exempt_header_for_browser_ = value;
+  }
+
   // ContentBrowserClient overrides.
-  BrowserMainParts* CreateBrowserMainParts(
+  std::unique_ptr<BrowserMainParts> CreateBrowserMainParts(
       const MainFunctionParams& parameters) override;
   bool IsHandledURL(const GURL& url) override;
-  void BindInterfaceRequestFromFrame(
-      content::RenderFrameHost* render_frame_host,
-      const std::string& interface_name,
-      mojo::ScopedMessagePipeHandle interface_pipe) override;
-  void RegisterOutOfProcessServices(OutOfProcessServiceMap* services) override;
-  void HandleServiceRequest(
-      const std::string& service_name,
-      service_manager::mojom::ServiceRequest request) override;
   bool ShouldTerminateOnServiceQuit(
       const service_manager::Identity& id) override;
-  base::Optional<service_manager::Manifest> GetServiceManifestOverlay(
-      base::StringPiece name) override;
   void AppendExtraCommandLineSwitches(base::CommandLine* command_line,
                                       int child_process_id) override;
-  void AdjustUtilityServiceProcessCommandLine(
-      const service_manager::Identity& identity,
-      base::CommandLine* command_line) override;
   std::string GetAcceptLangs(BrowserContext* context) override;
-  void ResourceDispatcherHostCreated() override;
   std::string GetDefaultDownloadName() override;
   WebContentsViewDelegate* GetWebContentsViewDelegate(
       WebContents* web_contents) override;
-  QuotaPermissionContext* CreateQuotaPermissionContext() override;
-  void GetQuotaSettings(
-      content::BrowserContext* context,
-      content::StoragePartition* partition,
-      storage::OptionalQuotaSettingsCallback callback) override;
+  scoped_refptr<content::QuotaPermissionContext> CreateQuotaPermissionContext()
+      override;
   GeneratedCodeCacheSettings GetGeneratedCodeCacheSettings(
       content::BrowserContext* context) override;
-  void SelectClientCertificate(
+  base::OnceClosure SelectClientCertificate(
       WebContents* web_contents,
       net::SSLCertRequestInfo* cert_request_info,
       net::ClientCertIdentityList client_certs,
       std::unique_ptr<ClientCertificateDelegate> delegate) override;
   SpeechRecognitionManagerDelegate* CreateSpeechRecognitionManagerDelegate()
       override;
-  net::NetLog* GetNetLog() override;
+  void OverrideWebkitPrefs(RenderViewHost* render_view_host,
+                           WebPreferences* prefs) override;
+  base::FilePath GetFontLookupTableCacheDir() override;
   DevToolsManagerDelegate* GetDevToolsManagerDelegate() override;
+  void ExposeInterfacesToRenderer(
+      service_manager::BinderRegistry* registry,
+      blink::AssociatedInterfaceRegistry* associated_registry,
+      RenderProcessHost* render_process_host) override;
+  mojo::Remote<::media::mojom::MediaService> RunSecondaryMediaService()
+      override;
+  void RegisterBrowserInterfaceBindersForFrame(
+      RenderFrameHost* render_frame_host,
+      service_manager::BinderMapWithContext<RenderFrameHost*>* map) override;
   void OpenURL(SiteInstance* site_instance,
                const OpenURLParams& params,
-               const base::Callback<void(WebContents*)>& callback) override;
+               base::OnceCallback<void(WebContents*)> callback) override;
   std::unique_ptr<LoginDelegate> CreateLoginDelegate(
       const net::AuthChallengeInfo& auth_info,
       content::WebContents* web_contents,
@@ -87,9 +88,16 @@ class ShellContentBrowserClient : public ContentBrowserClient {
       scoped_refptr<net::HttpResponseHeaders> response_headers,
       bool first_auth_attempt,
       LoginAuthRequiredCallback auth_required_callback) override;
+  base::FilePath GetSandboxedStorageServiceDataDirectory() override;
 
-  std::string GetUserAgent() const override;
-  blink::UserAgentMetadata GetUserAgentMetadata() const override;
+  std::string GetUserAgent() override;
+  blink::UserAgentMetadata GetUserAgentMetadata() override;
+
+  void OverrideURLLoaderFactoryParams(
+      BrowserContext* browser_context,
+      const url::Origin& origin,
+      bool is_for_isolated_world,
+      network::mojom::URLLoaderFactoryParams* factory_params) override;
 
 #if defined(OS_LINUX) || defined(OS_ANDROID)
   void GetAdditionalMappedFilesForChildProcess(
@@ -98,61 +106,91 @@ class ShellContentBrowserClient : public ContentBrowserClient {
       content::PosixFileDescriptorInfo* mappings) override;
 #endif  // defined(OS_LINUX) || defined(OS_ANDROID)
 
-#if defined(OS_WIN)
-  bool PreSpawnRenderer(sandbox::TargetPolicy* policy) override;
-#endif
-
-  network::mojom::NetworkContextPtr CreateNetworkContext(
+  mojo::Remote<network::mojom::NetworkContext> CreateNetworkContext(
       BrowserContext* context,
       bool in_memory,
       const base::FilePath& relative_partition_path) override;
+  std::vector<base::FilePath> GetNetworkContextsParentDirectory() override;
 
   ShellBrowserContext* browser_context();
   ShellBrowserContext* off_the_record_browser_context();
-  ResourceDispatcherHostDelegate* resource_dispatcher_host_delegate() {
-    return resource_dispatcher_host_delegate_.get();
-  }
   ShellBrowserMainParts* shell_browser_main_parts() {
     return shell_browser_main_parts_;
   }
 
   // Used for content_browsertests.
   void set_select_client_certificate_callback(
-      base::Closure select_client_certificate_callback) {
+      base::OnceClosure select_client_certificate_callback) {
     select_client_certificate_callback_ =
         std::move(select_client_certificate_callback);
   }
   void set_should_terminate_on_service_quit_callback(
-      base::Callback<bool(const service_manager::Identity&)> callback) {
+      base::OnceCallback<bool(const service_manager::Identity&)> callback) {
     should_terminate_on_service_quit_callback_ = std::move(callback);
   }
   void set_login_request_callback(
-      base::Callback<void()> login_request_callback) {
+      base::OnceCallback<void(bool is_main_frame)> login_request_callback) {
     login_request_callback_ = std::move(login_request_callback);
+  }
+  void set_url_loader_factory_params_callback(
+      base::RepeatingCallback<void(
+          const network::mojom::URLLoaderFactoryParams*,
+          const url::Origin&,
+          bool is_for_isolated_world)> url_loader_factory_params_callback) {
+    url_loader_factory_params_callback_ =
+        std::move(url_loader_factory_params_callback);
+  }
+  void set_expose_interfaces_to_renderer_callback(
+      base::RepeatingCallback<
+          void(service_manager::BinderRegistry* registry,
+               blink::AssociatedInterfaceRegistry* associated_registry,
+               RenderProcessHost* render_process_host)>
+          expose_interfaces_to_renderer_callback) {
+    expose_interfaces_to_renderer_callback_ =
+        expose_interfaces_to_renderer_callback;
+  }
+  void set_register_browser_interface_binders_for_frame_callback(
+      base::RepeatingCallback<
+          void(RenderFrameHost* render_frame_host,
+               service_manager::BinderMapWithContext<RenderFrameHost*>* map)>
+          register_browser_interface_binders_for_frame_callback) {
+    register_browser_interface_binders_for_frame_callback_ =
+        register_browser_interface_binders_for_frame_callback;
   }
 
  protected:
-  virtual void ExposeInterfacesToFrame(
-      service_manager::BinderRegistryWithArgs<content::RenderFrameHost*>*
-          registry);
-
+  // Call this if CreateBrowserMainParts() is overridden in a subclass.
   void set_browser_main_parts(ShellBrowserMainParts* parts) {
     shell_browser_main_parts_ = parts;
   }
 
+  // Used by CreateNetworkContext(), and can be overridden to change the
+  // parameters used there.
+  virtual network::mojom::NetworkContextParamsPtr CreateNetworkContextParams(
+      BrowserContext* context);
+
  private:
-  std::unique_ptr<ResourceDispatcherHostDelegate>
-      resource_dispatcher_host_delegate_;
+  static bool allow_any_cors_exempt_header_for_browser_;
 
-  base::Closure select_client_certificate_callback_;
-  base::Callback<bool(const service_manager::Identity&)>
+  base::OnceClosure select_client_certificate_callback_;
+  base::OnceCallback<bool(const service_manager::Identity&)>
       should_terminate_on_service_quit_callback_;
-  base::Callback<void()> login_request_callback_;
+  base::OnceCallback<void(bool is_main_frame)> login_request_callback_;
+  base::RepeatingCallback<void(const network::mojom::URLLoaderFactoryParams*,
+                               const url::Origin&,
+                               bool is_for_isolated_world)>
+      url_loader_factory_params_callback_;
+  base::RepeatingCallback<void(
+      service_manager::BinderRegistry* registry,
+      blink::AssociatedInterfaceRegistry* associated_registry,
+      RenderProcessHost* render_process_host)>
+      expose_interfaces_to_renderer_callback_;
+  base::RepeatingCallback<void(
+      RenderFrameHost* render_frame_host,
+      service_manager::BinderMapWithContext<RenderFrameHost*>* map)>
+      register_browser_interface_binders_for_frame_callback_;
 
-  std::unique_ptr<
-      service_manager::BinderRegistryWithArgs<content::RenderFrameHost*>>
-      frame_interfaces_;
-
+  // Owned by content::BrowserMainLoop.
   ShellBrowserMainParts* shell_browser_main_parts_;
 };
 

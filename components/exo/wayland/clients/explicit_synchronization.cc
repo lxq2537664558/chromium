@@ -9,7 +9,8 @@
 #include "base/at_exit.h"
 #include "base/command_line.h"
 #include "base/files/scoped_file.h"
-#include "base/message_loop/message_loop.h"
+#include "base/message_loop/message_pump_type.h"
+#include "base/task/single_thread_task_executor.h"
 #include "components/exo/wayland/clients/client_helper.h"
 #include "third_party/skia/include/core/SkCanvas.h"
 #include "third_party/skia/include/core/SkSurface.h"
@@ -130,7 +131,7 @@ int main(int argc, char* argv[]) {
   if (!params.FromCommandLine(*command_line))
     return 1;
 
-  base::MessageLoopForUI message_loop;
+  base::SingleThreadTaskExecutor main_task_executor(base::MessagePumpType::UI);
   exo::wayland::clients::ExplicitSynchronizationClient client;
   if (!client.Init(params))
     return 1;

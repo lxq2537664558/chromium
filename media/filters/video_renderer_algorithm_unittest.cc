@@ -116,24 +116,11 @@ class VideoRendererAlgorithmTest : public testing::Test {
     if (!is_using_cadence())
       return false;
 
-    size_t size = algorithm_.cadence_estimator_.cadence_size_for_testing();
-    for (size_t i = 0; i < size; ++i) {
-      if (!algorithm_.cadence_estimator_.GetCadenceForFrame(i))
-        return true;
-    }
-
-    return false;
+    return algorithm_.cadence_estimator_.avg_cadence_for_testing() < 1.0;
   }
 
   double CadenceValue() const {
-    int num_render_intervals = 0;
-    size_t size = algorithm_.cadence_estimator_.cadence_size_for_testing();
-    for (size_t i = 0; i < size; ++i) {
-      num_render_intervals +=
-          algorithm_.cadence_estimator_.GetCadenceForFrame(i);
-    }
-
-    return (num_render_intervals + 0.0) / size;
+    return algorithm_.cadence_estimator_.avg_cadence_for_testing();
   }
 
   size_t frames_queued() const { return algorithm_.frame_queue_.size(); }
@@ -878,7 +865,7 @@ TEST_F(VideoRendererAlgorithmTest, BestFrameByCadence) {
     RunFramePumpTest(
         true, &frame_tg, &display_tg,
         [&current_frame, &actual_frame_pattern, desired_frame_pattern, this](
-            const scoped_refptr<VideoFrame>& frame, size_t frames_dropped) {
+            scoped_refptr<VideoFrame> frame, size_t frames_dropped) {
           ASSERT_TRUE(frame);
           ASSERT_EQ(0u, frames_dropped);
 
@@ -1124,18 +1111,18 @@ TEST_F(VideoRendererAlgorithmTest, BestFrameByFractionalCadence) {
     TickGenerator display_tg(tick_clock_->NowTicks(), test_rate[1]);
 
     scoped_refptr<VideoFrame> current_frame;
-    RunFramePumpTest(
-        true, &frame_tg, &display_tg,
-        [&current_frame, this](const scoped_refptr<VideoFrame>& frame,
-                               size_t frames_dropped) {
-          ASSERT_TRUE(frame);
+    RunFramePumpTest(true, &frame_tg, &display_tg,
+                     [&current_frame, this](scoped_refptr<VideoFrame> frame,
+                                            size_t frames_dropped) {
+                       ASSERT_TRUE(frame);
 
-          // We don't count frames dropped that cadence says we should skip.
-          ASSERT_EQ(0u, frames_dropped);
-          ASSERT_NE(current_frame, frame);
-          ASSERT_TRUE(is_using_cadence());
-          current_frame = frame;
-        });
+                       // We don't count frames dropped that cadence says we
+                       // should skip.
+                       ASSERT_EQ(0u, frames_dropped);
+                       ASSERT_NE(current_frame, frame);
+                       ASSERT_TRUE(is_using_cadence());
+                       current_frame = frame;
+                     });
 
     if (HasFatalFailure())
       return;
@@ -1157,7 +1144,7 @@ TEST_F(VideoRendererAlgorithmTest, FilmCadence) {
     RunFramePumpTest(
         true, &frame_tg, &display_tg,
         [&current_frame, &actual_frame_pattern, &desired_frame_pattern, this](
-            const scoped_refptr<VideoFrame>& frame, size_t frames_dropped) {
+            scoped_refptr<VideoFrame> frame, size_t frames_dropped) {
           ASSERT_TRUE(frame);
           ASSERT_EQ(0u, frames_dropped);
 
@@ -1362,7 +1349,7 @@ TEST_P(VideoRendererAlgorithmCadenceTest, CadenceTest) {
   TickGenerator display_tg(tick_clock_->NowTicks(), display_rate);
   RunFramePumpTest(
       true, &frame_tg, &display_tg,
-      [](const scoped_refptr<VideoFrame>& frame, size_t frames_dropped) {});
+      [](scoped_refptr<VideoFrame> frame, size_t frames_dropped) {});
 }
 
 // Common display rates.
@@ -1379,7 +1366,7 @@ const double kTestRates[] = {
     60,       72, 90,    100, 120,      144, 240,      300,
 };
 
-INSTANTIATE_TEST_SUITE_P(,
+INSTANTIATE_TEST_SUITE_P(All,
                          VideoRendererAlgorithmCadenceTest,
                          ::testing::Combine(::testing::ValuesIn(kDisplayRates),
                                             ::testing::ValuesIn(kTestRates)));
@@ -1399,7 +1386,7 @@ TEST_F(VideoRendererAlgorithmTest, VariablePlaybackRateCadence) {
     time_source_.SetPlaybackRate(playback_rate);
     RunFramePumpTest(
         false, &frame_tg, &display_tg,
-        [](const scoped_refptr<VideoFrame>& frame, size_t frames_dropped) {});
+        [](scoped_refptr<VideoFrame> frame, size_t frames_dropped) {});
     if (HasFatalFailure())
       return;
 
@@ -1634,6 +1621,38 @@ TEST_F(VideoRendererAlgorithmTest, UsesFrameDuration) {
   EXPECT_EQ(tg.interval(1), algorithm_.average_frame_duration());
   EXPECT_EQ(algorithm_.last_frame_end_time(),
             base::TimeTicks() + kLongDuration + tg.interval(1) * 3);
+}
+
+// Check that VideoRendererAlgorithm correctly sets WALLCLOCK_FRAME_DURATION
+// for each frame.
+TEST_F(VideoRendererAlgorithmTest, WallClockDurationMetadataSet) {
+  int playback_rate = 4;
+  int frame_count = 10;
+  TickGenerator tg(tick_clock_->NowTicks(), 25);
+
+  time_source_.SetPlaybackRate(playback_rate);
+  auto intended_duration = tg.interval(1) / playback_rate;
+
+  for (int i = 0; i < frame_count; i++) {
+    auto frame = CreateFrame(tg.interval(i));
+    frame->metadata()->SetTimeDelta(VideoFrameMetadata::FRAME_DURATION,
+                                    tg.interval(1));
+    algorithm_.EnqueueFrame(frame);
+  }
+
+  for (int i = 0; i < frame_count; i++) {
+    size_t frames_dropped = 0;
+    auto frame = RenderAndStep(&tg, &frames_dropped);
+
+    SCOPED_TRACE(base::StringPrintf("Frame #%d", i));
+    base::TimeDelta wallclock_duration;
+    EXPECT_TRUE(frame->metadata()->GetTimeDelta(
+        media::VideoFrameMetadata::WALLCLOCK_FRAME_DURATION,
+        &wallclock_duration));
+
+    EXPECT_EQ(wallclock_duration, intended_duration);
+    EXPECT_EQ(algorithm_.average_frame_duration(), intended_duration);
+  }
 }
 
 }  // namespace media

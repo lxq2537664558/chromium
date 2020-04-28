@@ -28,21 +28,15 @@ class TestableInputMethodChromeOS;
 
 // A ui::InputMethod implementation for ChromeOS.
 class COMPONENT_EXPORT(UI_BASE_IME_CHROMEOS) InputMethodChromeOS
-    : public InputMethodBase,
-      public AsyncKeyDispatcher {
+    : public InputMethodBase {
  public:
   explicit InputMethodChromeOS(internal::InputMethodDelegate* delegate);
   ~InputMethodChromeOS() override;
 
   using AckCallback = base::OnceCallback<void(bool)>;
 
-  // Overridden from AsyncKeyDispatcher:
-  void DispatchKeyEventAsync(ui::KeyEvent* event,
-                             AckCallback ack_callback) override;
-
   // Overridden from InputMethod:
   ui::EventDispatchDetails DispatchKeyEvent(ui::KeyEvent* event) override;
-  AsyncKeyDispatcher* GetAsyncKeyDispatcher() override;
   void OnTextInputTypeChanged(const TextInputClient* client) override;
   void OnCaretBoundsChanged(const TextInputClient* client) override;
   void CancelComposition(const TextInputClient* client) override;
@@ -50,12 +44,17 @@ class COMPONENT_EXPORT(UI_BASE_IME_CHROMEOS) InputMethodChromeOS
   InputMethodKeyboardController* GetInputMethodKeyboardController() override;
 
   // Overridden from InputMethodBase:
-  void OnFocus() override;
-  void OnBlur() override;
   void OnWillChangeFocusedClient(TextInputClient* focused_before,
                                  TextInputClient* focused) override;
   void OnDidChangeFocusedClient(TextInputClient* focused_before,
                                 TextInputClient* focused) override;
+  bool SetCompositionRange(
+      uint32_t before,
+      uint32_t after,
+      const std::vector<ui::ImeTextSpan>& text_spans) override;
+
+  bool SetSelectionRange(uint32_t start, uint32_t end) override;
+  void ConfirmCompositionText(bool reset_engine, bool keep_selection) override;
 
  protected:
   // Converts |text| into CompositionText.
@@ -66,24 +65,28 @@ class COMPONENT_EXPORT(UI_BASE_IME_CHROMEOS) InputMethodChromeOS
   // Process a key returned from the input method.
   virtual ui::EventDispatchDetails ProcessKeyEventPostIME(
       ui::KeyEvent* event,
-      ResultCallback result_callback,
       bool skip_process_filtered,
       bool handled,
       bool stopped_propagation) WARN_UNUSED_RESULT;
 
   // Resets context and abandon all pending results and key events.
-  void ResetContext();
+  // If |reset_engine| is true, a reset signal will be sent to the IME.
+  void ResetContext(bool reset_engine = true);
 
  private:
-  class MojoHelper;
   class PendingKeyEvent;
   friend TestableInputMethodChromeOS;
 
-  ui::EventDispatchDetails DispatchKeyEventInternal(ui::KeyEvent* event,
-                                                    AckCallback ack_callback);
+  // Representings a pending SetCompositionRange operation.
+  struct PendingSetCompositionRange {
+    PendingSetCompositionRange(const gfx::Range& range,
+                               const std::vector<ui::ImeTextSpan>& text_spans);
+    PendingSetCompositionRange(const PendingSetCompositionRange& other);
+    ~PendingSetCompositionRange();
 
-  // Asks the client to confirm current composition text.
-  void ConfirmCompositionText();
+    gfx::Range range;
+    std::vector<ui::ImeTextSpan> text_spans;
+  };
 
   // Checks the availability of focused text input client and update focus
   // state.
@@ -93,28 +96,12 @@ class COMPONENT_EXPORT(UI_BASE_IME_CHROMEOS) InputMethodChromeOS
   // A VKEY_PROCESSKEY may be dispatched to the EventTargets.
   // It returns the result of whether the event has been stopped propagation
   // when dispatching post IME.
-  ui::EventDispatchDetails ProcessFilteredKeyPressEvent(
-      ui::KeyEvent* event,
-      ResultCallback result_callback) WARN_UNUSED_RESULT;
-
-  // Post processes a key event that was already filtered by the input method.
-  void PostProcessFilteredKeyPressEvent(ui::KeyEvent* event,
-                                        TextInputClient* prev_client,
-                                        ResultCallback result_callback,
-                                        bool handled,
-                                        bool stopped_propagation);
+  ui::EventDispatchDetails ProcessFilteredKeyPressEvent(ui::KeyEvent* event)
+      WARN_UNUSED_RESULT;
 
   // Processes a key event that was not filtered by the input method.
-  ui::EventDispatchDetails ProcessUnfilteredKeyPressEvent(
-      ui::KeyEvent* event,
-      ResultCallback result_callback) WARN_UNUSED_RESULT;
-
-  // Post processes a key event that was unfiltered by the input method.
-  void PostProcessUnfilteredKeyPressEvent(ui::KeyEvent* event,
-                                          TextInputClient* prev_client,
-                                          ResultCallback result_callback,
-                                          bool handled,
-                                          bool stopped_propagation);
+  ui::EventDispatchDetails ProcessUnfilteredKeyPressEvent(ui::KeyEvent* event)
+      WARN_UNUSED_RESULT;
 
   // Sends input method result caused by the given key event to the focused text
   // input client.
@@ -141,14 +128,8 @@ class COMPONENT_EXPORT(UI_BASE_IME_CHROMEOS) InputMethodChromeOS
   // Hides the composition text.
   void HidePreeditText();
 
-  // Callback function for IMEEngineHandlerInterface::ProcessKeyEvent.
-  void KeyEventDoneCallback(ui::KeyEvent* event,
-                            ResultCallback result_callback,
-                            bool is_handled);
-  ui::EventDispatchDetails ProcessKeyEventDone(ui::KeyEvent* event,
-                                               ResultCallback result_callback,
-                                               bool is_handled)
-      WARN_UNUSED_RESULT;
+  // Called from the engine when it completes processing.
+  void ProcessKeyEventDone(ui::KeyEvent* event, bool is_handled);
 
   // Returns whether an non-password input field is focused.
   bool IsNonPasswordInputFieldFocused();
@@ -162,7 +143,7 @@ class COMPONENT_EXPORT(UI_BASE_IME_CHROMEOS) InputMethodChromeOS
   // Pending composition text generated by the current pending key event.
   // It'll be sent to the focused text input client as soon as we receive the
   // processing result of the pending key event.
-  CompositionText composition_;
+  CompositionText pending_composition_;
 
   // Pending result text generated by the current pending key event.
   // It'll be sent to the focused text input client as soon as we receive the
@@ -178,6 +159,9 @@ class COMPONENT_EXPORT(UI_BASE_IME_CHROMEOS) InputMethodChromeOS
   // Indicates if the composition text is changed or deleted.
   bool composition_changed_;
 
+  // Indicates whether there is a pending SetCompositionRange operation.
+  base::Optional<PendingSetCompositionRange> pending_composition_range_;
+
   // An object to compose a character from a sequence of key presses
   // including dead key etc.
   CharacterComposer character_composer_;
@@ -186,10 +170,8 @@ class COMPONENT_EXPORT(UI_BASE_IME_CHROMEOS) InputMethodChromeOS
   // This is used in CommitText/UpdateCompositionText/etc.
   bool handling_key_event_;
 
-  std::unique_ptr<MojoHelper> mojo_helper_;
-
   // Used for making callbacks.
-  base::WeakPtrFactory<InputMethodChromeOS> weak_ptr_factory_;
+  base::WeakPtrFactory<InputMethodChromeOS> weak_ptr_factory_{this};
 
   DISALLOW_COPY_AND_ASSIGN(InputMethodChromeOS);
 };

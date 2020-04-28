@@ -6,7 +6,6 @@
 
 #include "base/strings/string_number_conversions.h"
 #include "chrome/browser/browser_process.h"
-#include "chrome/browser/extensions/signin/gaia_auth_extension_loader.h"
 #include "chrome/browser/first_run/first_run.h"
 #include "chrome/browser/google/google_brand.h"
 #include "chrome/browser/profiles/profile.h"
@@ -18,7 +17,8 @@
 #include "components/google/core/common/google_util.h"
 #include "components/pref_registry/pref_registry_syncable.h"
 #include "components/prefs/pref_service.h"
-#include "components/signin/core/browser/account_consistency_method.h"
+#include "content/public/browser/browser_context.h"
+#include "extensions/browser/guest_view/web_view/web_view_guest.h"
 #include "google_apis/gaia/gaia_urls.h"
 #include "net/base/url_util.h"
 #include "url/gurl.h"
@@ -33,34 +33,6 @@ const char kSignInPromoQueryKeyAccessPoint[] = "access_point";
 const char kSignInPromoQueryKeyAutoClose[] = "auto_close";
 const char kSignInPromoQueryKeyForceKeepData[] = "force_keep_data";
 const char kSignInPromoQueryKeyReason[] = "reason";
-const char kSignInPromoQueryKeySource[] = "source";
-const char kSigninPromoLandingURLSuccessPage[] = "success.html";
-
-GURL GetLandingURL(signin_metrics::AccessPoint access_point) {
-  GURL url(extensions::kGaiaAuthExtensionOrigin);
-  GURL::Replacements replacements;
-  replacements.SetPathStr(kSigninPromoLandingURLSuccessPage);
-  url = url.ReplaceComponents(replacements);
-
-  url = net::AppendQueryParameter(
-      url, kSignInPromoQueryKeyAccessPoint,
-      base::NumberToString(static_cast<int>(access_point)));
-
-  // TODO(gogerald): right now, gaia server needs to distinguish the source from
-  // signin_metrics::SOURCE_START_PAGE, signin_metrics::SOURCE_SETTINGS and
-  // the others to show advanced sync settings, remove them after
-  // switching to Minute Maid sign in flow.
-  signin_metrics::Source source = signin_metrics::SOURCE_OTHERS;
-  if (access_point == signin_metrics::AccessPoint::ACCESS_POINT_START_PAGE) {
-    source = signin_metrics::SOURCE_START_PAGE;
-  } else if (access_point ==
-             signin_metrics::AccessPoint::ACCESS_POINT_SETTINGS) {
-    source = signin_metrics::SOURCE_SETTINGS;
-  }
-  url = net::AppendQueryParameter(url, signin::kSignInPromoQueryKeySource,
-                                  base::NumberToString(source));
-  return GURL(url);
-}
 
 #if !defined(OS_CHROMEOS)
 GURL GetEmbeddedPromoURL(signin_metrics::AccessPoint access_point,
@@ -119,8 +91,13 @@ GURL GetAddAccountURLForDice(const std::string& email,
   return url;
 }
 
-GURL GetSigninPartitionURL() {
-  return GURL("chrome-guest://chrome-signin/?");
+content::StoragePartition* GetSigninPartition(
+    content::BrowserContext* browser_context) {
+  const GURL signin_site_url =
+      extensions::WebViewGuest::GetSiteForGuestPartitionConfig(
+          "chrome-signin", /* partition_name= */ "", /* in_memory= */ true);
+  return content::BrowserContext::GetStoragePartitionForSite(browser_context,
+                                                             signin_site_url);
 }
 
 signin_metrics::AccessPoint GetAccessPointForEmbeddedPromoURL(const GURL& url) {
@@ -171,8 +148,6 @@ bool IsAutoCloseEnabledInEmbeddedURL(const GURL& url) {
 
 void RegisterProfilePrefs(
     user_prefs::PrefRegistrySyncable* registry) {
-  registry->RegisterBooleanPref(prefs::kSignInPromoShowOnFirstRunAllowed, true);
-  registry->RegisterBooleanPref(prefs::kSignInPromoShowNTPBubble, false);
   registry->RegisterIntegerPref(prefs::kDiceSigninUserMenuPromoCount, 0);
 }
 

@@ -13,7 +13,9 @@
 #include "base/component_export.h"
 #include "base/containers/stack_container.h"
 #include "base/macros.h"
+#include "mojo/public/cpp/bindings/connection_group.h"
 #include "mojo/public/cpp/bindings/lib/bindings_internal.h"
+#include "mojo/public/cpp/bindings/lib/pending_receiver_state.h"
 #include "mojo/public/cpp/bindings/scoped_interface_endpoint_handle.h"
 #include "mojo/public/cpp/system/handle.h"
 
@@ -28,14 +30,6 @@ class COMPONENT_EXPORT(MOJO_CPP_BINDINGS_BASE) SerializationContext {
  public:
   SerializationContext();
   ~SerializationContext();
-
-  void set_share_message_order_for_new_handles(bool share) {
-    share_message_order_for_new_handles_ = share;
-  }
-
-  bool has_handles_with_shared_message_order() const {
-    return has_handles_with_shared_message_order_;
-  }
 
   // Adds a handle to the handle list and outputs its serialized form in
   // |*out_data|.
@@ -59,13 +53,12 @@ class COMPONENT_EXPORT(MOJO_CPP_BINDINGS_BASE) SerializationContext {
                                   uint32_t version,
                                   AssociatedInterface_Data* out_data);
 
+  const ConnectionGroup::Ref* receiver_connection_group() const {
+    return receiver_connection_group_;
+  }
+
   const std::vector<mojo::ScopedHandle>* handles() { return &handles_; }
   std::vector<mojo::ScopedHandle>* mutable_handles() { return &handles_; }
-
-  const std::vector<MojoAppendMessageDataHandleOptions>* handle_options()
-      const {
-    return &handle_options_;
-  }
 
   const std::vector<ScopedInterfaceEndpointHandle>*
   associated_endpoint_handles() const {
@@ -90,25 +83,23 @@ class COMPONENT_EXPORT(MOJO_CPP_BINDINGS_BASE) SerializationContext {
     return ScopedHandleBase<T>::From(TakeHandle(encoded_handle));
   }
 
+  // Takes a handle from the list of serialized handle data and stuffs it into
+  // the internal data of an InterfaceRequest or PendingReceiver.
+  void TakeHandleAsReceiver(const Handle_Data& encoded_handle,
+                            PendingReceiverState* receiver_state);
+
   mojo::ScopedInterfaceEndpointHandle TakeAssociatedEndpointHandle(
       const AssociatedEndpointHandle_Data& encoded_handle);
 
  private:
-  // Whenever this is |true|, newly added interface handles are marked for
-  // splicing into the sendng interface pipe upon message transmission.
-  bool share_message_order_for_new_handles_ = false;
-
-  // Indicates whether any handles were added to this context while
-  // |share_message_order_for_new_handles_| was |true|.
-  bool has_handles_with_shared_message_order_ = false;
+  // The ConnectionGroup to which deserialized PendingReceivers should be added,
+  // if any.
+  const ConnectionGroup::Ref* receiver_connection_group_ = nullptr;
 
   // Handles owned by this object. Used during serialization to hold onto
   // handles accumulated during pre-serialization, and used during
   // deserialization to hold onto handles extracted from a message.
   std::vector<mojo::ScopedHandle> handles_;
-
-  // Options for each of the attached handles.
-  std::vector<MojoAppendMessageDataHandleOptions> handle_options_;
 
   // Stashes ScopedInterfaceEndpointHandles encoded in a message by index.
   std::vector<ScopedInterfaceEndpointHandle> associated_endpoint_handles_;

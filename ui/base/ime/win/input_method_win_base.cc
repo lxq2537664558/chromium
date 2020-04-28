@@ -10,7 +10,6 @@
 
 #include "base/auto_reset.h"
 #include "base/bind.h"
-#include "base/bind_helpers.h"
 #include "base/command_line.h"
 #include "base/memory/ptr_util.h"
 #include "base/win/windows_version.h"
@@ -23,10 +22,9 @@
 #include "ui/base/ui_base_features.h"
 #include "ui/display/win/screen_win.h"
 #include "ui/events/event.h"
-#include "ui/events/event_constants.h"
 #include "ui/events/event_utils.h"
 #include "ui/events/keycodes/keyboard_codes.h"
-#include "ui/gfx/win/hwnd_util.h"
+#include "ui/events/types/event_type.h"
 
 namespace ui {
 namespace {
@@ -38,10 +36,10 @@ constexpr size_t kExtraNumberOfChars = 20;
 std::unique_ptr<InputMethodKeyboardController> CreateKeyboardController(
     HWND toplevel_window_handle) {
   if (base::FeatureList::IsEnabled(features::kInputPaneOnScreenKeyboard) &&
-      base::win::GetVersion() >= base::win::VERSION_WIN10_RS4) {
+      base::win::GetVersion() >= base::win::Version::WIN10_RS4) {
     return std::make_unique<OnScreenKeyboardDisplayManagerInputPane>(
         toplevel_window_handle);
-  } else if (base::win::GetVersion() >= base::win::VERSION_WIN8) {
+  } else if (base::win::GetVersion() >= base::win::Version::WIN8) {
     return std::make_unique<OnScreenKeyboardDisplayManagerTabTip>(
         toplevel_window_handle);
   }
@@ -164,8 +162,7 @@ InputMethodWinBase::InputMethodWinBase(internal::InputMethodDelegate* delegate,
     : InputMethodBase(delegate,
                       CreateKeyboardController(toplevel_window_handle)),
       toplevel_window_handle_(toplevel_window_handle),
-      pending_requested_direction_(base::i18n::UNKNOWN_DIRECTION),
-      weak_ptr_factory_(this) {}
+      pending_requested_direction_(base::i18n::UNKNOWN_DIRECTION) {}
 
 InputMethodWinBase::~InputMethodWinBase() {}
 
@@ -245,8 +242,7 @@ ui::EventDispatchDetails InputMethodWinBase::DispatchKeyEvent(
   // 1) |char_msgs| is empty when the event is non-character key.
   // 2) |char_msgs|.size() == 1 when the event is character key and the WM_CHAR
   // messages have been combined in the event processing flow.
-  if (char_msgs.size() <= 1 && GetEngine() &&
-      GetEngine()->IsInterestedInKeyEvent()) {
+  if (char_msgs.size() <= 1 && GetEngine()) {
     ui::IMEEngineHandlerInterface::KeyEventDoneCallback callback =
         base::BindOnce(&InputMethodWinBase::ProcessKeyEventDone,
                        weak_ptr_factory_.GetWeakPtr(),
@@ -297,12 +293,6 @@ LRESULT InputMethodWinBase::OnChar(HWND window_handle,
       GetTextInputClient()->InsertChar(char_event);
     }
   }
-
-  // Explicitly show the system menu at a good location on [Alt]+[Space].
-  // Note: Setting |handled| to FALSE for DefWindowProc triggering of the system
-  //       menu causes undesirable titlebar artifacts in the classic theme.
-  if (message == WM_SYSCHAR && wparam == VK_SPACE)
-    gfx::ShowSystemMenu(window_handle);
 
   return 0;
 }
@@ -500,8 +490,7 @@ ui::EventDispatchDetails InputMethodWinBase::ProcessUnhandledKeyEvent(
     ui::KeyEvent* event,
     const std::vector<MSG>* char_msgs) {
   DCHECK(event);
-  ui::EventDispatchDetails details =
-      DispatchKeyEventPostIME(event, base::NullCallback());
+  ui::EventDispatchDetails details = DispatchKeyEventPostIME(event);
   if (details.dispatcher_destroyed || details.target_destroyed ||
       event->stopped_propagation()) {
     return details;

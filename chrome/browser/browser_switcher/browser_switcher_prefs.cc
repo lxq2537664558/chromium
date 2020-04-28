@@ -6,32 +6,58 @@
 
 #include "base/bind.h"
 #include "base/callback.h"
+#include "base/files/file_path.h"
 #include "base/metrics/histogram_macros.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/threading/thread_task_runner_handle.h"
 #include "build/build_config.h"
 #include "chrome/browser/browser_switcher/browser_switcher_sitelist.h"
 #include "chrome/browser/policy/profile_policy_connector.h"
-#include "chrome/browser/policy/profile_policy_connector_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "components/pref_registry/pref_registry_syncable.h"
 #include "components/prefs/pref_service.h"
 #include "content/public/browser/browser_thread.h"
 
+#if defined(OS_WIN)
+#include <windows.h>
+#endif
+
 namespace browser_switcher {
 
+namespace {
+
+std::vector<std::string> GetCachedRules(PrefService* prefs,
+                                        const std::string& pref_name) {
+  std::vector<std::string> rules;
+  for (const auto& url : *prefs->GetList(pref_name))
+    rules.push_back(url.GetString());
+  return rules;
+}
+
+void SetCachedRules(PrefService* prefs,
+                    const std::string& pref_name,
+                    const std::vector<std::string>& rules) {
+  base::ListValue rules_val;
+  for (const auto& url : rules)
+    rules_val.Append(base::Value(url));
+  prefs->Set(pref_name, rules_val);
+}
+
+}  // namespace
+
 RuleSet::RuleSet() = default;
+RuleSet::RuleSet(const RuleSet&) = default;
 RuleSet::~RuleSet() = default;
 
 BrowserSwitcherPrefs::BrowserSwitcherPrefs(Profile* profile)
     : BrowserSwitcherPrefs(
           profile->GetPrefs(),
-          policy::ProfilePolicyConnectorFactory::GetForBrowserContext(profile)
-              ->policy_service()) {}
+          profile->GetProfilePolicyConnector()->policy_service()) {}
 
 BrowserSwitcherPrefs::BrowserSwitcherPrefs(
     PrefService* prefs,
     policy::PolicyService* policy_service)
-    : policy_service_(policy_service), prefs_(prefs), weak_ptr_factory_(this) {
+    : policy_service_(policy_service), prefs_(prefs) {
   filtering_change_registrar_.Init(prefs_);
 
   const struct {
@@ -73,6 +99,7 @@ BrowserSwitcherPrefs::BrowserSwitcherPrefs(
     prefs::kUrlList,
     prefs::kUrlGreylist,
     prefs::kExternalSitelistUrl,
+    prefs::kExternalGreylistUrl,
 #if defined(OS_WIN)
     prefs::kUseIeSitelist,
     prefs::kChromePath,
@@ -107,8 +134,12 @@ void BrowserSwitcherPrefs::RegisterProfilePrefs(
   registry->RegisterListPref(prefs::kUrlList);
   registry->RegisterListPref(prefs::kUrlGreylist);
   registry->RegisterStringPref(prefs::kExternalSitelistUrl, "");
+  registry->RegisterListPref(prefs::kCachedExternalSitelist);
+  registry->RegisterStringPref(prefs::kExternalGreylistUrl, "");
+  registry->RegisterListPref(prefs::kCachedExternalGreylist);
 #if defined(OS_WIN)
   registry->RegisterBooleanPref(prefs::kUseIeSitelist, false);
+  registry->RegisterListPref(prefs::kCachedIeSitelist);
   registry->RegisterStringPref(prefs::kChromePath, "");
   registry->RegisterListPref(prefs::kChromeParameters);
 #endif
@@ -140,20 +171,57 @@ const RuleSet& BrowserSwitcherPrefs::GetRules() const {
   return rules_;
 }
 
+std::vector<std::string> BrowserSwitcherPrefs::GetCachedExternalSitelist()
+    const {
+  return GetCachedRules(prefs_, prefs::kCachedExternalSitelist);
+}
+
+void BrowserSwitcherPrefs::SetCachedExternalSitelist(
+    const std::vector<std::string>& sitelist) {
+  SetCachedRules(prefs_, prefs::kCachedExternalSitelist, sitelist);
+}
+
+std::vector<std::string> BrowserSwitcherPrefs::GetCachedExternalGreylist()
+    const {
+  return GetCachedRules(prefs_, prefs::kCachedExternalGreylist);
+}
+
+void BrowserSwitcherPrefs::SetCachedExternalGreylist(
+    const std::vector<std::string>& greylist) {
+  SetCachedRules(prefs_, prefs::kCachedExternalGreylist, greylist);
+}
+
+#if defined(OS_WIN)
+std::vector<std::string> BrowserSwitcherPrefs::GetCachedIeemSitelist() const {
+  return GetCachedRules(prefs_, prefs::kCachedIeSitelist);
+}
+
+void BrowserSwitcherPrefs::SetCachedIeemSitelist(
+    const std::vector<std::string>& sitelist) {
+  SetCachedRules(prefs_, prefs::kCachedIeSitelist, sitelist);
+}
+#endif
+
 GURL BrowserSwitcherPrefs::GetExternalSitelistUrl() const {
-  if (!prefs_->IsManagedPreference(prefs::kExternalSitelistUrl))
+  if (!IsEnabled() || !prefs_->IsManagedPreference(prefs::kExternalSitelistUrl))
     return GURL();
   return GURL(prefs_->GetString(prefs::kExternalSitelistUrl));
 }
 
+GURL BrowserSwitcherPrefs::GetExternalGreylistUrl() const {
+  if (!IsEnabled() || !prefs_->IsManagedPreference(prefs::kExternalGreylistUrl))
+    return GURL();
+  return GURL(prefs_->GetString(prefs::kExternalGreylistUrl));
+}
+
 #if defined(OS_WIN)
 bool BrowserSwitcherPrefs::UseIeSitelist() const {
-  if (!prefs_->IsManagedPreference(prefs::kUseIeSitelist))
+  if (!IsEnabled() || !prefs_->IsManagedPreference(prefs::kUseIeSitelist))
     return false;
   return prefs_->GetBoolean(prefs::kUseIeSitelist);
 }
 
-const std::string& BrowserSwitcherPrefs::GetChromePath() const {
+const base::FilePath& BrowserSwitcherPrefs::GetChromePath() const {
   return chrome_path_;
 }
 
@@ -181,13 +249,13 @@ BrowserSwitcherPrefs::RegisterPrefsChangedCallback(
 
 void BrowserSwitcherPrefs::RunCallbacksIfDirty() {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  if (dirty_)
-    callback_list_.Notify(this);
-  dirty_ = false;
+  if (!dirty_prefs_.empty())
+    callback_list_.Notify(this, dirty_prefs_);
+  dirty_prefs_.clear();
 }
 
-void BrowserSwitcherPrefs::MarkDirty() {
-  dirty_ = true;
+void BrowserSwitcherPrefs::MarkDirty(const std::string& pref_name) {
+  dirty_prefs_.push_back(pref_name);
 }
 
 void BrowserSwitcherPrefs::AlternativeBrowserPathChanged() {
@@ -257,7 +325,14 @@ void BrowserSwitcherPrefs::GreylistChanged() {
 void BrowserSwitcherPrefs::ChromePathChanged() {
   chrome_path_.clear();
   if (prefs_->IsManagedPreference(prefs::kChromePath))
-    chrome_path_ = prefs_->GetString(prefs::kChromePath);
+    chrome_path_ = prefs_->GetFilePath(prefs::kChromePath);
+#if defined(OS_WIN)
+  if (chrome_path_.empty()) {
+    base::FilePath::CharType chrome_path[MAX_PATH];
+    ::GetModuleFileName(NULL, chrome_path, ARRAYSIZE(chrome_path));
+    chrome_path_ = base::FilePath(chrome_path);
+  }
+#endif
 }
 
 void BrowserSwitcherPrefs::ChromeParametersChanged() {
@@ -295,10 +370,18 @@ const char kUrlGreylist[] = "browser_switcher.url_greylist";
 
 // URL with an external XML sitelist file to load.
 const char kExternalSitelistUrl[] = "browser_switcher.external_sitelist_url";
+const char kCachedExternalSitelist[] =
+    "browser_switcher.cached_external_sitelist";
+
+// URL with an external XML greylist file to load.
+const char kExternalGreylistUrl[] = "browser_switcher.external_greylist_url";
+const char kCachedExternalGreylist[] =
+    "browser_switcher.cached_external_greylist";
 
 #if defined(OS_WIN)
 // If set to true, use the IE Enterprise Mode Sitelist policy.
 const char kUseIeSitelist[] = "browser_switcher.use_ie_sitelist";
+const char kCachedIeSitelist[] = "browser_switcher.cached_ie_sitelist";
 
 // Path to the Chrome executable for the alternative browser.
 const char kChromePath[] = "browser_switcher.chrome_path";

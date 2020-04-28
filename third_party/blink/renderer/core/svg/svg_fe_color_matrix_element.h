@@ -36,15 +36,13 @@ class SVGFEColorMatrixElement final
   DEFINE_WRAPPERTYPEINFO();
 
  public:
-  DECLARE_NODE_FACTORY(SVGFEColorMatrixElement);
-
   explicit SVGFEColorMatrixElement(Document&);
 
   SVGAnimatedNumberList* values() { return values_.Get(); }
   SVGAnimatedString* in1() { return in1_.Get(); }
   SVGAnimatedEnumeration<ColorMatrixType>* type() { return type_.Get(); }
 
-  void Trace(blink::Visitor*) override;
+  void Trace(Visitor*) override;
 
  private:
   bool SetFilterEffectAttribute(FilterEffect*, const QualifiedName&) override;

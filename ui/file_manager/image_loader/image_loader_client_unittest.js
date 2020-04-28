@@ -36,11 +36,11 @@ function loadAndCheckCacheUsed(client, url, cache) {
     if (callback) {
       callback(new LoadImageResponse(
           LoadImageResponseStatus.SUCCESS, message.taskId || -1,
-          {data: 'ImageData', width: 100, height: 100}));
+          {width: 100, height: 100, ifd: null, data: 'ImageData'}));
     }
   };
 
-  let request = LoadImageRequest.createForUrl(url);
+  const request = LoadImageRequest.createForUrl(url);
   request.cache = cache;
 
   return new Promise(function(fulfill) {
@@ -51,7 +51,7 @@ function loadAndCheckCacheUsed(client, url, cache) {
 }
 
 function testCache(callback) {
-  var client = new ImageLoaderClient();
+  const client = new ImageLoaderClient();
   reportPromise(
       loadAndCheckCacheUsed(client, 'http://example.com/image.jpg', true)
           .then(function(cacheUsed) {
@@ -66,7 +66,7 @@ function testCache(callback) {
 }
 
 function testNoCache(callback) {
-  var client = new ImageLoaderClient();
+  const client = new ImageLoaderClient();
   reportPromise(
       loadAndCheckCacheUsed(client, 'http://example.com/image.jpg', false)
           .then(function(cacheUsed) {
@@ -81,7 +81,7 @@ function testNoCache(callback) {
 }
 
 function testDataURLCache(callback) {
-  var client = new ImageLoaderClient();
+  const client = new ImageLoaderClient();
   reportPromise(
       loadAndCheckCacheUsed(client, 'data:URI', true)
           .then(function(cacheUsed) {

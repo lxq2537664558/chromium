@@ -33,7 +33,8 @@ namespace {
 // activity to simulate idle time and verify that idle samples are dropped.
 class DemoSessionMetricsRecorderTest : public AshTestBase {
  public:
-  DemoSessionMetricsRecorderTest() = default;
+  DemoSessionMetricsRecorderTest()
+      : AshTestBase(base::test::TaskEnvironment::TimeSource::MOCK_TIME) {}
   ~DemoSessionMetricsRecorderTest() override = default;
 
   // AshTestBase:
@@ -130,7 +131,7 @@ class DemoSessionMetricsRecorderTest : public AshTestBase {
         kShelfIDKey,
         new std::string(ShelfID(app_id, std::string()).Serialize()));
     if (!package_name.empty())
-      window->SetProperty(kArcPackageNameKey, new std::string(package_name));
+      window->SetProperty(kArcPackageNameKey, package_name);
     return window;
   }
 
@@ -670,6 +671,24 @@ TEST_F(DemoSessionMetricsRecorderTest, AppLaunched) {
   histogram_tester_->ExpectBucketCount(
       "DemoMode.AppLaunched",
       DemoSessionMetricsRecorder::DemoModeApp::kOtherArcApp, 2);
+}
+
+TEST_F(DemoSessionMetricsRecorderTest, DwellTime) {
+  // Simulate user activity for 10 seconds.
+  SendUserActivity();
+
+  task_environment()->FastForwardBy(base::TimeDelta::FromSeconds(5));
+  SendUserActivity();
+
+  task_environment()->FastForwardBy(base::TimeDelta::FromSeconds(5));
+  SendUserActivity();
+
+  // Simulate a session "timing out" after 60 seconds.
+  task_environment()->FastForwardBy(base::TimeDelta::FromSeconds(60));
+  DeleteMetricsRecorder();
+
+  // The recorded dwell time should be 10 seconds.
+  histogram_tester_->ExpectUniqueSample("DemoMode.DwellTime", 10, 1);
 }
 
 }  // namespace

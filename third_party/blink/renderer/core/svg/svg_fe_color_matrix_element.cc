@@ -39,7 +39,7 @@ const SVGEnumerationMap& GetEnumerationMap<ColorMatrixType>() {
   return entries;
 }
 
-inline SVGFEColorMatrixElement::SVGFEColorMatrixElement(Document& document)
+SVGFEColorMatrixElement::SVGFEColorMatrixElement(Document& document)
     : SVGFilterPrimitiveStandardAttributes(svg_names::kFEColorMatrixTag,
                                            document),
       values_(
@@ -55,14 +55,12 @@ inline SVGFEColorMatrixElement::SVGFEColorMatrixElement(Document& document)
   AddToPropertyMap(type_);
 }
 
-void SVGFEColorMatrixElement::Trace(blink::Visitor* visitor) {
+void SVGFEColorMatrixElement::Trace(Visitor* visitor) {
   visitor->Trace(values_);
   visitor->Trace(in1_);
   visitor->Trace(type_);
   SVGFilterPrimitiveStandardAttributes::Trace(visitor);
 }
-
-DEFINE_NODE_FACTORY(SVGFEColorMatrixElement)
 
 bool SVGFEColorMatrixElement::SetFilterEffectAttribute(
     FilterEffect* effect,
@@ -102,9 +100,8 @@ FilterEffect* SVGFEColorMatrixElement::Build(SVGFilterBuilder* filter_builder,
   DCHECK(input1);
 
   ColorMatrixType filter_type = type_->CurrentValue()->EnumValue();
-  Vector<float> filter_values = values_->CurrentValue()->ToFloatVector();
-  auto* effect =
-      MakeGarbageCollected<FEColorMatrix>(filter, filter_type, filter_values);
+  auto* effect = MakeGarbageCollected<FEColorMatrix>(
+      filter, filter_type, values_->CurrentValue()->ToFloatVector());
   effect->InputEffects().push_back(input1);
   return effect;
 }

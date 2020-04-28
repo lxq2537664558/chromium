@@ -51,6 +51,24 @@ bool ReadLaunchDimension(const extensions::Manifest* manifest,
   return true;
 }
 
+bool HasValidComponentBookmarkAppURL(const GURL& url) {
+  // For component Bookmark Apps we additionally accept chrome:// and
+  // chrome-untrusted://.
+  //
+  // Making chrome-untrusted:// work with URLPattern has many side-effects e.g.
+  // it makes chrome-untrusted:// URLs scriptable. Given that
+  // chrome-untrusted:// support is only needed temporarily until Bookmark Apps
+  // are deprecated, we simply check the parsed URL scheme, rather than adding
+  // chrome-untrusted:// to URLPattern and dealing with all the side-effects.
+  if (url.SchemeIs(content::kChromeUIScheme))
+    return true;
+  if (url.SchemeIs(content::kChromeUIUntrustedScheme))
+    return true;
+
+  URLPattern pattern(Extension::kValidBookmarkAppSchemes);
+  return pattern.IsValidScheme(url.scheme());
+}
+
 static base::LazyInstance<AppLaunchInfo>::DestructorAtExit
     g_empty_app_launch_info = LAZY_INSTANCE_INITIALIZER;
 
@@ -63,10 +81,9 @@ const AppLaunchInfo& GetAppLaunchInfo(const Extension* extension) {
 }  // namespace
 
 AppLaunchInfo::AppLaunchInfo()
-    : launch_container_(LAUNCH_CONTAINER_TAB),
+    : launch_container_(LaunchContainer::kLaunchContainerTab),
       launch_width_(0),
-      launch_height_(0) {
-}
+      launch_height_(0) {}
 
 AppLaunchInfo::~AppLaunchInfo() {
 }
@@ -158,21 +175,37 @@ bool AppLaunchInfo::LoadLaunchURL(Extension* extension, base::string16* error) {
       return false;
     }
 
+    auto set_launch_web_url_error = [&]() {
+      *error = ErrorUtils::FormatErrorMessageUTF16(errors::kInvalidLaunchValue,
+                                                   keys::kLaunchWebURL);
+    };
     // Ensure the launch web URL is a valid absolute URL and web extent scheme.
     GURL url(launch_url);
-    URLPattern pattern(Extension::kValidWebExtentSchemes);
-    if (extension->from_bookmark()) {
-      // System Web Apps are bookmark apps that point to chrome:// URLs.
-      int valid_schemes = Extension::kValidBookmarkAppSchemes;
-      if (extension->location() == Manifest::EXTERNAL_COMPONENT)
-        valid_schemes |= URLPattern::SCHEME_CHROMEUI;
-      pattern.SetValidSchemes(valid_schemes);
-    }
-    if ((!url.is_valid() || !pattern.SetScheme(url.scheme()))) {
-      *error = ErrorUtils::FormatErrorMessageUTF16(
-          errors::kInvalidLaunchValue,
-          keys::kLaunchWebURL);
+    if (!url.is_valid()) {
+      set_launch_web_url_error();
       return false;
+    }
+
+    if (!extension->from_bookmark()) {
+      URLPattern pattern(Extension::kValidWebExtentSchemes);
+      // For non-Bookmark Apps, we only accept kValidWebExtentSchemes.
+      if (!pattern.IsValidScheme(url.scheme())) {
+        set_launch_web_url_error();
+        return false;
+      }
+    } else if (extension->location() != Manifest::EXTERNAL_COMPONENT) {
+      // For non-component Bookmark Apps we only accept
+      // kValidBookmarkAppSchemes.
+      URLPattern pattern(Extension::kValidBookmarkAppSchemes);
+      if (!pattern.IsValidScheme(url.scheme())) {
+        set_launch_web_url_error();
+        return false;
+      }
+    } else {
+      if (!HasValidComponentBookmarkAppURL(url)) {
+        set_launch_web_url_error();
+        return false;
+      }
     }
 
     launch_web_url_ = url;
@@ -244,9 +277,9 @@ bool AppLaunchInfo::LoadLaunchContainer(Extension* extension,
   }
 
   if (launch_container_string == values::kLaunchContainerPanelDeprecated) {
-    launch_container_ = LAUNCH_CONTAINER_PANEL_DEPRECATED;
+    launch_container_ = LaunchContainer::kLaunchContainerPanelDeprecated;
   } else if (launch_container_string == values::kLaunchContainerTab) {
-    launch_container_ = LAUNCH_CONTAINER_TAB;
+    launch_container_ = LaunchContainer::kLaunchContainerTab;
   } else {
     *error = base::ASCIIToUTF16(errors::kInvalidLaunchContainer);
     return false;
@@ -255,7 +288,7 @@ bool AppLaunchInfo::LoadLaunchContainer(Extension* extension,
   // TODO(manucornet): Remove this special behavior now that panels are
   // deprecated.
   bool can_specify_initial_size =
-      launch_container_ == LAUNCH_CONTAINER_PANEL_DEPRECATED;
+      launch_container_ == LaunchContainer::kLaunchContainerPanelDeprecated;
 
   // Validate the container width if present.
   if (!ReadLaunchDimension(extension->manifest(),

@@ -16,12 +16,14 @@
 namespace viz {
 
 SkiaOutputDeviceX11::SkiaOutputDeviceX11(
-    GrContext* gr_context,
+    scoped_refptr<gpu::SharedContextState> context_state,
     gfx::AcceleratedWidget widget,
+    gpu::MemoryTracker* memory_tracker,
     DidSwapBufferCompleteCallback did_swap_buffer_complete_callback)
-    : SkiaOutputDeviceOffscreen(gr_context,
-                                false /* flipped */,
+    : SkiaOutputDeviceOffscreen(context_state,
+                                gfx::SurfaceOrigin::kTopLeft,
                                 true /* has_alpha */,
+                                memory_tracker,
                                 did_swap_buffer_complete_callback),
       display_(gfx::GetXDisplay()),
       widget_(widget),
@@ -32,42 +34,49 @@ SkiaOutputDeviceX11::SkiaOutputDeviceX11(
   bpp_ = gfx::BitsPerPixelForPixmapDepth(display_, attributes_.depth);
   support_rendr_ = ui::QueryRenderSupport(display_);
 
-  capabilities_.flipped_output_surface = false;
-  capabilities_.supports_post_sub_buffer = true;
+  // |capabilities_| should be set by SkiaOutputDeviceOffscreen.
+  DCHECK_EQ(capabilities_.output_surface_origin, gfx::SurfaceOrigin::kTopLeft);
+  DCHECK(capabilities_.supports_post_sub_buffer);
 }
 
 SkiaOutputDeviceX11::~SkiaOutputDeviceX11() {
   XFreeGC(display_, gc_);
 }
 
-void SkiaOutputDeviceX11::Reshape(const gfx::Size& size,
+bool SkiaOutputDeviceX11::Reshape(const gfx::Size& size,
                                   float device_scale_factor,
                                   const gfx::ColorSpace& color_space,
-                                  bool has_alpha) {
-  SkiaOutputDeviceOffscreen::Reshape(size, device_scale_factor, color_space,
-                                     has_alpha);
+                                  gfx::BufferFormat format,
+                                  gfx::OverlayTransform transform) {
+  if (!SkiaOutputDeviceOffscreen::Reshape(size, device_scale_factor,
+                                          color_space, format, transform)) {
+    return false;
+  }
   auto ii =
       SkImageInfo::MakeN32(size.width(), size.height(), kOpaque_SkAlphaType);
   pixels_.reserve(ii.computeMinByteSize());
+  return true;
 }
 
-gfx::SwapResponse SkiaOutputDeviceX11::SwapBuffers(
-    BufferPresentedCallback feedback) {
+void SkiaOutputDeviceX11::SwapBuffers(
+    BufferPresentedCallback feedback,
+    std::vector<ui::LatencyInfo> latency_info) {
   return PostSubBuffer(
-      gfx::Rect(0, 0, draw_surface_->width(), draw_surface_->height()),
-      std::move(feedback));
+      gfx::Rect(0, 0, sk_surface_->width(), sk_surface_->height()),
+      std::move(feedback), std::move(latency_info));
 }
 
-gfx::SwapResponse SkiaOutputDeviceX11::PostSubBuffer(
+void SkiaOutputDeviceX11::PostSubBuffer(
     const gfx::Rect& rect,
-    BufferPresentedCallback feedback) {
+    BufferPresentedCallback feedback,
+    std::vector<ui::LatencyInfo> latency_info) {
   StartSwapBuffers(std::move(feedback));
 
   auto ii =
       SkImageInfo::MakeN32(rect.width(), rect.height(), kOpaque_SkAlphaType);
   DCHECK_GE(pixels_.capacity(), ii.computeMinByteSize());
   SkPixmap sk_pixmap(ii, pixels_.data(), ii.minRowBytes());
-  bool result = draw_surface_->readPixels(sk_pixmap, rect.x(), rect.y());
+  bool result = sk_surface_->readPixels(sk_pixmap, rect.x(), rect.y());
   LOG_IF(FATAL, !result) << "Failed to read pixels from offscreen SkSurface.";
 
   if (bpp_ == 32 || bpp_ == 16) {
@@ -128,7 +137,9 @@ gfx::SwapResponse SkiaOutputDeviceX11::PostSubBuffer(
     NOTIMPLEMENTED();
   }
   XFlush(display_);
-  return FinishSwapBuffers(gfx::SwapResult::SWAP_ACK);
+  FinishSwapBuffers(gfx::SwapResult::SWAP_ACK,
+                    gfx::Size(sk_surface_->width(), sk_surface_->height()),
+                    std::move(latency_info));
 }
 
 }  // namespace viz

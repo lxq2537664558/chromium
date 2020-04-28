@@ -62,14 +62,16 @@ class BulletView : public views::View {
 PublicAccountWarningDialog::PublicAccountWarningDialog(
     base::WeakPtr<LoginExpandedPublicAccountView> controller)
     : controller_(controller) {
+  DialogDelegate::SetButtons(ui::DIALOG_BUTTON_NONE);
   SetLayoutManager(std::make_unique<views::BoxLayout>(
-      views::BoxLayout::kVertical, gfx::Insets(), kBetweenLabelPaddingDp));
+      views::BoxLayout::Orientation::kVertical, gfx::Insets(),
+      kBetweenLabelPaddingDp));
   SetBorder(views::CreateEmptyBorder(gfx::Insets(kDialogContentMarginDp)));
 
   auto add_bulleted_label = [&](const base::string16& text) {
     auto* container = new views::View();
-    container->SetLayoutManager(
-        std::make_unique<views::BoxLayout>(views::BoxLayout::kHorizontal));
+    container->SetLayoutManager(std::make_unique<views::BoxLayout>(
+        views::BoxLayout::Orientation::kHorizontal));
 
     auto* label = new views::Label(text);
     label->SetMultiLine(true);
@@ -79,7 +81,8 @@ PublicAccountWarningDialog::PublicAccountWarningDialog(
         1, gfx::Font::FontStyle::NORMAL, gfx::Font::Weight::NORMAL));
     label->SetEnabledColor(SK_ColorGRAY);
 
-    auto* bullet_view = new BulletView(label->enabled_color(), kBulletRadiusDp);
+    auto* bullet_view =
+        new BulletView(label->GetEnabledColor(), kBulletRadiusDp);
     bullet_view->SetPreferredSize(
         gfx::Size(kBulletContainerSizeDp, kBulletContainerSizeDp));
 
@@ -114,10 +117,6 @@ bool PublicAccountWarningDialog::IsVisible() {
 void PublicAccountWarningDialog::Show() {
   if (GetWidget())
     GetWidget()->Show();
-}
-
-int PublicAccountWarningDialog::GetDialogButtons() const {
-  return ui::DIALOG_BUTTON_NONE;
 }
 
 void PublicAccountWarningDialog::AddedToWidget() {

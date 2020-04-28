@@ -9,6 +9,7 @@
 
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/post_task.h"
+#include "build/build_config.h"
 #include "components/content_capture/browser/content_capture_receiver_manager.h"
 #include "content/public/browser/content_browser_client.h"
 #include "content/public/browser/web_contents.h"
@@ -32,18 +33,39 @@ class FakeContentCaptureSender {
     content_capture_receiver_->DidCaptureContent(captured_content, first_data);
   }
 
+  void DidUpdateContent(const ContentCaptureData& captured_content) {
+    content_capture_receiver_->DidUpdateContent(captured_content);
+  }
+
   void DidRemoveContent(const std::vector<int64_t>& data) {
     content_capture_receiver_->DidRemoveContent(data);
   }
 
-  mojom::ContentCaptureReceiverAssociatedRequest GetAssociatedRequest() {
-    return mojo::MakeRequestAssociatedWithDedicatedPipe(
-        &content_capture_receiver_);
+  mojo::PendingAssociatedReceiver<mojom::ContentCaptureReceiver>
+  GetPendingAssociatedReceiver() {
+    return content_capture_receiver_
+        .BindNewEndpointAndPassDedicatedReceiverForTesting();
   }
 
  private:
-  mojom::ContentCaptureReceiverAssociatedPtr content_capture_receiver_ =
-      nullptr;
+  mojo::AssociatedRemote<mojom::ContentCaptureReceiver>
+      content_capture_receiver_;
+};
+
+class SessionRemovedTestHelper {
+ public:
+  void DidRemoveSession(const ContentCaptureSession& data) {
+    removed_sessions_.push_back(data);
+  }
+
+  const std::vector<ContentCaptureSession>& removed_sessions() const {
+    return removed_sessions_;
+  }
+
+  void Reset() { removed_sessions_.clear(); }
+
+ private:
+  std::vector<ContentCaptureSession> removed_sessions_;
 };
 
 // The helper class implements ContentCaptureReceiverManager and keeps the
@@ -51,17 +73,28 @@ class FakeContentCaptureSender {
 class ContentCaptureReceiverManagerHelper
     : public ContentCaptureReceiverManager {
  public:
-  static void Create(content::WebContents* web_contents) {
-    new ContentCaptureReceiverManagerHelper(web_contents);
+  static void Create(content::WebContents* web_contents,
+                     SessionRemovedTestHelper* session_removed_test_helper) {
+    new ContentCaptureReceiverManagerHelper(web_contents,
+                                            session_removed_test_helper);
   }
 
-  ContentCaptureReceiverManagerHelper(content::WebContents* web_contents)
-      : ContentCaptureReceiverManager(web_contents) {}
+  ContentCaptureReceiverManagerHelper(
+      content::WebContents* web_contents,
+      SessionRemovedTestHelper* session_removed_test_helper)
+      : ContentCaptureReceiverManager(web_contents),
+        session_removed_test_helper_(session_removed_test_helper) {}
 
   void DidCaptureContent(const ContentCaptureSession& parent_session,
                          const ContentCaptureData& data) override {
     parent_session_ = parent_session;
     captured_data_ = data;
+  }
+
+  void DidUpdateContent(const ContentCaptureSession& parent_session,
+                        const ContentCaptureData& data) override {
+    updated_parent_session_ = parent_session;
+    updated_data_ = data;
   }
 
   void DidRemoveContent(const ContentCaptureSession& session,
@@ -71,7 +104,9 @@ class ContentCaptureReceiverManagerHelper
   }
 
   void DidRemoveSession(const ContentCaptureSession& data) override {
-    removed_session_ = data;
+    if (session_removed_test_helper_)
+      session_removed_test_helper_->DidRemoveSession(data);
+    removed_sessions_.push_back(data);
   }
 
   bool ShouldCapture(const GURL& url) override { return false; }
@@ -80,29 +115,48 @@ class ContentCaptureReceiverManagerHelper
     return parent_session_;
   }
 
+  const ContentCaptureSession& updated_parent_session() const {
+    return updated_parent_session_;
+  }
+
   const ContentCaptureSession& session() const { return session_; }
 
   const ContentCaptureData& captured_data() const { return captured_data_; }
 
-  const ContentCaptureSession& removed_session() const {
-    return removed_session_;
+  const ContentCaptureData& updated_data() const { return updated_data_; }
+
+  const std::vector<ContentCaptureSession>& removed_sessions() const {
+    return removed_sessions_;
   }
 
   const std::vector<int64_t>& removed_ids() const { return removed_ids_; }
 
+  void Reset() { removed_sessions_.clear(); }
+
+  ContentCaptureReceiver* GetContentCaptureReceiver(
+      content::RenderFrameHost* rfh) const {
+    return ContentCaptureReceiverForFrame(rfh);
+  }
+
  private:
   ContentCaptureSession parent_session_;
+  ContentCaptureSession updated_parent_session_;
   ContentCaptureSession session_;
   ContentCaptureData captured_data_;
+  ContentCaptureData updated_data_;
   std::vector<int64_t> removed_ids_;
-  ContentCaptureSession removed_session_;
+  std::vector<ContentCaptureSession> removed_sessions_;
+  SessionRemovedTestHelper* session_removed_test_helper_;
 };
+
+}  // namespace
 
 class ContentCaptureReceiverTest : public content::RenderViewHostTestHarness {
  public:
   void SetUp() override {
     content::RenderViewHostTestHarness::SetUp();
-    ContentCaptureReceiverManagerHelper::Create(web_contents());
+    ContentCaptureReceiverManagerHelper::Create(web_contents(),
+                                                &session_removed_test_helper_);
     content_capture_receiver_manager_helper_ =
         static_cast<ContentCaptureReceiverManagerHelper*>(
             ContentCaptureReceiverManager::FromWebContents(web_contents()));
@@ -113,7 +167,7 @@ class ContentCaptureReceiverTest : public content::RenderViewHostTestHarness {
     main_frame_ = web_contents()->GetMainFrame();
     // Binds sender with receiver.
     ContentCaptureReceiverManager::BindContentCaptureReceiver(
-        content_capture_sender_->GetAssociatedRequest(), main_frame_);
+        content_capture_sender_->GetPendingAssociatedReceiver(), main_frame_);
 
     ContentCaptureData child;
     // Have the unique id for text content.
@@ -127,6 +181,16 @@ class ContentCaptureReceiverTest : public content::RenderViewHostTestHarness {
     test_data2_.value = base::ASCIIToUTF16(kChildFrameUrl);
     test_data2_.bounds = gfx::Rect(10, 10);
     test_data2_.children.push_back(child);
+
+    ContentCaptureData child_change;
+    // Same ID with child.
+    child_change.id = 2;
+    child_change.value = base::ASCIIToUTF16("Hello World");
+    child_change.bounds = gfx::Rect(5, 5, 5, 5);
+    test_data_change_.value = base::ASCIIToUTF16(kMainFrameUrl);
+    test_data_change_.bounds = gfx::Rect(10, 10);
+    test_data_change_.children.push_back(child_change);
+
     // Update to test_data_.
     ContentCaptureData child2;
     // Have the unique id for text content.
@@ -139,6 +203,7 @@ class ContentCaptureReceiverTest : public content::RenderViewHostTestHarness {
   }
 
   void NavigateMainFrame(const GURL& url) {
+    content_capture_receiver_manager_helper()->Reset();
     NavigateAndCommit(url);
     main_frame_ = web_contents()->GetMainFrame();
   }
@@ -150,7 +215,8 @@ class ContentCaptureReceiverTest : public content::RenderViewHostTestHarness {
         content::RenderFrameHostTester::For(main_frame_)->AppendChild("child");
     // Binds sender with receiver for child frame.
     ContentCaptureReceiverManager::BindContentCaptureReceiver(
-        child_content_capture_sender_->GetAssociatedRequest(), child_frame_);
+        child_content_capture_sender_->GetPendingAssociatedReceiver(),
+        child_frame_);
   }
 
   FakeContentCaptureSender* content_capture_sender() {
@@ -162,6 +228,9 @@ class ContentCaptureReceiverTest : public content::RenderViewHostTestHarness {
   }
 
   const ContentCaptureData& test_data() const { return test_data_; }
+  const ContentCaptureData& test_data_change() const {
+    return test_data_change_;
+  }
   const ContentCaptureData& test_data2() const { return test_data2_; }
   const ContentCaptureData& test_data_update() const {
     return test_data_update_;
@@ -175,6 +244,13 @@ class ContentCaptureReceiverTest : public content::RenderViewHostTestHarness {
     // Replaces the id with expected id.
     expected.id = ContentCaptureReceiver::GetIdFrom(main_frame ? main_frame_
                                                                : child_frame_);
+    return expected;
+  }
+
+  ContentCaptureData GetExpectedTestDataChange(int64_t expected_id) const {
+    ContentCaptureData expected(test_data_change_);
+    // Replaces the id with expected id.
+    expected.id = expected_id;
     return expected;
   }
 
@@ -197,6 +273,10 @@ class ContentCaptureReceiverTest : public content::RenderViewHostTestHarness {
   ContentCaptureReceiverManagerHelper* content_capture_receiver_manager_helper()
       const {
     return content_capture_receiver_manager_helper_;
+  }
+
+  SessionRemovedTestHelper* session_removed_test_helper() {
+    return &session_removed_test_helper_;
   }
 
   void VerifySession(const ContentCaptureSession& expected,
@@ -226,10 +306,27 @@ class ContentCaptureReceiverTest : public content::RenderViewHostTestHarness {
     run_loop.RunUntilIdle();
   }
 
+  void DidUpdateContent(const ContentCaptureData& updated_content) {
+    base::RunLoop run_loop;
+    content_capture_sender()->DidUpdateContent(updated_content);
+    run_loop.RunUntilIdle();
+  }
+
   void DidRemoveContent(const std::vector<int64_t>& data) {
     base::RunLoop run_loop;
     content_capture_sender()->DidRemoveContent(data);
     run_loop.RunUntilIdle();
+  }
+
+  void BuildChildSession(const ContentCaptureSession& parent,
+                         const ContentCaptureData& data,
+                         ContentCaptureSession* child) {
+    ContentCaptureData child_frame = data;
+    child_frame.children.clear();
+    child->clear();
+    child->push_back(child_frame);
+    DCHECK(parent.size() == 1);
+    child->push_back(parent.front());
   }
 
  protected:
@@ -244,10 +341,12 @@ class ContentCaptureReceiverTest : public content::RenderViewHostTestHarness {
   content::RenderFrameHost* main_frame_ = nullptr;
   content::RenderFrameHost* child_frame_ = nullptr;
   ContentCaptureData test_data_;
+  ContentCaptureData test_data_change_;
   ContentCaptureData test_data2_;
   ContentCaptureData test_data_update_;
   // Expected removed Ids.
   std::vector<int64_t> expected_removed_ids_{2};
+  SessionRemovedTestHelper session_removed_test_helper_;
 };
 
 TEST_F(ContentCaptureReceiverTest, DidCaptureContent) {
@@ -255,18 +354,25 @@ TEST_F(ContentCaptureReceiverTest, DidCaptureContent) {
   EXPECT_TRUE(
       content_capture_receiver_manager_helper()->parent_session().empty());
   EXPECT_TRUE(
-      content_capture_receiver_manager_helper()->removed_session().empty());
+      content_capture_receiver_manager_helper()->removed_sessions().empty());
   EXPECT_EQ(GetExpectedTestData(true /* main_frame */),
             content_capture_receiver_manager_helper()->captured_data());
 }
 
-TEST_F(ContentCaptureReceiverTest, DidCaptureContentWithUpdate) {
+// TODO(https://crbug.com/1010179): Fix flakes on win10_chromium_x64_rel_ng and
+// re-enable this test.
+#if defined(OS_WIN)
+#define MAYBE_DidCaptureContentWithUpdate DISABLED_DidCaptureContentWithUpdate
+#else
+#define MAYBE_DidCaptureContentWithUpdate DidCaptureContentWithUpdate
+#endif
+TEST_F(ContentCaptureReceiverTest, MAYBE_DidCaptureContentWithUpdate) {
   DidCaptureContent(test_data(), true /* first_data */);
   // Verifies to get test_data() with correct frame content id.
   EXPECT_TRUE(
       content_capture_receiver_manager_helper()->parent_session().empty());
   EXPECT_TRUE(
-      content_capture_receiver_manager_helper()->removed_session().empty());
+      content_capture_receiver_manager_helper()->removed_sessions().empty());
   EXPECT_EQ(GetExpectedTestData(true /* main_frame */),
             content_capture_receiver_manager_helper()->captured_data());
   // Simulates to update the content within the same document.
@@ -276,9 +382,37 @@ TEST_F(ContentCaptureReceiverTest, DidCaptureContentWithUpdate) {
       content_capture_receiver_manager_helper()->parent_session().empty());
   // Verifies that the sesssion isn't removed.
   EXPECT_TRUE(
-      content_capture_receiver_manager_helper()->removed_session().empty());
+      content_capture_receiver_manager_helper()->removed_sessions().empty());
   EXPECT_EQ(GetExpectedTestDataUpdate(true /* main_frame */),
             content_capture_receiver_manager_helper()->captured_data());
+}
+
+// TODO(https://crbug.com/1011204): Fix flakes on win10_chromium_x64_rel_ng and
+// re-enable this test.
+#if defined(OS_WIN)
+#define MAYBE_DidUpdateContent DISABLED_DidUpdateContent
+#else
+#define MAYBE_DidUpdateContent DidUpdateContent
+#endif
+TEST_F(ContentCaptureReceiverTest, MAYBE_DidUpdateContent) {
+  DidCaptureContent(test_data(), true /* first_data */);
+  EXPECT_TRUE(
+      content_capture_receiver_manager_helper()->parent_session().empty());
+  EXPECT_TRUE(
+      content_capture_receiver_manager_helper()->removed_sessions().empty());
+  ContentCaptureData expected_data = GetExpectedTestData(true /* main_frame */);
+  EXPECT_EQ(expected_data,
+            content_capture_receiver_manager_helper()->captured_data());
+
+  // Simulate content change.
+  DidUpdateContent(test_data_change());
+  EXPECT_TRUE(content_capture_receiver_manager_helper()
+                  ->updated_parent_session()
+                  .empty());
+  EXPECT_TRUE(
+      content_capture_receiver_manager_helper()->removed_sessions().empty());
+  EXPECT_EQ(GetExpectedTestDataChange(expected_data.id),
+            content_capture_receiver_manager_helper()->updated_data());
 }
 
 TEST_F(ContentCaptureReceiverTest, DidRemoveSession) {
@@ -287,7 +421,7 @@ TEST_F(ContentCaptureReceiverTest, DidRemoveSession) {
   EXPECT_TRUE(
       content_capture_receiver_manager_helper()->parent_session().empty());
   EXPECT_TRUE(
-      content_capture_receiver_manager_helper()->removed_session().empty());
+      content_capture_receiver_manager_helper()->removed_sessions().empty());
   EXPECT_EQ(GetExpectedTestData(true /* main_frame */),
             content_capture_receiver_manager_helper()->captured_data());
   // Simulates to navigate other document.
@@ -296,11 +430,12 @@ TEST_F(ContentCaptureReceiverTest, DidRemoveSession) {
       content_capture_receiver_manager_helper()->parent_session().empty());
   // Verifies that the previous session was removed.
   EXPECT_EQ(
-      1u, content_capture_receiver_manager_helper()->removed_session().size());
+      1u, content_capture_receiver_manager_helper()->removed_sessions().size());
   std::vector<ContentCaptureData> expected{
       GetExpectedTestData(true /* main_frame */)};
-  VerifySession(expected,
-                content_capture_receiver_manager_helper()->removed_session());
+  VerifySession(
+      expected,
+      content_capture_receiver_manager_helper()->removed_sessions().front());
   // Verifies that we get the test_data2() from the new document.
   EXPECT_EQ(GetExpectedTestData2(true /* main_frame */),
             content_capture_receiver_manager_helper()->captured_data());
@@ -312,7 +447,7 @@ TEST_F(ContentCaptureReceiverTest, DidRemoveContent) {
   EXPECT_TRUE(
       content_capture_receiver_manager_helper()->parent_session().empty());
   EXPECT_TRUE(
-      content_capture_receiver_manager_helper()->removed_session().empty());
+      content_capture_receiver_manager_helper()->removed_sessions().empty());
   EXPECT_EQ(GetExpectedTestData(true /* main_frame */),
             content_capture_receiver_manager_helper()->captured_data());
   // Simulates to remove the content.
@@ -320,7 +455,7 @@ TEST_F(ContentCaptureReceiverTest, DidRemoveContent) {
   EXPECT_TRUE(
       content_capture_receiver_manager_helper()->parent_session().empty());
   EXPECT_TRUE(
-      content_capture_receiver_manager_helper()->removed_session().empty());
+      content_capture_receiver_manager_helper()->removed_sessions().empty());
   // Verifies that the removed_ids() was removed from the correct session.
   EXPECT_EQ(expected_removed_ids(),
             content_capture_receiver_manager_helper()->removed_ids());
@@ -338,7 +473,7 @@ TEST_F(ContentCaptureReceiverTest, ChildFrameDidCaptureContent) {
   EXPECT_TRUE(
       content_capture_receiver_manager_helper()->parent_session().empty());
   EXPECT_TRUE(
-      content_capture_receiver_manager_helper()->removed_session().empty());
+      content_capture_receiver_manager_helper()->removed_sessions().empty());
   EXPECT_EQ(GetExpectedTestData(true /* main_frame */),
             content_capture_receiver_manager_helper()->captured_data());
   // Simulate to capture the content from child frame.
@@ -351,13 +486,36 @@ TEST_F(ContentCaptureReceiverTest, ChildFrameDidCaptureContent) {
   VerifySession(expected,
                 content_capture_receiver_manager_helper()->parent_session());
   EXPECT_TRUE(
-      content_capture_receiver_manager_helper()->removed_session().empty());
+      content_capture_receiver_manager_helper()->removed_sessions().empty());
   // Verifies that we receive the correct content from child frame.
   EXPECT_EQ(GetExpectedTestData2(false /* main_frame */),
             content_capture_receiver_manager_helper()->captured_data());
 }
 
-TEST_F(ContentCaptureReceiverTest, ChildFrameCaptureContentFirst) {
+// This test is for issue crbug.com/995121 .
+TEST_F(ContentCaptureReceiverTest, RenderFrameHostGone) {
+  auto* receiver =
+      content_capture_receiver_manager_helper()->GetContentCaptureReceiver(
+          web_contents()->GetMainFrame());
+  // No good way to simulate crbug.com/995121, just set rfh_ to nullptr in
+  // ContentCaptureReceiver, so content::WebContents::FromRenderFrameHost()
+  // won't return WebContents.
+  receiver->rfh_ = nullptr;
+  // Ensure no crash.
+  DidCaptureContent(test_data(), true /* first_data */);
+  DidUpdateContent(test_data());
+  DidRemoveContent(expected_removed_ids());
+}
+
+// TODO(https://crbug.com/1010416): Fix flakes on win10_chromium_x64_rel_ng and
+// re-enable this test.
+#if defined(OS_WIN)
+#define MAYBE_ChildFrameCaptureContentFirst \
+  DISABLED_ChildFrameCaptureContentFirst
+#else
+#define MAYBE_ChildFrameCaptureContentFirst ChildFrameCaptureContentFirst
+#endif
+TEST_F(ContentCaptureReceiverTest, MAYBE_ChildFrameCaptureContentFirst) {
   // Simulate add child frame.
   SetupChildFrame();
   // Simulate to capture the content from child frame.
@@ -369,15 +527,24 @@ TEST_F(ContentCaptureReceiverTest, ChildFrameCaptureContentFirst) {
   ContentCaptureData data = GetExpectedTestData(true /* main_frame */);
   // Currently, there is no way to fake frame size, set it to 0.
   data.bounds = gfx::Rect();
-  std::vector<ContentCaptureData> expected{data};
+  ContentCaptureSession expected{data};
 
   VerifySession(expected,
                 content_capture_receiver_manager_helper()->parent_session());
   EXPECT_TRUE(
-      content_capture_receiver_manager_helper()->removed_session().empty());
+      content_capture_receiver_manager_helper()->removed_sessions().empty());
   // Verifies that we receive the correct content from child frame.
   EXPECT_EQ(GetExpectedTestData2(false /* main_frame */),
             content_capture_receiver_manager_helper()->captured_data());
+
+  // Get the child session, so we can verify that it has been removed in next
+  // navigation
+  ContentCaptureData child_frame = GetExpectedTestData2(false);
+  // child_frame.children.clear();
+  ContentCaptureSession removed_child_session;
+  BuildChildSession(expected,
+                    content_capture_receiver_manager_helper()->captured_data(),
+                    &removed_child_session);
 
   // When main frame navigates to same url, the parent session will not change.
   NavigateMainFrame(GURL(kMainFrameUrl));
@@ -385,8 +552,19 @@ TEST_F(ContentCaptureReceiverTest, ChildFrameCaptureContentFirst) {
   DidCaptureContentForChildFrame(test_data2(), true /* first_data */);
   VerifySession(expected,
                 content_capture_receiver_manager_helper()->parent_session());
-  EXPECT_TRUE(
-      content_capture_receiver_manager_helper()->removed_session().empty());
+  // Verify the child frame is removed.
+  EXPECT_EQ(
+      1u, content_capture_receiver_manager_helper()->removed_sessions().size());
+  VerifySession(
+      removed_child_session,
+      content_capture_receiver_manager_helper()->removed_sessions().front());
+
+  // Get main and child session to verify that they are removed in next
+  // navigateion.
+  ContentCaptureSession removed_main_session = expected;
+  BuildChildSession(expected,
+                    content_capture_receiver_manager_helper()->captured_data(),
+                    &removed_child_session);
 
   // When main frame navigates to same domain, the parent session will change.
   NavigateMainFrame(GURL(kMainFrameUrl2));
@@ -404,6 +582,24 @@ TEST_F(ContentCaptureReceiverTest, ChildFrameCaptureContentFirst) {
   expected.push_back(data);
   VerifySession(expected,
                 content_capture_receiver_manager_helper()->parent_session());
+  // There are two sessions removed, one the main frame because we navigate to
+  // different URL (though the domain is same), another one is child frame
+  // because of the main frame change.
+  EXPECT_EQ(
+      2u, content_capture_receiver_manager_helper()->removed_sessions().size());
+
+  VerifySession(
+      removed_child_session,
+      content_capture_receiver_manager_helper()->removed_sessions().front());
+  VerifySession(
+      removed_main_session,
+      content_capture_receiver_manager_helper()->removed_sessions().back());
+
+  // Keep current sessions to verify removed sessions later.
+  removed_main_session = expected;
+  BuildChildSession(expected,
+                    content_capture_receiver_manager_helper()->captured_data(),
+                    &removed_child_session);
 
   // When main frame navigates to different domain, the parent session will
   // change.
@@ -418,6 +614,28 @@ TEST_F(ContentCaptureReceiverTest, ChildFrameCaptureContentFirst) {
   expected.push_back(data);
   VerifySession(expected,
                 content_capture_receiver_manager_helper()->parent_session());
+  EXPECT_EQ(
+      2u, content_capture_receiver_manager_helper()->removed_sessions().size());
+  VerifySession(
+      removed_child_session,
+      content_capture_receiver_manager_helper()->removed_sessions().front());
+  VerifySession(
+      removed_main_session,
+      content_capture_receiver_manager_helper()->removed_sessions().back());
+
+  // Keep current sessions to verify removed sessions later.
+  removed_main_session = expected;
+  BuildChildSession(expected,
+                    content_capture_receiver_manager_helper()->captured_data(),
+                    &removed_child_session);
+
+  session_removed_test_helper()->Reset();
+  DeleteContents();
+  EXPECT_EQ(2u, session_removed_test_helper()->removed_sessions().size());
+  VerifySession(removed_child_session,
+                session_removed_test_helper()->removed_sessions().front());
+  VerifySession(removed_main_session,
+                session_removed_test_helper()->removed_sessions().back());
 }
 
 class ContentCaptureReceiverMultipleFrameTest
@@ -431,7 +649,7 @@ class ContentCaptureReceiverMultipleFrameTest
     NavigateAndCommit(GURL("about:blank"));
     content::RenderFrameHostTester::For(web_contents()->GetMainFrame())
         ->AppendChild("child");
-    ContentCaptureReceiverManagerHelper::Create(web_contents());
+    ContentCaptureReceiverManagerHelper::Create(web_contents(), nullptr);
     content_capture_receiver_manager_helper_ =
         static_cast<ContentCaptureReceiverManagerHelper*>(
             ContentCaptureReceiverManager::FromWebContents(web_contents()));
@@ -440,11 +658,19 @@ class ContentCaptureReceiverMultipleFrameTest
   void TearDown() override { content::RenderViewHostTestHarness::TearDown(); }
 };
 
+// TODO(https://crbug.com/1010417): Fix flakes on win10_chromium_x64_rel_ng and
+// re-enable this test.
+#if defined(OS_WIN)
+#define MAYBE_ReceiverCreatedForExistingFrame \
+  DISABLED_ReceiverCreatedForExistingFrame
+#else
+#define MAYBE_ReceiverCreatedForExistingFrame ReceiverCreatedForExistingFrame
+#endif
 TEST_F(ContentCaptureReceiverMultipleFrameTest,
-       ReceiverCreatedForExistingFrame) {
+       MAYBE_ReceiverCreatedForExistingFrame) {
   EXPECT_EQ(
       2u,
       content_capture_receiver_manager_helper()->GetFrameMapSizeForTesting());
 }
-}  // namespace
+
 }  // namespace content_capture

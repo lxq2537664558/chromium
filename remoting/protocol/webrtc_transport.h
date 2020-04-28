@@ -17,6 +17,7 @@
 #include "base/timer/timer.h"
 #include "crypto/hmac.h"
 #include "remoting/base/session_options.h"
+#include "remoting/protocol/session_options_provider.h"
 #include "remoting/protocol/transport.h"
 #include "remoting/protocol/webrtc_data_stream_adapter.h"
 #include "remoting/protocol/webrtc_dummy_video_encoder.h"
@@ -30,7 +31,7 @@ class TransportContext;
 class MessagePipe;
 class WebrtcAudioModule;
 
-class WebrtcTransport : public Transport {
+class WebrtcTransport : public Transport, public SessionOptionsProvider {
  public:
   class EventHandler {
    public:
@@ -79,23 +80,25 @@ class WebrtcTransport : public Transport {
   // any messages.
   std::unique_ptr<MessagePipe> CreateOutgoingChannel(const std::string& name);
 
-  // Transport interface.
+  // Transport implementations.
   void Start(Authenticator* authenticator,
              SendTransportInfoCallback send_transport_info_callback) override;
   bool ProcessTransportInfo(jingle_xmpp::XmlElement* transport_info) override;
+
+  // SessionOptionsProvider implementations.
+  const SessionOptions& session_options() const override;
+
   void Close(ErrorCode error);
 
   void ApplySessionOptions(const SessionOptions& options);
 
-  // Called when a new AudioSender has been created from
-  // PeerConnection::AddTrack().
-  void OnAudioSenderCreated(
-      rtc::scoped_refptr<webrtc::RtpSenderInterface> sender);
+  // Called when a new audio transceiver has been created by the PeerConnection.
+  void OnAudioTransceiverCreated(
+      rtc::scoped_refptr<webrtc::RtpTransceiverInterface> transceiver);
 
-  // Called when a new VideoSender has been created from
-  // PeerConnection::AddTrack().
-  void OnVideoSenderCreated(
-      rtc::scoped_refptr<webrtc::RtpSenderInterface> sender);
+  // Called when a new video transceiver has been created by the PeerConnection.
+  void OnVideoTransceiverCreated(
+      rtc::scoped_refptr<webrtc::RtpTransceiverInterface> transceiver);
 
  private:
   // PeerConnectionWrapper is responsible for PeerConnection creation,
@@ -184,7 +187,11 @@ class WebrtcTransport : public Transport {
 
   std::string preferred_video_codec_;
 
-  base::WeakPtrFactory<WebrtcTransport> weak_factory_;
+  SessionOptions session_options_;
+
+  rtc::scoped_refptr<webrtc::RtpTransceiverInterface> video_transceiver_;
+
+  base::WeakPtrFactory<WebrtcTransport> weak_factory_{this};
 
   DISALLOW_COPY_AND_ASSIGN(WebrtcTransport);
 };

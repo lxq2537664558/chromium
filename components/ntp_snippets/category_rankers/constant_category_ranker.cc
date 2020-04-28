@@ -12,9 +12,7 @@
 namespace ntp_snippets {
 
 namespace {
-// All categories must be present. An exception is
-// KnownCategories::CONTEXTUAL because it is not handled by
-// ContentSuggestionsService.
+// All categories must be present.
 constexpr KnownCategories kKnownCategoriesDefaultOrder[] = {
     KnownCategories::READING_LIST,
     KnownCategories::ARTICLES,
@@ -32,11 +30,11 @@ ConstantCategoryRanker::ConstantCategoryRanker() {
 ConstantCategoryRanker::~ConstantCategoryRanker() = default;
 
 bool ConstantCategoryRanker::Compare(Category left, Category right) const {
-  if (!base::ContainsValue(ordered_categories_, left)) {
+  if (!base::Contains(ordered_categories_, left)) {
     LOG(DFATAL) << "The category with ID " << left.id()
                 << " has not been added using AppendCategoryIfNecessary.";
   }
-  if (!base::ContainsValue(ordered_categories_, right)) {
+  if (!base::Contains(ordered_categories_, right)) {
     LOG(DFATAL) << "The category with ID " << right.id()
                 << " has not been added using AppendCategoryIfNecessary.";
   }
@@ -64,7 +62,7 @@ void ConstantCategoryRanker::ClearHistory(base::Time begin, base::Time end) {
 }
 
 void ConstantCategoryRanker::AppendCategoryIfNecessary(Category category) {
-  if (!base::ContainsValue(ordered_categories_, category)) {
+  if (!base::Contains(ordered_categories_, category)) {
     ordered_categories_.push_back(category);
   }
 }
@@ -115,7 +113,7 @@ void ConstantCategoryRanker::OnCategoryDismissed(Category category) {
 std::vector<KnownCategories>
 ConstantCategoryRanker::GetKnownCategoriesDefaultOrder() {
   static_assert(
-      static_cast<size_t>(KnownCategories::LOCAL_CATEGORIES_COUNT) == 7,
+      static_cast<size_t>(KnownCategories::LOCAL_CATEGORIES_COUNT) == 6,
       "Number of local categories has changed, please update "
       "ConstantCategoryRanker::kKnownCategoriesDefaultOrder to list all "
       "local KnownCategories for all orders.");
@@ -129,7 +127,7 @@ ConstantCategoryRanker::GetKnownCategoriesDefaultOrder() {
 void ConstantCategoryRanker::AppendKnownCategory(
     KnownCategories known_category) {
   Category category = Category::FromKnownCategory(known_category);
-  DCHECK(!base::ContainsValue(ordered_categories_, category));
+  DCHECK(!base::Contains(ordered_categories_, category));
   ordered_categories_.push_back(category);
 }
 

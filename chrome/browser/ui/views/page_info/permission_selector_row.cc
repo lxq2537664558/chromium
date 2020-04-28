@@ -8,12 +8,13 @@
 #include "base/i18n/rtl.h"
 #include "base/macros.h"
 #include "base/strings/utf_string_conversions.h"
-#include "chrome/browser/ui/page_info/page_info_ui.h"
+#include "chrome/browser/ui/page_info/chrome_page_info_ui_delegate.h"
 #include "chrome/browser/ui/page_info/permission_menu_model.h"
 #include "chrome/browser/ui/views/accessibility/non_accessible_image_view.h"
 #include "chrome/browser/ui/views/chrome_layout_provider.h"
 #include "chrome/browser/ui/views/chrome_typography.h"
 #include "chrome/browser/ui/views/page_info/page_info_bubble_view.h"
+#include "components/page_info/page_info_ui.h"
 #include "components/strings/grit/components_strings.h"
 #include "ui/accessibility/ax_node_data.h"
 #include "ui/base/l10n/l10n_util.h"
@@ -126,7 +127,6 @@ PermissionCombobox::PermissionCombobox(ComboboxModelAdapter* model,
   SetEnabled(enabled);
   UpdateSelectedIndex(use_default);
   set_size_to_largest_label(false);
-  ModelChanged();
 }
 
 PermissionCombobox::~PermissionCombobox() {}
@@ -146,7 +146,7 @@ gfx::Size PermissionCombobox::CalculatePreferredSize() const {
 }
 
 void PermissionCombobox::OnPerformAction(Combobox* combobox) {
-  model_->OnPerformAction(combobox->selected_index());
+  model_->OnPerformAction(combobox->GetSelectedIndex());
 }
 
 }  // namespace internal
@@ -168,31 +168,31 @@ PermissionSelectorRow::PermissionSelectorRow(
                               views::GridLayout::kFixedSize, list_item_padding);
 
   // Create the permission icon and label.
-  icon_ = new NonAccessibleImageView();
-  layout->AddView(icon_);
+  icon_ = layout->AddView(std::make_unique<NonAccessibleImageView>());
   // Create the label that displays the permission type.
-  label_ =
-      new views::Label(PageInfoUI::PermissionTypeToUIString(permission.type),
-                       CONTEXT_BODY_TEXT_LARGE);
+  auto label = std::make_unique<views::Label>(
+      PageInfoUI::PermissionTypeToUIString(permission.type),
+      CONTEXT_BODY_TEXT_LARGE);
   icon_->SetImage(
-      PageInfoUI::GetPermissionIcon(permission, label_->enabled_color()));
-  layout->AddView(label_);
+      PageInfoUI::GetPermissionIcon(permission, label->GetEnabledColor()));
+  label_ = layout->AddView(std::move(label));
   // Create the menu model.
-  menu_model_.reset(new PermissionMenuModel(
+  menu_model_ = std::make_unique<PermissionMenuModel>(
       profile, url, permission,
       base::Bind(&PermissionSelectorRow::PermissionChanged,
-                 base::Unretained(this))));
+                 base::Unretained(this)));
 
   // Create the permission combobox.
   InitializeComboboxView(layout, permission);
 
   // Show the permission decision reason, if it was not the user.
-  base::string16 reason =
-      PageInfoUI::PermissionDecisionReasonToUIString(profile, permission, url);
+  auto delegate = ChromePageInfoUiDelegate(profile);
+  base::string16 reason = PageInfoUI::PermissionDecisionReasonToUIString(
+      &delegate, permission, url);
   if (!reason.empty()) {
     layout->StartRow(1.0, PageInfoBubbleView::kPermissionColumnSetId);
     layout->SkipColumns(1);
-    views::Label* secondary_label = new views::Label(reason);
+    auto secondary_label = std::make_unique<views::Label>(reason);
     secondary_label->SetHorizontalAlignment(gfx::ALIGN_LEFT);
     secondary_label->SetEnabledColor(PageInfoUI::GetSecondaryTextColor());
     // The |secondary_label| should wrap when it's too long instead of
@@ -213,11 +213,11 @@ PermissionSelectorRow::PermissionSelectorRow(
     // display.
     constexpr int kMaxSecondaryLabelWidth = 140;
     if (preferred_width > kMaxSecondaryLabelWidth) {
-      layout->AddView(secondary_label, column_span, 1.0,
+      layout->AddView(std::move(secondary_label), column_span, 1.0,
                       views::GridLayout::LEADING, views::GridLayout::CENTER,
                       kMaxSecondaryLabelWidth, 0);
     } else {
-      layout->AddView(secondary_label, column_span, 1.0,
+      layout->AddView(std::move(secondary_label), column_span, 1.0,
                       views::GridLayout::FILL, views::GridLayout::CENTER);
     }
   }
@@ -273,20 +273,20 @@ void PermissionSelectorRow::InitializeComboboxView(
       permission.source == content_settings::SETTING_SOURCE_USER;
   combobox_model_adapter_.reset(
       new internal::ComboboxModelAdapter(menu_model_.get()));
-  combobox_ = new internal::PermissionCombobox(combobox_model_adapter_.get(),
-                                               button_enabled, true);
-  combobox_->SetEnabled(button_enabled);
-  combobox_->SetTooltipText(l10n_util::GetStringFUTF16(
+  auto combobox = std::make_unique<internal::PermissionCombobox>(
+      combobox_model_adapter_.get(), button_enabled, true);
+  combobox->SetEnabled(button_enabled);
+  combobox->SetTooltipText(l10n_util::GetStringFUTF16(
       IDS_PAGE_INFO_SELECTOR_TOOLTIP,
       PageInfoUI::PermissionTypeToUIString(permission.type)));
-  layout->AddView(combobox_);
+  combobox_ = layout->AddView(std::move(combobox));
 }
 
 void PermissionSelectorRow::PermissionChanged(
     const PageInfoUI::PermissionInfo& permission) {
   // Change the permission icon to reflect the selected setting.
   icon_->SetImage(
-      PageInfoUI::GetPermissionIcon(permission, label_->enabled_color()));
+      PageInfoUI::GetPermissionIcon(permission, label_->GetEnabledColor()));
 
   bool use_default = permission.setting == CONTENT_SETTING_DEFAULT;
   auto* combobox = static_cast<internal::PermissionCombobox*>(combobox_);

@@ -11,10 +11,17 @@
 #include "base/optional.h"
 #include "ui/gfx/geometry/rect.h"
 
-namespace ash {
-
+namespace chromeos {
+namespace assistant {
+namespace mojom {
 enum class AssistantEntryPoint;
 enum class AssistantExitPoint;
+}  // namespace mojom
+}  // namespace assistant
+}  // namespace chromeos
+
+namespace ash {
+
 enum class AssistantUiMode;
 enum class AssistantVisibility;
 
@@ -23,8 +30,13 @@ enum class AssistantVisibility;
 class COMPONENT_EXPORT(ASSISTANT_MODEL) AssistantUiModelObserver
     : public base::CheckedObserver {
  public:
-  // Invoked when the UI mode is changed.
-  virtual void OnUiModeChanged(AssistantUiMode ui_mode) {}
+  using AssistantEntryPoint = chromeos::assistant::mojom::AssistantEntryPoint;
+  using AssistantExitPoint = chromeos::assistant::mojom::AssistantExitPoint;
+
+  // Invoked when the UI mode is changed. If |due_to_interaction| is true, the
+  // UI mode was changed as a result of an Assistant interaction.
+  virtual void OnUiModeChanged(AssistantUiMode ui_mode,
+                               bool due_to_interaction) {}
 
   // Invoked when the UI visibility is changed from |old_visibility| to
   // |new_visibility|. The |source| of the visibility change event is provided

@@ -106,7 +106,7 @@ bool ValidateLinuxBufferParams(wl_resource* resource,
 
   LinuxBufferParams* linux_buffer_params =
       GetUserDataAs<LinuxBufferParams>(resource);
-  size_t num_planes = gfx::NumberOfPlanesForBufferFormat(format);
+  size_t num_planes = gfx::NumberOfPlanesForLinearBufferFormat(format);
 
   for (uint32_t i = 0; i < num_planes; ++i) {
     auto plane_it = linux_buffer_params->planes.find(i);
@@ -153,7 +153,7 @@ void linux_buffer_params_create(wl_client* client,
       GetUserDataAs<LinuxBufferParams>(resource);
 
   size_t num_planes =
-      gfx::NumberOfPlanesForBufferFormat(supported_format->buffer_format);
+      gfx::NumberOfPlanesForLinearBufferFormat(supported_format->buffer_format);
 
   gfx::NativePixmapHandle handle;
 
@@ -178,8 +178,8 @@ void linux_buffer_params_create(wl_client* client,
   wl_resource* buffer_resource =
       wl_resource_create(client, &wl_buffer_interface, 1, 0);
 
-  buffer->set_release_callback(base::Bind(&HandleBufferReleaseCallback,
-                                          base::Unretained(buffer_resource)));
+  buffer->set_release_callback(base::BindRepeating(
+      &HandleBufferReleaseCallback, base::Unretained(buffer_resource)));
 
   SetImplementation(buffer_resource, &buffer_implementation, std::move(buffer));
 
@@ -213,7 +213,7 @@ void linux_buffer_params_create_immed(wl_client* client,
       GetUserDataAs<LinuxBufferParams>(resource);
 
   size_t num_planes =
-      gfx::NumberOfPlanesForBufferFormat(supported_format->buffer_format);
+      gfx::NumberOfPlanesForLinearBufferFormat(supported_format->buffer_format);
 
   gfx::NativePixmapHandle handle;
 
@@ -242,8 +242,8 @@ void linux_buffer_params_create_immed(wl_client* client,
   wl_resource* buffer_resource =
       wl_resource_create(client, &wl_buffer_interface, 1, buffer_id);
 
-  buffer->set_release_callback(base::Bind(&HandleBufferReleaseCallback,
-                                          base::Unretained(buffer_resource)));
+  buffer->set_release_callback(base::BindRepeating(
+      &HandleBufferReleaseCallback, base::Unretained(buffer_resource)));
 
   SetImplementation(buffer_resource, &buffer_implementation, std::move(buffer));
 }

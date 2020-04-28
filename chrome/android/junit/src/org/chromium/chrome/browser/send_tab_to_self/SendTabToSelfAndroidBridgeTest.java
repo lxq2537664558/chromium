@@ -27,8 +27,10 @@ import org.robolectric.annotation.Config;
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.base.test.util.JniMocker;
 import org.chromium.chrome.browser.profiles.Profile;
+import org.chromium.chrome.browser.send_tab_to_self.TargetDeviceInfo.DeviceType;
 import org.chromium.content_public.browser.WebContents;
 
+import java.util.Arrays;
 import java.util.List;
 
 /** Tests for SendTabToSelfAndroidBridge */
@@ -48,11 +50,11 @@ public class SendTabToSelfAndroidBridgeTest {
     private static final String TITLE = "Come try Tanya's famous tacos";
     private static final String DEVICE_NAME = "Macbook Pro";
     private static final String TARGET_DEVICE_SYNC_CACHE_GUID = "randomguid2";
-    private static final long NAVIGATION_TIME_MS = 123l;
-    private static final long SHARE_TIME_MS = 456l;
+    private static final long NAVIGATION_TIME_MS = 123L;
+    private static final long SHARE_TIME_MS = 456L;
 
     @Before
-    public void setUp() throws Exception {
+    public void setUp() {
         MockitoAnnotations.initMocks(this);
         mocker.mock(SendTabToSelfAndroidBridgeJni.TEST_HOOKS, mNativeMock);
     }
@@ -65,6 +67,33 @@ public class SendTabToSelfAndroidBridgeTest {
         verify(mNativeMock)
                 .addEntry(eq(mProfile), eq(URL), eq(TITLE), eq(NAVIGATION_TIME_MS),
                         eq(TARGET_DEVICE_SYNC_CACHE_GUID));
+    }
+
+    @Test
+    @SmallTest
+    @SuppressWarnings("unchecked")
+    public void testGetAllTargetDeviceInfos() {
+        TargetDeviceInfo one = new TargetDeviceInfo("name1", "guid1", DeviceType.CHROMEOS, 123L);
+        TargetDeviceInfo two = new TargetDeviceInfo("name2", "guid2", DeviceType.LINUX, 456L);
+        TargetDeviceInfo three = new TargetDeviceInfo("name3", "guid3", DeviceType.PHONE, 789L);
+        doAnswer(answerVoid(new VoidAnswer2<Profile, List<TargetDeviceInfo>>() {
+            @Override
+            public void answer(Profile profile, List<TargetDeviceInfo> deviceInfos) {
+                deviceInfos.add(one);
+                deviceInfos.add(two);
+                deviceInfos.add(three);
+            }
+        }))
+                .when(mNativeMock)
+                .getAllTargetDeviceInfos(eq(mProfile), any(List.class));
+
+        List<TargetDeviceInfo> actual =
+                SendTabToSelfAndroidBridge.getAllTargetDeviceInfos(mProfile);
+
+        verify(mNativeMock).getAllTargetDeviceInfos(eq(mProfile), any(List.class));
+        Assert.assertEquals(3, actual.size());
+        List<TargetDeviceInfo> expected = Arrays.asList(one, two, three);
+        Assert.assertArrayEquals(expected.toArray(), actual.toArray());
     }
 
     @Test
@@ -92,8 +121,8 @@ public class SendTabToSelfAndroidBridgeTest {
     @Test
     @SmallTest
     public void testGetEntryByGUID() {
-        SendTabToSelfEntry expected = new SendTabToSelfEntry(
-                GUID, URL, TITLE, SHARE_TIME_MS, NAVIGATION_TIME_MS, DEVICE_NAME);
+        SendTabToSelfEntry expected = new SendTabToSelfEntry(GUID, URL, TITLE, SHARE_TIME_MS,
+                NAVIGATION_TIME_MS, DEVICE_NAME, TARGET_DEVICE_SYNC_CACHE_GUID);
         when(mNativeMock.getEntryByGUID(eq(mProfile), anyString())).thenReturn(expected);
         // Note that the GUID passed in this function does not match the GUID of the returned entry.
         // This is okay because the purpose of the test is to make sure that the JNI layer passes
@@ -106,6 +135,7 @@ public class SendTabToSelfAndroidBridgeTest {
         Assert.assertEquals(expected.sharedTime, actual.sharedTime);
         Assert.assertEquals(expected.originalNavigationTime, actual.originalNavigationTime);
         Assert.assertEquals(expected.deviceName, actual.deviceName);
+        Assert.assertEquals(expected.targetDeviceSyncCacheGuid, actual.targetDeviceSyncCacheGuid);
     }
 
     @Test
@@ -120,6 +150,13 @@ public class SendTabToSelfAndroidBridgeTest {
     public void testDismissEntry() {
         SendTabToSelfAndroidBridge.dismissEntry(mProfile, GUID);
         verify(mNativeMock).dismissEntry(eq(mProfile), eq(GUID));
+    }
+
+    @Test
+    @SmallTest
+    public void testMarkEntryOpened() {
+        SendTabToSelfAndroidBridge.markEntryOpened(mProfile, GUID);
+        verify(mNativeMock).markEntryOpened(eq(mProfile), eq(GUID));
     }
 
     @Test

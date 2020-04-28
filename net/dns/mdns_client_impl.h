@@ -111,7 +111,7 @@ class NET_EXPORT_PRIVATE MDnsConnection {
 
   Delegate* delegate_;
 
-  base::WeakPtrFactory<MDnsConnection> weak_ptr_factory_;
+  base::WeakPtrFactory<MDnsConnection> weak_ptr_factory_{this};
 
   DISALLOW_COPY_AND_ASSIGN(MDnsConnection);
 };
@@ -218,9 +218,10 @@ class NET_EXPORT_PRIVATE MDnsClientImpl : public MDnsClient {
   Core* core() { return core_.get(); }
 
  private:
-  std::unique_ptr<Core> core_;
   base::Clock* clock_;
   std::unique_ptr<base::OneShotTimer> cleanup_timer_;
+
+  std::unique_ptr<Core> core_;
 
   DISALLOW_COPY_AND_ASSIGN(MDnsClientImpl);
 };

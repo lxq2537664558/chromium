@@ -12,9 +12,10 @@
 #include <ws2tcpip.h>
 #endif
 
-#include "base/logging.h"
+#include "base/check_op.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
+#include "base/strings/utf_string_conversions.h"
 #include "net/base/escape.h"
 #include "net/base/ip_address.h"
 #include "net/base/registry_controlled_domains/registry_controlled_domain.h"
@@ -35,6 +36,23 @@ bool IsHostCharAlphanumeric(char c) {
 
 bool IsNormalizedLocalhostTLD(const std::string& host) {
   return base::EndsWith(host, ".localhost", base::CompareCase::SENSITIVE);
+}
+
+// Helper function used by GetIdentityFromURL. If |escaped_text| can be "safely
+// unescaped" to a valid UTF-8 string, return that string, as UTF-16. Otherwise,
+// convert it as-is to UTF-16. "Safely unescaped" is defined as having no
+// escaped character between '0x00' and '0x1F', inclusive.
+base::string16 UnescapeIdentityString(base::StringPiece escaped_text) {
+  std::string unescaped_text;
+  if (UnescapeBinaryURLComponentSafe(
+          escaped_text, false /* fail_on_path_separators */, &unescaped_text)) {
+    base::string16 result;
+    if (base::UTF8ToUTF16(unescaped_text.data(), unescaped_text.length(),
+                          &result)) {
+      return result;
+    }
+  }
+  return base::UTF8ToUTF16(escaped_text);
 }
 
 }  // namespace
@@ -241,6 +259,27 @@ std::string GetHostOrSpecFromURL(const GURL& url) {
   return url.has_host() ? TrimEndingDot(url.host_piece()) : url.spec();
 }
 
+std::string GetSuperdomain(base::StringPiece domain) {
+  size_t dot_pos = domain.find('.');
+  if (dot_pos == std::string::npos)
+    return "";
+  return domain.substr(dot_pos + 1).as_string();
+}
+
+bool IsSubdomainOf(base::StringPiece subdomain, base::StringPiece superdomain) {
+  // Subdomain must be identical or have strictly more labels than the
+  // superdomain.
+  if (subdomain.length() <= superdomain.length())
+    return subdomain == superdomain;
+
+  // Superdomain must be suffix of subdomain, and the last character not
+  // included in the matching substring must be a dot.
+  if (!subdomain.ends_with(superdomain))
+    return false;
+  subdomain.remove_suffix(superdomain.length());
+  return subdomain.back() == '.';
+}
+
 std::string CanonicalizeHost(base::StringPiece host,
                              url::CanonHostInfo* host_info) {
   // Try to canonicalize the host.
@@ -338,27 +377,10 @@ bool IsLocalhost(const GURL& url) {
 }
 
 bool HostStringIsLocalhost(base::StringPiece host) {
-  if (IsLocalHostname(host, nullptr))
-    return true;
-
   IPAddress ip_address;
-  if (ip_address.AssignFromIPLiteral(host)) {
-    size_t size = ip_address.size();
-    switch (size) {
-      case IPAddress::kIPv4AddressSize: {
-        const uint8_t prefix[] = {127};
-        return IPAddressStartsWith(ip_address, prefix);
-      }
-
-      case IPAddress::kIPv6AddressSize:
-        return ip_address == IPAddress::IPv6Localhost();
-
-      default:
-        NOTREACHED();
-    }
-  }
-
-  return false;
+  if (ip_address.AssignFromIPLiteral(host))
+    return ip_address.IsLoopback();
+  return IsLocalHostname(host, nullptr);
 }
 
 GURL SimplifyUrlForRequest(const GURL& url) {
@@ -384,14 +406,15 @@ GURL ChangeWebSocketSchemeToHttpScheme(const GURL& url) {
 void GetIdentityFromURL(const GURL& url,
                         base::string16* username,
                         base::string16* password) {
-  UnescapeRule::Type flags =
-      UnescapeRule::SPACES | UnescapeRule::PATH_SEPARATORS |
-      UnescapeRule::URL_SPECIAL_CHARS_EXCEPT_PATH_SEPARATORS;
-  *username = UnescapeAndDecodeUTF8URLComponent(url.username(), flags);
-  *password = UnescapeAndDecodeUTF8URLComponent(url.password(), flags);
+  *username = UnescapeIdentityString(url.username());
+  *password = UnescapeIdentityString(url.password());
 }
 
 bool HasGoogleHost(const GURL& url) {
+  return IsGoogleHost(url.host_piece());
+}
+
+bool IsGoogleHost(base::StringPiece host) {
   static const char* kGoogleHostSuffixes[] = {
       ".google.com",
       ".youtube.com",
@@ -406,7 +429,6 @@ bool HasGoogleHost(const GURL& url) {
       ".googleapis.com",
       ".ytimg.com",
   };
-  base::StringPiece host = url.host_piece();
   for (const char* suffix : kGoogleHostSuffixes) {
     // Here it's possible to get away with faster case-sensitive comparisons
     // because the list above is all lowercase, and a GURL's host name will

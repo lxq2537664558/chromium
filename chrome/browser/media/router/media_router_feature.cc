@@ -9,12 +9,10 @@
 #include "base/strings/string_util.h"
 #include "build/build_config.h"
 #include "chrome/browser/profiles/profile.h"
-#include "components/mirroring/service/features.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/common/content_features.h"
 #include "crypto/random.h"
 #include "extensions/buildflags/buildflags.h"
-#include "services/network/public/cpp/features.h"
 #include "ui/base/buildflags.h"
 
 #if defined(OS_ANDROID) || BUILDFLAG(ENABLE_EXTENSIONS)
@@ -33,15 +31,11 @@ namespace media_router {
 #if !defined(OS_ANDROID)
 // Controls if browser side DialMediaRouteProvider is enabled.
 const base::Feature kDialMediaRouteProvider{"DialMediaRouteProvider",
-                                            base::FEATURE_DISABLED_BY_DEFAULT};
-
-// Controls if browser side Cast device discovery is enabled.
-const base::Feature kEnableCastDiscovery{"EnableCastDiscovery",
-                                         base::FEATURE_ENABLED_BY_DEFAULT};
-
+                                            base::FEATURE_ENABLED_BY_DEFAULT};
 const base::Feature kCastMediaRouteProvider{"CastMediaRouteProvider",
                                             base::FEATURE_DISABLED_BY_DEFAULT};
-
+const base::Feature kCastAllowAllIPsFeature{"CastAllowAllIPs",
+                                            base::FEATURE_DISABLED_BY_DEFAULT};
 #endif
 
 #if defined(OS_ANDROID) || BUILDFLAG(ENABLE_EXTENSIONS)
@@ -67,7 +61,7 @@ bool MediaRouterEnabled(content::BrowserContext* context) {
   // The component extension cannot be loaded in guest sessions.
   // TODO(crbug.com/756243): Figure out why.
   return !Profile::FromBrowserContext(context)->IsGuestSession();
-#else  // !(defined(OS_ANDROID) || BUILDFLAG(ENABLE_EXTENSIONS))
+#else   // !(defined(OS_ANDROID) || BUILDFLAG(ENABLE_EXTENSIONS))
   return false;
 #endif  // defined(OS_ANDROID) || BUILDFLAG(ENABLE_EXTENSIONS)
 }
@@ -83,9 +77,6 @@ void RegisterProfilePrefs(PrefRegistrySimple* registry) {
   registry->RegisterStringPref(prefs::kMediaRouterReceiverIdHashToken, "",
                                PrefRegistry::PUBLIC);
 }
-
-const base::Feature kCastAllowAllIPsFeature{"CastAllowAllIPs",
-                                            base::FEATURE_DISABLED_BY_DEFAULT};
 
 bool GetCastAllowAllIPsPref(PrefService* pref_service) {
   auto* pref = pref_service->FindPreference(prefs::kMediaRouterCastAllowAllIPs);
@@ -118,22 +109,8 @@ bool DialMediaRouteProviderEnabled() {
   return base::FeatureList::IsEnabled(kDialMediaRouteProvider);
 }
 
-bool CastDiscoveryEnabled() {
-  return base::FeatureList::IsEnabled(kEnableCastDiscovery);
-}
-
 bool CastMediaRouteProviderEnabled() {
   return base::FeatureList::IsEnabled(kCastMediaRouteProvider);
-}
-
-bool ShouldUseViewsDialog() {
-  return base::FeatureList::IsEnabled(features::kViewsCastDialog);
-}
-
-bool ShouldUseMirroringService() {
-  return base::FeatureList::IsEnabled(mirroring::features::kMirroringService) &&
-         base::FeatureList::IsEnabled(features::kAudioServiceAudioStreams) &&
-         base::FeatureList::IsEnabled(network::features::kNetworkService);
 }
 
 #endif  // !defined(OS_ANDROID)

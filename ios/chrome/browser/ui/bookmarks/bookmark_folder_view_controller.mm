@@ -18,6 +18,7 @@
 #import "ios/chrome/browser/ui/bookmarks/cells/bookmark_folder_item.h"
 #import "ios/chrome/browser/ui/icons/chrome_icon.h"
 #import "ios/chrome/browser/ui/material_components/utils.h"
+#import "ios/chrome/common/ui/colors/UIColor+cr_semantic_colors.h"
 #include "ios/chrome/grit/ios_strings.h"
 #include "ui/base/l10n/l10n_util_mac.h"
 
@@ -78,6 +79,9 @@ using bookmarks::BookmarkNode;
 @property(nonatomic, assign, readonly)
     const std::vector<const BookmarkNode*>& folders;
 
+// The browser for this ViewController.
+@property(nonatomic, readonly) Browser* browser;
+
 // Reloads the model and the updates |self.tableView| to reflect any model
 // changes.
 - (void)reloadModel;
@@ -110,13 +114,15 @@ using bookmarks::BookmarkNode;
                           editedNodes:
                               (const std::set<const BookmarkNode*>&)nodes
                          allowsCancel:(BOOL)allowsCancel
-                       selectedFolder:(const BookmarkNode*)selectedFolder {
+                       selectedFolder:(const BookmarkNode*)selectedFolder
+                              browser:(Browser*)browser {
   DCHECK(bookmarkModel);
   DCHECK(bookmarkModel->loaded());
+  DCHECK(browser);
   DCHECK(selectedFolder == NULL || selectedFolder->is_folder());
-  self = [super initWithTableViewStyle:UITableViewStylePlain
-                           appBarStyle:ChromeTableViewControllerStyleNoAppBar];
+  self = [super initWithStyle:UITableViewStylePlain];
   if (self) {
+    _browser = browser;
     _allowsCancel = allowsCancel;
     _allowsNewFolders = allowsNewFolders;
     _bookmarkModel = bookmarkModel;
@@ -172,9 +178,6 @@ using bookmarks::BookmarkNode;
   // Configure the table view.
   self.tableView.autoresizingMask =
       UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-  // Add a tableFooterView in order to disable separators at the bottom of the
-  // tableView.
-  self.tableView.tableFooterView = [[UIView alloc] init];
 
   self.tableView.estimatedRowHeight = kEstimatedFolderCellHeight;
   self.tableView.rowHeight = UITableViewAutomaticDimension;
@@ -225,7 +228,7 @@ using bookmarks::BookmarkNode;
     UIView* separator = [[UIView alloc] initWithFrame:separatorFrame];
     separator.autoresizingMask = UIViewAutoresizingFlexibleBottomMargin |
                                  UIViewAutoresizingFlexibleWidth;
-    separator.backgroundColor = bookmark_utils_ios::separatorColor();
+    separator.backgroundColor = UIColor.cr_opaqueSeparatorColor;
     [headerView addSubview:separator];
   }
   return headerView;
@@ -297,6 +300,13 @@ using bookmarks::BookmarkNode;
 - (void)bookmarkFolderEditorWillCommitTitleChange:
     (BookmarkFolderEditorViewController*)controller {
   // Do nothing.
+}
+
+#pragma mark - UIAdaptivePresentationControllerDelegate
+
+- (void)presentationControllerDidDismiss:
+    (UIPresentationController*)presentationController {
+  [self.delegate folderPickerDidDismiss:self];
 }
 
 #pragma mark - BookmarkModelBridgeObserver
@@ -439,7 +449,8 @@ using bookmarks::BookmarkNode;
   BookmarkFolderEditorViewController* folderCreator =
       [BookmarkFolderEditorViewController
           folderCreatorWithBookmarkModel:self.bookmarkModel
-                            parentFolder:self.selectedFolder];
+                            parentFolder:self.selectedFolder
+                                 browser:self.browser];
   folderCreator.delegate = self;
   [self.navigationController pushViewController:folderCreator animated:YES];
   self.folderAddController = folderCreator;

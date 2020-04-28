@@ -15,7 +15,6 @@ import android.provider.Browser;
 import android.support.test.InstrumentationRegistry;
 import android.support.test.filters.SmallTest;
 
-import org.junit.After;
 import org.junit.Assert;
 import org.junit.Before;
 import org.junit.Rule;
@@ -25,9 +24,9 @@ import org.junit.runner.RunWith;
 import org.chromium.base.ContextUtils;
 import org.chromium.base.test.util.CommandLineFlags;
 import org.chromium.chrome.browser.ChromeActivity;
-import org.chromium.chrome.browser.ChromeSwitches;
 import org.chromium.chrome.browser.IntentHandler;
 import org.chromium.chrome.browser.ShortcutHelper;
+import org.chromium.chrome.browser.flags.ChromeSwitches;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.test.ChromeActivityTestRule;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
@@ -66,11 +65,6 @@ public class InstantAppsHandlerTest {
         editor.putBoolean("applink.app_link_enabled", true);
         editor.putBoolean("applink.chrome_default_browser", true);
         editor.apply();
-    }
-
-    @After
-    public void tearDown() throws Exception {
-        ContextUtils.getAppSharedPreferences().edit().clear().apply();
     }
 
     @Test

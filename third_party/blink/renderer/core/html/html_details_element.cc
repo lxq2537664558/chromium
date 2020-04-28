@@ -21,13 +21,14 @@
 #include "third_party/blink/renderer/core/html/html_details_element.h"
 
 #include "third_party/blink/public/platform/task_type.h"
+#include "third_party/blink/public/strings/grit/blink_strings.h"
 #include "third_party/blink/renderer/core/css/css_property_names.h"
 #include "third_party/blink/renderer/core/css_value_keywords.h"
 #include "third_party/blink/renderer/core/dom/element_traversal.h"
 #include "third_party/blink/renderer/core/dom/events/event.h"
 #include "third_party/blink/renderer/core/dom/shadow_root.h"
 #include "third_party/blink/renderer/core/dom/text.h"
-#include "third_party/blink/renderer/core/frame/use_counter.h"
+#include "third_party/blink/renderer/core/frame/web_feature.h"
 #include "third_party/blink/renderer/core/html/html_div_element.h"
 #include "third_party/blink/renderer/core/html/html_slot_element.h"
 #include "third_party/blink/renderer/core/html/html_summary_element.h"
@@ -37,38 +38,37 @@
 #include "third_party/blink/renderer/core/layout/layout_block_flow.h"
 #include "third_party/blink/renderer/core/layout/layout_object_factory.h"
 #include "third_party/blink/renderer/platform/bindings/exception_state.h"
+#include "third_party/blink/renderer/platform/heap/heap.h"
+#include "third_party/blink/renderer/platform/instrumentation/use_counter.h"
 #include "third_party/blink/renderer/platform/text/platform_locale.h"
 
 namespace blink {
 
-using namespace html_names;
-
-HTMLDetailsElement* HTMLDetailsElement::Create(Document& document) {
-  HTMLDetailsElement* details =
-      MakeGarbageCollected<HTMLDetailsElement>(document);
-  details->EnsureUserAgentShadowRoot();
-  return details;
-}
-
 HTMLDetailsElement::HTMLDetailsElement(Document& document)
-    : HTMLElement(kDetailsTag, document), is_open_(false) {
+    : HTMLElement(html_names::kDetailsTag, document), is_open_(false) {
   UseCounter::Count(document, WebFeature::kDetailsElement);
+  EnsureUserAgentShadowRoot();
 }
 
 HTMLDetailsElement::~HTMLDetailsElement() = default;
 
 // static
 bool HTMLDetailsElement::IsFirstSummary(const Node& node) {
-  DCHECK(IsHTMLDetailsElement(node.parentElement()));
-  if (!IsHTMLSummaryElement(node))
+  DCHECK(IsA<HTMLDetailsElement>(node.parentElement()));
+  if (!IsA<HTMLSummaryElement>(node))
     return false;
   return node.parentElement() &&
          &node ==
              Traversal<HTMLSummaryElement>::FirstChild(*node.parentElement());
 }
 
-void HTMLDetailsElement::DispatchPendingEvent() {
+void HTMLDetailsElement::DispatchPendingEvent(
+    const AttributeModificationReason reason) {
+  if (reason == AttributeModificationReason::kByParser)
+    GetDocument().SetToggleDuringParsing(true);
   DispatchEvent(*Event::Create(event_type_names::kToggle));
+  if (reason == AttributeModificationReason::kByParser)
+    GetDocument().SetToggleDuringParsing(false);
 }
 
 LayoutObject* HTMLDetailsElement::CreateLayoutObject(const ComputedStyle& style,
@@ -77,11 +77,11 @@ LayoutObject* HTMLDetailsElement::CreateLayoutObject(const ComputedStyle& style,
 }
 
 void HTMLDetailsElement::DidAddUserAgentShadowRoot(ShadowRoot& root) {
-  HTMLSummaryElement* default_summary =
-      HTMLSummaryElement::Create(GetDocument());
+  auto* default_summary =
+      MakeGarbageCollected<HTMLSummaryElement>(GetDocument());
   default_summary->AppendChild(
       Text::Create(GetDocument(),
-                   GetLocale().QueryString(WebLocalizedString::kDetailsLabel)));
+                   GetLocale().QueryString(IDS_DETAILS_WITHOUT_SUMMARY_LABEL)));
 
   HTMLSlotElement* summary_slot =
       HTMLSlotElement::CreateUserAgentCustomAssignSlot(GetDocument());
@@ -89,7 +89,7 @@ void HTMLDetailsElement::DidAddUserAgentShadowRoot(ShadowRoot& root) {
   summary_slot->AppendChild(default_summary);
   root.AppendChild(summary_slot);
 
-  HTMLDivElement* content = HTMLDivElement::Create(GetDocument());
+  auto* content = MakeGarbageCollected<HTMLDivElement>(GetDocument());
   content->SetIdAttribute(shadow_element_names::DetailsContent());
   content->AppendChild(
       HTMLSlotElement::CreateUserAgentDefaultSlot(GetDocument()));
@@ -102,16 +102,17 @@ Element* HTMLDetailsElement::FindMainSummary() const {
           Traversal<HTMLSummaryElement>::FirstChild(*this))
     return summary;
 
-  HTMLSlotElement* slot =
-      ToHTMLSlotElementOrDie(UserAgentShadowRoot()->firstChild());
+  auto* element = UserAgentShadowRoot()->firstChild();
+  CHECK(!element || IsA<HTMLSlotElement>(element));
+  HTMLSlotElement* slot = To<HTMLSlotElement>(element);
   DCHECK(slot->firstChild());
-  CHECK(IsHTMLSummaryElement(*slot->firstChild()));
-  return ToElement(slot->firstChild());
+  CHECK(IsA<HTMLSummaryElement>(*slot->firstChild()));
+  return To<Element>(slot->firstChild());
 }
 
 void HTMLDetailsElement::ParseAttribute(
     const AttributeModificationParams& params) {
-  if (params.name == kOpenAttr) {
+  if (params.name == html_names::kOpenAttr) {
     bool old_value = is_open_;
     is_open_ = !params.new_value.IsNull();
     if (is_open_ == old_value)
@@ -121,7 +122,7 @@ void HTMLDetailsElement::ParseAttribute(
     pending_event_ = PostCancellableTask(
         *GetDocument().GetTaskRunner(TaskType::kDOMManipulation), FROM_HERE,
         WTF::Bind(&HTMLDetailsElement::DispatchPendingEvent,
-                  WrapPersistent(this)));
+                  WrapPersistent(this), params.reason));
 
     Element* content = EnsureUserAgentShadowRoot().getElementById(
         shadow_element_names::DetailsContent());
@@ -138,7 +139,7 @@ void HTMLDetailsElement::ParseAttribute(
     Element* summary = FindMainSummary();
     DCHECK(summary);
 
-    Element* control = ToHTMLSummaryElement(summary)->MarkerControl();
+    auto* control = To<HTMLSummaryElement>(summary)->MarkerControl();
     if (control && control->GetLayoutObject())
       control->GetLayoutObject()->SetShouldDoFullPaintInvalidation();
 
@@ -148,7 +149,7 @@ void HTMLDetailsElement::ParseAttribute(
 }
 
 void HTMLDetailsElement::ToggleOpen() {
-  setAttribute(kOpenAttr, is_open_ ? g_null_atom : g_empty_atom);
+  setAttribute(html_names::kOpenAttr, is_open_ ? g_null_atom : g_empty_atom);
 }
 
 bool HTMLDetailsElement::IsInteractiveContent() const {

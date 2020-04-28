@@ -58,11 +58,10 @@ ContextResult WebGPUInProcessContext::Initialize(
 
   static const scoped_refptr<gl::GLSurface> surface = nullptr;
   static constexpr bool is_offscreen = true;
-  static constexpr InProcessCommandBuffer* share_group = nullptr;
   auto result = command_buffer_->Initialize(
-      surface, is_offscreen, kNullSurfaceHandle, attribs, share_group,
+      surface, is_offscreen, kNullSurfaceHandle, attribs,
       gpu_memory_buffer_manager, image_factory, gpu_channel_manager_delegate,
-      client_task_runner_, nullptr, nullptr);
+      client_task_runner_, nullptr /* task_sequence */, nullptr, nullptr);
   if (result != ContextResult::kSuccess) {
     DLOG(ERROR) << "Failed to initialize InProcessCommmandBuffer";
     return result;
@@ -96,7 +95,7 @@ const GpuFeatureInfo& WebGPUInProcessContext::GetGpuFeatureInfo() const {
   return command_buffer_->GetGpuFeatureInfo();
 }
 
-webgpu::WebGPUInterface* WebGPUInProcessContext::GetImplementation() {
+webgpu::WebGPUImplementation* WebGPUInProcessContext::GetImplementation() {
   return webgpu_implementation_.get();
 }
 

@@ -10,6 +10,7 @@
 #include "base/bind.h"
 #include "base/location.h"
 #include "base/logging.h"
+#include "base/memory/read_only_shared_memory_region.h"
 #include "base/numerics/checked_math.h"
 #include "base/single_thread_task_runner.h"
 #include "base/stl_util.h"
@@ -30,7 +31,7 @@
 #include "content/renderer/pepper/ppb_image_data_impl.h"
 #include "content/renderer/render_thread_impl.h"
 #include "gpu/GLES2/gl2extchromium.h"
-#include "gpu/command_buffer/client/gles2_interface.h"
+#include "gpu/command_buffer/client/raster_interface.h"
 #include "gpu/command_buffer/common/capabilities.h"
 #include "gpu/command_buffer/common/gpu_memory_buffer_support.h"
 #include "gpu/command_buffer/common/shared_image_usage.h"
@@ -45,7 +46,7 @@
 #include "ppapi/proxy/ppapi_messages.h"
 #include "ppapi/shared_impl/ppb_view_shared.h"
 #include "ppapi/thunk/enter.h"
-#include "services/ws/public/cpp/gpu/context_provider_command_buffer.h"
+#include "services/viz/public/cpp/gpu/context_provider_command_buffer.h"
 #include "skia/ext/platform_canvas.h"
 #include "third_party/khronos/GLES2/gl2.h"
 #include "third_party/khronos/GLES2/gl2ext.h"
@@ -584,7 +585,7 @@ void PepperGraphics2DHost::ReleaseSoftwareCallback(
 // static
 void PepperGraphics2DHost::ReleaseTextureCallback(
     base::WeakPtr<PepperGraphics2DHost> host,
-    scoped_refptr<viz::ContextProvider> context,
+    scoped_refptr<viz::RasterContextProvider> context,
     const gfx::Size& size,
     const gpu::Mailbox& mailbox,
     const gpu::SyncToken& sync_token,
@@ -607,7 +608,7 @@ bool PepperGraphics2DHost::PrepareTransferableResource(
   // reuse the shared images, they are invalid. If the compositing mode changed,
   // the context will be lost also, so we get both together.
   if (!main_thread_context_ ||
-      main_thread_context_->ContextGL()->GetGraphicsResetStatusKHR() !=
+      main_thread_context_->RasterInterface()->GetGraphicsResetStatusKHR() !=
           GL_NO_ERROR) {
     recycled_shared_images_.clear();
     main_thread_context_ = nullptr;
@@ -638,7 +639,7 @@ bool PepperGraphics2DHost::PrepareTransferableResource(
   // When gpu compositing, the compositor expects gpu resources, so we copy the
   // |image_data_| into a texture.
   if (main_thread_context_) {
-    auto* gl = main_thread_context_->ContextGL();
+    auto* ri = main_thread_context_->RasterInterface();
     auto* sii = main_thread_context_->SharedImageInterface();
 
     // The bitmap in |image_data_| uses the skia N32 byte order.
@@ -699,19 +700,16 @@ bool PepperGraphics2DHost::PrepareTransferableResource(
       src = swizzled.get();
     }
 
-    gl->WaitSyncTokenCHROMIUM(in_sync_token.GetConstData());
-    GLuint texture_id =
-        gl->CreateAndTexStorage2DSharedImageCHROMIUM(gpu_mailbox.name);
-    gl->BeginSharedImageAccessDirectCHROMIUM(
-        texture_id, GL_SHARED_IMAGE_ACCESS_MODE_READWRITE_CHROMIUM);
-    gl->BindTexture(texture_target, texture_id);
-    gl->TexSubImage2D(texture_target, 0, 0, 0, size.width(), size.height(),
-                      viz::GLDataFormat(format), viz::GLDataType(format), src);
-    gl->BindTexture(texture_target, 0);
-    gl->EndSharedImageAccessDirectCHROMIUM(texture_id);
-    gl->DeleteTextures(1, &texture_id);
+    SkImageInfo src_info =
+        SkImageInfo::Make(size.width(), size.height(),
+                          viz::ResourceFormatToClosestSkColorType(true, format),
+                          kUnknown_SkAlphaType);
+    ri->WaitSyncTokenCHROMIUM(in_sync_token.GetConstData());
+    ri->WritePixels(gpu_mailbox, 0, 0, texture_target, src_info.minRowBytes(),
+                    src_info, src);
+
     gpu::SyncToken out_sync_token;
-    gl->GenUnverifiedSyncTokenCHROMIUM(out_sync_token.GetData());
+    ri->GenUnverifiedSyncTokenCHROMIUM(out_sync_token.GetData());
 
     image_data_->Unmap();
     swizzled.reset();
@@ -719,7 +717,7 @@ bool PepperGraphics2DHost::PrepareTransferableResource(
     *release_callback = viz::SingleReleaseCallback::Create(
         base::BindOnce(&ReleaseTextureCallback, this->AsWeakPtr(),
                        main_thread_context_, size, gpu_mailbox));
-    *transferable_resource = viz::TransferableResource::MakeGLOverlay(
+    *transferable_resource = viz::TransferableResource::MakeGL(
         std::move(gpu_mailbox), GL_LINEAR, texture_target,
         std::move(out_sync_token), size, overlays_supported);
     transferable_resource->format = format;
@@ -741,15 +739,15 @@ bool PepperGraphics2DHost::PrepareTransferableResource(
   }
   if (!shared_bitmap) {
     viz::SharedBitmapId id = viz::SharedBitmap::GenerateId();
-    std::unique_ptr<base::SharedMemory> shm =
-        viz::bitmap_allocation::AllocateMappedBitmap(pixel_image_size,
+    base::MappedReadOnlyRegion shm =
+        viz::bitmap_allocation::AllocateSharedBitmap(pixel_image_size,
                                                      viz::RGBA_8888);
     shared_bitmap = base::MakeRefCounted<cc::CrossThreadSharedBitmap>(
         id, std::move(shm), pixel_image_size, viz::RGBA_8888);
     registration = bitmap_registrar->RegisterSharedBitmapId(id, shared_bitmap);
   }
   void* src = image_data_->Map();
-  memcpy(shared_bitmap->shared_memory()->memory(), src,
+  memcpy(shared_bitmap->memory(), src,
          viz::ResourceSizes::CheckedSizeInBytes<size_t>(pixel_image_size,
                                                         viz::RGBA_8888));
   image_data_->Unmap();
@@ -834,15 +832,8 @@ int32_t PepperGraphics2DHost::Flush(PP_Resource* old_image_data) {
         no_update_visible = false;
       }
 
-      // Notify the plugin of the entire change (op_rect), even if it is
-      // partially or completely off-screen.
-      if (operation.type == QueuedOperation::SCROLL) {
-        bound_instance_->ScrollRect(
-            scroll_delta.x(), scroll_delta.y(), op_rect_in_viewport);
-      } else {
-        if (!op_rect_in_viewport.IsEmpty())
-          bound_instance_->InvalidateRect(op_rect_in_viewport);
-      }
+      if (!op_rect_in_viewport.IsEmpty())
+        bound_instance_->InvalidateRect(op_rect_in_viewport);
       composited_output_modified_ = true;
     }
   }

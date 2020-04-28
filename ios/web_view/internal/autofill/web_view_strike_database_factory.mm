@@ -34,7 +34,8 @@ WebViewStrikeDatabaseFactory* WebViewStrikeDatabaseFactory::GetInstance() {
 WebViewStrikeDatabaseFactory::WebViewStrikeDatabaseFactory()
     : BrowserStateKeyedServiceFactory(
           "AutofillStrikeDatabase",
-          BrowserStateDependencyManager::GetInstance()) {}
+          BrowserStateDependencyManager::GetInstance()) {
+}
 
 WebViewStrikeDatabaseFactory::~WebViewStrikeDatabaseFactory() {}
 
@@ -43,9 +44,12 @@ WebViewStrikeDatabaseFactory::BuildServiceInstanceFor(
     web::BrowserState* context) const {
   WebViewBrowserState* browser_state =
       WebViewBrowserState::FromBrowserState(context);
+
+  leveldb_proto::ProtoDatabaseProvider* db_provider =
+      browser_state->GetProtoDatabaseProvider();
+
   return std::make_unique<autofill::StrikeDatabase>(
-      browser_state->GetStatePath().Append(
-          FILE_PATH_LITERAL("AutofillStrikeDatabase")));
+      db_provider, browser_state->GetStatePath());
 }
 
 }  // namespace ios_web_view

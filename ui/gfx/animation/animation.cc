@@ -4,12 +4,15 @@
 
 #include "ui/gfx/animation/animation.h"
 
-#include "base/message_loop/message_loop.h"
+#include <memory>
+
+#include "base/command_line.h"
 #include "build/build_config.h"
 #include "ui/gfx/animation/animation_container.h"
 #include "ui/gfx/animation/animation_delegate.h"
 #include "ui/gfx/animation/tween.h"
 #include "ui/gfx/geometry/rect.h"
+#include "ui/gfx/switches.h"
 
 namespace gfx {
 
@@ -37,8 +40,11 @@ void Animation::Start() {
   if (is_animating_)
     return;
 
-  if (!container_.get())
-    container_ = new AnimationContainer();
+  if (!container_) {
+    container_ = base::MakeRefCounted<AnimationContainer>();
+    if (delegate_)
+      delegate_->AnimationContainerWasSet(container_.get());
+  }
 
   is_animating_ = true;
 
@@ -92,6 +98,9 @@ void Animation::SetContainer(AnimationContainer* container) {
   else
     container_ = new AnimationContainer();
 
+  if (delegate_)
+    delegate_->AnimationContainerWasSet(container_.get());
+
   if (is_animating_)
     container_->Start(this);
 }
@@ -103,17 +112,18 @@ bool Animation::ShouldRenderRichAnimation() {
          RichAnimationRenderMode::FORCE_ENABLED;
 }
 
-#if !defined(OS_WIN) && (!defined(OS_MACOSX) || defined(OS_IOS))
+#if defined(OS_ANDROID) || defined(OS_CHROMEOS) || defined(OS_IOS) || \
+    defined(OS_FUCHSIA)
 // static
 bool Animation::ShouldRenderRichAnimationImpl() {
-  // Defined in platform specific file for Windows and OSX.
   return true;
+  // Defined in platform specific file for Windows and OSX and Linux.
 }
 
 // static
 bool Animation::ScrollAnimationsEnabledBySystem() {
-  // Defined in platform specific files for Windows and OSX.
   return true;
+  // Defined in platform specific files for Windows and OSX and Linux.
 }
 
 #if !defined(OS_ANDROID)
@@ -127,13 +137,21 @@ void Animation::UpdatePrefersReducedMotion() {
   prefers_reduced_motion_ = false;
 }
 #endif  // !defined(OS_ANDROID)
-#endif  // !defined(OS_WIN) && (!defined(OS_MACOSX) || defined(OS_IOS))
+#endif  // defined(OS_ANDROID) || defined(OS_CHROMEOS) || defined(OS_IOS) ||
+        // defined(OS_FUCHSIA)
 
 // static
 bool Animation::PrefersReducedMotion() {
-  if (!prefers_reduced_motion_)
+  // --force-prefers-reduced-motion must always override
+  // |prefers_reduced_motion_|, so check it first.
+  if (base::CommandLine::ForCurrentProcess()->HasSwitch(
+          switches::kForcePrefersReducedMotion)) {
+    return true;
+  }
+
+  if (!prefers_reduced_motion_.has_value())
     UpdatePrefersReducedMotion();
-  return *prefers_reduced_motion_;
+  return prefers_reduced_motion_.value();
 }
 
 bool Animation::ShouldSendCanceledFromStop() {

@@ -7,11 +7,10 @@
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_idle_request_callback.h"
-#include "third_party/blink/renderer/core/dom/idle_request_options.h"
+#include "third_party/blink/renderer/bindings/core/v8/v8_idle_request_options.h"
 #include "third_party/blink/renderer/core/testing/null_execution_context.h"
 #include "third_party/blink/renderer/platform/scheduler/public/thread_scheduler.h"
 #include "third_party/blink/renderer/platform/testing/scoped_scheduler_overrider.h"
-#include "third_party/blink/renderer/platform/wtf/time.h"
 
 namespace blink {
 namespace {
@@ -34,6 +33,9 @@ class MockScriptedIdleTaskControllerScheduler final : public ThreadScheduler {
   scoped_refptr<base::SingleThreadTaskRunner> V8TaskRunner() override {
     return nullptr;
   }
+  scoped_refptr<base::SingleThreadTaskRunner> NonWakingTaskRunner() override {
+    return nullptr;
+  }
   scoped_refptr<base::SingleThreadTaskRunner> DeprecatedDefaultTaskRunner()
       override {
     return nullptr;
@@ -44,6 +46,11 @@ class MockScriptedIdleTaskControllerScheduler final : public ThreadScheduler {
   void PostIdleTask(const base::Location&,
                     Thread::IdleTask idle_task) override {
     idle_task_ = std::move(idle_task);
+  }
+  void PostDelayedIdleTask(const base::Location&,
+                           base::TimeDelta,
+                           Thread::IdleTask) override {
+    NOTIMPLEMENTED();
   }
   void PostNonNestableIdleTask(const base::Location&,
                                Thread::IdleTask) override {}
@@ -73,7 +80,7 @@ class MockScriptedIdleTaskControllerScheduler final : public ThreadScheduler {
 
   void SetV8Isolate(v8::Isolate* isolate) override {}
 
-  void RunIdleTask() { std::move(idle_task_).Run(TimeTicks()); }
+  void RunIdleTask() { std::move(idle_task_).Run(base::TimeTicks()); }
   bool HasIdleTask() const { return !!idle_task_; }
 
  private:

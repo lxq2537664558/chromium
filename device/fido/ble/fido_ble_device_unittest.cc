@@ -7,7 +7,7 @@
 #include "base/bind.h"
 #include "base/optional.h"
 #include "base/test/bind_test_util.h"
-#include "base/test/scoped_task_environment.h"
+#include "base/test/task_environment.h"
 #include "device/bluetooth/bluetooth_adapter_factory.h"
 #include "device/bluetooth/test/bluetooth_test.h"
 #include "device/bluetooth/test/mock_bluetooth_adapter.h"
@@ -101,8 +101,8 @@ class FidoBleDeviceTest : public Test {
   }
 
  protected:
-  base::test::ScopedTaskEnvironment scoped_task_environment_{
-      base::test::ScopedTaskEnvironment::MainThreadType::MOCK_TIME};
+  base::test::TaskEnvironment task_environment_{
+      base::test::TaskEnvironment::TimeSource::MOCK_TIME};
 
  private:
   scoped_refptr<MockBluetoothAdapter> adapter_ =
@@ -124,7 +124,7 @@ TEST_F(FidoBleDeviceTest, SendPingTest_Failure_WriteFailed) {
 
   EXPECT_CALL(*connection(), WriteControlPointPtr(_, _))
       .WillOnce(Invoke([this](const auto& data, auto* cb) {
-        scoped_task_environment_.GetMainThreadTaskRunner()->PostTask(
+        task_environment_.GetMainThreadTaskRunner()->PostTask(
             FROM_HERE, base::BindOnce(std::move(*cb), false));
       }));
 
@@ -140,7 +140,7 @@ TEST_F(FidoBleDeviceTest, SendPingTest_Failure_NoResponse) {
   ConnectWithLength(kControlPointLength);
   EXPECT_CALL(*connection(), WriteControlPointPtr(_, _))
       .WillOnce(Invoke([this](const auto& data, auto* cb) {
-        scoped_task_environment_.GetMainThreadTaskRunner()->PostTask(
+        task_environment_.GetMainThreadTaskRunner()->PostTask(
             FROM_HERE, base::BindOnce(std::move(*cb), true));
       }));
 
@@ -156,7 +156,7 @@ TEST_F(FidoBleDeviceTest, SendPingTest_Failure_SlowResponse) {
   ConnectWithLength(kControlPointLength);
   EXPECT_CALL(*connection(), WriteControlPointPtr(_, _))
       .WillOnce(Invoke([this](const auto& data, auto* cb) {
-        scoped_task_environment_.GetMainThreadTaskRunner()->PostTask(
+        task_environment_.GetMainThreadTaskRunner()->PostTask(
             FROM_HERE, base::BindOnce(std::move(*cb), true));
       }));
 
@@ -179,10 +179,10 @@ TEST_F(FidoBleDeviceTest, SendPingTest) {
 
   EXPECT_CALL(*connection(), WriteControlPointPtr(_, _))
       .WillOnce(Invoke([this](const auto& data, auto* cb) {
-        scoped_task_environment_.GetMainThreadTaskRunner()->PostTask(
+        task_environment_.GetMainThreadTaskRunner()->PostTask(
             FROM_HERE, base::BindOnce(std::move(*cb), true));
 
-        scoped_task_environment_.GetMainThreadTaskRunner()->PostTask(
+        task_environment_.GetMainThreadTaskRunner()->PostTask(
             FROM_HERE, base::BindOnce(connection()->read_callback(), data));
       }));
 
@@ -199,7 +199,7 @@ TEST_F(FidoBleDeviceTest, SendPingTest) {
 TEST_F(FidoBleDeviceTest, CancelDuringTransmission) {
   // Simulate a cancelation request that occurs while a multi-fragment message
   // is still being transmitted.
-  device()->set_supported_protocol(ProtocolVersion::kCtap);
+  device()->set_supported_protocol(ProtocolVersion::kCtap2);
   ConnectWithLength(kControlPointLength);
 
   ::testing::Sequence sequence;
@@ -208,7 +208,7 @@ TEST_F(FidoBleDeviceTest, CancelDuringTransmission) {
   EXPECT_CALL(*connection(), WriteControlPointPtr(_, _))
       .InSequence(sequence)
       .WillOnce(testing::WithArg<1>(Invoke([this](auto* cb) {
-        scoped_task_environment_.GetMainThreadTaskRunner()->PostTask(
+        task_environment_.GetMainThreadTaskRunner()->PostTask(
             FROM_HERE, base::BindOnce(std::move(*cb), true));
       })));
   EXPECT_CALL(*connection(), WriteControlPointPtr(_, _))
@@ -233,7 +233,7 @@ TEST_F(FidoBleDeviceTest, CancelDuringTransmission) {
 
 TEST_F(FidoBleDeviceTest, CancelAfterTransmission) {
   // Simulate a cancelation request that occurs after the request has been sent.
-  device()->set_supported_protocol(ProtocolVersion::kCtap);
+  device()->set_supported_protocol(ProtocolVersion::kCtap2);
   ConnectWithLength(kControlPointLength);
 
   ::testing::Sequence sequence;
@@ -258,7 +258,7 @@ TEST_F(FidoBleDeviceTest, CancelAfterTransmission) {
 
 TEST_F(FidoBleDeviceTest, StaticGetIdTest) {
   std::string address = BluetoothTestBase::kTestDeviceAddress1;
-  EXPECT_EQ("ble:" + address, FidoBleDevice::GetId(address));
+  EXPECT_EQ("ble:" + address, FidoBleDevice::GetIdForAddress(address));
 }
 
 TEST_F(FidoBleDeviceTest, GetIdTest) {
@@ -336,10 +336,10 @@ TEST_F(FidoBleDeviceTest, DeviceMsgErrorTest) {
   EXPECT_CALL(*connection(), WriteControlPointPtr(_, _))
       .WillOnce(::testing::WithArg<1>(
           Invoke([this, kBleInvalidCommandError](auto* cb) {
-            scoped_task_environment_.GetMainThreadTaskRunner()->PostTask(
+            task_environment_.GetMainThreadTaskRunner()->PostTask(
                 FROM_HERE, base::BindOnce(std::move(*cb), true));
 
-            scoped_task_environment_.GetMainThreadTaskRunner()->PostTask(
+            task_environment_.GetMainThreadTaskRunner()->PostTask(
                 FROM_HERE, base::BindOnce(connection()->read_callback(),
                                           fido_parsing_utils::Materialize(
                                               kBleInvalidCommandError)));
@@ -351,6 +351,51 @@ TEST_F(FidoBleDeviceTest, DeviceMsgErrorTest) {
 
   callback_receiver.WaitForCallback();
   EXPECT_EQ(FidoDevice::State::kMsgError, device()->state_for_testing());
+}
+
+TEST_F(FidoBleDeviceTest, Timeout) {
+  EXPECT_CALL(*connection(), ConnectPtr);
+  TestDeviceCallbackReceiver callback_receiver;
+  device()->SendPing(std::vector<uint8_t>(), callback_receiver.callback());
+
+  task_environment_.FastForwardUntilNoTasksRemain();
+  EXPECT_EQ(FidoDevice::State::kDeviceError, device()->state_for_testing());
+  EXPECT_TRUE(callback_receiver.was_called());
+  EXPECT_FALSE(callback_receiver.value());
+}
+
+TEST_F(FidoBleDeviceTest, RequiresBlePairingPin) {
+  EXPECT_TRUE(device()->RequiresBlePairingPin());
+
+  EXPECT_CALL(*connection(), ConnectPtr)
+      .WillOnce(Invoke([this](auto* callback) {
+        connection()->FidoBleConnection::Connect(std::move(*callback));
+      }));
+  device()->Connect();
+
+  // Add mock FIDO device.
+  auto mock_bluetooth_device = std::make_unique<NiceMockBluetoothDevice>(
+      adapter(), /* bluetooth_class */ 0u,
+      BluetoothTestBase::kTestDeviceNameU2f,
+      BluetoothTestBase::kTestDeviceAddress1, /* paired */ true,
+      /* connected */ false);
+  EXPECT_CALL(*adapter(), GetDevice(BluetoothTestBase::kTestDeviceAddress1))
+      .WillRepeatedly(Return(mock_bluetooth_device.get()));
+
+  // The default is for a device to require a PIN or passkey.
+  EXPECT_TRUE(device()->RequiresBlePairingPin());
+
+  // Clear the advertised service data to include the flag for requiring a PIN
+  // or passkey during pairing.
+  SetServiceData(mock_bluetooth_device.get(),
+                 {{BluetoothUUID(kFidoServiceUUID), {}}});
+  EXPECT_FALSE(device()->RequiresBlePairingPin());
+
+  // Set the flag.
+  SetServiceData(mock_bluetooth_device.get(),
+                 {{BluetoothUUID(kFidoServiceUUID),
+                   {static_cast<int>(FidoServiceDataFlags::kPasskeyEntry)}}});
+  EXPECT_TRUE(device()->RequiresBlePairingPin());
 }
 
 }  // namespace device

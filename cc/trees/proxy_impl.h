@@ -14,6 +14,10 @@
 #include "cc/scheduler/scheduler.h"
 #include "cc/trees/layer_tree_host_impl.h"
 
+namespace viz {
+struct FrameTimingDetails;
+}
+
 namespace cc {
 class LayerTreeHost;
 class ProxyMain;
@@ -57,8 +61,9 @@ class CC_EXPORT ProxyImpl : public LayerTreeHostImplClient,
   void NotifyReadyToCommitOnImpl(CompletionEvent* completion,
                                  LayerTreeHost* layer_tree_host,
                                  base::TimeTicks main_thread_start_time,
+                                 const viz::BeginFrameArgs& commit_args,
                                  bool hold_commit_for_activation);
-  void SetURLForUkm(const GURL& url);
+  void SetSourceURL(ukm::SourceId source_id, const GURL& url);
   void ClearHistory();
   void SetRenderFrameObserver(
       std::unique_ptr<RenderFrameMetadataObserver> observer);
@@ -91,9 +96,8 @@ class CC_EXPORT ProxyImpl : public LayerTreeHostImplClient,
   void SetNeedsPrepareTilesOnImplThread() override;
   void SetNeedsCommitOnImplThread() override;
   void SetVideoNeedsBeginFrames(bool needs_begin_frames) override;
-  void PostAnimationEventsToMainThreadOnImplThread(
-      std::unique_ptr<MutatorEvents> events) override;
   bool IsInsideDraw() override;
+  bool IsBeginMainFrameExpected() override;
   void RenewTreePriority() override;
   void PostDelayedAnimationTaskOnImplThread(base::OnceClosure task,
                                             base::TimeDelta delay) override;
@@ -108,17 +112,18 @@ class CC_EXPORT ProxyImpl : public LayerTreeHostImplClient,
   void DidPresentCompositorFrameOnImplThread(
       uint32_t frame_token,
       std::vector<LayerTreeHost::PresentationTimeCallback> callbacks,
-      const gfx::PresentationFeedback& feedback) override;
-  void DidGenerateLocalSurfaceIdAllocationOnImplThread(
-      const viz::LocalSurfaceIdAllocation& allocation) override;
+      const viz::FrameTimingDetails& details) override;
   void NotifyAnimationWorkletStateChange(
       AnimationWorkletMutationState state,
       ElementListType element_list_type) override;
+  void NotifyPaintWorkletStateChange(
+      Scheduler::PaintWorkletState state) override;
 
   // SchedulerClient implementation
   bool WillBeginImplFrame(const viz::BeginFrameArgs& args) override;
   void DidFinishImplFrame() override;
-  void DidNotProduceFrame(const viz::BeginFrameAck& ack) override;
+  void DidNotProduceFrame(const viz::BeginFrameAck& ack,
+                          FrameSkippedReason reason) override;
   void WillNotReceiveBeginFrame() override;
   void ScheduledActionSendBeginMainFrame(
       const viz::BeginFrameArgs& args) override;
@@ -136,6 +141,7 @@ class CC_EXPORT ProxyImpl : public LayerTreeHostImplClient,
   void FrameIntervalUpdated(base::TimeDelta interval) override {}
   size_t CompositedAnimationsCount() const override;
   size_t MainThreadAnimationsCount() const override;
+  bool HasCustomPropertyAnimations() const override;
   bool CurrentFrameHadRAF() const override;
   bool NextFrameHasPendingRAF() const override;
 
@@ -169,8 +175,6 @@ class CC_EXPORT ProxyImpl : public LayerTreeHostImplClient,
   TaskRunnerProvider* task_runner_provider_;
 
   DelayedUniqueNotifier smoothness_priority_expiration_notifier_;
-
-  RenderingStatsInstrumentation* rendering_stats_instrumentation_;
 
   std::unique_ptr<LayerTreeHostImpl> host_impl_;
 

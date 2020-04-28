@@ -15,6 +15,7 @@
 #include "third_party/blink/renderer/core/workers/global_scope_creation_params.h"
 #include "third_party/blink/renderer/core/workers/worker_thread.h"
 #include "third_party/blink/renderer/modules/animationworklet/animation_worklet_proxy_client.h"
+#include "third_party/blink/renderer/modules/animationworklet/worklet_animation_effect_timings.h"
 #include "third_party/blink/renderer/modules/animationworklet/worklet_animation_options.h"
 #include "third_party/blink/renderer/platform/bindings/callback_method_retriever.h"
 #include "third_party/blink/renderer/platform/bindings/exception_code.h"
@@ -22,7 +23,7 @@
 #include "third_party/blink/renderer/platform/bindings/v8_binding_macros.h"
 #include "third_party/blink/renderer/platform/bindings/v8_object_constructor.h"
 #include "third_party/blink/renderer/platform/weborigin/security_origin.h"
-#include "third_party/blink/renderer/platform/wtf/time.h"
+
 #include "v8/include/v8.h"
 
 namespace blink {
@@ -51,7 +52,7 @@ AnimationWorkletGlobalScope::AnimationWorkletGlobalScope(
 
 AnimationWorkletGlobalScope::~AnimationWorkletGlobalScope() = default;
 
-void AnimationWorkletGlobalScope::Trace(blink::Visitor* visitor) {
+void AnimationWorkletGlobalScope::Trace(Visitor* visitor) {
   visitor->Trace(animator_definitions_);
   visitor->Trace(animators_);
   WorkletGlobalScope::Trace(visitor);
@@ -70,10 +71,11 @@ Animator* AnimationWorkletGlobalScope::CreateAnimatorFor(
     const String& name,
     WorkletAnimationOptions options,
     scoped_refptr<SerializedScriptValue> serialized_state,
-    const std::vector<base::Optional<TimeDelta>>& local_times) {
+    const Vector<base::Optional<base::TimeDelta>>& local_times,
+    const Vector<Timing>& timings) {
   DCHECK(!animators_.at(animation_id));
   Animator* animator =
-      CreateInstance(name, options, serialized_state, local_times);
+      CreateInstance(name, options, serialized_state, local_times, timings);
   if (!animator)
     return nullptr;
   animators_.Set(animation_id, animator);
@@ -104,10 +106,18 @@ void AnimationWorkletGlobalScope::UpdateAnimatorsList(
           *(static_cast<WorkletAnimationOptions*>(animation.options.get()));
     }
 
-    std::vector<base::Optional<TimeDelta>> local_times(animation.num_effects,
-                                                       base::nullopt);
+    // Down casting to blink type
+    Vector<Timing> timings = (static_cast<WorkletAnimationEffectTimings*>(
+                                  animation.effect_timings.get()))
+                                 ->GetTimings()
+                                 ->data;
+    DCHECK_GE(timings.size(), 1u);
+
+    Vector<base::Optional<base::TimeDelta>> local_times(
+        static_cast<int>(timings.size()), base::nullopt);
+
     CreateAnimatorFor(id, name, options, nullptr /* serialized_state */,
-                      local_times);
+                      local_times, timings);
   }
 }
 
@@ -143,18 +153,6 @@ void AnimationWorkletGlobalScope::UpdateAnimators(
 
     UpdateAnimation(isolate, animator, animation.worklet_animation_id,
                     animation.current_time, output);
-  }
-
-  for (const auto& worklet_animation_id : input.peeked_animations) {
-    int id = worklet_animation_id.animation_id;
-    Animator* animator = animators_.at(id);
-    if (!animator || !predicate(animator))
-      continue;
-
-    AnimationWorkletDispatcherOutput::AnimationState animation_output(
-        worklet_animation_id);
-    animation_output.local_times = animator->GetLocalTimes();
-    output->animations.push_back(animation_output);
   }
 }
 
@@ -233,7 +231,8 @@ Animator* AnimationWorkletGlobalScope::CreateInstance(
     const String& name,
     WorkletAnimationOptions options,
     scoped_refptr<SerializedScriptValue> serialized_state,
-    const std::vector<base::Optional<TimeDelta>>& local_times) {
+    const Vector<base::Optional<base::TimeDelta>>& local_times,
+    const Vector<Timing>& timings) {
   DCHECK(IsContextThread());
   AnimatorDefinition* definition = animator_definitions_.at(name);
   if (!definition)
@@ -252,8 +251,8 @@ Animator* AnimationWorkletGlobalScope::CreateInstance(
   v8::Local<v8::Value> v8_state = serialized_state
                                       ? serialized_state->Deserialize(isolate)
                                       : v8::Undefined(isolate).As<v8::Value>();
-  ScriptValue options_value(script_state, v8_options);
-  ScriptValue state_value(script_state, v8_state);
+  ScriptValue options_value(isolate, v8_options);
+  ScriptValue state_value(isolate, v8_state);
 
   ScriptValue instance;
   if (!definition->ConstructorFunction()
@@ -263,7 +262,8 @@ Animator* AnimationWorkletGlobalScope::CreateInstance(
   }
 
   return MakeGarbageCollected<Animator>(isolate, definition, instance.V8Value(),
-                                        name, std::move(options), local_times);
+                                        name, std::move(options), local_times,
+                                        timings);
 }
 
 bool AnimationWorkletGlobalScope::IsAnimatorStateful(int animation_id) {
@@ -316,9 +316,11 @@ void AnimationWorkletGlobalScope::MigrateAnimatorsTo(
       }
     }
 
+    Vector<base::Optional<base::TimeDelta>> local_times;
+    animator->GetLocalTimes(local_times);
     target_global_scope->CreateAnimatorFor(
         animation_id, animator->name(), animator->options(), serialized_state,
-        animator->GetLocalTimes());
+        std::move(local_times), animator->GetTimings());
   }
   animators_.clear();
 }

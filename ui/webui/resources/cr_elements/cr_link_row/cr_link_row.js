@@ -27,7 +27,6 @@ Polymer({
       type: String,
       /* Value used for noSubLabel attribute. */
       value: '',
-      observer: 'onSubLabelChange_',
     },
 
     disabled: {
@@ -40,8 +39,18 @@ Polymer({
       value: false,
     },
 
-    /** @private {string|undefined} */
-    ariaDescribedBy_: String,
+    usingSlottedLabel: {
+      type: Boolean,
+      value: false,
+    },
+
+    roleDescription: String,
+
+    /** @private */
+    hideLabelWrapper_: {
+      type: Boolean,
+      computed: 'computeHideLabelWrapper_(label, usingSlottedLabel)',
+    },
   },
 
   /** @type {boolean} */
@@ -54,17 +63,23 @@ Polymer({
     this.$.icon.noink = value;
   },
 
-  focus: function() {
+  focus() {
     this.$.icon.focus();
   },
 
-  /** @private */
-  getIconClass_: function() {
-    return this.external ? 'icon-external' : 'subpage-arrow';
+  /**
+   * @return {boolean}
+   * @private
+   */
+  computeHideLabelWrapper_() {
+    return !(this.label || this.usingSlottedLabel);
   },
 
-  /** @private */
-  onSubLabelChange_: function() {
-    this.ariaDescribedBy_ = this.subLabel ? 'subLabel' : undefined;
+  /**
+   * @return {string}
+   * @private
+   */
+  getIcon_() {
+    return this.external ? 'cr:open-in-new' : 'cr:arrow-right';
   },
 });

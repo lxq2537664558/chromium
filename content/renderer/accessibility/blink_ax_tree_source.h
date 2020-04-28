@@ -8,7 +8,9 @@
 #include <stdint.h>
 
 #include <set>
+#include <string>
 
+#include "base/optional.h"
 #include "content/common/ax_content_node_data.h"
 #include "third_party/blink/public/web/web_ax_object.h"
 #include "third_party/blink/public/web/web_document.h"
@@ -76,13 +78,24 @@ class BlinkAXTreeSource
   // The following methods add or remove an image annotator which is used to
   // provide automatic labels for images.
   void AddImageAnnotator(AXImageAnnotator* const annotator) {
+    DCHECK_EQ(image_annotator_, nullptr);
+    DCHECK(!first_unlabeled_image_id_.has_value());
     image_annotator_ = annotator;
   }
-  void RemoveImageAnnotator() { image_annotator_ = nullptr; }
+  void RemoveImageAnnotator() {
+    image_annotator_ = nullptr;
+    first_unlabeled_image_id_ = base::nullopt;
+  }
 
   // Query or update a set of IDs for which we should load inline text boxes.
   bool ShouldLoadInlineTextBoxes(const blink::WebAXObject& obj) const;
   void SetLoadInlineTextBoxesForId(int32_t id);
+
+  // Call this to enable populating the DOMNodeID for each node. This is
+  // currently only used for accessible PDF exporting. Warning, this is totally
+  // unrelated to the accessibility node ID, or the ID attribute for an HTML
+  // element.
+  void EnableDOMNodeIDs();
 
   // AXTreeSource implementation.
   bool GetTreeData(AXContentTreeData* tree_data) const override;
@@ -95,10 +108,12 @@ class BlinkAXTreeSource
   blink::WebAXObject GetParent(blink::WebAXObject node) const override;
   void SerializeNode(blink::WebAXObject node,
                      AXContentNodeData* out_data) const override;
+  bool IsIgnored(blink::WebAXObject node) const override;
   bool IsValid(blink::WebAXObject node) const override;
   bool IsEqual(blink::WebAXObject node1,
                blink::WebAXObject node2) const override;
   blink::WebAXObject GetNull() const override;
+  std::string GetDebugString(blink::WebAXObject node) const override;
 
   blink::WebDocument GetMainDocument() const;
 
@@ -129,8 +144,8 @@ class BlinkAXTreeSource
       const std::string& value,
       uint32_t max_len = kMaxStringAttributeLength) const;
 
-  void AddImageAnnotations(blink::WebAXObject node,
-                           AXContentNodeData* out_data) const;
+  void AddImageAnnotations(blink::WebAXObject& src,
+                           AXContentNodeData* dst) const;
 
   RenderFrameImpl* render_frame_;
 
@@ -142,16 +157,28 @@ class BlinkAXTreeSource
   // A set of IDs for which we should always load inline text boxes.
   std::set<int32_t> load_inline_text_boxes_ids_;
 
+  // Whether we should store Blink DOMNodeIds in the accessibility tree.
+  // Warning, this is totally unrelated to the accessibility node ID, or the ID
+  // attribute for an HTML element.
+  bool enable_dom_node_ids_ = false;
+
   // The ID of the object to fetch image data for.
   int image_data_node_id_ = -1;
 
   gfx::Size max_image_data_size_;
 
+  // The class instance that retrieves and manages automatic labels for images.
   AXImageAnnotator* image_annotator_ = nullptr;
 
   // Whether we should highlight annotation results visually on the page
   // for debugging.
   bool image_annotation_debugging_ = false;
+
+  // The AxID of the first unlabeled image we have encountered in this tree.
+  //
+  // Used to ensure that the tutor message that explains to screen reader users
+  // how to turn on automatic image labels is provided only once.
+  mutable base::Optional<int32_t> first_unlabeled_image_id_ = base::nullopt;
 
   // These are updated when calling |Freeze|.
   bool frozen_ = false;

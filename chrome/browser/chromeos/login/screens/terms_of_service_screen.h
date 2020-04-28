@@ -12,7 +12,6 @@
 #include "base/macros.h"
 #include "base/timer/timer.h"
 #include "chrome/browser/chromeos/login/screens/base_screen.h"
-#include "chrome/browser/chromeos/login/screens/terms_of_service_screen_view.h"
 
 namespace network {
 class SimpleURLLoader;
@@ -20,30 +19,50 @@ class SimpleURLLoader;
 
 namespace chromeos {
 
+class TermsOfServiceScreenView;
+
 // A screen that shows Terms of Service which have been configured through
 // policy. The screen is shown during login and requires the user to accept the
 // Terms of Service before proceeding. Currently, Terms of Service are available
 // for public sessions only.
-class TermsOfServiceScreen : public BaseScreen,
-                             public TermsOfServiceScreenView::Delegate {
+class TermsOfServiceScreen : public BaseScreen {
  public:
-  enum class Result { ACCEPTED, DECLINED };
+  enum class Result { ACCEPTED, DECLINED, NOT_APPLICABLE };
+
+  static std::string GetResultString(Result result);
+
+  // The possible states that the screen may assume.
+  enum class ScreenState : int { LOADING = 0, LOADED = 1, ERROR = 2 };
 
   using ScreenExitCallback = base::RepeatingCallback<void(Result result)>;
   TermsOfServiceScreen(TermsOfServiceScreenView* view,
                        const ScreenExitCallback& exit_callback);
   ~TermsOfServiceScreen() override;
 
-  // BaseScreen:
-  void Show() override;
-  void Hide() override;
+  // Called when the user declines the Terms of Service.
+  void OnDecline();
 
-  // TermsOfServiceScreenActor::Delegate:
-  void OnDecline() override;
-  void OnAccept() override;
-  void OnViewDestroyed(TermsOfServiceScreenView* view) override;
+  // Called when the user accepts the Terms of Service.
+  void OnAccept();
+
+  // Called when view is destroyed so there is no dead reference to it.
+  void OnViewDestroyed(TermsOfServiceScreenView* view);
+
+  void set_exit_callback_for_testing(const ScreenExitCallback& exit_callback) {
+    exit_callback_ = exit_callback;
+  }
+
+  const ScreenExitCallback& get_exit_callback_for_testing() {
+    return exit_callback_;
+  }
 
  private:
+  // BaseScreen:
+  bool MaybeSkip() override;
+  void ShowImpl() override;
+  void HideImpl() override;
+  void OnUserAction(const std::string& action_id) override;
+
   // Start downloading the Terms of Service.
   void StartDownload();
 

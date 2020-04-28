@@ -4,7 +4,8 @@
 
 #include "chrome/browser/ui/webauthn/transport_utils.h"
 
-#include "base/logging.h"
+#include "base/check_op.h"
+#include "base/notreached.h"
 #include "chrome/app/vector_icons/vector_icons.h"
 #include "chrome/grit/generated_resources.h"
 #include "components/vector_icons/vector_icons.h"
@@ -16,8 +17,10 @@ int GetMessageIdForTransportOnTransportSelectionSheet(
     AuthenticatorTransport transport) {
   switch (transport) {
     case AuthenticatorTransport::kBluetoothLowEnergy:
-      return IDS_WEBAUTHN_TRANSPORT_BLE;
+      NOTREACHED();
+      return 0;
     case AuthenticatorTransport::kNearFieldCommunication:
+      NOTREACHED();
       return IDS_WEBAUTHN_TRANSPORT_NFC;
     case AuthenticatorTransport::kUsbHumanInterfaceDevice:
       return IDS_WEBAUTHN_TRANSPORT_USB;
@@ -34,8 +37,10 @@ int GetMessageIdForTransportOnOtherTransportsPopup(
     AuthenticatorTransport transport) {
   switch (transport) {
     case AuthenticatorTransport::kBluetoothLowEnergy:
-      return IDS_WEBAUTHN_TRANSPORT_POPUP_BLE;
+      NOTREACHED();
+      return 0;
     case AuthenticatorTransport::kNearFieldCommunication:
+      NOTREACHED();
       return IDS_WEBAUTHN_TRANSPORT_POPUP_NFC;
     case AuthenticatorTransport::kUsbHumanInterfaceDevice:
       return IDS_WEBAUTHN_TRANSPORT_POPUP_USB;
@@ -61,20 +66,22 @@ base::string16 GetTransportHumanReadableName(
   return l10n_util::GetStringUTF16(message_id);
 }
 
-const gfx::VectorIcon& GetTransportVectorIcon(
+const gfx::VectorIcon* GetTransportVectorIcon(
     AuthenticatorTransport transport) {
   switch (transport) {
     case AuthenticatorTransport::kBluetoothLowEnergy:
-      return kBluetoothIcon;
+      NOTREACHED();
+      return &kFingerprintIcon;
     case AuthenticatorTransport::kNearFieldCommunication:
-      return kNfcIcon;
+      NOTREACHED();
+      return &kNfcIcon;
     case AuthenticatorTransport::kUsbHumanInterfaceDevice:
-      return vector_icons::kUsbIcon;
+      return &vector_icons::kUsbIcon;
     case AuthenticatorTransport::kInternal:
-      return kFingerprintIcon;
+      return &kFingerprintIcon;
     case AuthenticatorTransport::kCloudAssistedBluetoothLowEnergy:
-      return kSmartphoneIcon;
+      return &kSmartphoneIcon;
   }
   NOTREACHED();
-  return kFingerprintIcon;
+  return &kFingerprintIcon;
 }

@@ -22,11 +22,11 @@
 #import "ios/chrome/browser/ui/autofill/manual_fill/form_observer_helper.h"
 #import "ios/chrome/browser/web_state_list/web_state_list.h"
 #include "ios/chrome/grit/ios_strings.h"
-#import "ios/web/public/web_state/js/crw_js_injection_receiver.h"
-#include "ios/web/public/web_state/web_frame.h"
-#include "ios/web/public/web_state/web_frame_util.h"
-#include "ios/web/public/web_state/web_frames_manager.h"
-#import "ios/web/public/web_state/web_state.h"
+#import "ios/web/public/deprecated/crw_js_injection_receiver.h"
+#include "ios/web/public/js_messaging/web_frame.h"
+#include "ios/web/public/js_messaging/web_frame_util.h"
+#include "ios/web/public/js_messaging/web_frames_manager.h"
+#import "ios/web/public/web_state.h"
 #include "ui/base/l10n/l10n_util_mac.h"
 #include "url/gurl.h"
 
@@ -93,7 +93,7 @@ const int64_t kJavaScriptExecutionTimeoutInSeconds = 1;
   return self;
 }
 
-#pragma mark - ManualFillContentDelegate
+#pragma mark - ManualFillContentInjector
 
 - (BOOL)canUserInjectInPasswordField:(BOOL)passwordField
                        requiresHTTPS:(BOOL)requiresHTTPS {
@@ -156,7 +156,7 @@ const int64_t kJavaScriptExecutionTimeoutInSeconds = 1;
       [self.injectionReceiver instanceOfClass:[JsSuggestionManager class]]);
   web::WebState* webState = self.webStateList->GetActiveWebState();
   if (webState) {
-    [manager setWebFramesManager:web::WebFramesManager::FromWebState(webState)];
+    [manager setWebFramesManager:webState->GetWebFramesManager()];
   }
   return manager;
 }

@@ -22,11 +22,11 @@
 #include "chromeos/dbus/power/fake_power_manager_client.h"
 #include "chromeos/dbus/shill/shill_service_client.h"
 #include "chromeos/network/network_handler.h"
-#include "components/arc/common/app.mojom.h"
+#include "components/arc/mojom/app.mojom.h"
 #include "components/policy/proto/device_management_backend.pb.h"
 #include "components/prefs/pref_service.h"
 #include "components/prefs/testing_pref_service.h"
-#include "content/public/test/test_browser_thread_bundle.h"
+#include "content/public/test/browser_task_environment.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/cros_system_api/dbus/service_constants.h"
 
@@ -176,7 +176,7 @@ class AppInstallEventLogCollectorTest : public testing::Test {
   chromeos::ShillServiceClient::TestInterface* service_test_ = nullptr;
 
  private:
-  content::TestBrowserThreadBundle thread_bundle_;
+  content::BrowserTaskEnvironment task_environment_;
   std::unique_ptr<TestingProfile> profile_;
   FakeAppInstallEventLogCollectorDelegate delegate_;
   TestingPrefServiceSimple pref_service_;
@@ -321,7 +321,8 @@ TEST_F(AppInstallEventLogCollectorTest, ConnectivityChanges) {
             delegate()->last_event().event_type());
   EXPECT_FALSE(delegate()->last_event().online());
 
-  SetNetworkState(collector.get(), kWifiServicePath, shill::kStatePortal);
+  SetNetworkState(collector.get(), kWifiServicePath,
+                  shill::kStateNoConnectivity);
   EXPECT_EQ(2, delegate()->add_for_all_count());
 
   SetNetworkState(collector.get(), kWifiServicePath, shill::kStateOnline);
@@ -417,8 +418,16 @@ TEST_F(AppInstallEventLogCollectorTest, InstallPackages) {
   collector->OnPendingPackagesChanged({kPackageName, kPackageName2});
 
   // Now kPackageName2 is in the pending set.
-  app_host->OnInstallationStarted(kPackageName2);
+  base::Time time = base::Time::Now();
+  collector->OnReportDirectInstall(time, {kPackageName2});
   EXPECT_EQ(3, delegate()->add_count());
+  EXPECT_EQ(em::AppInstallReportLogEvent::DIRECT_INSTALL,
+            delegate()->last_event().event_type());
+  EXPECT_EQ(kPackageName2, delegate()->last_request().package_name);
+  EXPECT_TRUE(delegate()->last_request().add_disk_space_info);
+
+  app_host->OnInstallationStarted(kPackageName2);
+  EXPECT_EQ(4, delegate()->add_count());
   EXPECT_EQ(em::AppInstallReportLogEvent::INSTALLATION_STARTED,
             delegate()->last_event().event_type());
   EXPECT_EQ(kPackageName2, delegate()->last_request().package_name);
@@ -428,8 +437,16 @@ TEST_F(AppInstallEventLogCollectorTest, InstallPackages) {
   result.success = false;
   app_host->OnInstallationFinished(
       arc::mojom::InstallationResultPtr(result.Clone()));
-  EXPECT_EQ(4, delegate()->add_count());
+  EXPECT_EQ(5, delegate()->add_count());
   EXPECT_EQ(em::AppInstallReportLogEvent::INSTALLATION_FAILED,
+            delegate()->last_event().event_type());
+  EXPECT_EQ(kPackageName2, delegate()->last_request().package_name);
+  EXPECT_TRUE(delegate()->last_request().add_disk_space_info);
+
+  time += base::TimeDelta::FromSeconds(1);
+  collector->OnReportForceInstallMainLoopFailed(time, {kPackageName2});
+  EXPECT_EQ(6, delegate()->add_count());
+  EXPECT_EQ(em::AppInstallReportLogEvent::CLOUDDPC_MAIN_LOOP_FAILED,
             delegate()->last_event().event_type());
   EXPECT_EQ(kPackageName2, delegate()->last_request().package_name);
   EXPECT_TRUE(delegate()->last_request().add_disk_space_info);

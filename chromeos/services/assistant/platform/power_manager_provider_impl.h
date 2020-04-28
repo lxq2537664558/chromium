@@ -14,12 +14,10 @@
 #include "base/memory/weak_ptr.h"
 #include "base/sequence_checker.h"
 #include "chromeos/dbus/power/native_timer.h"
+#include "chromeos/services/assistant/public/mojom/assistant.mojom.h"
 #include "libassistant/shared/public/platform_system.h"
+#include "mojo/public/cpp/bindings/remote.h"
 #include "services/device/public/mojom/wake_lock.mojom.h"
-
-namespace service_manager {
-class Connector;
-}  // namespace service_manager
 
 namespace chromeos {
 namespace assistant {
@@ -40,8 +38,7 @@ namespace assistant {
 class COMPONENT_EXPORT(ASSISTANT_SERVICE) PowerManagerProviderImpl
     : public assistant_client::PowerManagerProvider {
  public:
-  PowerManagerProviderImpl(
-      service_manager::Connector* connector,
+  explicit PowerManagerProviderImpl(
       scoped_refptr<base::SequencedTaskRunner> main_thread_task_runner);
   ~PowerManagerProviderImpl() override;
 
@@ -54,9 +51,17 @@ class COMPONENT_EXPORT(ASSISTANT_SERVICE) PowerManagerProviderImpl
   void AcquireWakeLock() override;
   void ReleaseWakeLock() override;
 
+  void set_tick_clock_for_testing(const base::TickClock* tick_clock) {
+    DCHECK(tick_clock);
+    tick_clock_ = tick_clock;
+  }
+
  private:
   using CallbackAndTimer =
       std::pair<assistant_client::Callback0, std::unique_ptr<NativeTimer>>;
+
+  // Returns time ticks from boot including time ticks during sleeping.
+  base::TimeTicks GetCurrentBootTime();
 
   // Creates a native timer by calling |NativeTimer::Create|. Runs on
   // |main_thread_task_runner_|.
@@ -79,9 +84,6 @@ class COMPONENT_EXPORT(ASSISTANT_SERVICE) PowerManagerProviderImpl
   // for |id| from |timers_|.
   void OnTimerFiredOnMainThread(AlarmId id);
 
-  // Owned by chromeos::assistant::Service.
-  service_manager::Connector* const connector_;
-
   // Store of currently active alarm ids returned to clients and the
   // corresponding pair of timer objects and client callbacks.
   std::map<AlarmId, CallbackAndTimer> timers_;
@@ -92,7 +94,7 @@ class COMPONENT_EXPORT(ASSISTANT_SERVICE) PowerManagerProviderImpl
   AlarmId next_id_ = 1;
 
   // Lazily initialized in response to the first call to |AcquireWakeLock|.
-  device::mojom::WakeLockPtr wake_lock_;
+  mojo::Remote<device::mojom::WakeLock> wake_lock_;
 
   // Current number of clients that requested |wake_lock_|. On zero |wake_lock_|
   // is released.
@@ -101,6 +103,9 @@ class COMPONENT_EXPORT(ASSISTANT_SERVICE) PowerManagerProviderImpl
   // Used to post tasks from a libassistant thread on to the main thread in
   // order to use Chrome APIs safely.
   const scoped_refptr<base::SequencedTaskRunner> main_thread_task_runner_;
+
+  // Clock to use to calculate time ticks. Set and used only for testing.
+  const base::TickClock* tick_clock_ = nullptr;
 
   base::WeakPtrFactory<PowerManagerProviderImpl> weak_factory_;
 

@@ -25,6 +25,11 @@ FindTabHelper::FindTabHelper(web::WebState* web_state) {
 
 FindTabHelper::~FindTabHelper() {}
 
+void FindTabHelper::SetResponseDelegate(
+    id<FindInPageResponseDelegate> response_delegate) {
+  controller_.responseDelegate = response_delegate;
+}
+
 void FindTabHelper::StartFinding(NSString* search_term,
                                  FindInPageCompletionBlock completion) {
   base::RecordAction(base::UserMetricsAction(kFindActionName));
@@ -85,15 +90,17 @@ void FindTabHelper::RestoreSearchTerm() {
   [controller_ restoreSearchTerm];
 }
 
-void FindTabHelper::DidFinishNavigation(
-    web::WebState* web_state,
-    web::NavigationContext* navigation_context) {
-  StopFinding(nil);
-}
-
 void FindTabHelper::WebStateDestroyed(web::WebState* web_state) {
   [controller_ detachFromWebState];
   web_state->RemoveObserver(this);
+}
+
+void FindTabHelper::DidFinishNavigation(
+    web::WebState* web_state,
+    web::NavigationContext* navigation_context) {
+  if (IsFindUIActive()) {
+    StopFinding(nil);
+  }
 }
 
 WEB_STATE_USER_DATA_KEY_IMPL(FindTabHelper)

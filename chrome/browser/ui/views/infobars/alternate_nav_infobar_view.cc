@@ -8,7 +8,7 @@
 
 #include <utility>
 
-#include "base/logging.h"
+#include "base/check_op.h"
 #include "build/build_config.h"
 #include "chrome/browser/ui/omnibox/alternate_nav_infobar_delegate.h"
 #include "ui/base/window_open_disposition.h"
@@ -40,7 +40,7 @@ AlternateNavInfoBarView::AlternateNavInfoBarView(
   AddChildView(label_1_);
 
   link_text_ = delegate_ptr->GetLinkText();
-  link_ = CreateLink(link_text_, this);
+  link_ = CreateLink(link_text_);
   AddChildView(link_);
 
   label_2_text_ = message_text.substr(offset);
@@ -63,7 +63,7 @@ void AlternateNavInfoBarView::ElideLabels(Labels* labels, int available_width) {
   if (last_label_width < last_label->GetMinimumSize().width()) {
     last_label_width = 0;
     if (!labels->empty())
-      labels->back()->SetText(labels->back()->text() + gfx::kEllipsisUTF16);
+      labels->back()->SetText(labels->back()->GetText() + gfx::kEllipsisUTF16);
   }
   last_label->SetSize(gfx::Size(last_label_width, last_label->height()));
   if (!labels->empty())
@@ -90,16 +90,6 @@ void AlternateNavInfoBarView::Layout() {
 int AlternateNavInfoBarView::ContentMinimumWidth() const {
   int label_1_width = label_1_->GetMinimumSize().width();
   return label_1_width ? label_1_width : link_->GetMinimumSize().width();
-}
-
-void AlternateNavInfoBarView::LinkClicked(views::Link* source,
-                                          int event_flags) {
-  if (!owner())
-    return;  // We're closing; don't call anything, it might access the owner.
-  DCHECK(link_ != NULL);
-  DCHECK_EQ(link_, source);
-  if (GetDelegate()->LinkClicked(ui::DispositionFromEventFlags(event_flags)))
-    RemoveSelf();
 }
 
 AlternateNavInfoBarDelegate* AlternateNavInfoBarView::GetDelegate() {

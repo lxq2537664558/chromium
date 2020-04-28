@@ -21,7 +21,7 @@ VariationID GetIDForTrial(IDCollectionKey key, base::FieldTrial* trial) {
   return GetGoogleVariationID(key, trial->trial_name(), trial->group_name());
 }
 
-// Call FieldTrialList::FactoryGetFieldTrial() with a future expiry date.
+// Call FieldTrialList::FactoryGetFieldTrial().
 scoped_refptr<base::FieldTrial> CreateFieldTrial(
     const std::string& trial_name,
     int total_probability,
@@ -29,7 +29,6 @@ scoped_refptr<base::FieldTrial> CreateFieldTrial(
     int* default_group_number) {
   return base::FieldTrialList::FactoryGetFieldTrial(
       trial_name, total_probability, default_group_name,
-      base::FieldTrialList::kNoExpirationYear, 1, 1,
       base::FieldTrial::SESSION_RANDOMIZED, default_group_number);
 }
 
@@ -37,7 +36,7 @@ scoped_refptr<base::FieldTrial> CreateFieldTrial(
 
 class VariationsAssociatedDataTest : public ::testing::Test {
  public:
-  VariationsAssociatedDataTest() : field_trial_list_(nullptr) {}
+  VariationsAssociatedDataTest() {}
 
   ~VariationsAssociatedDataTest() override {
     // Ensure that the maps are cleared between tests, since they are stored as
@@ -46,8 +45,6 @@ class VariationsAssociatedDataTest : public ::testing::Test {
   }
 
  private:
-  base::FieldTrialList field_trial_list_;
-
   DISALLOW_COPY_AND_ASSIGN(VariationsAssociatedDataTest);
 };
 

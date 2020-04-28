@@ -8,13 +8,14 @@
 #include "base/logging.h"
 #include "base/run_loop.h"
 #include "base/stl_util.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/threading/thread_task_runner_handle.h"
 #include "build/build_config.h"
+#include "chrome/test/pixel/browser_skia_gold_pixel_diff.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 #if defined(OS_CHROMEOS)
 #include "ash/shell.h"  // mash-ok
-#include "ui/base/ui_base_features.h"
 #endif
 
 #if defined(OS_MACOSX)
@@ -22,10 +23,12 @@
 #endif
 
 #if defined(TOOLKIT_VIEWS)
+#include "base/callback_helpers.h"
+#include "base/strings/strcat.h"
+#include "ui/compositor/test/draw_waiter_for_test.h"
 #include "ui/display/display.h"
 #include "ui/display/screen.h"
 #include "ui/views/test/widget_test.h"
-#include "ui/views/widget/widget_observer.h"
 #endif
 
 namespace {
@@ -54,15 +57,27 @@ class WidgetCloser {
 
   DISALLOW_COPY_AND_ASSIGN(WidgetCloser);
 };
+
 #endif  // defined(TOOLKIT_VIEWS)
 
 }  // namespace
 
-TestBrowserDialog::TestBrowserDialog() = default;
+TestBrowserDialog::TestBrowserDialog() : TestBrowserUi() {
+  if (base::CommandLine::ForCurrentProcess()->HasSwitch(
+          "browser-ui-tests-verify-pixels")) {
+    pixel_diff_ = std::make_unique<BrowserSkiaGoldPixelDiff>();
+  }
+}
+
 TestBrowserDialog::~TestBrowserDialog() = default;
 
 void TestBrowserDialog::PreShow() {
   UpdateWidgets();
+}
+
+void TestBrowserDialog::ShowAndVerifyUi() {
+  TestBrowserUi::ShowAndVerifyUi();
+  baseline_.clear();
 }
 
 // This returns true if exactly one views widget was shown that is a dialog or
@@ -72,6 +87,11 @@ bool TestBrowserDialog::VerifyUi() {
 #if defined(TOOLKIT_VIEWS)
   views::Widget::Widgets widgets_before = widgets_;
   UpdateWidgets();
+
+  // Force pending layouts of all existing widgets. This ensures any
+  // anchor Views are in the correct position.
+  for (views::Widget* widget : widgets_)
+    widget->LayoutRootViewIfNecessary();
 
   // Get the list of added dialog widgets. Ignore non-dialog widgets, including
   // those added by tests to anchor dialogs and the browser's status bubble.
@@ -85,8 +105,49 @@ bool TestBrowserDialog::VerifyUi() {
   });
   widgets_ = added;
 
-  if (added.size() != 1)
+  if (added.size() != 1) {
+    DLOG(INFO) << "VerifyUi(): Expected 1 added widget; got " << added.size();
+    if (added.size() > 1) {
+      base::string16 widget_title_log =
+          base::ASCIIToUTF16("Added Widgets are: ");
+      for (views::Widget* widget : added) {
+        widget_title_log += widget->widget_delegate()->GetWindowTitle() +
+                            base::ASCIIToUTF16(" ");
+      }
+      DLOG(INFO) << widget_title_log;
+    }
     return false;
+  }
+
+  views::Widget* dialog_widget = *(added.begin());
+// TODO(https://crbug.com/958242) support Mac for pixel tests.
+#if !defined(OS_MACOSX)
+  if (pixel_diff_) {
+    dialog_widget->SetBlockCloseForTesting(true);
+    // Deactivate before taking screenshot. Deactivated dialog pixel outputs
+    // is more predictable than activated dialog.
+    bool is_active = dialog_widget->IsActive();
+    dialog_widget->Deactivate();
+    base::ScopedClosureRunner unblock_close(
+        base::BindOnce(&views::Widget::SetBlockCloseForTesting,
+                       base::Unretained(dialog_widget), false));
+    // Wait for painting complete.
+    auto* compositor = dialog_widget->GetCompositor();
+    ui::DrawWaiterForTest::WaitForCompositingEnded(compositor);
+
+    pixel_diff_->Init(dialog_widget, "BrowserUiDialog");
+    auto* test_info = testing::UnitTest::GetInstance()->current_test_info();
+    const std::string test_name = base::StrCat(
+        {test_info->test_case_name(), "_", test_info->name(), "_", baseline_});
+    if (!pixel_diff_->CompareScreenshot(test_name,
+                                        dialog_widget->GetContentsView())) {
+      DLOG(INFO) << "VerifyUi(): Pixel compare failed.";
+      return false;
+    }
+    if (is_active)
+      dialog_widget->Activate();
+  }
+#endif  // OS_MACOSX
 
   if (!should_verify_dialog_bounds_)
     return true;
@@ -94,7 +155,6 @@ bool TestBrowserDialog::VerifyUi() {
   // Verify that the dialog's dimensions do not exceed the display's work area
   // bounds, which may be smaller than its bounds(), e.g. in the case of the
   // docked magnifier or Chromevox being enabled.
-  views::Widget* dialog_widget = *(added.begin());
   const gfx::Rect dialog_bounds = dialog_widget->GetWindowBoundsInScreen();
   gfx::NativeWindow native_window = dialog_widget->GetNativeWindow();
   DCHECK(native_window);
@@ -102,7 +162,11 @@ bool TestBrowserDialog::VerifyUi() {
   const gfx::Rect display_work_area =
       screen->GetDisplayNearestWindow(native_window).work_area();
 
-  return display_work_area.Contains(dialog_bounds);
+  const bool dialog_in_bounds = display_work_area.Contains(dialog_bounds);
+  DLOG_IF(INFO, !dialog_in_bounds)
+      << "VerifyUi(): Dialog bounds " << dialog_bounds.ToString()
+      << " outside of display work area " << display_work_area.ToString();
+  return dialog_in_bounds;
 #else
   NOTIMPLEMENTED();
   return false;
@@ -146,15 +210,8 @@ std::string TestBrowserDialog::GetNonDialogName() {
 void TestBrowserDialog::UpdateWidgets() {
   widgets_.clear();
 #if defined(OS_CHROMEOS)
-  // Under mash, GetAllWidgets() uses MusClient to get the list of root windows.
-  // Otherwise, GetAllWidgets() relies on AuraTestHelper to get the root window,
-  // but that is not available in browser_tests, so use ash::Shell directly.
-  if (features::IsUsingWindowService()) {
-    widgets_ = views::test::WidgetTest::GetAllWidgets();
-  } else {
-    for (aura::Window* root_window : ash::Shell::GetAllRootWindows())
-      views::Widget::GetAllChildWidgets(root_window, &widgets_);
-  }
+  for (aura::Window* root_window : ash::Shell::GetAllRootWindows())
+    views::Widget::GetAllChildWidgets(root_window, &widgets_);
 #elif defined(TOOLKIT_VIEWS)
   widgets_ = views::test::WidgetTest::GetAllWidgets();
 #else

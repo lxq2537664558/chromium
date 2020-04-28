@@ -40,6 +40,8 @@ Polymer({
 
     max: Number,
 
+    labelAria: String,
+
     labelMin: String,
 
     labelMax: String,
@@ -67,7 +69,7 @@ Polymer({
     'valueChanged_(pref.*, ticks.*, loaded_)',
   ],
 
-  attached: function() {
+  attached() {
     this.loaded_ = true;
   },
 
@@ -75,7 +77,7 @@ Polymer({
    * @param {number|cr_slider.SliderTick} tick
    * @return {number|undefined}
    */
-  getTickValue_: function(tick) {
+  getTickValue_(tick) {
     return typeof tick == 'object' ? tick.value : tick;
   },
 
@@ -84,7 +86,7 @@ Polymer({
    * @return {number|undefined}
    * @private
    */
-  getTickValueAtIndex_: function(index) {
+  getTickValueAtIndex_(index) {
     return this.getTickValue_(this.ticks[index]);
   },
 
@@ -93,7 +95,7 @@ Polymer({
    * position after a user action.
    * @private
    */
-  onSliderChanged_: function() {
+  onSliderChanged_() {
     if (!this.loaded_) {
       return;
     }
@@ -115,7 +117,7 @@ Polymer({
   },
 
   /** @private */
-  computeDisableSlider_: function() {
+  computeDisableSlider_() {
     return this.disabled || this.isPrefEnforced();
   },
 
@@ -125,8 +127,9 @@ Polymer({
    * position.
    * @private
    */
-  valueChanged_: function() {
-    if (this.pref == undefined || !this.loaded_) {
+  valueChanged_() {
+    if (this.pref == undefined || !this.loaded_ || this.$.slider.dragging ||
+        this.$.slider.updatingFromKey) {
       return;
     }
 
@@ -141,18 +144,7 @@ Polymer({
 
     // The preference and slider values are continuous when |ticks| is empty.
     if (numTicks == 0) {
-      // This method is handling a preference value change. If the slider is,
-      // in a dragging state, that change is discarded and the the preference
-      // value is updated based on the slider value.
-      if (this.$.slider.dragging) {
-        const prefValueFromSlider = this.$.slider.value / this.scale;
-        if (this.updateValueInstantly && prefValue != prefValueFromSlider) {
-          this.set('pref.value', prefValueFromSlider);
-        }
-      } else {
-        // When not dragging, simply update the slider value.
-        this.$.slider.value = prefValue * this.scale;
-      }
+      this.$.slider.value = prefValue * this.scale;
       return;
     }
 
@@ -161,15 +153,6 @@ Polymer({
     const MAX_TICKS = 10;
     this.$.slider.markerCount =
         (this.showMarkers || numTicks <= MAX_TICKS) ? numTicks : 0;
-
-    if (this.$.slider.dragging) {
-      const tickValue = this.getTickValueAtIndex_(this.$.slider.value);
-      if (this.updateValueInstantly && this.pref.value != tickValue) {
-        this.set('pref.value', tickValue);
-      }
-
-      return;
-    }
 
     // Convert from the public |value| to the slider index (where the knob
     // should be positioned on the slider).
@@ -187,5 +170,14 @@ Polymer({
     if (this.pref.value != tickValue) {
       this.set('pref.value', tickValue);
     }
+  },
+
+  /**
+   * @return {string}
+   * @private
+   */
+  getRoleDescription_() {
+    return loadTimeData.getStringF('settingsSliderRoleDescription',
+      this.labelMin, this.labelMax);
   },
 });

@@ -71,9 +71,9 @@ MediaGalleriesPermissionController::MediaGalleriesPermissionController(
   // Passing unretained pointer is safe, since the dialog controller
   // is self-deleting, and so won't be deleted until it can be shown
   // and then closed.
-  preferences_->EnsureInitialized(
-      base::Bind(&MediaGalleriesPermissionController::OnPreferencesInitialized,
-                 base::Unretained(this)));
+  preferences_->EnsureInitialized(base::BindOnce(
+      &MediaGalleriesPermissionController::OnPreferencesInitialized,
+      base::Unretained(this)));
 
   // Unretained is safe because |this| owns |context_menu_|.
   context_menu_.reset(
@@ -180,8 +180,8 @@ MediaGalleriesPermissionController::GetSectionEntries(size_t index) const {
   for (auto iter = known_galleries_.begin(); iter != known_galleries_.end();
        ++iter) {
     MediaGalleryPrefId pref_id = GetPrefId(iter->first);
-    if (!base::ContainsKey(forgotten_galleries_, iter->first) &&
-        existing == base::ContainsKey(pref_permitted_galleries_, pref_id)) {
+    if (!base::Contains(forgotten_galleries_, iter->first) &&
+        existing == base::Contains(pref_permitted_galleries_, pref_id)) {
       result.push_back(iter->second);
     }
   }
@@ -247,7 +247,7 @@ void MediaGalleriesPermissionController::DidForgetEntry(
     GalleryDialogId gallery_id) {
   media_galleries::UsageCount(media_galleries::DIALOG_FORGET_GALLERY);
   if (!new_galleries_.erase(gallery_id)) {
-    DCHECK(base::ContainsKey(known_galleries_, gallery_id));
+    DCHECK(base::Contains(known_galleries_, gallery_id));
     forgotten_galleries_.insert(gallery_id);
   }
   dialog_->UpdateGalleries();
@@ -396,7 +396,7 @@ void MediaGalleriesPermissionController::InitializePermissions() {
   for (auto iter = pref_permitted_galleries_.begin();
        iter != pref_permitted_galleries_.end(); ++iter) {
     GalleryDialogId gallery_id = GetDialogId(*iter);
-    DCHECK(base::ContainsKey(known_galleries_, gallery_id));
+    DCHECK(base::Contains(known_galleries_, gallery_id));
     known_galleries_[gallery_id].selected = true;
   }
 
@@ -414,7 +414,7 @@ void MediaGalleriesPermissionController::SavePermissions() {
   for (GalleryPermissionsMap::const_iterator iter = known_galleries_.begin();
        iter != known_galleries_.end(); ++iter) {
     MediaGalleryPrefId pref_id = GetPrefId(iter->first);
-    if (base::ContainsKey(forgotten_galleries_, iter->first)) {
+    if (base::Contains(forgotten_galleries_, iter->first)) {
       preferences_->ForgetGalleryById(pref_id);
     } else {
       bool changed = preferences_->SetGalleryPermissionForExtension(

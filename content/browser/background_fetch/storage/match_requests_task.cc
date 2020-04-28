@@ -10,6 +10,7 @@
 #include "base/bind.h"
 #include "content/browser/background_fetch/background_fetch_data_manager.h"
 #include "content/browser/background_fetch/storage/database_helpers.h"
+#include "content/browser/cache_storage/cache_storage.h"
 #include "content/browser/cache_storage/cache_storage_manager.h"
 #include "content/browser/service_worker/service_worker_context_wrapper.h"
 #include "content/common/service_worker/service_worker_utils.h"
@@ -28,8 +29,7 @@ MatchRequestsTask::MatchRequestsTask(
     : DatabaseTask(host),
       registration_id_(registration_id),
       match_params_(std::move(match_params)),
-      callback_(std::move(callback)),
-      weak_factory_(this) {}
+      callback_(std::move(callback)) {}
 
 MatchRequestsTask::~MatchRequestsTask() = default;
 

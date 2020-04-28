@@ -21,11 +21,13 @@ P2PQuicStreamImpl::P2PQuicStreamImpl(quic::QuicStreamId id,
   DCHECK_GT(write_buffer_size_, 0u);
 }
 
-P2PQuicStreamImpl::P2PQuicStreamImpl(quic::PendingStream pending,
+P2PQuicStreamImpl::P2PQuicStreamImpl(quic::PendingStream* pending,
                                      quic::QuicSession* session,
                                      uint32_t delegate_read_buffer_size,
                                      uint32_t write_buffer_size)
-    : quic::QuicStream(std::move(pending), quic::BIDIRECTIONAL),
+    : quic::QuicStream(pending,
+                       quic::BIDIRECTIONAL,
+                       /*is_static=*/false),
       delegate_read_buffer_size_(delegate_read_buffer_size),
       write_buffer_size_(write_buffer_size) {
   DCHECK_GT(delegate_read_buffer_size_, 0u);
@@ -129,8 +131,8 @@ void P2PQuicStreamImpl::WriteData(Vector<uint8_t> data, bool fin) {
   DCHECK_GE(write_buffer_size_, data.size() + write_buffered_amount_);
   write_buffered_amount_ += data.size();
   QuicStream::WriteOrBufferData(
-      quic::QuicStringPiece(reinterpret_cast<const char*>(data.data()),
-                            data.size()),
+      quiche::QuicheStringPiece(reinterpret_cast<const char*>(data.data()),
+                                data.size()),
       fin, nullptr);
 }
 

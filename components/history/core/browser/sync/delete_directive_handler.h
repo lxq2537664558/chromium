@@ -62,19 +62,18 @@ class DeleteDirectiveHandler : public syncer::SyncableService {
   //       history entries that match. Caller still needs to call other
   //       interfaces, e.g. HistoryService::ExpireHistoryBetween(), to delete
   //       local history entries.
-  syncer::SyncError ProcessLocalDeleteDirective(
+  base::Optional<syncer::ModelError> ProcessLocalDeleteDirective(
       const sync_pb::HistoryDeleteDirectiveSpecifics& delete_directive);
 
   // syncer::SyncableService implementation.
   void WaitUntilReadyToSync(base::OnceClosure done) override;
-  syncer::SyncMergeResult MergeDataAndStartSyncing(
+  base::Optional<syncer::ModelError> MergeDataAndStartSyncing(
       syncer::ModelType type,
       const syncer::SyncDataList& initial_sync_data,
       std::unique_ptr<syncer::SyncChangeProcessor> sync_processor,
       std::unique_ptr<syncer::SyncErrorFactory> error_handler) override;
   void StopSyncing(syncer::ModelType type) override;
-  syncer::SyncDataList GetAllSyncData(syncer::ModelType type) const override;
-  syncer::SyncError ProcessSyncChanges(
+  base::Optional<syncer::ModelError> ProcessSyncChanges(
       const base::Location& from_here,
       const syncer::SyncChangeList& change_list) override;
 
@@ -96,7 +95,7 @@ class DeleteDirectiveHandler : public syncer::SyncableService {
   base::CancelableTaskTracker internal_tracker_;
   std::unique_ptr<syncer::SyncChangeProcessor> sync_processor_;
   base::ThreadChecker thread_checker_;
-  base::WeakPtrFactory<DeleteDirectiveHandler> weak_ptr_factory_;
+  base::WeakPtrFactory<DeleteDirectiveHandler> weak_ptr_factory_{this};
 
   DISALLOW_COPY_AND_ASSIGN(DeleteDirectiveHandler);
 };

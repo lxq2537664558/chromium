@@ -8,10 +8,6 @@
 #include "base/macros.h"
 #include "chrome/browser/chromeos/first_run/step.h"
 
-namespace gfx {
-class Rect;
-}
-
 namespace chromeos {
 namespace first_run {
 
@@ -21,9 +17,7 @@ class AppListStep : public Step {
 
  private:
   // Step:
-  void DoShow() override;
-
-  void ShowWithButtonBounds(const gfx::Rect& screen_bounds);
+  bool DoShow() override;
 
   DISALLOW_COPY_AND_ASSIGN(AppListStep);
 };
@@ -32,4 +26,3 @@ class AppListStep : public Step {
 }  // namespace chromeos
 
 #endif  // CHROME_BROWSER_CHROMEOS_FIRST_RUN_STEPS_APP_LIST_STEP_H_
-

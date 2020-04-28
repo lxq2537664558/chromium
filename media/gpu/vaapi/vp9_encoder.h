@@ -40,9 +40,10 @@ class VP9Encoder : public AcceleratedVideoEncoder {
     // Coded picture buffer size in bits.
     unsigned int cpb_size_bits;
 
+    // Quantization parameter. They are vp9 ac/dc indices and their ranges are
+    // 0-255.
     int initial_qp;
-    int min_qp;
-    int max_qp;
+    ScalingSettings scaling_settings;
 
     bool error_resilient_mode;
   };
@@ -59,12 +60,16 @@ class VP9Encoder : public AcceleratedVideoEncoder {
 
     // Initializes |job| to use the provided |encode_params| as its parameters,
     // and |pic| as the target, as well as |ref_frames| as reference frames for
-    // it. Returns true on success.
+    // it. |ref_frames_used| is to specify whether each of |ref_frame_idx| of
+    // VP9FrameHeader in |pic| is used. If |ref_frames_used[i]| is true,
+    // ref_frame_idx[i] will be used as a reference frame. Returns true on
+    // success.
     virtual bool SubmitFrameParameters(
         EncodeJob* job,
         const VP9Encoder::EncodeParams& encode_params,
         scoped_refptr<VP9Picture> pic,
-        const Vp9ReferenceFrameVector& ref_frames) = 0;
+        const Vp9ReferenceFrameVector& ref_frames,
+        const std::array<bool, kVp9NumRefsPerFrame>& ref_frames_used) = 0;
 
     DISALLOW_COPY_AND_ASSIGN(Accelerator);
   };
@@ -79,6 +84,7 @@ class VP9Encoder : public AcceleratedVideoEncoder {
                    uint32_t framerate) override;
   gfx::Size GetCodedSize() const override;
   size_t GetMaxNumOfRefFrames() const override;
+  ScalingSettings GetScalingSettings() const override;
   bool PrepareEncodeJob(EncodeJob* encode_job) override;
 
  private:

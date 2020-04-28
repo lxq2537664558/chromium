@@ -20,8 +20,7 @@
 #include "chrome/browser/safe_browsing/download_protection/path_sanitizer.h"
 #include "chrome/browser/safe_browsing/incident_reporting/module_integrity_unittest_util_win.h"
 #include "chrome/browser/safe_browsing/incident_reporting/module_integrity_verifier_win.h"
-#include "chrome_elf/chrome_elf_constants.h"
-#include "components/safe_browsing/proto/csd.pb.h"
+#include "components/safe_browsing/core/proto/csd.pb.h"
 #include "net/base/winsock_init.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -51,9 +50,8 @@ bool DllEntryContainsLspFeature(
     const std::string& dll_path) {
   for (const auto& dll : process_report.dll()) {
     if (dll.path() == dll_path &&
-        base::ContainsValue(
-            dll.feature(),
-            ClientIncidentReport_EnvironmentData_Process_Dll::LSP)) {
+        base::Contains(dll.feature(),
+                       ClientIncidentReport_EnvironmentData_Process_Dll::LSP)) {
       // LSP feature found.
       return true;
     }

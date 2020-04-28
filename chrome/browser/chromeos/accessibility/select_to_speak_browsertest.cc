@@ -5,19 +5,17 @@
 #include <memory>
 #include <vector>
 
-#include "ash/accessibility/accessibility_focus_ring_controller.h"
+#include "ash/accessibility/accessibility_focus_ring_controller_impl.h"
 #include "ash/accessibility/accessibility_focus_ring_layer.h"
 #include "ash/public/cpp/ash_features.h"
-#include "ash/public/interfaces/constants.mojom.h"
-#include "ash/public/interfaces/status_area_widget_test_api.test-mojom-test-utils.h"
-#include "ash/public/interfaces/status_area_widget_test_api.test-mojom.h"
+#include "ash/public/cpp/system_tray_test_api.h"
 #include "ash/root_window_controller.h"
 #include "ash/shell.h"
 #include "ash/system/status_area_widget.h"
 #include "ash/system/unified/unified_system_tray.h"
 #include "base/bind.h"
+#include "base/command_line.h"
 #include "base/memory/weak_ptr.h"
-#include "base/strings/pattern.h"
 #include "chrome/browser/chromeos/accessibility/accessibility_manager.h"
 #include "chrome/browser/chromeos/accessibility/speech_monitor.h"
 #include "chrome/browser/profiles/profile.h"
@@ -28,12 +26,13 @@
 #include "chrome/test/base/ui_test_utils.h"
 #include "content/public/browser/notification_details.h"
 #include "content/public/browser/notification_service.h"
-#include "content/public/common/service_manager_connection.h"
+#include "content/public/browser/system_connector.h"
 #include "content/public/test/browser_test_utils.h"
 #include "extensions/browser/extension_host.h"
 #include "extensions/browser/notification_types.h"
 #include "extensions/browser/process_manager.h"
-#include "services/service_manager/public/cpp/connector.h"
+#include "mojo/public/cpp/bindings/remote.h"
+#include "ui/accessibility/accessibility_switches.h"
 #include "ui/events/test/event_generator.h"
 #include "url/url_constants.h"
 
@@ -54,18 +53,13 @@ class SelectToSpeakTest : public InProcessBrowserTest {
   }
 
  protected:
-  SelectToSpeakTest() : weak_ptr_factory_(this) {}
+  SelectToSpeakTest() {}
   ~SelectToSpeakTest() override {}
 
   void SetUpOnMainThread() override {
     ASSERT_FALSE(AccessibilityManager::Get()->IsSelectToSpeakEnabled());
 
-    // Connect to the ash test interface for the StatusAreaWidget.
-    content::ServiceManagerConnection::GetForProcess()
-        ->GetConnector()
-        ->BindInterface(ash::mojom::kServiceName,
-                        &status_area_widget_test_api_);
-
+    tray_test_api_ = ash::SystemTrayTestApi::Create();
     content::WindowedNotificationObserver extension_load_waiter(
         extensions::NOTIFICATION_EXTENSION_HOST_DID_STOP_FIRST_LOAD,
         content::NotificationService::AllSources());
@@ -78,7 +72,7 @@ class SelectToSpeakTest : public InProcessBrowserTest {
     ui_test_utils::NavigateToURL(browser(), GURL(url::kAboutBlankURL));
   }
 
-  SpeechMonitor speech_monitor_;
+  SpeechMonitor sm_;
   std::unique_ptr<ui::test::EventGenerator> generator_;
 
   gfx::Rect GetWebContentsBounds() const {
@@ -113,10 +107,8 @@ class SelectToSpeakTest : public InProcessBrowserTest {
   }
 
   void TapSelectToSpeakTray() {
-    ash::mojom::StatusAreaWidgetTestApiAsyncWaiter status_area(
-        status_area_widget_test_api_.get());
     PrepareToWaitForSelectToSpeakStatusChanged();
-    status_area.TapSelectToSpeakTray();
+    tray_test_api_->TapSelectToSpeakTray();
     WaitForSelectToSpeakStatusChanged();
   }
 
@@ -146,16 +138,26 @@ class SelectToSpeakTest : public InProcessBrowserTest {
     return browser()->tab_strip_model()->GetActiveWebContents();
   }
 
-  void ExecuteJavaScriptInForeground(const std::string& script) {
-    CHECK(content::ExecuteScript(GetWebContents(), script));
+  void ExecuteJavaScriptAsync(const std::string& script) {
+    content::ExecuteScriptAsync(GetWebContents(), script);
   }
 
  private:
-  ash::mojom::StatusAreaWidgetTestApiPtr status_area_widget_test_api_;
+  std::unique_ptr<ash::SystemTrayTestApi> tray_test_api_;
   scoped_refptr<content::MessageLoopRunner> loop_runner_;
   scoped_refptr<content::MessageLoopRunner> tray_loop_runner_;
-  base::WeakPtrFactory<SelectToSpeakTest> weak_ptr_factory_;
+  base::WeakPtrFactory<SelectToSpeakTest> weak_ptr_factory_{this};
   DISALLOW_COPY_AND_ASSIGN(SelectToSpeakTest);
+};
+
+/* Test fixture enabling experimental accessibility language detection switch */
+class SelectToSpeakTestWithLanguageDetection : public SelectToSpeakTest {
+ protected:
+  void SetUpCommandLine(base::CommandLine* command_line) override {
+    SelectToSpeakTest::SetUpCommandLine(command_line);
+    command_line->AppendSwitch(
+        ::switches::kEnableExperimentalAccessibilityLanguageDetection);
+  }
 };
 
 IN_PROC_BROWSER_TEST_F(SelectToSpeakTest, SpeakStatusTray) {
@@ -172,8 +174,8 @@ IN_PROC_BROWSER_TEST_F(SelectToSpeakTest, SpeakStatusTray) {
   generator_->ReleaseLeftButton();
   generator_->ReleaseKey(ui::VKEY_LWIN, 0 /* flags */);
 
-  EXPECT_TRUE(
-      base::MatchPattern(speech_monitor_.GetNextUtterance(), "Status tray*"));
+  sm_.ExpectSpeechPattern("Status tray*");
+  sm_.Replay();
 }
 
 IN_PROC_BROWSER_TEST_F(SelectToSpeakTest, ActivatesWithTapOnSelectToSpeakTray) {
@@ -195,8 +197,8 @@ IN_PROC_BROWSER_TEST_F(SelectToSpeakTest, ActivatesWithTapOnSelectToSpeakTray) {
                           bounds.y() + bounds.height());
   generator_->ReleaseLeftButton();
 
-  EXPECT_TRUE(base::MatchPattern(speech_monitor_.GetNextUtterance(),
-                                 "This is some text*"));
+  sm_.ExpectSpeechPattern("This is some text*");
+  sm_.Replay();
 }
 
 IN_PROC_BROWSER_TEST_F(SelectToSpeakTest, SelectToSpeakTrayNotSpoken) {
@@ -214,8 +216,9 @@ IN_PROC_BROWSER_TEST_F(SelectToSpeakTest, SelectToSpeakTrayNotSpoken) {
   // The next should be the first thing spoken -- the tray was not spoken.
   ActivateSelectToSpeakInWindowBounds(
       "data:text/html;charset=utf-8,<p>This is some text</p>");
-  EXPECT_TRUE(base::MatchPattern(speech_monitor_.GetNextUtterance(),
-                                 "This is some text*"));
+
+  sm_.ExpectSpeechPattern("This is some text*");
+  sm_.Replay();
 }
 
 IN_PROC_BROWSER_TEST_F(SelectToSpeakTest, SmoothlyReadsAcrossInlineUrl) {
@@ -226,9 +229,8 @@ IN_PROC_BROWSER_TEST_F(SelectToSpeakTest, SmoothlyReadsAcrossInlineUrl) {
   // Should combine nodes in a paragraph into one utterance.
   // Includes some wildcards between words because there may be extra
   // spaces. Spaces are not pronounced, so extra spaces do not impact output.
-  EXPECT_TRUE(
-      base::MatchPattern(speech_monitor_.GetNextUtterance(),
-                         "This is some text*with a node*in the middle*"));
+  sm_.ExpectSpeechPattern("This is some text*with a node*in the middle*");
+  sm_.Replay();
 }
 
 IN_PROC_BROWSER_TEST_F(SelectToSpeakTest, SmoothlyReadsAcrossMultipleLines) {
@@ -241,9 +243,8 @@ IN_PROC_BROWSER_TEST_F(SelectToSpeakTest, SmoothlyReadsAcrossMultipleLines) {
   // spaces, for example at line wraps. Extra wildcards included to
   // reduce flakyness in case wrapping is not consistent.
   // Spaces are not pronounced, so extra spaces do not impact output.
-  EXPECT_TRUE(
-      base::MatchPattern(speech_monitor_.GetNextUtterance(),
-                         "This is some*text*with*a*node*in*the*middle*"));
+  sm_.ExpectSpeechPattern("This is some*text*with*a*node*in*the*middle*");
+  sm_.Replay();
 }
 
 IN_PROC_BROWSER_TEST_F(SelectToSpeakTest, SmoothlyReadsAcrossFormattedText) {
@@ -255,9 +256,8 @@ IN_PROC_BROWSER_TEST_F(SelectToSpeakTest, SmoothlyReadsAcrossFormattedText) {
   // Should combine nodes in a paragraph into one utterance.
   // Includes some wildcards between words because there may be extra
   // spaces. Spaces are not pronounced, so extra spaces do not impact output.
-  EXPECT_TRUE(
-      base::MatchPattern(speech_monitor_.GetNextUtterance(),
-                         "This is some text*with a node*in the middle*"));
+  sm_.ExpectSpeechPattern("This is some text*with a node*in the middle*");
+  sm_.Replay();
 }
 
 IN_PROC_BROWSER_TEST_F(SelectToSpeakTest,
@@ -265,8 +265,9 @@ IN_PROC_BROWSER_TEST_F(SelectToSpeakTest,
   // Bold or formatted text
   ActivateSelectToSpeakInWindowBounds(
       "data:text/html;charset=utf-8,<canvas>This is some text</canvas>");
-  EXPECT_TRUE(base::MatchPattern(speech_monitor_.GetNextUtterance(),
-                                 "This is some text*"));
+
+  sm_.ExpectSpeechPattern("This is some text*");
+  sm_.Replay();
 }
 
 IN_PROC_BROWSER_TEST_F(SelectToSpeakTest, BreaksAtParagraphBounds) {
@@ -275,14 +276,36 @@ IN_PROC_BROWSER_TEST_F(SelectToSpeakTest, BreaksAtParagraphBounds) {
       "<p>Second paragraph</p></div>");
 
   // Should keep each paragraph as its own utterance.
-  EXPECT_TRUE(base::MatchPattern(speech_monitor_.GetNextUtterance(),
-                                 "First paragraph*"));
-  EXPECT_TRUE(base::MatchPattern(speech_monitor_.GetNextUtterance(),
-                                 "Second paragraph*"));
+  sm_.ExpectSpeechPattern("First paragraph*");
+  sm_.ExpectSpeechPattern("Second paragraph*");
+  sm_.Replay();
 }
 
-// Flaky test. https://crbug.com/950049
-IN_PROC_BROWSER_TEST_F(SelectToSpeakTest, DISABLED_FocusRingMovesWithMouse) {
+IN_PROC_BROWSER_TEST_F(SelectToSpeakTest, LanguageBoundsIgnoredByDefault) {
+  // Splitting at language bounds is behind a feature flag, test the default
+  // behaviour doesn't introduce a regression.
+  ActivateSelectToSpeakInWindowBounds(
+      "data:text/html;charset=utf-8,<div>"
+      "<span lang='en-US'>The first paragraph</span>"
+      "<span lang='fr-FR'>la deuxième paragraphe</span></div>");
+
+  sm_.ExpectSpeechPattern("The first paragraph* la deuxième paragraphe*");
+  sm_.Replay();
+}
+
+IN_PROC_BROWSER_TEST_F(SelectToSpeakTestWithLanguageDetection,
+                       BreaksAtLanguageBounds) {
+  ActivateSelectToSpeakInWindowBounds(
+      "data:text/html;charset=utf-8,<div>"
+      "<span lang='en-US'>The first paragraph</span>"
+      "<span lang='fr-FR'>la deuxième paragraphe</span></div>");
+
+  sm_.ExpectSpeechPatternWithLocale("The first paragraph*", "en-US");
+  sm_.ExpectSpeechPatternWithLocale("la deuxième paragraphe*", "fr-FR");
+  sm_.Replay();
+}
+
+IN_PROC_BROWSER_TEST_F(SelectToSpeakTest, FocusRingMovesWithMouse) {
   // Create a callback for the focus ring observer.
   base::RepeatingCallback<void()> callback =
       base::BindRepeating(&SelectToSpeakTest::OnFocusRingChanged, GetWeakPtr());
@@ -292,7 +315,7 @@ IN_PROC_BROWSER_TEST_F(SelectToSpeakTest, DISABLED_FocusRingMovesWithMouse) {
       chromeos::AccessibilityManager::Get()->GetFocusRingId(
           extension_misc::kSelectToSpeakExtensionId, "");
 
-  ash::AccessibilityFocusRingController* controller =
+  ash::AccessibilityFocusRingControllerImpl* controller =
       ash::Shell::Get()->accessibility_focus_ring_controller();
   controller->SetNoFadeForTesting();
   const ash::AccessibilityFocusRingGroup* focus_ring_group =
@@ -364,15 +387,16 @@ IN_PROC_BROWSER_TEST_F(SelectToSpeakTest, ContinuesReadingDuringResize) {
       "<p>Second paragraph is longer than 300 pixels and will wrap when "
       "resized</p></div>");
 
-  EXPECT_TRUE(base::MatchPattern(speech_monitor_.GetNextUtterance(),
-                                 "First paragraph*"));
+  sm_.ExpectSpeechPattern("First paragraph*");
 
   // Resize before second is spoken. If resizing caused errors finding the
   // inlineTextBoxes in the node, speech would be stopped early.
-  ExecuteJavaScriptInForeground(
-      "document.getElementById('resize').style.width='100px'");
-  EXPECT_TRUE(
-      base::MatchPattern(speech_monitor_.GetNextUtterance(), "*when*resized*"));
+  sm_.Call([this]() {
+    ExecuteJavaScriptAsync(
+        "document.getElementById('resize').style.width='100px'");
+  });
+  sm_.ExpectSpeechPattern("*when*resized*");
+  sm_.Replay();
 }
 
 IN_PROC_BROWSER_TEST_F(SelectToSpeakTest, WorksWithStickyKeys) {
@@ -394,11 +418,12 @@ IN_PROC_BROWSER_TEST_F(SelectToSpeakTest, WorksWithStickyKeys) {
                           bounds.y() + bounds.height());
   generator_->ReleaseLeftButton();
 
-  EXPECT_TRUE(base::MatchPattern(speech_monitor_.GetNextUtterance(),
-                                 "This is some text*"));
+  sm_.ExpectSpeechPattern("This is some text*");
 
   // Reset state.
-  AccessibilityManager::Get()->EnableStickyKeys(false);
+  sm_.Call([]() { AccessibilityManager::Get()->EnableStickyKeys(false); });
+
+  sm_.Replay();
 }
 
 }  // namespace chromeos

@@ -4,7 +4,7 @@ Copyright (c) 2011 The Chromium Authors. All rights reserved.
 Use of this source code is governed by a BSD-style license that can be
 found in the LICENSE file.
 -->
-<html dir="$i18n{textdirection}" lang="$i18n{language}">
+<html dir="ltr" lang="en">
 <title>Quota Internals</title>
 <meta charset="utf-8">
 <link rel="stylesheet" href="chrome://resources/css/text_defaults.css">
@@ -48,6 +48,17 @@ found in the LICENSE file.
       <table>
         <tbody id="stat-entries" class="entries"></tbody>
       </table>
+      <h2>Test Storage Pressure Behavior</h2>
+      <div class="pressure">
+      Origin to test:
+      <input id="storage-pressure-origin"
+             value="https://www.example.com">
+      </div>
+      <div class="pressure">
+        <button id="trigger-notification">
+          Trigger Storage Pressure Notification
+        </button>
+      </div>
     </tabpanel>
 
     <tabpanel>

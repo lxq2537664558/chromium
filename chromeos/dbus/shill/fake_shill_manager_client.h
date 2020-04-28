@@ -32,37 +32,36 @@ class COMPONENT_EXPORT(SHILL_CLIENT) FakeShillManagerClient
       ShillPropertyChangedObserver* observer) override;
   void RemovePropertyChangedObserver(
       ShillPropertyChangedObserver* observer) override;
-  void GetProperties(const DictionaryValueCallback& callback) override;
-  void GetNetworksForGeolocation(
-      const DictionaryValueCallback& callback) override;
+  void GetProperties(DictionaryValueCallback callback) override;
+  void GetNetworksForGeolocation(DictionaryValueCallback callback) override;
   void SetProperty(const std::string& name,
                    const base::Value& value,
-                   const base::Closure& callback,
-                   const ErrorCallback& error_callback) override;
+                   base::OnceClosure callback,
+                   ErrorCallback error_callback) override;
   void RequestScan(const std::string& type,
-                   const base::Closure& callback,
-                   const ErrorCallback& error_callback) override;
+                   base::OnceClosure callback,
+                   ErrorCallback error_callback) override;
   void EnableTechnology(const std::string& type,
-                        const base::Closure& callback,
-                        const ErrorCallback& error_callback) override;
+                        base::OnceClosure callback,
+                        ErrorCallback error_callback) override;
   void DisableTechnology(const std::string& type,
-                         const base::Closure& callback,
-                         const ErrorCallback& error_callback) override;
+                         base::OnceClosure callback,
+                         ErrorCallback error_callback) override;
   void ConfigureService(const base::DictionaryValue& properties,
-                        const ObjectPathCallback& callback,
-                        const ErrorCallback& error_callback) override;
+                        ObjectPathCallback callback,
+                        ErrorCallback error_callback) override;
   void ConfigureServiceForProfile(const dbus::ObjectPath& profile_path,
                                   const base::DictionaryValue& properties,
-                                  const ObjectPathCallback& callback,
-                                  const ErrorCallback& error_callback) override;
+                                  ObjectPathCallback callback,
+                                  ErrorCallback error_callback) override;
   void GetService(const base::DictionaryValue& properties,
-                  const ObjectPathCallback& callback,
-                  const ErrorCallback& error_callback) override;
-  void ConnectToBestServices(const base::Closure& callback,
-                             const ErrorCallback& error_callback) override;
+                  ObjectPathCallback callback,
+                  ErrorCallback error_callback) override;
+  void ConnectToBestServices(base::OnceClosure callback,
+                             ErrorCallback error_callback) override;
   void SetNetworkThrottlingStatus(const NetworkThrottlingStatus& status,
-                                  const base::Closure& callback,
-                                  const ErrorCallback& error_callback) override;
+                                  base::OnceClosure callback,
+                                  ErrorCallback error_callback) override;
 
   ShillManagerClient::TestInterface* GetTestInterface() override;
 
@@ -88,29 +87,30 @@ class COMPONENT_EXPORT(SHILL_CLIENT) FakeShillManagerClient
                            const std::string& state) override;
   void SortManagerServices(bool notify) override;
   void SetupDefaultEnvironment() override;
-  int GetInteractiveDelay() const override;
+  base::TimeDelta GetInteractiveDelay() const override;
+  void SetInteractiveDelay(base::TimeDelta delay) override;
   void SetBestServiceToConnect(const std::string& service_path) override;
   const NetworkThrottlingStatus& GetNetworkThrottlingStatus() override;
   bool GetFastTransitionStatus() override;
+  void SetSimulateConfigurationResult(
+      FakeShillSimulatedResult configuration_result) override;
 
   // Constants used for testing.
   static const char kFakeEthernetNetworkGuid[];
 
  private:
   void SetDefaultProperties();
-  void PassStubProperties(const DictionaryValueCallback& callback) const;
-  void PassStubGeoNetworks(const DictionaryValueCallback& callback) const;
+  void PassStubProperties(DictionaryValueCallback callback) const;
+  void PassStubGeoNetworks(DictionaryValueCallback callback) const;
   void CallNotifyObserversPropertyChanged(const std::string& property);
   void NotifyObserversPropertyChanged(const std::string& property);
   base::ListValue* GetListProperty(const std::string& property);
   bool TechnologyEnabled(const std::string& type) const;
   void SetTechnologyEnabled(const std::string& type,
-                            const base::Closure& callback,
+                            base::OnceClosure callback,
                             bool enabled);
-  std::unique_ptr<base::ListValue> GetEnabledServiceList(
-      const std::string& property) const;
-  void ScanCompleted(const std::string& device_path,
-                     const base::Closure& callback);
+  base::Value GetEnabledServiceList(const std::string& property) const;
+  void ScanCompleted(const std::string& device_path);
 
   // Parses the command line for Shill stub switches and sets initial states.
   // Uses comma-separated name-value pairs (see SplitStringIntoKeyValuePairs):
@@ -128,14 +128,11 @@ class COMPONENT_EXPORT(SHILL_CLIENT) FakeShillManagerClient
   // Dictionary of technology -> list of property dictionaries
   base::DictionaryValue stub_geo_networks_;
 
-  // Seconds to delay interactive actions
-  int interactive_delay_;
+  // Delay for interactive actions
+  base::TimeDelta interactive_delay_;
 
   // Initial state for fake services.
   std::map<std::string, std::string> shill_initial_state_map_;
-
-  // Carrier for fake cellular service.
-  std::string cellular_carrier_;
 
   // URL used for cellular activation.
   std::string cellular_olp_;
@@ -161,9 +158,12 @@ class COMPONENT_EXPORT(SHILL_CLIENT) FakeShillManagerClient
   // 'Best' service to connect to on ConnectToBestServices() calls.
   std::string best_service_;
 
+  FakeShillSimulatedResult simulate_configuration_result_ =
+      FakeShillSimulatedResult::kSuccess;
+
   // Note: This should remain the last member so it'll be destroyed and
   // invalidate its weak pointers before any other members are destroyed.
-  base::WeakPtrFactory<FakeShillManagerClient> weak_ptr_factory_;
+  base::WeakPtrFactory<FakeShillManagerClient> weak_ptr_factory_{this};
 
   DISALLOW_COPY_AND_ASSIGN(FakeShillManagerClient);
 };

@@ -18,20 +18,21 @@
         android:id="@+id/bottom_toolbar_buttons"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
-        android:background="@color/modern_primary_color" >
+        android:background="@color/default_bg_color" >
+
         <LinearLayout
             android:orientation="horizontal"
             android:layout_width="match_parent"
-            android:layout_height="@dimen/bottom_toolbar_height"
-            android:paddingStart="@dimen/bottom_toolbar_start_padding"
-            android:paddingEnd="@dimen/bottom_toolbar_end_padding" >
+            android:layout_height="match_parent"
+            android:paddingStart="@dimen/bottom_toolbar_padding"
+            android:paddingEnd="@dimen/bottom_toolbar_padding" >
 
             <org.chromium.chrome.browser.toolbar.bottom.CloseAllTabsButton
                 android:id="@+id/close_all_tabs_button"
-                style="@style/BottomToolbarButton"
+                style="@style/BottomToolbarButtonWrapper"
                 android:src="@drawable/ic_close_all_tabs"
                 android:contentDescription="@string/accessibility_toolbar_btn_close_all_tabs"
-                app:tint="@color/standard_mode_tint" />
+                app:tint="@color/default_icon_color_tint_list" />
 
             <include layout="@layout/toolbar_space" />
 
@@ -40,15 +41,17 @@
                 android:layout_width="@dimen/search_accelerator_height"
                 android:layout_height="@dimen/search_accelerator_height"
                 android:layout_gravity="center"
+                android:contentDescription="@string/accessibility_toolbar_btn_new_tab"
                 android:paddingTop="@dimen/search_accelerator_height_padding"
-                android:paddingBottom="@dimen/search_accelerator_height_padding"
-                android:contentDescription="@string/accessibility_toolbar_btn_new_tab" />
+                android:paddingBottom="@dimen/search_accelerator_height_padding" />
 
             <include layout="@layout/toolbar_space" />
 
-            <include layout="@layout/menu_button" />
+            <include layout="@layout/bottom_toolbar_menu_button"
+                style="@style/SplitToolbarButton" />
 
         </LinearLayout>
+
     </FrameLayout>
 
     <ImageView

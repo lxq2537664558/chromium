@@ -11,8 +11,8 @@
 #include "ios/chrome/browser/chrome_url_constants.h"
 #import "ios/chrome/browser/ui/webui/translate_internals/ios_translate_internals_handler.h"
 #include "ios/chrome/grit/ios_resources.h"
-#include "ios/web/public/web_ui_ios_data_source.h"
 #include "ios/web/public/webui/web_ui_ios.h"
+#include "ios/web/public/webui/web_ui_ios_data_source.h"
 
 #if !defined(__has_feature) || !__has_feature(objc_arc)
 #error "This file requires ARC support."
@@ -28,10 +28,9 @@ web::WebUIIOSDataSource* CreateTranslateInternalsHTMLSource() {
       web::WebUIIOSDataSource::Create(kChromeUITranslateInternalsHost);
 
   source->SetDefaultResource(IDR_IOS_TRANSLATE_INTERNALS_HTML);
-  source->SetJsonPath("strings.js");
+  source->UseStringsJs();
   source->AddResourcePath("translate_internals.js",
                           IDR_IOS_TRANSLATE_INTERNALS_JS);
-  source->UseGzip();
 
   base::DictionaryValue langs;
   translate::TranslateInternalsHandler::GetLanguages(&langs);
@@ -52,7 +51,7 @@ web::WebUIIOSDataSource* CreateTranslateInternalsHTMLSource() {
 TranslateInternalsUI::TranslateInternalsUI(web::WebUIIOS* web_ui)
     : web::WebUIIOSController(web_ui) {
   web_ui->AddMessageHandler(std::make_unique<IOSTranslateInternalsHandler>());
-  web::WebUIIOSDataSource::Add(ios::ChromeBrowserState::FromWebUIIOS(web_ui),
+  web::WebUIIOSDataSource::Add(ChromeBrowserState::FromWebUIIOS(web_ui),
                                CreateTranslateInternalsHTMLSource());
 }
 

@@ -30,7 +30,8 @@ class BackgroundFetchDataManager;
 
 // The JobController will be responsible for coordinating communication with the
 // DownloadManager. It will get requests from the RequestManager and dispatch
-// them to the DownloadService. It lives entirely on the IO thread.
+// them to the DownloadService. It lives entirely on the service worker core
+// thread.
 //
 // Lifetime: It is created lazily only once a Background Fetch registration
 // starts downloading, and it is destroyed once no more communication with the
@@ -212,7 +213,7 @@ class CONTENT_EXPORT BackgroundFetchJobController
   // Custom callback that runs after the controller is finished.
   FinishedCallback finished_callback_;
 
-  base::WeakPtrFactory<BackgroundFetchJobController> weak_ptr_factory_;
+  base::WeakPtrFactory<BackgroundFetchJobController> weak_ptr_factory_{this};
 
   DISALLOW_COPY_AND_ASSIGN(BackgroundFetchJobController);
 };

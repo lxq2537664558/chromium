@@ -2,6 +2,14 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+// clang-format off
+// #import 'chrome://resources/cr_elements/cr_dialog/cr_dialog.m.js';
+//
+// #import {eventToPromise, flushTasks} from '../test_util.m.js';
+// #import {keyDownOn, keyEventOn, tap} from 'chrome://resources/polymer/v3_0/iron-test-helpers/mock-interactions.js';
+// #import {Polymer} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
+// clang-format on
+
 suite('cr-dialog', function() {
   function pressEnter(element) {
     MockInteractions.keyEventOn(element, 'keypress', 13, undefined, 'Enter');
@@ -36,6 +44,11 @@ suite('cr-dialog', function() {
 
   setup(function() {
     PolymerTest.clearBody();
+    // Ensure svg, which is referred to by a relative URL, is loaded from
+    // chrome://resources and not chrome://test
+    const base = document.createElement('base');
+    base.href = 'chrome://resources/cr_elements/';
+    document.head.appendChild(base);
   });
 
   test('cr-dialog-open event fires when opened', function() {
@@ -220,25 +233,48 @@ suite('cr-dialog', function() {
     assertTrue(clicked);
   });
 
-  test('enter keys from cr-inputs (only) are processed', function() {
+  test('enter keys from certain inputs only are processed', function() {
     document.body.innerHTML = `
       <cr-dialog>
         <div slot="title">title</div>
         <div slot="body">
-          <cr-input></cr-input>
           <foobar></foobar>
+          <input type="checkbox">
+          <input type="text">
+
+          <cr-input type="search"></cr-input>
+          <cr-input type="text"></cr-input>
+
+          <div id="withShadow"></div>
           <button class="action-button">active</button>
         </div>
       </cr-dialog>`;
 
     const dialog = document.body.querySelector('cr-dialog');
 
-    const inputElement = document.body.querySelector('cr-input');
     const otherElement = document.body.querySelector('foobar');
+    const inputCheckboxElement =
+        document.body.querySelector('input[type="checkbox"]');
+    const inputTextElement = document.body.querySelector('input[type="text"]');
+
+    // Manually set the |type| property since cr-input is not actually imported
+    // as part of this test, and therefore the element is not upgraded, as it
+    // would normally.
+    const crTextInputElement =
+        document.body.querySelector('cr-input[type="text"]');
+    crTextInputElement.type = 'text';
+    const crSearchInputElement =
+        document.body.querySelector('cr-input[type="search"]');
+    crSearchInputElement.type = 'search';
+
+    // Attach a cr-input element nested within another element.
+    const containerElement = document.body.querySelector('#withShadow');
+    const shadow = containerElement.attachShadow({mode: 'open'});
+    const crInputNested = document.createElement('cr-input');
+    crInputNested.type = 'text';
+    shadow.appendChild(crInputNested);
+
     const actionButton = document.body.querySelector('.action-button');
-    assertTrue(!!inputElement);
-    assertTrue(!!otherElement);
-    assertTrue(!!actionButton);
 
     // MockInteractions triggers event listeners synchronously.
     let clickedCounter = 0;
@@ -246,11 +282,25 @@ suite('cr-dialog', function() {
       clickedCounter++;
     });
 
+    // Enter on anything other than cr-input should not be accepted.
     pressEnter(otherElement);
     assertEquals(0, clickedCounter);
+    pressEnter(inputCheckboxElement);
+    assertEquals(0, clickedCounter);
+    pressEnter(inputTextElement);
+    assertEquals(0, clickedCounter);
 
-    pressEnter(inputElement);
+    // Enter on a cr-input with type "search" should not be accepted.
+    pressEnter(crSearchInputElement);
+    assertEquals(0, clickedCounter);
+
+    // Enter on a cr-input with type "text" should be accepted.
+    pressEnter(crTextInputElement);
     assertEquals(1, clickedCounter);
+
+    // Enter on a nested <cr-input> should be accepted.
+    pressEnter(crInputNested);
+    assertEquals(2, clickedCounter);
   });
 
   test('focuses [autofocus] instead of title when present', function() {
@@ -290,7 +340,7 @@ suite('cr-dialog', function() {
     const bottomShadow = dialog.$$('#cr-container-shadow-bottom');
     assertTrue(!!bottomShadow);
 
-    return PolymerTest.flushTasks().then(() => {
+    return test_util.flushTasks().then(() => {
       assertFalse(topShadow.classList.contains('has-shadow'));
       assertFalse(bottomShadow.classList.contains('has-shadow'));
     });
@@ -365,7 +415,7 @@ suite('cr-dialog', function() {
     assertTrue(dialog.open);
     assertTrue(dialog.hasAttribute('open'));
 
-    e = new CustomEvent('cancel', {cancelable: true});
+    const e = new CustomEvent('cancel', {cancelable: true});
     dialog.getNative().dispatchEvent(e);
 
     assertFalse(dialog.open);
@@ -441,7 +491,7 @@ suite('cr-dialog', function() {
     }
     document.addEventListener('keydown', assertKeydownNotReached);
 
-    return PolymerTest.flushTasks().then(() => {
+    return test_util.flushTasks().then(() => {
       MockInteractions.keyDownOn(dialog, 65, undefined, 'a');
       MockInteractions.keyDownOn(document.body, 65, undefined, 'a');
       document.removeEventListener('keydown', assertKeydownNotReached);
@@ -465,7 +515,7 @@ suite('cr-dialog', function() {
     }
     document.addEventListener('keydown', assertKeydownCount);
 
-    return PolymerTest.flushTasks().then(() => {
+    return test_util.flushTasks().then(() => {
       MockInteractions.keyDownOn(dialog, 65, undefined, 'a');
       assertEquals(1, keydownCounter);
       document.removeEventListener('keydown', assertKeydownCount);

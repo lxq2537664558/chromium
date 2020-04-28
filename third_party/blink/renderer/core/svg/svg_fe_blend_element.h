@@ -53,12 +53,11 @@ class SVGFEBlendElement final : public SVGFilterPrimitiveStandardAttributes {
 
   explicit SVGFEBlendElement(Document&);
 
-  DECLARE_NODE_FACTORY(SVGFEBlendElement);
   SVGAnimatedString* in1() { return in1_.Get(); }
   SVGAnimatedString* in2() { return in2_.Get(); }
   SVGAnimatedEnumeration<Mode>* mode() { return mode_.Get(); }
 
-  void Trace(blink::Visitor*) override;
+  void Trace(Visitor*) override;
 
  private:
   bool SetFilterEffectAttribute(FilterEffect*,

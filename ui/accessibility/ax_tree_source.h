@@ -48,6 +48,9 @@ class AXTreeSource {
   // node object representing the null pointer.
   virtual bool IsValid(AXNodeSource node) const = 0;
 
+  // Returns true if |node| is an ignored node
+  virtual bool IsIgnored(AXNodeSource node) const = 0;
+
   // Returns true if two nodes are equal.
   virtual bool IsEqual(AXNodeSource node1,
                        AXNodeSource node2) const = 0;
@@ -57,6 +60,13 @@ class AXTreeSource {
 
   // Serialize one node in the tree.
   virtual void SerializeNode(AXNodeSource node, AXNodeData* out_data) const = 0;
+
+  // Return a string useful for debugging a node.
+  virtual std::string GetDebugString(AXNodeSource node) const {
+    AXNodeData node_data;
+    SerializeNode(node, &node_data);
+    return node_data.ToString();
+  }
 
  protected:
   AXTreeSource() {}

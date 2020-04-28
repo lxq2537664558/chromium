@@ -11,8 +11,10 @@
 #include "base/metrics/user_metrics.h"
 #include "base/threading/thread_task_runner_handle.h"
 #include "chrome/browser/consent_auditor/consent_auditor_factory.h"
+#include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_avatar_icon_util.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
+#include "chrome/browser/sync/profile_sync_service_factory.h"
 #include "chrome/browser/ui/browser_list.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/signin_view_controller_delegate.h"
@@ -21,24 +23,25 @@
 #include "chrome/browser/ui/webui/signin/sync_confirmation_ui.h"
 #include "chrome/common/webui_url_constants.h"
 #include "components/consent_auditor/consent_auditor.h"
-#include "components/signin/core/browser/account_info.h"
-#include "components/signin/core/browser/avatar_icon_util.h"
-#include "components/unified_consent/feature.h"
+#include "components/signin/public/base/avatar_icon_util.h"
+#include "components/signin/public/identity_manager/account_info.h"
+#include "components/signin/public/identity_manager/consent_level.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_ui.h"
 #include "url/gurl.h"
 
+using signin::ConsentLevel;
+
+namespace {
 const int kProfileImageSize = 128;
+}  // namespace
 
 SyncConfirmationHandler::SyncConfirmationHandler(
     Browser* browser,
-    const std::unordered_map<std::string, int>& string_to_grd_id_map,
-    consent_auditor::Feature consent_feature)
+    const std::unordered_map<std::string, int>& string_to_grd_id_map)
     : profile_(browser->profile()),
       browser_(browser),
-      did_user_explicitly_interact(false),
       string_to_grd_id_map_(string_to_grd_id_map),
-      consent_feature_(consent_feature),
       identity_manager_(IdentityManagerFactory::GetForProfile(profile_)) {
   DCHECK(profile_);
   DCHECK(browser_);
@@ -51,7 +54,7 @@ SyncConfirmationHandler::~SyncConfirmationHandler() {
 
   // Abort signin and prevent sync from starting if none of the actions on the
   // sync confirmation dialog are taken by the user.
-  if (!did_user_explicitly_interact) {
+  if (!did_user_explicitly_interact_) {
     HandleUndo(nullptr);
     base::RecordAction(base::UserMetricsAction("Signin_Abort_Signin"));
   }
@@ -84,27 +87,29 @@ void SyncConfirmationHandler::RegisterMessages() {
 }
 
 void SyncConfirmationHandler::HandleConfirm(const base::ListValue* args) {
-  did_user_explicitly_interact = true;
+  did_user_explicitly_interact_ = true;
   RecordConsent(args);
   CloseModalSigninWindow(LoginUIService::SYNC_WITH_DEFAULT_SETTINGS);
 }
 
 void SyncConfirmationHandler::HandleGoToSettings(const base::ListValue* args) {
-  did_user_explicitly_interact = true;
+  DCHECK(ProfileSyncServiceFactory::IsSyncAllowed(profile_));
+  did_user_explicitly_interact_ = true;
   RecordConsent(args);
   CloseModalSigninWindow(LoginUIService::CONFIGURE_SYNC_FIRST);
 }
 
 void SyncConfirmationHandler::HandleUndo(const base::ListValue* args) {
-  did_user_explicitly_interact = true;
+  did_user_explicitly_interact_ = true;
   CloseModalSigninWindow(LoginUIService::ABORT_SIGNIN);
 }
 
 void SyncConfirmationHandler::HandleAccountImageRequest(
     const base::ListValue* args) {
+  DCHECK(ProfileSyncServiceFactory::IsSyncAllowed(profile_));
   base::Optional<AccountInfo> primary_account_info =
-      identity_manager_->FindExtendedAccountInfoForAccount(
-          identity_manager_->GetPrimaryAccountInfo());
+      identity_manager_->FindExtendedAccountInfoForAccountWithRefreshToken(
+          identity_manager_->GetPrimaryAccountInfo(ConsentLevel::kNotRequired));
 
   // Fire the "account-image-changed" listener from |SetUserImageURL()|.
   // Note: If the account info is not available yet in the
@@ -116,16 +121,14 @@ void SyncConfirmationHandler::HandleAccountImageRequest(
 
 void SyncConfirmationHandler::RecordConsent(const base::ListValue* args) {
   CHECK_EQ(2U, args->GetSize());
-  const std::vector<base::Value>& consent_description =
-      args->GetList()[0].GetList();
+  base::Value::ConstListView consent_description = args->GetList()[0].GetList();
   const std::string& consent_confirmation = args->GetList()[1].GetString();
-
-  std::vector<int> consent_text_ids;
 
   // The strings returned by the WebUI are not free-form, they must belong into
   // a pre-determined set of strings (stored in |string_to_grd_id_map_|). As
   // this has privacy and legal implications, CHECK the integrity of the strings
   // received from the renderer process before recording the consent.
+  std::vector<int> consent_text_ids;
   for (const base::Value& text : consent_description) {
     auto iter = string_to_grd_id_map_.find(text.GetString());
     CHECK(iter != string_to_grd_id_map_.end()) << "Unexpected string:\n"
@@ -138,33 +141,28 @@ void SyncConfirmationHandler::RecordConsent(const base::ListValue* args) {
                                              << consent_confirmation;
   int consent_confirmation_id = iter->second;
 
+  sync_pb::UserConsentTypes::SyncConsent sync_consent;
+  sync_consent.set_confirmation_grd_id(consent_confirmation_id);
+  for (int id : consent_text_ids) {
+    sync_consent.add_description_grd_ids(id);
+  }
+  sync_consent.set_status(sync_pb::UserConsentTypes::ConsentStatus::
+                              UserConsentTypes_ConsentStatus_GIVEN);
+
   consent_auditor::ConsentAuditor* consent_auditor =
       ConsentAuditorFactory::GetForProfile(profile_);
-  const std::string& account_id = identity_manager_->GetPrimaryAccountId();
-  // TODO(markusheintz): Use a bool unified_consent_enabled instead of a
-  // consent_auditor::Feature type variable.
-  if (consent_feature_ == consent_auditor::Feature::CHROME_UNIFIED_CONSENT) {
-    sync_pb::UserConsentTypes::UnifiedConsent unified_consent;
-    unified_consent.set_confirmation_grd_id(consent_confirmation_id);
-    for (int id : consent_text_ids) {
-      unified_consent.add_description_grd_ids(id);
-    }
-    unified_consent.set_status(sync_pb::UserConsentTypes::ConsentStatus::
-                                   UserConsentTypes_ConsentStatus_GIVEN);
-    consent_auditor->RecordUnifiedConsent(account_id, unified_consent);
-  } else {
-    sync_pb::UserConsentTypes::SyncConsent sync_consent;
-    sync_consent.set_confirmation_grd_id(consent_confirmation_id);
-    for (int id : consent_text_ids) {
-      sync_consent.add_description_grd_ids(id);
-    }
-    sync_consent.set_status(sync_pb::UserConsentTypes::ConsentStatus::
-                                UserConsentTypes_ConsentStatus_GIVEN);
-    consent_auditor->RecordSyncConsent(account_id, sync_consent);
-  }
+  consent_auditor->RecordSyncConsent(
+      identity_manager_->GetPrimaryAccountId(ConsentLevel::kNotRequired),
+      sync_consent);
 }
 
 void SyncConfirmationHandler::SetUserImageURL(const std::string& picture_url) {
+  if (!ProfileSyncServiceFactory::IsSyncAllowed(profile_)) {
+    // The sync disabled confirmation handler does not present the user image.
+    // Avoid updating the image URL in this case.
+    return;
+  }
+
   std::string picture_url_to_load;
   GURL picture_gurl(picture_url);
   if (picture_gurl.is_valid()) {
@@ -179,12 +177,7 @@ void SyncConfirmationHandler::SetUserImageURL(const std::string& picture_url) {
   base::Value picture_url_value(picture_url_to_load);
 
   AllowJavascript();
-  if (unified_consent::IsUnifiedConsentFeatureEnabled()) {
-    FireWebUIListener("account-image-changed", picture_url_value);
-  } else {
-    CallJavascriptFunction("sync.confirmation.setUserImageURL",
-                           picture_url_value);
-  }
+  FireWebUIListener("account-image-changed", picture_url_value);
 }
 
 void SyncConfirmationHandler::OnExtendedAccountInfoUpdated(
@@ -192,8 +185,10 @@ void SyncConfirmationHandler::OnExtendedAccountInfoUpdated(
   if (!info.IsValid())
     return;
 
-  if (info.account_id != identity_manager_->GetPrimaryAccountId())
+  if (info.account_id !=
+      identity_manager_->GetPrimaryAccountId(ConsentLevel::kNotRequired)) {
     return;
+  }
 
   identity_manager_->RemoveObserver(this);
   SetUserImageURL(info.picture_url);
@@ -222,12 +217,14 @@ void SyncConfirmationHandler::CloseModalSigninWindow(
 
 void SyncConfirmationHandler::HandleInitializedWithSize(
     const base::ListValue* args) {
+  AllowJavascript();
+
   if (!browser_)
     return;
 
   base::Optional<AccountInfo> primary_account_info =
-      identity_manager_->FindExtendedAccountInfoForAccount(
-          identity_manager_->GetPrimaryAccountInfo());
+      identity_manager_->FindExtendedAccountInfoForAccountWithRefreshToken(
+          identity_manager_->GetPrimaryAccountInfo(ConsentLevel::kNotRequired));
   if (!primary_account_info) {
     // No account is signed in, so there is nothing to be displayed in the sync
     // confirmation dialog.
@@ -248,5 +245,5 @@ void SyncConfirmationHandler::HandleInitializedWithSize(
   // TODO(anthonyvd): Figure out why this is needed on Mac and not other
   // platforms and if there's a way to start unfocused while avoiding this
   // workaround.
-  web_ui()->CallJavascriptFunctionUnsafe("sync.confirmation.clearFocus");
+  FireWebUIListener("clear-focus");
 }

@@ -1,7 +1,8 @@
-emircan@chromium.org
+guidou@chromium.org
 
 # Original (legacy) owner.
+emircan@chromium.org
 mcasas@chromium.org
 
-# TEAM: media-capture-and-streams@grotations.appspotmail.com
+# TEAM: webrtc-dev@chromium.org
 # COMPONENT: Blink>MediaStream>CaptureFromElement

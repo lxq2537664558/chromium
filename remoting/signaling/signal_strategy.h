@@ -10,12 +10,18 @@
 
 #include "base/macros.h"
 #include "base/observer_list_types.h"
+#include "remoting/signaling/signaling_tracker_impl.h"
 
 namespace jingle_xmpp {
 class XmlElement;
 }  // namespace jingle_xmpp
 
 namespace remoting {
+
+namespace ftl {
+class ChromotingMessage;
+class Id;
+}  // namespace ftl
 
 class SignalingAddress;
 
@@ -57,6 +63,21 @@ class SignalStrategy {
     // handler of this message.
     virtual bool OnSignalStrategyIncomingStanza(
         const jingle_xmpp::XmlElement* stanza) = 0;
+
+    // This method is similar to OnSignalStrategyIncomingStanza(). It will be
+    // called by signal strategy that supports ChromotingMessage (i.e.
+    // FtlSignalStrategy) before OnSignalStrategyIncomingStanza() is called.
+    //
+    // Must return true if the message was handled, false
+    // otherwise. The signal strategy must not be deleted from a
+    // handler of this message.
+    //
+    // TODO(yuweih): Remove OnSignalStrategyIncomingStanza() and make this
+    // method pure virtual.
+    virtual bool OnSignalStrategyIncomingMessage(
+        const ftl::Id& sender_id,
+        const std::string& sender_registration_id,
+        const ftl::ChromotingMessage& message);
   };
 
   SignalStrategy() {}
@@ -95,6 +116,18 @@ class SignalStrategy {
   // Returns new ID that should be used for the next outgoing IQ
   // request.
   virtual std::string GetNextId() = 0;
+
+  // Returns true if the signal strategy gets into an error state when it tries
+  // to sign in. You can get back the actual error by calling GetError().
+  // The default implementation always returns false.
+  virtual bool IsSignInError() const;
+
+  // Returns a signaling tracker to extract extra information about the
+  // signaling channel.
+  virtual const SignalingTracker& signaling_tracker() const;
+
+ protected:
+  SignalingTrackerImpl signaling_tracker_;
 
  private:
   DISALLOW_COPY_AND_ASSIGN(SignalStrategy);

@@ -18,12 +18,10 @@ void StubPrefetchService::NewSuggestionsAvailable() {}
 
 void StubPrefetchService::RemoveSuggestion(GURL url) {}
 
-void StubPrefetchService::SetCachedGCMToken(const std::string& gcm_token) {}
+void StubPrefetchService::ForceRefreshSuggestions() {}
 
-void StubPrefetchService::GetGCMToken(GCMTokenCallback callback) {}
-
-const std::string& StubPrefetchService::GetCachedGCMToken() const {
-  return gcm_token_;
+std::string StubPrefetchService::GetCachedGCMToken() const {
+  return "";
 }
 
 PrefetchGCMHandler* StubPrefetchService::GetPrefetchGCMHandler() {
@@ -80,5 +78,8 @@ SuggestedArticlesObserver*
 StubPrefetchService::GetSuggestedArticlesObserverForTesting() {
   return nullptr;
 }
+
+void StubPrefetchService::SetEnabledByServer(PrefService* pref_service,
+                                             bool enabled) {}
 
 }  // namespace offline_pages

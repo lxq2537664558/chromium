@@ -14,15 +14,12 @@
 #include "ash/app_list/views/folder_header_view.h"
 #include "ash/app_list/views/folder_header_view_delegate.h"
 #include "base/macros.h"
+#include "base/optional.h"
 #include "ui/views/controls/button/button.h"
 #include "ui/views/view.h"
 #include "ui/views/view_model.h"
 
-namespace gfx {
-class SlideAnimation;
-}  // namespace gfx
-
-namespace app_list {
+namespace ash {
 
 class AppsContainerView;
 class AppsGridView;
@@ -60,6 +57,10 @@ class APP_LIST_EXPORT AppListFolderView : public views::View,
   // Hides the view immediately without animation.
   void HideViewImmediately();
 
+  // Prepares folder item grid for closing the folder - it ends any in-progress
+  // drag, and clears any selected view.
+  void ResetItemsGridForClose();
+
   // Closes the folder page and goes back the top level page.
   void CloseFolderPage();
 
@@ -67,6 +68,7 @@ class APP_LIST_EXPORT AppListFolderView : public views::View,
   gfx::Size CalculatePreferredSize() const override;
   void Layout() override;
   bool OnKeyPressed(const ui::KeyEvent& event) override;
+  const char* GetClassName() const override;
 
   // AppListModelObserver
   void OnAppListItemWillBeDeleted(AppListItem* item) override;
@@ -82,6 +84,10 @@ class APP_LIST_EXPORT AppListFolderView : public views::View,
   // Returns true if this view's child views are in animation for opening or
   // closing the folder.
   bool IsAnimationRunning() const;
+
+  // Helper for getting current app list config from the parents in the app list
+  // view hierarchy.
+  const AppListConfig& GetAppListConfig() const;
 
   AppsGridView* items_grid_view() { return items_grid_view_; }
 
@@ -106,13 +112,8 @@ class APP_LIST_EXPORT AppListFolderView : public views::View,
   // ContentsContainerAnimation.
   void RecordAnimationSmoothness();
 
-  // Sets the layer mask's corner radius and insets in background.
-  void UpdateBackgroundMask(int corner_radius, const gfx::Insets& insets);
-
   // Called when tablet mode starts and ends.
-  void OnTabletModeChanged(bool started) {
-    folder_header_view()->set_tablet_mode(started);
-  }
+  void OnTabletModeChanged(bool started);
 
   // When transform in |contents_view_| is updated, notify accessibility to show
   // ChromeVox focus in correct locations.
@@ -188,20 +189,18 @@ class APP_LIST_EXPORT AppListFolderView : public views::View,
 
   bool hide_for_reparent_ = false;
 
-  std::unique_ptr<gfx::SlideAnimation> background_animation_;
-  std::unique_ptr<gfx::SlideAnimation> folder_item_title_animation_;
+  std::unique_ptr<Animation> background_animation_;
+  std::unique_ptr<Animation> folder_item_title_animation_;
   std::unique_ptr<Animation> top_icon_animation_;
   std::unique_ptr<Animation> contents_container_animation_;
 
-  // The layer mask to create rounded corner.
-  std::unique_ptr<ui::LayerOwner> background_mask_ = nullptr;
-
-  // The compositor frame number when animation starts.
-  int animation_start_frame_number_ = 0;
+  // Records smoothness of the folder show/hide animation.
+  std::unique_ptr<AppListAnimationMetricsRecorder> show_hide_metrics_recorder_;
+  std::unique_ptr<FolderShowHideAnimationReporter> show_hide_metrics_reporter_;
 
   DISALLOW_COPY_AND_ASSIGN(AppListFolderView);
 };
 
-}  // namespace app_list
+}  // namespace ash
 
 #endif  // ASH_APP_LIST_VIEWS_APP_LIST_FOLDER_VIEW_H_

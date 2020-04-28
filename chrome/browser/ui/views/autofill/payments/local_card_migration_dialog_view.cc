@@ -12,6 +12,7 @@
 #include "base/location.h"
 #include "base/macros.h"
 #include "base/strings/utf_string_conversions.h"
+#include "build/branding_buildflags.h"
 #include "chrome/app/vector_icons/vector_icons.h"
 #include "chrome/browser/ui/autofill/payments/local_card_migration_dialog_factory.h"
 #include "chrome/browser/ui/autofill/payments/local_card_migration_dialog_state.h"
@@ -48,7 +49,6 @@
 #include "ui/views/layout/box_layout.h"
 #include "ui/views/style/typography.h"
 #include "ui/views/widget/widget.h"
-#include "ui/views/window/dialog_client_view.h"
 
 namespace autofill {
 
@@ -76,15 +76,20 @@ std::unique_ptr<views::Label> CreateTitle(
   auto title = std::make_unique<views::Label>(
       l10n_util::GetPluralStringFUTF16(message_id, card_list_size));
   constexpr int kMigrationDialogTitleFontSize = 8;
+#if BUILDFLAG(GOOGLE_CHROME_BRANDING)
+  constexpr int kMigrationDialogTitleMarginTop = 0;
+#else
+  constexpr int kMigrationDialogTitleMarginTop = 12;
+#endif
   title->SetBorder(views::CreateEmptyBorder(
-      /*top=*/0, /*left=*/kMigrationDialogInsets.left(), /*bottom=*/0,
+      /*top=*/kMigrationDialogTitleMarginTop,
+      /*left=*/kMigrationDialogInsets.left(), /*bottom=*/0,
       /*right=*/kMigrationDialogInsets.right()));
   title->SetFontList(gfx::FontList().Derive(kMigrationDialogTitleFontSize,
                                             gfx::Font::NORMAL,
                                             gfx::Font::Weight::NORMAL));
-  title->SetEnabledColor(dialog_view->GetNativeTheme()->SystemDarkModeEnabled()
-                             ? gfx::kGoogleGrey200
-                             : gfx::kGoogleGrey900);
+  title->SetEnabledColor(dialog_view->GetNativeTheme()->GetSystemColor(
+      ui::NativeTheme::kColorId_LabelEnabledColor));
   constexpr int kMigrationDialogTitleLineHeight = 20;
   title->SetMultiLine(true);
   title->SetLineHeight(kMigrationDialogTitleLineHeight);
@@ -98,9 +103,8 @@ std::unique_ptr<views::Label> CreateExplanationText(
     LocalCardMigrationDialogState view_state,
     int card_list_size,
     const base::string16& user_email) {
-  auto explanation_text =
-      std::make_unique<views::Label>(base::string16(), CONTEXT_BODY_TEXT_LARGE,
-                                     ChromeTextStyle::STYLE_SECONDARY);
+  auto explanation_text = std::make_unique<views::Label>(
+      base::string16(), CONTEXT_BODY_TEXT_LARGE, views::style::STYLE_SECONDARY);
   switch (view_state) {
     case LocalCardMigrationDialogState::kOffered:
       DCHECK(!user_email.empty());
@@ -142,22 +146,22 @@ std::unique_ptr<views::ScrollView> CreateCardList(
   constexpr int kCardListSmallVerticalDistance = 8;
   auto* card_list_view_layout =
       card_list_view->SetLayoutManager(std::make_unique<views::BoxLayout>(
-          views::BoxLayout::kVertical, gfx::Insets(),
+          views::BoxLayout::Orientation::kVertical, gfx::Insets(),
           should_show_checkbox
               ? kCardListSmallVerticalDistance
               : provider->GetDistanceMetric(
                     views::DISTANCE_UNRELATED_CONTROL_VERTICAL)));
   card_list_view_layout->set_main_axis_alignment(
-      views::BoxLayout::MAIN_AXIS_ALIGNMENT_START);
+      views::BoxLayout::MainAxisAlignment::kStart);
   for (size_t index = 0; index < migratable_credit_cards.size(); ++index) {
     card_list_view->AddChildView(new MigratableCardView(
         migratable_credit_cards[index], dialog_view, should_show_checkbox));
   }
 
   auto card_list_scroll_view = std::make_unique<views::ScrollView>();
-  card_list_scroll_view->set_hide_horizontal_scrollbar(true);
+  card_list_scroll_view->SetHideHorizontalScrollBar(true);
   card_list_scroll_view->SetContents(std::move(card_list_view));
-  card_list_scroll_view->set_draw_overflow_indicator(false);
+  card_list_scroll_view->SetDrawOverflowIndicator(false);
   constexpr int kCardListScrollViewHeight = 140;
   card_list_scroll_view->ClipHeightTo(0, kCardListScrollViewHeight);
   return card_list_scroll_view;
@@ -176,15 +180,15 @@ std::unique_ptr<views::View> CreateTip(
       provider->GetDistanceMetric(views::DISTANCE_RELATED_LABEL_HORIZONTAL);
 
   tip_text_container->SetLayoutManager(std::make_unique<views::BoxLayout>(
-      views::BoxLayout::kHorizontal, gfx::Insets(container_insets),
+      views::BoxLayout::Orientation::kHorizontal, gfx::Insets(container_insets),
       container_child_space));
   tip_text_container->SetBackground(views::CreateSolidBackground(
-      dialog_view->GetNativeTheme()->SystemDarkModeEnabled()
+      dialog_view->GetNativeTheme()->ShouldUseDarkColors()
           ? gfx::kGoogleGrey800
           : gfx::kGoogleGrey050));
 
-  // If in dark mode, do not add the border.
-  if (!dialog_view->GetNativeTheme()->SystemDarkModeEnabled()) {
+  // Do not add the border if it is not using dark colors.
+  if (!dialog_view->GetNativeTheme()->ShouldUseDarkColors()) {
     constexpr int kTipValuePromptBorderThickness = 1;
     tip_text_container->SetBorder(views::CreateSolidBorder(
         kTipValuePromptBorderThickness, gfx::kGoogleGrey100));
@@ -194,20 +198,19 @@ std::unique_ptr<views::View> CreateTip(
   constexpr int kTipImageSize = 16;
   lightbulb_outline_image->SetImage(gfx::CreateVectorIcon(
       vector_icons::kLightbulbOutlineIcon, kTipImageSize,
-      dialog_view->GetNativeTheme()->SystemDarkModeEnabled()
-          ? gfx::kGoogleYellow300
-          : gfx::kGoogleYellow700));
-  lightbulb_outline_image->SetVerticalAlignment(views::ImageView::LEADING);
+      dialog_view->GetNativeTheme()->GetSystemColor(
+          ui::NativeTheme::kColorId_AlertSeverityMedium)));
+  lightbulb_outline_image->SetVerticalAlignment(
+      views::ImageView::Alignment::kLeading);
   tip_text_container->AddChildView(lightbulb_outline_image);
 
   auto* tip = new views::Label(tip_message, CONTEXT_BODY_TEXT_SMALL,
-                               ChromeTextStyle::STYLE_SECONDARY);
+                               views::style::STYLE_SECONDARY);
   tip->SetMultiLine(true);
   // If it is in dark mode, set the font color to GG200 since it is on a lighter
   // shade of grey background.
-  if (dialog_view->GetNativeTheme()->SystemDarkModeEnabled()) {
+  if (dialog_view->GetNativeTheme()->ShouldUseDarkColors())
     tip->SetEnabledColor(gfx::kGoogleGrey200);
-  }
   tip->SetHorizontalAlignment(gfx::ALIGN_LEFT);
   tip->SizeToFit(
       provider->GetDistanceMetric(DISTANCE_LARGE_MODAL_DIALOG_PREFERRED_WIDTH) -
@@ -228,7 +231,7 @@ std::unique_ptr<views::View> CreateFeedbackContentView(
   auto feedback_view = std::make_unique<views::View>();
   ChromeLayoutProvider* provider = ChromeLayoutProvider::Get();
   feedback_view->SetLayoutManager(std::make_unique<views::BoxLayout>(
-      views::BoxLayout::kVertical, gfx::Insets(),
+      views::BoxLayout::Orientation::kVertical, gfx::Insets(),
       provider->GetDistanceMetric(views::DISTANCE_UNRELATED_CONTROL_VERTICAL)));
   feedback_view->SetBorder(views::CreateEmptyBorder(kMigrationDialogInsets));
 
@@ -272,12 +275,12 @@ class LocalCardMigrationOfferView : public views::View,
       : controller_(controller) {
     ChromeLayoutProvider* provider = ChromeLayoutProvider::Get();
     SetLayoutManager(std::make_unique<views::BoxLayout>(
-        views::BoxLayout::kVertical, gfx::Insets(),
+        views::BoxLayout::Orientation::kVertical, gfx::Insets(),
         kMigrationDialogMainContainerChildSpacing));
 
     auto* contents_container = new views::View();
     contents_container->SetLayoutManager(std::make_unique<views::BoxLayout>(
-        views::BoxLayout::kVertical, gfx::Insets(),
+        views::BoxLayout::Orientation::kVertical, gfx::Insets(),
         provider->GetDistanceMetric(
             views::DISTANCE_UNRELATED_CONTROL_VERTICAL)));
     // Don't set bottom since there is a legal message view in the offer dialog.
@@ -321,11 +324,9 @@ class LocalCardMigrationOfferView : public views::View,
 
   const std::vector<std::string> GetSelectedCardGuids() const {
     std::vector<std::string> selected_cards;
-    for (int index = 0; index < card_list_view_->child_count(); ++index) {
-      DCHECK_EQ(MigratableCardView::kViewClassName,
-                card_list_view_->child_at(index)->GetClassName());
-      MigratableCardView* card =
-          static_cast<MigratableCardView*>(card_list_view_->child_at(index));
+    for (views::View* child : card_list_view_->children()) {
+      DCHECK_EQ(MigratableCardView::kViewClassName, child->GetClassName());
+      auto* card = static_cast<MigratableCardView*>(child);
       if (card->IsSelected())
         selected_cards.push_back(card->GetGuid());
     }
@@ -350,6 +351,18 @@ LocalCardMigrationDialogView::LocalCardMigrationDialogView(
     LocalCardMigrationDialogController* controller,
     content::WebContents* web_contents)
     : controller_(controller), web_contents_(web_contents) {
+  DialogDelegate::SetButtons(controller_->AllCardsInvalid()
+                                  ? ui::DIALOG_BUTTON_OK
+                                  : ui::DIALOG_BUTTON_OK |
+                                        ui::DIALOG_BUTTON_CANCEL);
+  DialogDelegate::SetButtonLabel(ui::DIALOG_BUTTON_OK, GetOkButtonLabel());
+  DialogDelegate::SetButtonLabel(ui::DIALOG_BUTTON_CANCEL,
+                                   GetCancelButtonLabel());
+  DialogDelegate::SetCancelCallback(
+      base::BindOnce(&LocalCardMigrationDialogView::OnDialogCancelled,
+                     base::Unretained(this)));
+  DialogDelegate::SetAcceptCallback(base::BindOnce(
+      &LocalCardMigrationDialogView::OnDialogAccepted, base::Unretained(this)));
   set_close_on_deactivate(false);
   set_margins(gfx::Insets());
 }
@@ -385,20 +398,6 @@ bool LocalCardMigrationDialogView::ShouldShowCloseButton() const {
   return false;
 }
 
-int LocalCardMigrationDialogView::GetDialogButtons() const {
-  // Don't show the "View cards" button if all cards are invalid.
-  if (controller_->AllCardsInvalid())
-    return ui::DIALOG_BUTTON_OK;
-
-  return ui::DIALOG_BUTTON_OK | ui::DIALOG_BUTTON_CANCEL;
-}
-
-base::string16 LocalCardMigrationDialogView::GetDialogButtonLabel(
-    ui::DialogButton button) const {
-  return button == ui::DIALOG_BUTTON_OK ? GetOkButtonLabel()
-                                        : GetCancelButtonLabel();
-}
-
 // TODO(crbug.com/867194): Update this method when adding feedback.
 bool LocalCardMigrationDialogView::IsDialogButtonEnabled(
     ui::DialogButton button) const {
@@ -412,34 +411,29 @@ bool LocalCardMigrationDialogView::IsDialogButtonEnabled(
   return true;
 }
 
-bool LocalCardMigrationDialogView::Accept() {
+void LocalCardMigrationDialogView::OnDialogAccepted() {
   switch (controller_->GetViewState()) {
     case LocalCardMigrationDialogState::kOffered:
       DCHECK(offer_view_);
       controller_->OnSaveButtonClicked(offer_view_->GetSelectedCardGuids());
-      return true;
+      break;
     case LocalCardMigrationDialogState::kFinished:
     case LocalCardMigrationDialogState::kActionRequired:
       controller_->OnDoneButtonClicked();
-      return true;
+      break;
   }
 }
 
-bool LocalCardMigrationDialogView::Cancel() {
+void LocalCardMigrationDialogView::OnDialogCancelled() {
   switch (controller_->GetViewState()) {
     case LocalCardMigrationDialogState::kOffered:
       controller_->OnCancelButtonClicked();
-      return true;
+      break;
     case LocalCardMigrationDialogState::kFinished:
     case LocalCardMigrationDialogState::kActionRequired:
       controller_->OnViewCardsButtonClicked();
-      return true;
+      break;
   }
-}
-
-bool LocalCardMigrationDialogView::Close() {
-  // Close the dialog if the user exits the browser when dialog is visible.
-  return true;
 }
 
 void LocalCardMigrationDialogView::WindowClosing() {
@@ -473,20 +467,22 @@ void LocalCardMigrationDialogView::ConstructView() {
   RemoveAllChildViews(/*delete_children=*/true);
 
   SetLayoutManager(std::make_unique<views::BoxLayout>(
-      views::BoxLayout::kVertical, gfx::Insets(),
+      views::BoxLayout::Orientation::kVertical, gfx::Insets(),
       kMigrationDialogMainContainerChildSpacing));
-  ui::ResourceBundle& rb = ui::ResourceBundle::GetSharedInstance();
 
+#if BUILDFLAG(GOOGLE_CHROME_BRANDING)
   auto* image = new views::ImageView();
   constexpr int kImageBorderBottom = 8;
   image->SetBorder(views::CreateEmptyBorder(0, 0, kImageBorderBottom, 0));
+  ui::ResourceBundle& rb = ui::ResourceBundle::GetSharedInstance();
   image->SetImage(
-      rb.GetImageSkiaNamed(GetNativeTheme()->SystemDarkModeEnabled()
+      rb.GetImageSkiaNamed(GetNativeTheme()->ShouldUseDarkColors()
                                ? IDR_AUTOFILL_MIGRATION_DIALOG_HEADER_DARK
                                : IDR_AUTOFILL_MIGRATION_DIALOG_HEADER));
   image->SetAccessibleName(
       l10n_util::GetStringUTF16(IDS_AUTOFILL_GOOGLE_PAY_LOGO_ACCESSIBLE_NAME));
   AddChildView(image);
+#endif  // BUILDFLAG(GOOGLE_CHROME_BRANDING)
 
   LocalCardMigrationDialogState view_state = controller_->GetViewState();
   AddChildView(CreateTitle(view_state, this, controller_->GetCardList().size())
@@ -494,7 +490,7 @@ void LocalCardMigrationDialogView::ConstructView() {
 
   if (view_state == LocalCardMigrationDialogState::kOffered) {
     offer_view_ = new LocalCardMigrationOfferView(controller_, this);
-    offer_view_->set_id(DialogViewId::MAIN_CONTENT_VIEW_MIGRATION_OFFER_DIALOG);
+    offer_view_->SetID(DialogViewId::MAIN_CONTENT_VIEW_MIGRATION_OFFER_DIALOG);
     card_list_view_ = offer_view_->card_list_view_;
     AddChildView(offer_view_);
   } else {

@@ -20,6 +20,7 @@
 #include "third_party/blink/renderer/core/dom/dom_exception.h"
 #include "third_party/blink/renderer/core/execution_context/execution_context.h"
 #include "third_party/blink/renderer/core/frame/deprecation.h"
+#include "third_party/blink/renderer/core/frame/local_dom_window.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
 #include "third_party/blink/renderer/core/inspector/console_message.h"
 #include "third_party/blink/renderer/modules/encryptedmedia/encrypted_media_utils.h"
@@ -27,9 +28,11 @@
 #include "third_party/blink/renderer/modules/encryptedmedia/media_key_system_access.h"
 #include "third_party/blink/renderer/modules/encryptedmedia/media_key_system_access_initializer_base.h"
 #include "third_party/blink/renderer/modules/encryptedmedia/media_keys_controller.h"
+#include "third_party/blink/renderer/platform/bindings/exception_state.h"
 #include "third_party/blink/renderer/platform/bindings/script_state.h"
 #include "third_party/blink/renderer/platform/bindings/v8_throw_exception.h"
 #include "third_party/blink/renderer/platform/encrypted_media_request.h"
+#include "third_party/blink/renderer/platform/heap/heap.h"
 #include "third_party/blink/renderer/platform/network/mime/content_type.h"
 #include "third_party/blink/renderer/platform/network/parsed_content_type.h"
 #include "third_party/blink/renderer/platform/runtime_enabled_features.h"
@@ -39,11 +42,6 @@
 namespace blink {
 
 namespace {
-
-const char kEncryptedMediaFeaturePolicyConsoleWarning[] =
-    "Encrypted Media access has been blocked because of a Feature Policy "
-    "applied to the current document. See https://goo.gl/EuHzyv for more "
-    "details.";
 
 // This class allows capabilities to be checked and a MediaKeySystemAccess
 // object to be created asynchronously.
@@ -62,15 +60,11 @@ class MediaKeySystemAccessInitializer final
       std::unique_ptr<WebContentDecryptionModuleAccess>) override;
   void RequestNotSupported(const WebString& error_message) override;
 
-  ScriptPromise Promise() { return resolver_->Promise(); }
-
-  void Trace(blink::Visitor* visitor) override {
-    visitor->Trace(resolver_);
+  void Trace(Visitor* visitor) override {
     MediaKeySystemAccessInitializerBase::Trace(visitor);
   }
 
  private:
-  Member<ScriptPromiseResolver> resolver_;
   DISALLOW_COPY_AND_ASSIGN(MediaKeySystemAccessInitializer);
 };
 
@@ -79,10 +73,9 @@ MediaKeySystemAccessInitializer::MediaKeySystemAccessInitializer(
     const String& key_system,
     const HeapVector<Member<MediaKeySystemConfiguration>>&
         supported_configurations)
-    : MediaKeySystemAccessInitializerBase(ExecutionContext::From(script_state),
+    : MediaKeySystemAccessInitializerBase(script_state,
                                           key_system,
-                                          supported_configurations),
-      resolver_(MakeGarbageCollected<ScriptPromiseResolver>(script_state)) {}
+                                          supported_configurations) {}
 
 void MediaKeySystemAccessInitializer::RequestSucceeded(
     std::unique_ptr<WebContentDecryptionModuleAccess> access) {
@@ -103,8 +96,8 @@ void MediaKeySystemAccessInitializer::RequestNotSupported(
   if (!IsExecutionContextValid())
     return;
 
-  resolver_->Reject(DOMException::Create(DOMExceptionCode::kNotSupportedError,
-                                         error_message));
+  resolver_->Reject(MakeGarbageCollected<DOMException>(
+      DOMExceptionCode::kNotSupportedError, error_message));
   resolver_.Clear();
 }
 
@@ -115,25 +108,23 @@ ScriptPromise NavigatorRequestMediaKeySystemAccess::requestMediaKeySystemAccess(
     Navigator& navigator,
     const String& key_system,
     const HeapVector<Member<MediaKeySystemConfiguration>>&
-        supported_configurations) {
+        supported_configurations,
+    ExceptionState& exception_state) {
   DVLOG(3) << __func__;
 
-  ExecutionContext* execution_context = ExecutionContext::From(script_state);
-  Document* document = To<Document>(execution_context);
-
-  if (!document->IsFeatureEnabled(mojom::FeaturePolicyFeature::kEncryptedMedia,
-                                  ReportOptions::kReportOnFailure)) {
-    UseCounter::Count(document,
+  LocalDOMWindow* window = LocalDOMWindow::From(script_state);
+  if (!window->IsFeatureEnabled(
+          mojom::blink::FeaturePolicyFeature::kEncryptedMedia,
+          ReportOptions::kReportOnFailure)) {
+    UseCounter::Count(window,
                       WebFeature::kEncryptedMediaDisabledByFeaturePolicy);
-    document->AddConsoleMessage(
-        ConsoleMessage::Create(mojom::ConsoleMessageSource::kJavaScript,
-                               mojom::ConsoleMessageLevel::kWarning,
-                               kEncryptedMediaFeaturePolicyConsoleWarning));
-    return ScriptPromise::RejectWithDOMException(
-        script_state,
-        DOMException::Create(
-            DOMExceptionCode::kSecurityError,
-            "requestMediaKeySystemAccess is disabled by feature policy."));
+    window->AddConsoleMessage(MakeGarbageCollected<ConsoleMessage>(
+        mojom::ConsoleMessageSource::kJavaScript,
+        mojom::ConsoleMessageLevel::kWarning,
+        kEncryptedMediaFeaturePolicyConsoleWarning));
+    exception_state.ThrowSecurityError(
+        "requestMediaKeySystemAccess is disabled by feature policy.");
+    return ScriptPromise();
   }
 
   // From https://w3c.github.io/encrypted-media/#requestMediaKeySystemAccess
@@ -141,34 +132,30 @@ ScriptPromise NavigatorRequestMediaKeySystemAccess::requestMediaKeySystemAccess(
   // 1. If keySystem is the empty string, return a promise rejected with a
   //    newly created TypeError.
   if (key_system.IsEmpty()) {
-    return ScriptPromise::Reject(
-        script_state,
-        V8ThrowException::CreateTypeError(script_state->GetIsolate(),
-                                          "The keySystem parameter is empty."));
+    exception_state.ThrowTypeError("The keySystem parameter is empty.");
+    return ScriptPromise();
   }
 
   // 2. If supportedConfigurations is empty, return a promise rejected with
   //    a newly created TypeError.
   if (!supported_configurations.size()) {
-    return ScriptPromise::Reject(
-        script_state, V8ThrowException::CreateTypeError(
-                          script_state->GetIsolate(),
-                          "The supportedConfigurations parameter is empty."));
+    exception_state.ThrowTypeError(
+        "The supportedConfigurations parameter is empty.");
+    return ScriptPromise();
   }
 
   // 3. Let document be the calling context's Document.
   //    (Done at the begining of this function.)
-  if (!document->GetPage()) {
-    return ScriptPromise::RejectWithDOMException(
-        script_state,
-        DOMException::Create(
-            DOMExceptionCode::kInvalidStateError,
-            "The context provided is not associated with a page."));
+  if (!window->GetFrame()) {
+    exception_state.ThrowDOMException(
+        DOMExceptionCode::kInvalidStateError,
+        "The context provided is not associated with a page.");
+    return ScriptPromise();
   }
 
-  UseCounter::Count(*document, WebFeature::kEncryptedMediaSecureOrigin);
-  UseCounter::CountCrossOriginIframe(
-      *document, WebFeature::kEncryptedMediaCrossOriginIframe);
+  UseCounter::Count(*window, WebFeature::kEncryptedMediaSecureOrigin);
+  window->document()->CountUseOnlyInCrossOriginIframe(
+      WebFeature::kEncryptedMediaCrossOriginIframe);
 
   // 4. Let origin be the origin of document.
   //    (Passed with the execution context.)
@@ -182,9 +169,9 @@ ScriptPromise NavigatorRequestMediaKeySystemAccess::requestMediaKeySystemAccess(
   // 6. Asynchronously determine support, and if allowed, create and
   //    initialize the MediaKeySystemAccess object.
   MediaKeysController* controller =
-      MediaKeysController::From(document->GetPage());
+      MediaKeysController::From(window->GetFrame()->GetPage());
   WebEncryptedMediaClient* media_client =
-      controller->EncryptedMediaClient(execution_context);
+      controller->EncryptedMediaClient(window);
   media_client->RequestMediaKeySystemAccess(
       WebEncryptedMediaRequest(initializer));
 

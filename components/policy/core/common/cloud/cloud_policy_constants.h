@@ -51,12 +51,14 @@ POLICY_EXPORT extern const char kValueRequestCheckAndroidManagement[];
 POLICY_EXPORT extern const char kValueRequestCertBasedRegister[];
 POLICY_EXPORT extern const char kValueRequestActiveDirectoryEnrollPlayUser[];
 POLICY_EXPORT extern const char kValueRequestActiveDirectoryPlayActivity[];
-POLICY_EXPORT extern const char kValueRequestCheckDeviceLicense[];
 POLICY_EXPORT extern const char kValueRequestAppInstallReport[];
 POLICY_EXPORT extern const char kValueRequestTokenEnrollment[];
 POLICY_EXPORT extern const char kValueRequestChromeDesktopReport[];
 POLICY_EXPORT extern const char kValueRequestInitialEnrollmentStateRetrieval[];
 POLICY_EXPORT extern const char kValueRequestUploadPolicyValidationReport[];
+POLICY_EXPORT extern const char kValueRequestPublicSamlUser[];
+POLICY_EXPORT extern const char kValueRequestChromeOsUserReport[];
+POLICY_EXPORT extern const char kValueRequestCertProvisioningRequest[];
 
 // Policy type strings for the policy_type field in PolicyFetchRequest.
 POLICY_EXPORT extern const char kChromeDevicePolicyType[];
@@ -66,6 +68,7 @@ POLICY_EXPORT extern const char kChromeExtensionPolicyType[];
 POLICY_EXPORT extern const char kChromeSigninExtensionPolicyType[];
 POLICY_EXPORT extern const char kChromeMachineLevelUserCloudPolicyType[];
 POLICY_EXPORT extern const char kChromeMachineLevelExtensionCloudPolicyType[];
+POLICY_EXPORT extern const char kChromeRemoteCommandPolicyType[];
 
 // These codes are sent in the |error_code| field of PolicyFetchResponse.
 enum PolicyFetchStatus {
@@ -74,9 +77,6 @@ enum PolicyFetchStatus {
 };
 
 }  // namespace dm_protocol
-
-// The header used to transmit the policy ID for this client.
-POLICY_EXPORT extern const char kChromePolicyHeader[];
 
 // Public half of the verification key that is used to verify that policy
 // signing keys are originating from DM server.
@@ -123,6 +123,8 @@ enum DeviceManagementStatus {
   DM_STATUS_SERVICE_DOMAIN_MISMATCH = 14,
   // Client error: Request could not be signed.
   DM_STATUS_CANNOT_SIGN_REQUEST = 15,
+  // Client error: Request body is too large.
+  DM_STATUS_REQUEST_TOO_LARGE = 16,
   // Service error: Policy not found. Error code defined by the DM folks.
   DM_STATUS_SERVICE_POLICY_NOT_FOUND = 902,
   // Service error: ARC is not enabled on this domain.
@@ -159,20 +161,16 @@ enum DeviceMode {
 // Domain that demo mode devices are enrolled into: cros-demo-mode.com
 POLICY_EXPORT extern const char kDemoModeDomain[];
 
-// License types available for enrollment.
-enum class LicenseType {
-  UNKNOWN,    // Included for compatibility.
-  PERPETUAL,  // Perpetual license
-  ANNUAL,     // Annual license
-  KIOSK       // Single App Kiosk license
-};
-
 // Indicate this device's market segment. go/cros-rlz-segments
 enum class MarketSegment {
   UNKNOWN,  // If device is not enrolled or market segment is not specified.
   EDUCATION,
   ENTERPRISE,
 };
+
+// Sender ID of FCM (Firebase Cloud Messaging)
+// Policy Invalidation sender coming from the Firebase console.
+extern const char kPolicyFCMInvalidationSenderID[];
 
 }  // namespace policy
 

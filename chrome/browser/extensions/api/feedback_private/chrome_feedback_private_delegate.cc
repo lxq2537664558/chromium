@@ -18,23 +18,26 @@
 #include "chrome/browser/ui/simple_message_box.h"
 #include "chrome/grit/generated_resources.h"
 #include "components/feedback/system_logs/system_logs_fetcher.h"
+#include "components/signin/public/identity_manager/consent_level.h"
+#include "components/signin/public/identity_manager/identity_manager.h"
 #include "components/strings/grit/components_strings.h"
 #include "content/public/browser/browser_context.h"
-#include "services/identity/public/cpp/identity_manager.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/webui/web_ui_util.h"
 
 #if defined(OS_CHROMEOS)
+#include "base/strings/string_split.h"
+#include "base/system/sys_info.h"
 #include "chrome/browser/chromeos/arc/arc_util.h"
 #include "chrome/browser/chromeos/system_logs/iwlwifi_dump_log_source.h"
 #include "chrome/browser/chromeos/system_logs/single_debug_daemon_log_source.h"
 #include "chrome/browser/chromeos/system_logs/single_log_file_log_source.h"
 #include "chrome/browser/extensions/component_loader.h"
 #include "chrome/browser/extensions/extension_service.h"
-#include "chrome/browser/profiles/profile.h"
 #include "components/feedback/system_logs/system_logs_source.h"
 #include "extensions/browser/extension_system.h"
 #include "extensions/common/constants.h"
+#include "google_apis/gaia/gaia_auth_util.h"
 #endif  // defined(OS_CHROMEOS)
 
 namespace extensions {
@@ -71,28 +74,28 @@ ChromeFeedbackPrivateDelegate::GetStrings(
                                ? IDS_FEEDBACK_REPORT_PAGE_TITLE_SAD_TAB_FLOW
                                : IDS_FEEDBACK_REPORT_PAGE_TITLE);
   SET_STRING("additionalInfo", IDS_FEEDBACK_ADDITIONAL_INFO_LABEL);
-  SET_STRING("minimize-btn-label", IDS_FEEDBACK_MINIMIZE_BUTTON_LABEL);
-  SET_STRING("close-btn-label", IDS_FEEDBACK_CLOSE_BUTTON_LABEL);
-  SET_STRING("page-url", IDS_FEEDBACK_REPORT_URL_LABEL);
+  SET_STRING("minimizeBtnLabel", IDS_FEEDBACK_MINIMIZE_BUTTON_LABEL);
+  SET_STRING("closeBtnLabel", IDS_FEEDBACK_CLOSE_BUTTON_LABEL);
+  SET_STRING("pageUrl", IDS_FEEDBACK_REPORT_URL_LABEL);
   SET_STRING("screenshot", IDS_FEEDBACK_SCREENSHOT_LABEL);
-  SET_STRING("user-email", IDS_FEEDBACK_USER_EMAIL_LABEL);
-  SET_STRING("anonymous-user", IDS_FEEDBACK_ANONYMOUS_EMAIL_OPTION);
-  SET_STRING("sys-info", GetSysInfoCheckboxStringId(browser_context));
-  SET_STRING("assistant-info",
+  SET_STRING("screenshotA11y", IDS_FEEDBACK_SCREENSHOT_A11Y_TEXT);
+  SET_STRING("userEmail", IDS_FEEDBACK_USER_EMAIL_LABEL);
+  SET_STRING("anonymousUser", IDS_FEEDBACK_ANONYMOUS_EMAIL_OPTION);
+  SET_STRING("sysInfo", GetSysInfoCheckboxStringId(browser_context));
+  SET_STRING("assistantInfo",
              IDS_FEEDBACK_INCLUDE_ASSISTANT_INFORMATION_CHKBOX);
-  SET_STRING("attach-file-label", IDS_FEEDBACK_ATTACH_FILE_LABEL);
-  SET_STRING("attach-file-note", IDS_FEEDBACK_ATTACH_FILE_NOTE);
-  SET_STRING("attach-file-to-big", IDS_FEEDBACK_ATTACH_FILE_TO_BIG);
-  SET_STRING("reading-file", IDS_FEEDBACK_READING_FILE);
-  SET_STRING("send-report", IDS_FEEDBACK_SEND_REPORT);
+  SET_STRING("attachFileLabel", IDS_FEEDBACK_ATTACH_FILE_LABEL);
+  SET_STRING("attachFileNote", IDS_FEEDBACK_ATTACH_FILE_NOTE);
+  SET_STRING("attachFileToBig", IDS_FEEDBACK_ATTACH_FILE_TO_BIG);
+  SET_STRING("sendReport", IDS_FEEDBACK_SEND_REPORT);
   SET_STRING("cancel", IDS_CANCEL);
-  SET_STRING("no-description", IDS_FEEDBACK_NO_DESCRIPTION);
-  SET_STRING("privacy-note", IDS_FEEDBACK_PRIVACY_NOTE);
-  SET_STRING("performance-trace",
+  SET_STRING("noDescription", IDS_FEEDBACK_NO_DESCRIPTION);
+  SET_STRING("privacyNote", IDS_FEEDBACK_PRIVACY_NOTE);
+  SET_STRING("performanceTrace",
              IDS_FEEDBACK_INCLUDE_PERFORMANCE_TRACE_CHECKBOX);
-  SET_STRING("bluetooth-logs-info", IDS_FEEDBACK_BLUETOOTH_LOGS_CHECKBOX);
-  SET_STRING("bluetooth-logs-message", IDS_FEEDBACK_BLUETOOTH_LOGS_MESSAGE);
-  SET_STRING("assistant-logs-message", IDS_FEEDBACK_ASSISTANT_LOGS_MESSAGE);
+  SET_STRING("bluetoothLogsInfo", IDS_FEEDBACK_BLUETOOTH_LOGS_CHECKBOX);
+  SET_STRING("bluetoothLogsMessage", IDS_FEEDBACK_BLUETOOTH_LOGS_MESSAGE);
+  SET_STRING("assistantLogsMessage", IDS_FEEDBACK_ASSISTANT_LOGS_MESSAGE);
 
   // Add the localized strings needed for the "system information" page.
   SET_STRING("sysinfoPageTitle", IDS_FEEDBACK_SYSINFO_PAGE_TITLE);
@@ -196,14 +199,17 @@ void ChromeFeedbackPrivateDelegate::FetchExtraLogs(
   constexpr bool scrub = true;
 
   if (system_logs::ContainsIwlwifiLogs(feedback_data->sys_info())) {
-    VLOG(1) << "Fetching WiFi dump logs.";
+    // TODO (jkardatzke): Modify this so that we are using the same instance of
+    // the anonymizer for the rest of the logs.
+    // We can pass null for the 1st party IDs since we are just anonymizing
+    // wifi data here.
     system_logs::SystemLogsFetcher* fetcher =
-        new system_logs::SystemLogsFetcher(scrub);
+        new system_logs::SystemLogsFetcher(scrub, nullptr);
     fetcher->AddSource(std::make_unique<system_logs::IwlwifiDumpLogSource>());
     fetcher->Fetch(base::BindOnce(&OnFetchedExtraLogs, feedback_data,
                                   std::move(callback)));
   } else {
-    VLOG(1) << "WiFi dump logs are not present.";
+    std::move(callback).Run(feedback_data);
   }
 }
 
@@ -214,14 +220,32 @@ void ChromeFeedbackPrivateDelegate::UnloadFeedbackExtension(
       ->component_loader()
       ->Remove(extension_misc::kFeedbackExtensionId);
 }
+
+api::feedback_private::LandingPageType
+ChromeFeedbackPrivateDelegate::GetLandingPageType(
+    const feedback::FeedbackData& feedback_data) const {
+  // Googlers using eve get a custom landing page.
+  if (!gaia::IsGoogleInternalAccountEmail(feedback_data.user_email()))
+    return api::feedback_private::LANDING_PAGE_TYPE_NORMAL;
+
+  const std::vector<std::string> board =
+      base::SplitString(base::SysInfo::GetLsbReleaseBoard(), "-",
+                        base::TRIM_WHITESPACE, base::SPLIT_WANT_NONEMPTY);
+  return board[0] == "eve" ? api::feedback_private::LANDING_PAGE_TYPE_TECHSTOP
+                           : api::feedback_private::LANDING_PAGE_TYPE_NORMAL;
+}
 #endif  // defined(OS_CHROMEOS)
 
 std::string ChromeFeedbackPrivateDelegate::GetSignedInUserEmail(
     content::BrowserContext* context) const {
   auto* identity_manager = IdentityManagerFactory::GetForProfile(
       Profile::FromBrowserContext(context));
-  return identity_manager ? identity_manager->GetPrimaryAccountInfo().email
-                          : std::string();
+  if (!identity_manager)
+    return std::string();
+  // Browser sync consent is not required to use feedback.
+  return identity_manager
+      ->GetPrimaryAccountInfo(signin::ConsentLevel::kNotRequired)
+      .email;
 }
 
 void ChromeFeedbackPrivateDelegate::NotifyFeedbackDelayed() const {

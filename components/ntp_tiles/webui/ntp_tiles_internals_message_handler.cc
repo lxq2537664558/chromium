@@ -18,6 +18,7 @@
 #include "base/task_runner_util.h"
 #include "base/values.h"
 #include "components/favicon/core/favicon_service.h"
+#include "components/ntp_tiles/constants.h"
 #include "components/ntp_tiles/most_visited_sites.h"
 #include "components/ntp_tiles/pref_names.h"
 #include "components/ntp_tiles/webui/ntp_tiles_internals_message_handler_client.h"
@@ -58,10 +59,7 @@ NTPTilesInternalsMessageHandler::NTPTilesInternalsMessageHandler(
     favicon::FaviconService* favicon_service)
     : favicon_service_(favicon_service),
       client_(nullptr),
-      // 9 tiles are required for the custom links feature in order to balance
-      // the Most Visited rows (this is due to an additional "Add" button).
-      site_count_(9),
-      weak_ptr_factory_(this) {}
+      site_count_(ntp_tiles::kMaxNumMostVisited) {}
 
 NTPTilesInternalsMessageHandler::~NTPTilesInternalsMessageHandler() = default;
 
@@ -312,8 +310,8 @@ void NTPTilesInternalsMessageHandler::OnURLsAvailable(
     for (const auto& entry : kIconTypesAndNames) {
       favicon_service_->GetLargestRawFaviconForPageURL(
           tile.url, std::vector<favicon_base::IconTypeSet>({{entry.type_enum}}),
-          /*minimum_size_in_pixels=*/0, base::Bind(on_lookup_done, tile.url),
-          &cancelable_task_tracker_);
+          /*minimum_size_in_pixels=*/0,
+          base::BindOnce(on_lookup_done, tile.url), &cancelable_task_tracker_);
     }
   }
 }

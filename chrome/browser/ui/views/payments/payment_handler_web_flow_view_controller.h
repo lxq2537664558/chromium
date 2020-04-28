@@ -59,15 +59,15 @@ class PaymentHandlerWebFlowViewController
   base::string16 GetSheetTitle() override;
   void FillContentView(views::View* content_view) override;
   bool ShouldShowSecondaryButton() override;
-  std::unique_ptr<views::View> CreateHeaderContentView() override;
+  std::unique_ptr<views::View> CreateHeaderContentView(
+      views::View* header_view) override;
   views::View* CreateHeaderContentSeparatorView() override;
-  std::unique_ptr<views::Background> GetHeaderBackground() override;
+  std::unique_ptr<views::Background> GetHeaderBackground(
+      views::View* header_view) override;
   bool GetSheetId(DialogViewID* sheet_id) override;
   bool DisplayDynamicBorderForHiddenContents() override;
 
   // content::WebContentsDelegate:
-  void LoadProgressChanged(content::WebContents* source,
-                           double progress) override;
   void VisibleSecurityStateChanged(content::WebContents* source) override;
   void AddNewContents(content::WebContents* source,
                       std::unique_ptr<content::WebContents> new_contents,
@@ -81,6 +81,7 @@ class PaymentHandlerWebFlowViewController
       content::NavigationHandle* navigation_handle) override;
   void DidFinishNavigation(
       content::NavigationHandle* navigation_handle) override;
+  void LoadProgressChanged(double progress) override;
   void TitleWasSet(content::NavigationEntry* entry) override;
   void DidAttachInterstitialPage() override;
 

@@ -69,9 +69,6 @@ class ExtensionContextMenuModel : public ui::SimpleMenuModel,
     kMaxValue = kPageAccessLearnMore,
   };
 
-  // Type of action the extension icon represents.
-  enum ActionType { NO_ACTION = 0, BROWSER_ACTION, PAGE_ACTION };
-
   // The current visibility of the button; this can affect the "hide"/"show"
   // strings in the menu.
   enum ButtonVisibility {
@@ -102,7 +99,8 @@ class ExtensionContextMenuModel : public ui::SimpleMenuModel,
   ExtensionContextMenuModel(const Extension* extension,
                             Browser* browser,
                             ButtonVisibility visibility,
-                            PopupDelegate* delegate);
+                            PopupDelegate* delegate,
+                            bool can_show_icon_in_toolbar);
   ~ExtensionContextMenuModel() override;
 
   // SimpleMenuModel::Delegate:
@@ -160,11 +158,10 @@ class ExtensionContextMenuModel : public ui::SimpleMenuModel,
   // The delegate which handles the 'inspect popup' menu command (or NULL).
   PopupDelegate* delegate_;
 
-  // The type of extension action to which this context menu is attached.
-  ActionType action_type_;
-
   // The visibility of the button at the time the menu opened.
   ButtonVisibility button_visibility_;
+
+  const bool can_show_icon_in_toolbar_;
 
   // Menu matcher for context menu items specified by the extension.
   std::unique_ptr<ContextMenuMatcher> extension_items_;

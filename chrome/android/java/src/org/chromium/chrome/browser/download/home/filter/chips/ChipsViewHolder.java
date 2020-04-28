@@ -3,9 +3,10 @@
 // found in the LICENSE file.
 package org.chromium.chrome.browser.download.home.filter.chips;
 
-import android.support.v7.widget.RecyclerView.ViewHolder;
 import android.view.View;
 import android.view.ViewGroup;
+
+import androidx.recyclerview.widget.RecyclerView.ViewHolder;
 
 import org.chromium.chrome.R;
 import org.chromium.ui.modelutil.RecyclerViewAdapter;
@@ -47,7 +48,7 @@ public class ChipsViewHolder extends ViewHolder {
         getChipView().setSelected(chip.selected);
         getChipView().setOnClickListener(v -> chip.chipSelectedListener.run());
         getChipView().getPrimaryTextView().setText(chip.text);
-        getChipView().setIcon(chip.icon, true);
+        getChipView().setIcon(chip.selected ? R.drawable.ic_check_googblue_24dp : chip.icon, true);
         getChipView().getPrimaryTextView().setContentDescription(chip.contentDescription);
     }
 }

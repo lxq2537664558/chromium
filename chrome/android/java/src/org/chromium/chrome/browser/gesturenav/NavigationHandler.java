@@ -5,14 +5,16 @@
 package org.chromium.chrome.browser.gesturenav;
 
 import android.content.Context;
-import android.support.annotation.IntDef;
-import android.view.GestureDetector;
 import android.view.MotionEvent;
+import android.view.View;
 import android.view.ViewGroup;
 import android.view.ViewGroup.LayoutParams;
 
-import org.chromium.base.Supplier;
-import org.chromium.chrome.browser.tab.Tab;
+import androidx.annotation.IntDef;
+import androidx.annotation.VisibleForTesting;
+
+import org.chromium.base.supplier.Supplier;
+import org.chromium.chrome.browser.gesturenav.NavigationBubble.CloseTarget;
 
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
@@ -21,6 +23,18 @@ import java.lang.annotation.RetentionPolicy;
  * Handles history overscroll navigation controlling the underlying UI widget.
  */
 public class NavigationHandler {
+    // Width of a rectangluar area in dp on the left/right edge used for navigation.
+    // Swipe beginning from a point within these rects triggers the operation.
+    @VisibleForTesting
+    static final float EDGE_WIDTH_DP = 48;
+
+    // Weighted value to determine when to trigger an edge swipe. Initial scroll
+    // vector should form 30 deg or below to initiate swipe action.
+    private static final float WEIGTHED_TRIGGER_THRESHOLD = 1.73f;
+
+    // |EDGE_WIDTH_DP| in physical pixel.
+    private final float mEdgeWidthPx;
+
     @IntDef({GestureState.NONE, GestureState.STARTED, GestureState.DRAGGED})
     @Retention(RetentionPolicy.SOURCE)
     private @interface GestureState {
@@ -30,16 +44,20 @@ public class NavigationHandler {
         int GLOW = 3;
     }
 
+    private final ViewGroup mParentView;
     private final Context mContext;
 
-    private Supplier<Tab> mTabProvider;
+    private HistoryNavigationDelegate mDelegate;
+    private ActionDelegate mActionDelegate;
 
-    private ViewGroup mParentView;
-    private GestureDetector mGestureDetector;
+    private Supplier<NavigationGlow> mGlowEffectSupplier;
+
     private @GestureState int mState = GestureState.NONE;
 
     // Frame layout where the main logic turning the gesture into corresponding UI resides.
     private SideSlideLayout mSideSlideLayout;
+
+    private NavigationSheet mNavigationSheet;
 
     // Async runnable for ending the refresh animation after the page first
     // loads a frame. This is used to provide a reasonable minimum animation time.
@@ -49,39 +67,50 @@ public class NavigationHandler {
     // it does not conflict with pending Android draws.
     private Runnable mDetachLayoutRunnable;
 
-    public NavigationHandler(Context context, Supplier<Tab> tabProvider) {
-        mContext = context;
-        mTabProvider = tabProvider;
+    /**
+     * Interface to perform actions for navigating.
+     */
+    public interface ActionDelegate {
+        /**
+         * @param forward Direction to navigate. {@code true} if forward.
+         * @return {@code true} if navigation toward the given direction is possible.
+         */
+        boolean canNavigate(boolean forward);
+
+        /**
+         * Execute navigation toward the given direction.
+         * @param forward Direction to navigate. {@code true} if forward.
+         */
+        void navigate(boolean forward);
+
+        /**
+         * @return {@code true} if back action will close the current tab.
+         */
+        boolean willBackCloseTab();
+
+        /**
+         * @return {@code true} if back action will cause the app to exit.
+         */
+        boolean willBackExitApp();
     }
 
-    /**
-     * Sets the view to which a widget view is added.
-     * @param view Parent view to contain the navigation UI view.
-     */
-    public void setParentView(ViewGroup view) {
-        if (view == null && mParentView != null) detachLayoutIfNecessary();
-        mParentView = view;
+    public NavigationHandler(
+            ViewGroup parentView, Context context, Supplier<NavigationGlow> glowEffect) {
+        mParentView = parentView;
+        mContext = context;
+        mGlowEffectSupplier = glowEffect;
+        mEdgeWidthPx = EDGE_WIDTH_DP * parentView.getResources().getDisplayMetrics().density;
     }
 
     private void createLayout() {
         mSideSlideLayout = new SideSlideLayout(mContext);
         mSideSlideLayout.setLayoutParams(
                 new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT));
-        mSideSlideLayout.setOnNavigationListener((isForward) -> {
-            Tab tab = mTabProvider.get();
-            if (isForward) {
-                tab.goForward();
-            } else {
-                if (canNavigate(/* forward= */ false)) {
-                    tab.goBack();
-                } else {
-                    tab.getActivity().onBackPressed();
-                }
-            }
+        mSideSlideLayout.setOnNavigationListener((forward) -> {
+            mActionDelegate.navigate(forward);
             cancelStopNavigatingRunnable();
             mSideSlideLayout.post(getStopNavigatingRunnable());
         });
-
         mSideSlideLayout.setOnResetListener(() -> {
             if (mDetachLayoutRunnable != null) return;
             mDetachLayoutRunnable = () -> {
@@ -90,66 +119,137 @@ public class NavigationHandler {
             };
             mSideSlideLayout.post(mDetachLayoutRunnable);
         });
+
+        mNavigationSheet = NavigationSheet.isEnabled() ? NavigationSheet.create(
+                                   mParentView, mContext, mDelegate.getBottomSheetController())
+                                                       : NavigationSheet.DUMMY;
+        mNavigationSheet.setDelegate(mDelegate.createSheetDelegate());
     }
 
-    private boolean canNavigate(boolean forward) {
-        Tab tab = mTabProvider.get();
-        if (tab == null) return false;
-        return forward ? tab.canGoForward() : tab.canGoBack();
+    /**
+     * Sets {@link HistoryNavigationDelegate} object.
+     * Also creates new delegates, for horizontal gesture and bottom sheet processing.
+     * @param {@link HistoryNavigationDelegate} object.
+     */
+    void setDelegate(HistoryNavigationDelegate delegate) {
+        mDelegate = delegate;
+        mActionDelegate = delegate.createActionDelegate();
+        if (mNavigationSheet != null) mNavigationSheet.setDelegate(delegate.createSheetDelegate());
     }
 
     /**
      * @see View#onTouchEvent(MotionEvent)
      */
-    void onTouchEvent(MotionEvent e) {
-        if (e.getAction() == MotionEvent.ACTION_UP) {
-            if (mState == GestureState.DRAGGED) mSideSlideLayout.release(true);
+    public void onTouchEvent(int action) {
+        if (action == MotionEvent.ACTION_UP) {
+            if (mState == GestureState.DRAGGED && mSideSlideLayout != null) {
+                mSideSlideLayout.release(mNavigationSheet.isHidden());
+                mNavigationSheet.release();
+            } else if (mState == GestureState.GLOW && mGlowEffectSupplier != null) {
+                mGlowEffectSupplier.get().release();
+            }
         }
     }
 
     /**
      * @see GestureDetector#SimpleOnGestureListener#onDown(MotionEvent)
      */
-    boolean onDown(MotionEvent event) {
+    public boolean onDown() {
         mState = GestureState.STARTED;
         return true;
     }
 
     /**
-     * @see GestureDetector#SimpleOnGestureListener#onScroll(MotionEvent, MotionEvent, float, float)
+     * Processes scroll event from {@link SimpleOnGestureListener#onScroll()}.
+     * @param startX X coordinate of the position where gesture swipes from.
+     * @param distanceX X delta between previous and current motion event.
+     * @param distanceX Y delta between previous and current motion event.
+     * @param endX X coordinate of the current motion event.
+     * @param endY Y coordinate of the current motion event.
      */
-    boolean onScroll(float distanceX, float distanceY) {
-        // onScroll needs handling only after the state moves away from none state.
+    public boolean onScroll(
+            float startX, float distanceX, float distanceY, float endX, float endY) {
+        // onScroll needs handling only after the state moves away from |NONE|.
         if (mState == GestureState.NONE) return true;
 
         if (mState == GestureState.STARTED) {
-            if (Math.abs(distanceX) > Math.abs(distanceY)) {
-                boolean forward = distanceX > 0;
-                boolean navigable = canNavigate(forward);
-                if (navigable || !forward) {
-                    start(forward, !navigable);
-                    mState = GestureState.DRAGGED;
-                }
+            if (shouldTriggerUi(startX, distanceX, distanceY)) {
+                navigate(distanceX > 0, endX, endY);
             }
-            if (mState != GestureState.DRAGGED) mState = GestureState.NONE;
+            if (!isActive()) mState = GestureState.NONE;
         }
-        if (mState == GestureState.DRAGGED) pull(-distanceX);
+        pull(-distanceX);
         return true;
     }
 
+    private boolean shouldTriggerUi(float sX, float dX, float dY) {
+        return Math.abs(dX) > Math.abs(dY) * WEIGTHED_TRIGGER_THRESHOLD
+                && (sX < mEdgeWidthPx || (mParentView.getWidth() - mEdgeWidthPx) < sX);
+    }
+
     /**
-     * Initiates navigation UI widget on the screen.
-     * @param isForward {@code true} if started for forward navigation.
-     * @param enableCloseIndicator Whether 'close chrome' indicator should be
-     *     enabled when the condition is met.
+     * Shows UI in response to gesture events.
+     * @param forward Direction of the swipe gesture. {@code true} if forward; else back.
+     * @param x The X position of the event.
+     * @param y The Y position of the event.
+     * @return {@code true} if the navigation can be triggered.
      */
-    public void start(boolean isForward, boolean enableCloseIndicator) {
+    public boolean navigate(boolean forward, float x, float y) {
+        assert mActionDelegate != null;
+        boolean navigable = mActionDelegate.canNavigate(forward);
+        if (navigable) {
+            showArrowWidget(forward);
+        } else {
+            showGlow(x, y);
+        }
+        return navigable;
+    }
+
+    /**
+     * Start showing arrow widget for navigation back/forward.
+     * @param forward {@code true} if navigating forward.
+     */
+    private void showArrowWidget(boolean forward) {
+        if (mState != GestureState.STARTED) reset();
         if (mSideSlideLayout == null) createLayout();
         mSideSlideLayout.setEnabled(true);
-        mSideSlideLayout.setDirection(isForward);
-        mSideSlideLayout.setEnableCloseIndicator(enableCloseIndicator);
+        mSideSlideLayout.setDirection(forward);
+        @CloseTarget
+        int closeIndicator = getCloseIndicator(forward);
+        mSideSlideLayout.setCloseIndicator(closeIndicator);
         attachLayoutIfNecessary();
         mSideSlideLayout.start();
+        mNavigationSheet.start(forward, closeIndicator != CloseTarget.NONE);
+        mState = GestureState.DRAGGED;
+    }
+
+    /**
+     * Start showing edge glow effect.
+     * @param startX X coordinate of the touch event at the beginning.
+     * @param startY Y coordinate of the touch event at the beginning.
+     */
+    private void showGlow(float startX, float startY) {
+        if (mState != GestureState.STARTED) reset();
+        mGlowEffectSupplier.get().prepare(startX, startY);
+        mState = GestureState.GLOW;
+    }
+
+    private boolean shouldShowCloseIndicator(boolean forward) {
+        // Some tabs, upon back at the beginning of the history stack, should be just closed
+        // than closing the entire app. In such case we do not show the close indicator.
+        return !forward && mActionDelegate.willBackExitApp();
+    }
+
+    private @CloseTarget int getCloseIndicator(boolean forward) {
+        // Some tabs, upon back at the beginning of the history stack, should be just closed
+        // than closing the entire app.
+        if (!forward && mActionDelegate.willBackCloseTab()) {
+            return CloseTarget.TAB;
+        } else if (!forward && mActionDelegate.willBackExitApp()) {
+            return CloseTarget.APP;
+        } else {
+            return CloseTarget.NONE;
+        }
     }
 
     /**
@@ -158,13 +258,33 @@ public class NavigationHandler {
      *         negative if left).
      */
     public void pull(float delta) {
-        if (mSideSlideLayout != null) mSideSlideLayout.pull(delta);
+        if (mState == GestureState.DRAGGED && mSideSlideLayout != null) {
+            mSideSlideLayout.pull(delta);
+            mNavigationSheet.onScroll(
+                    delta, mSideSlideLayout.getOverscroll(), mSideSlideLayout.willNavigate());
+
+            mSideSlideLayout.fadeArrow(!mNavigationSheet.isHidden(), /* animate= */ true);
+            if (mNavigationSheet.isExpanded()) {
+                mSideSlideLayout.hideArrow();
+                mState = GestureState.NONE;
+            }
+        } else if (mState == GestureState.GLOW) {
+            mGlowEffectSupplier.get().onScroll(-delta);
+        }
+    }
+
+    /**
+     * @return {@code true} if navigation was triggered and its UI is in action, or
+     *         edge glow effect is visible.
+     */
+    public boolean isActive() {
+        return mState == GestureState.DRAGGED || mState == GestureState.GLOW;
     }
 
     /**
      * @return {@code true} if navigation is not in operation.
      */
-    boolean isStopped() {
+    public boolean isStopped() {
         return mState == GestureState.NONE;
     }
 
@@ -175,9 +295,12 @@ public class NavigationHandler {
      *         the navigation action and animation sequence.
      */
     public void release(boolean allowNav) {
-        if (mSideSlideLayout != null) {
+        if (mState == GestureState.DRAGGED && mSideSlideLayout != null) {
             cancelStopNavigatingRunnable();
-            mSideSlideLayout.release(allowNav);
+            mSideSlideLayout.release(allowNav && mNavigationSheet.isHidden());
+            mNavigationSheet.release();
+        } else if (mState == GestureState.GLOW) {
+            mGlowEffectSupplier.get().release();
         }
     }
 
@@ -185,9 +308,11 @@ public class NavigationHandler {
      * Reset navigation UI in action.
      */
     public void reset() {
-        if (mSideSlideLayout != null) {
+        if (mState == GestureState.DRAGGED && mSideSlideLayout != null) {
             cancelStopNavigatingRunnable();
             mSideSlideLayout.reset();
+        } else if (mState == GestureState.GLOW) {
+            mGlowEffectSupplier.get().reset();
         }
         mState = GestureState.NONE;
     }
@@ -217,16 +342,12 @@ public class NavigationHandler {
         // The animation view is attached/detached on-demand to minimize overlap
         // with composited SurfaceView content.
         cancelDetachLayoutRunnable();
-        if (mSideSlideLayout.getParent() == null) {
-            mParentView.addView(mSideSlideLayout);
-        }
+        if (mSideSlideLayout.getParent() == null) mParentView.addView(mSideSlideLayout);
     }
 
     private void detachLayoutIfNecessary() {
         if (mSideSlideLayout == null) return;
         cancelDetachLayoutRunnable();
-        if (mSideSlideLayout.getParent() != null) {
-            mParentView.removeView(mSideSlideLayout);
-        }
+        if (mSideSlideLayout.getParent() != null) mParentView.removeView(mSideSlideLayout);
     }
 }

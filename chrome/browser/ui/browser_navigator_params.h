@@ -5,24 +5,31 @@
 #ifndef CHROME_BROWSER_UI_BROWSER_NAVIGATOR_PARAMS_H_
 #define CHROME_BROWSER_UI_BROWSER_NAVIGATOR_PARAMS_H_
 
+#include <memory>
 #include <string>
 #include <vector>
 
 #include "base/memory/ref_counted.h"
+#include "base/optional.h"
 #include "build/build_config.h"
-#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "content/public/browser/global_request_id.h"
 #include "content/public/browser/reload_type.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/site_instance.h"
+#include "content/public/common/impression.h"
 #include "content/public/common/referrer.h"
-#include "content/public/common/was_activated_option.h"
+#include "content/public/common/was_activated_option.mojom.h"
 #include "services/network/public/cpp/resource_request_body.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "ui/base/page_transition_types.h"
 #include "ui/base/window_open_disposition.h"
 #include "ui/gfx/geometry/rect.h"
 #include "url/gurl.h"
+
+#if !defined(OS_ANDROID)
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
+#include "components/tab_groups/tab_group_id.h"
+#endif
 
 class Browser;
 class Profile;
@@ -94,9 +101,6 @@ struct NavigateParams {
   // Any redirect URLs that occurred for this navigation before |url|.
   // Usually empty.
   std::vector<GURL> redirect_chain;
-
-  // Indicates whether this navigation will be sent using POST.
-  bool uses_post = false;
 
   // The post data when the navigation uses POST.
   scoped_refptr<network::ResourceRequestBody> post_data;
@@ -171,14 +175,6 @@ struct NavigateParams {
   // accordance with |add_types|. The default allows the TabHandler to decide.
   int tabstrip_index = -1;
 
-  // The group the caller would like the tab to be added to.
-  const TabGroupData* group = nullptr;
-
-  // A bitmask of values defined in TabStripModel::AddTabTypes. Helps
-  // determine where to insert a new tab and whether or not it should be
-  // selected, among other properties.
-  int tabstrip_add_types = TabStripModel::ADD_ACTIVE;
-
   // If non-empty, the new tab is an app tab.
   std::string extension_app_id;
 
@@ -203,6 +199,10 @@ struct NavigateParams {
   // If disposition is NEW_WINDOW or NEW_POPUP, and |window_action| is set to
   // NO_ACTION, |window_action| will be set to SHOW_WINDOW.
   WindowAction window_action = NO_ACTION;
+
+  // Whether the browser is being created for captive portal resolution. If
+  // true, |disposition| should be NEW_POPUP.
+  bool is_captive_portal_popup = false;
 
   // If false then the navigation was not initiated by a user gesture.
   bool user_gesture = true;
@@ -230,6 +230,14 @@ struct NavigateParams {
   //       window can assume responsibility for the Browser's lifetime (Browser
   //       objects are deleted when the user closes a visible browser window).
   Browser* browser = nullptr;
+
+  // The group the caller would like the tab to be added to.
+  base::Optional<tab_groups::TabGroupId> group;
+
+  // A bitmask of values defined in TabStripModel::AddTabTypes. Helps
+  // determine where to insert a new tab and whether or not it should be
+  // selected, among other properties.
+  int tabstrip_add_types = TabStripModel::ADD_ACTIVE;
 #endif
 
   // The profile that is initiating the navigation. If there is a non-NULL
@@ -271,8 +279,8 @@ struct NavigateParams {
   // outside of the page and pass it to the page as if it happened on a prior
   // page. For example, if the assistant opens a page we should treat the
   // user's interaction with the assistant as a previous user activation.
-  content::WasActivatedOption was_activated =
-      content::WasActivatedOption::kUnknown;
+  content::mojom::WasActivatedOption was_activated =
+      content::mojom::WasActivatedOption::kUnknown;
 
   // If this navigation was initiated from a link that specified the
   // hrefTranslate attribute, this contains the attribute's value (a BCP47
@@ -281,6 +289,11 @@ struct NavigateParams {
 
   // Indicates the reload type of this navigation.
   content::ReloadType reload_type = content::ReloadType::NONE;
+
+  // Optional impression associated with this navigation. Only set on
+  // navigations that originate from links with impression attributes. Used for
+  // conversion measurement.
+  base::Optional<content::Impression> impression;
 
  private:
   NavigateParams();

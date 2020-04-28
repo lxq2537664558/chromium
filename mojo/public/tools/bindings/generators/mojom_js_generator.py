@@ -8,8 +8,13 @@ import mojom.generate.generator as generator
 import mojom.generate.module as mojom
 import mojom.generate.pack as pack
 import os
-import urllib
+import sys
 from mojom.generate.template_expander import UseJinja
+
+if sys.version_info.major == 2:
+  import urllib as urllib_request
+else:
+  import urllib.request as urllib_request
 
 _kind_to_javascript_default_value = {
   mojom.BOOL:                  "false",
@@ -25,11 +30,13 @@ _kind_to_javascript_default_value = {
   mojom.DPPIPE:                "null",
   mojom.MSGPIPE:               "null",
   mojom.SHAREDBUFFER:          "null",
+  mojom.PLATFORMHANDLE:          "null",
   mojom.NULLABLE_HANDLE:       "null",
   mojom.NULLABLE_DCPIPE:       "null",
   mojom.NULLABLE_DPPIPE:       "null",
   mojom.NULLABLE_MSGPIPE:      "null",
   mojom.NULLABLE_SHAREDBUFFER: "null",
+  mojom.NULLABLE_PLATFORMHANDLE: "null",
   mojom.INT64:                 "0",
   mojom.UINT64:                "0",
   mojom.DOUBLE:                "0",
@@ -51,11 +58,13 @@ _kind_to_codec_type = {
   mojom.DPPIPE:                "codec.Handle",
   mojom.MSGPIPE:               "codec.Handle",
   mojom.SHAREDBUFFER:          "codec.Handle",
+  mojom.PLATFORMHANDLE:        "codec.Handle",
   mojom.NULLABLE_HANDLE:       "codec.NullableHandle",
   mojom.NULLABLE_DCPIPE:       "codec.NullableHandle",
   mojom.NULLABLE_DPPIPE:       "codec.NullableHandle",
   mojom.NULLABLE_MSGPIPE:      "codec.NullableHandle",
   mojom.NULLABLE_SHAREDBUFFER: "codec.NullableHandle",
+  mojom.NULLABLE_PLATFORMHANDLE: "codec.NullableHandle",
   mojom.INT64:                 "codec.Int64",
   mojom.UINT64:                "codec.Uint64",
   mojom.DOUBLE:                "codec.Double",
@@ -82,11 +91,13 @@ _kind_to_closure_type = {
   mojom.DPPIPE:                "MojoHandle",
   mojom.MSGPIPE:               "MojoHandle",
   mojom.SHAREDBUFFER:          "MojoHandle",
+  mojom.PLATFORMHANDLE:        "MojoHandle",
   mojom.NULLABLE_HANDLE:       "MojoHandle",
   mojom.NULLABLE_DCPIPE:       "MojoHandle",
   mojom.NULLABLE_DPPIPE:       "MojoHandle",
   mojom.NULLABLE_MSGPIPE:      "MojoHandle",
   mojom.NULLABLE_SHAREDBUFFER: "MojoHandle",
+  mojom.NULLABLE_PLATFORMHANDLE: "MojoHandle",
 }
 
 _kind_to_lite_js_type = {
@@ -103,11 +114,13 @@ _kind_to_lite_js_type = {
   mojom.DPPIPE:                "mojo.internal.Handle",
   mojom.MSGPIPE:               "mojo.internal.Handle",
   mojom.SHAREDBUFFER:          "mojo.internal.Handle",
+  mojom.PLATFORMHANDLE:        "mojo.internal.Handle",
   mojom.NULLABLE_HANDLE:       "mojo.internal.Handle",
   mojom.NULLABLE_DCPIPE:       "mojo.internal.Handle",
   mojom.NULLABLE_DPPIPE:       "mojo.internal.Handle",
   mojom.NULLABLE_MSGPIPE:      "mojo.internal.Handle",
   mojom.NULLABLE_SHAREDBUFFER: "mojo.internal.Handle",
+  mojom.NULLABLE_PLATFORMHANDLE: "mojo.internal.Handle",
   mojom.INT64:                 "mojo.internal.Int64",
   mojom.UINT64:                "mojo.internal.Uint64",
   mojom.DOUBLE:                "mojo.internal.Double",
@@ -181,11 +194,13 @@ _primitive_kind_to_fuzz_type = {
   mojom.DPPIPE:                "DataPipeProducer",
   mojom.MSGPIPE:               "MessagePipe",
   mojom.SHAREDBUFFER:          "SharedBuffer",
+  mojom.PLATFORMHANDLE:        "PlatformHandle",
   mojom.NULLABLE_HANDLE:       "Handle",
   mojom.NULLABLE_DCPIPE:       "DataPipeConsumer",
   mojom.NULLABLE_DPPIPE:       "DataPipeProducer",
   mojom.NULLABLE_MSGPIPE:      "MessagePipe",
   mojom.NULLABLE_SHAREDBUFFER: "SharedBuffer",
+  mojom.NULLABLE_PLATFORMHANDLE: "PlatformHandle",
 }
 
 
@@ -215,13 +230,13 @@ def GetArrayExpectedDimensionSizes(kind):
 
 
 def GetRelativeUrl(module, base_module):
-  return urllib.pathname2url(
+  return urllib_request.pathname2url(
       os.path.relpath(module.path, os.path.dirname(base_module.path)))
 
 
 class JavaScriptStylizer(generator.Stylizer):
   def StylizeConstant(self, mojom_name):
-    return mojom_name
+    return generator.ToUpperSnakeCase(mojom_name)
 
   def StylizeField(self, mojom_name):
     return generator.ToCamel(mojom_name, lower_initial=True)
@@ -253,15 +268,18 @@ class Generator(generator.Generator):
   def _GetParameters(self, for_compile=False):
     return {
       "enums": self.module.enums,
+      "html_imports": self._GenerateHtmlImports(),
       "imports": self.module.imports,
       "interfaces": self.module.interfaces,
       "kinds": self.module.kinds,
       "module": self.module,
+      "mojom_filename": os.path.basename(self.module.path),
       "mojom_namespace": self.module.mojom_namespace,
       "structs": self.module.structs + self._GetStructsFromMethods(),
       "unions": self.module.unions,
       "generate_fuzzing": self.generate_fuzzing,
       "generate_closure_exports": for_compile,
+      "generate_struct_deserializers": self.js_generate_struct_deserializers,
     }
 
   @staticmethod
@@ -282,8 +300,11 @@ class Generator(generator.Generator):
       "is_any_handle_or_interface_kind": mojom.IsAnyHandleOrInterfaceKind,
       "is_array_kind": mojom.IsArrayKind,
       "is_associated_interface_kind": mojom.IsAssociatedInterfaceKind,
+      "is_pending_associated_remote_kind": mojom.IsPendingAssociatedRemoteKind,
       "is_associated_interface_request_kind":
           mojom.IsAssociatedInterfaceRequestKind,
+      "is_pending_associated_receiver_kind":
+          mojom.IsPendingAssociatedReceiverKind,
       "is_bool_kind": mojom.IsBoolKind,
       "is_enum_kind": mojom.IsEnumKind,
       "is_any_handle_kind": mojom.IsAnyHandleKind,
@@ -337,6 +358,10 @@ class Generator(generator.Generator):
   def _GenerateExterns(self):
     return self._GetParameters()
 
+  @UseJinja("lite/mojom.html.tmpl")
+  def _GenerateLiteHtml(self):
+    return self._GetParameters()
+
   @UseJinja("lite/mojom-lite.js.tmpl")
   def _GenerateLiteBindings(self):
     return self._GetParameters()
@@ -356,12 +381,16 @@ class Generator(generator.Generator):
     # affected and we can remove this method.
     self._SetUniqueNameForImports()
 
-    self.Write(self._GenerateAMDModule(), "%s.js" % self.module.path)
-    self.Write(self._GenerateExterns(), "%s.externs.js" % self.module.path)
+    self.WriteWithComment(self._GenerateAMDModule(), "%s.js" % self.module.path)
+    self.WriteWithComment(self._GenerateExterns(),
+                          "%s.externs.js" % self.module.path)
     if self.js_bindings_mode == "new":
-      self.Write(self._GenerateLiteBindings(), "%s-lite.js" % self.module.path)
-      self.Write(self._GenerateLiteBindingsForCompile(),
-          "%s-lite-for-compile.js" % self.module.path)
+      self.WriteWithComment(self._GenerateLiteHtml(),
+                            "%s.html" % self.module.path)
+      self.WriteWithComment(self._GenerateLiteBindings(),
+                            "%s-lite.js" % self.module.path)
+      self.WriteWithComment(self._GenerateLiteBindingsForCompile(),
+                            "%s-lite-for-compile.js" % self.module.path)
 
   def _SetUniqueNameForImports(self):
     used_names = set()
@@ -401,10 +430,12 @@ class Generator(generator.Generator):
     if mojom.IsInterfaceRequestKind(kind) or mojom.IsPendingReceiverKind(kind):
       return "mojo.InterfaceRequest"
     # TODO(calamity): Support associated interfaces properly.
-    if mojom.IsAssociatedInterfaceKind(kind):
+    if (mojom.IsAssociatedInterfaceKind(kind) or
+        mojom.IsPendingAssociatedRemoteKind(kind)):
       return "mojo.AssociatedInterfacePtrInfo"
     # TODO(calamity): Support associated interface requests properly.
-    if mojom.IsAssociatedInterfaceRequestKind(kind):
+    if (mojom.IsAssociatedInterfaceRequestKind(kind) or
+        mojom.IsPendingAssociatedReceiverKind(kind)):
       return "mojo.AssociatedInterfaceRequest"
     # TODO(calamity): Support enums properly.
 
@@ -433,7 +464,9 @@ class Generator(generator.Generator):
           self._LiteClosureTypeWithNullability(kind.value_kind))
 
     if (mojom.IsAssociatedKind(kind) or mojom.IsInterfaceRequestKind(kind) or
-        mojom.IsPendingRemoteKind(kind) or mojom.IsPendingReceiverKind(kind)):
+        mojom.IsPendingRemoteKind(kind) or mojom.IsPendingReceiverKind(kind) or
+        mojom.IsPendingAssociatedRemoteKind(kind) or
+        mojom.IsPendingAssociatedReceiverKind(kind)):
       named_kind = kind.kind
     else:
       named_kind = kind
@@ -455,14 +488,16 @@ class Generator(generator.Generator):
         mojom.IsEnumKind(kind)):
       return name
     if mojom.IsInterfaceKind(kind) or mojom.IsPendingRemoteKind(kind):
-      return name + "Proxy"
+      return name + "Remote"
     if mojom.IsInterfaceRequestKind(kind) or mojom.IsPendingReceiverKind(kind):
-      return name + "Request"
+      return name + "PendingReceiver"
     # TODO(calamity): Support associated interfaces properly.
-    if mojom.IsAssociatedInterfaceKind(kind):
+    if (mojom.IsAssociatedInterfaceKind(kind) or
+        mojom.IsPendingAssociatedRemoteKind(kind)):
       return "Object"
     # TODO(calamity): Support associated interface requests properly.
-    if mojom.IsAssociatedInterfaceRequestKind(kind):
+    if (mojom.IsAssociatedInterfaceRequestKind(kind) or
+        mojom.IsPendingAssociatedReceiverKind(kind)):
       return "Object"
 
     raise Exception("No valid closure type: %s" % kind)
@@ -530,7 +565,9 @@ class Generator(generator.Generator):
           "true" if mojom.IsNullableKind(kind.value_kind) else "false")
 
     if (mojom.IsAssociatedKind(kind) or mojom.IsInterfaceRequestKind(kind) or
-        mojom.IsPendingRemoteKind(kind) or mojom.IsPendingReceiverKind(kind)):
+        mojom.IsPendingRemoteKind(kind) or mojom.IsPendingReceiverKind(kind) or
+        mojom.IsPendingAssociatedRemoteKind(kind) or
+        mojom.IsPendingAssociatedReceiverKind(kind)):
       named_kind = kind.kind
     else:
       named_kind = kind
@@ -550,15 +587,17 @@ class Generator(generator.Generator):
         mojom.IsEnumKind(kind)):
       return "%sSpec.$" % name
     if mojom.IsInterfaceKind(kind) or mojom.IsPendingRemoteKind(kind):
-      return "mojo.internal.InterfaceProxy(%sProxy)" % name
+      return "mojo.internal.InterfaceProxy(%sRemote)" % name
     if mojom.IsInterfaceRequestKind(kind) or mojom.IsPendingReceiverKind(kind):
-      return "mojo.internal.InterfaceRequest(%sRequest)" % name
-    if mojom.IsAssociatedInterfaceKind(kind):
+      return "mojo.internal.InterfaceRequest(%sPendingReceiver)" % name
+    if (mojom.IsAssociatedInterfaceKind(kind) or
+        mojom.IsPendingAssociatedRemoteKind(kind)):
       # TODO(rockot): Implement associated interfaces.
-      return "mojo.internal.AssociatedInterfaceProxy(%sProxy)" % (
-          name)
-    if mojom.IsAssociatedInterfaceRequestKind(kind):
-      return "mojo.internal.AssociatedInterfaceRequest(%s)" % name
+      return "mojo.internal.AssociatedInterfaceProxy(%sRemote)" % (name)
+    if (mojom.IsAssociatedInterfaceRequestKind(kind) or
+        mojom.IsPendingAssociatedReceiverKind(kind)):
+      return "mojo.internal.AssociatedInterfaceRequest(%sPendingReceiver)" % (
+        name)
 
     return name
 
@@ -594,9 +633,11 @@ class Generator(generator.Generator):
     if (mojom.IsInterfaceRequestKind(field.kind) or
         mojom.IsPendingReceiverKind(field.kind)):
       return "new bindings.InterfaceRequest()"
-    if mojom.IsAssociatedInterfaceKind(field.kind):
+    if (mojom.IsAssociatedInterfaceKind(field.kind) or
+        mojom.IsPendingAssociatedRemoteKind(field.kind)):
       return "new associatedBindings.AssociatedInterfacePtrInfo()"
-    if mojom.IsAssociatedInterfaceRequestKind(field.kind):
+    if (mojom.IsAssociatedInterfaceRequestKind(field.kind) or
+        mojom.IsPendingAssociatedReceiverKind(field.kind)):
       return "new associatedBindings.AssociatedInterfaceRequest()"
     if mojom.IsEnumKind(field.kind):
       return "0"
@@ -641,10 +682,12 @@ class Generator(generator.Generator):
       return "codec.%s" % (
           "NullableInterfaceRequest" if mojom.IsNullableKind(kind)
                                      else "InterfaceRequest")
-    if mojom.IsAssociatedInterfaceKind(kind):
+    if (mojom.IsAssociatedInterfaceKind(kind) or
+        mojom.IsPendingAssociatedRemoteKind(kind)):
       return "codec.%s" % ("NullableAssociatedInterfacePtrInfo"
           if mojom.IsNullableKind(kind) else "AssociatedInterfacePtrInfo")
-    if mojom.IsAssociatedInterfaceRequestKind(kind):
+    if (mojom.IsAssociatedInterfaceRequestKind(kind) or
+        mojom.IsPendingAssociatedReceiverKind(kind)):
       return "codec.%s" % ("NullableAssociatedInterfaceRequest"
           if mojom.IsNullableKind(kind) else "AssociatedInterfaceRequest")
     if mojom.IsEnumKind(kind):
@@ -779,19 +822,35 @@ class Generator(generator.Generator):
 
   def _ExpressionToTextLite(self, token):
     if isinstance(token, (mojom.EnumValue, mojom.NamedValue)):
-      # Both variable and enum constants are constructed like:
-      # NamespaceUid.Struct[.Enum].CONSTANT_NAME
-      name = []
+      # Generate the following for:
+      #  - Enums: NamespaceUid.Enum.CONSTANT_NAME
+      #  - Struct: NamespaceUid.Struct_CONSTANT_NAME
+
+      name_prefix = []
       if token.module:
-        name.append(token.module.namespace)
+        name_prefix.append(token.module.namespace)
       if token.parent_kind:
-        name.append(token.parent_kind.name)
+        name_prefix.append(token.parent_kind.name)
+
+      name = []
       if isinstance(token, mojom.EnumValue):
         name.append(token.enum.name)
       name.append(token.name)
-      return ".".join(name)
+
+      separator = "."
+      if mojom.IsStructKind(token.parent_kind):
+        separator = "_"
+
+      return ".".join(name_prefix) + separator + ".".join(name)
 
     return self._ExpressionToText(token)
+
+  def _GenerateHtmlImports(self):
+    result = []
+    for full_import in self.module.imports:
+      result.append(os.path.relpath(full_import.path,
+                                    os.path.dirname(self.module.path)))
+    return result
 
   def _GetStructsFromMethods(self):
     result = []
@@ -812,10 +871,12 @@ class Generator(generator.Generator):
     elif mojom.IsPendingRemoteKind(kind):
       return '{0}.{1}Ptr'.format(kind.kind.module.namespace,
                                  kind.kind.name)
-    elif mojom.IsAssociatedInterfaceRequestKind(kind):
+    elif (mojom.IsAssociatedInterfaceRequestKind(kind) or
+          mojom.IsPendingAssociatedReceiverKind(kind)):
       return '{0}.{1}AssociatedRequest'.format(kind.kind.module.namespace,
                                                kind.kind.name)
-    elif mojom.IsAssociatedInterfaceKind(kind):
+    elif (mojom.IsAssociatedInterfaceKind(kind) or
+          mojom.IsPendingAssociatedRemoteKind(kind)):
       return '{0}.{1}AssociatedPtr'.format(kind.kind.module.namespace,
                                            kind.kind.name)
     elif mojom.IsSharedBufferKind(kind):

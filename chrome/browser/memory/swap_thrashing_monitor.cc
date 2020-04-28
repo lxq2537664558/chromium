@@ -5,8 +5,9 @@
 #include "chrome/browser/memory/swap_thrashing_monitor.h"
 
 #include "base/bind.h"
-#include "base/logging.h"
+#include "base/check_op.h"
 #include "base/metrics/histogram_macros.h"
+#include "base/notreached.h"
 #include "base/task_runner_util.h"
 #include "base/time/time.h"
 
@@ -94,8 +95,7 @@ SwapThrashingMonitor::SwapThrashingMonitor()
     : delegate_(GetPlatformSpecificDelegate().release(),
                 base::OnTaskRunnerDeleter(blocking_task_runner_)),
       current_swap_thrashing_level_(
-          SwapThrashingLevel::SWAP_THRASHING_LEVEL_NONE),
-      weak_factory_(this) {
+          SwapThrashingLevel::SWAP_THRASHING_LEVEL_NONE) {
   DCHECK(base::FeatureList::IsEnabled(features::kSwapThrashingMonitor));
   StartObserving();
 }

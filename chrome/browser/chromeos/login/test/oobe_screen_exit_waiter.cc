@@ -10,7 +10,7 @@
 
 namespace chromeos {
 
-OobeScreenExitWaiter::OobeScreenExitWaiter(OobeScreen target_screen)
+OobeScreenExitWaiter::OobeScreenExitWaiter(OobeScreenId target_screen)
     : target_screen_(target_screen) {}
 
 OobeScreenExitWaiter::~OobeScreenExitWaiter() = default;
@@ -18,7 +18,8 @@ OobeScreenExitWaiter::~OobeScreenExitWaiter() = default;
 void OobeScreenExitWaiter::Wait() {
   DCHECK_EQ(State::IDLE, state_);
 
-  if (GetOobeUI()->current_screen() != target_screen_) {
+  OobeUI* oobe_ui = GetOobeUI();
+  if (!oobe_ui || oobe_ui->current_screen() != target_screen_) {
     state_ = State::DONE;
     return;
   }
@@ -27,6 +28,8 @@ void OobeScreenExitWaiter::Wait() {
   oobe_ui_observer_.Add(GetOobeUI());
 
   state_ = State::WAITING_FOR_SCREEN_EXIT;
+
+  LOG(INFO) << "Actually waiting for exiting screen " << target_screen_.name;
 
   run_loop_ = std::make_unique<base::RunLoop>();
   run_loop_->Run();
@@ -37,8 +40,8 @@ void OobeScreenExitWaiter::Wait() {
   oobe_ui_observer_.RemoveAll();
 }
 
-void OobeScreenExitWaiter::OnCurrentScreenChanged(OobeScreen current_screen,
-                                                  OobeScreen new_screen) {
+void OobeScreenExitWaiter::OnCurrentScreenChanged(OobeScreenId current_screen,
+                                                  OobeScreenId new_screen) {
   DCHECK_NE(state_, State::IDLE);
   if (new_screen != target_screen_)
     EndWait();
@@ -50,9 +53,9 @@ void OobeScreenExitWaiter::OnDestroyingOobeUI() {
 }
 
 OobeUI* OobeScreenExitWaiter::GetOobeUI() {
-  OobeUI* oobe_ui = LoginDisplayHost::default_host()->GetOobeUI();
-  CHECK(oobe_ui);
-  return oobe_ui;
+  if (!LoginDisplayHost::default_host())
+    return nullptr;
+  return LoginDisplayHost::default_host()->GetOobeUI();
 }
 
 void OobeScreenExitWaiter::EndWait() {

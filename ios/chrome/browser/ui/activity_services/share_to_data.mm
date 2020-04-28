@@ -6,7 +6,6 @@
 
 #include "base/logging.h"
 #include "base/strings/sys_string_conversions.h"
-#include "ios/chrome/browser/tabs/tab.h"
 #import "net/base/mac/url_conversions.h"
 
 #if !defined(__has_feature) || !__has_feature(objc_arc)
@@ -24,13 +23,6 @@
 
 @implementation ShareToData
 
-@synthesize title = _title;
-@synthesize thumbnailGenerator = _thumbnailGenerator;
-@synthesize isOriginalTitle = _isOriginalTitle;
-@synthesize isPagePrintable = _isPagePrintable;
-@synthesize isPageSearchable = _isPageSearchable;
-@synthesize userAgent = _userAgent;
-
 - (id)initWithShareURL:(const GURL&)shareURL
             visibleURL:(const GURL&)visibleURL
                  title:(NSString*)title
@@ -38,7 +30,8 @@
        isPagePrintable:(BOOL)isPagePrintable
       isPageSearchable:(BOOL)isPageSearchable
              userAgent:(web::UserAgentType)userAgent
-    thumbnailGenerator:(ThumbnailGeneratorBlock)thumbnailGenerator {
+    thumbnailGenerator:
+        (ChromeActivityItemThumbnailGenerator*)thumbnailGenerator {
   DCHECK(shareURL.is_valid());
   DCHECK(visibleURL.is_valid());
   DCHECK(title);
@@ -66,10 +59,6 @@
 
 - (NSURL*)shareNSURL {
   return net::NSURLWithGURL(_shareURL);
-}
-
-- (NSURL*)passwordManagerNSURL {
-  return net::NSURLWithGURL(_visibleURL);
 }
 
 @end

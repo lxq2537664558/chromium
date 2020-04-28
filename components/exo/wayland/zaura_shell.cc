@@ -13,17 +13,23 @@
 #include <utility>
 #include <vector>
 
-#include "ash/session/session_controller.h"
-#include "ash/shell.h"
 #include "components/exo/wayland/server_util.h"
 #include "components/exo/wayland/wayland_display_observer.h"
 #include "components/exo/wayland/wl_output.h"
+#include "components/exo/wm_helper.h"
+#include "ui/aura/env.h"
 #include "ui/aura/window_occlusion_tracker.h"
 #include "ui/display/manager/display_manager.h"
 #include "ui/display/manager/display_util.h"
+#include "ui/display/screen.h"
 #include "ui/views/widget/widget.h"
 #include "ui/wm/core/coordinate_conversion.h"
 #include "ui/wm/public/activation_client.h"
+
+#if defined(OS_CHROMEOS)
+#include "ash/session/session_controller_impl.h"
+#include "ash/shell.h"
+#endif  // defined(OS_CHROMEOS)
 
 namespace exo {
 namespace wayland {
@@ -123,6 +129,14 @@ void aura_surface_unset_occlusion_tracking(wl_client* client,
   GetUserDataAs<AuraSurface>(resource)->SetOcclusionTracking(false);
 }
 
+void aura_surface_activate(wl_client* client, wl_resource* resource) {
+  GetUserDataAs<AuraSurface>(resource)->Activate();
+}
+
+void aura_surface_draw_attention(wl_client* client, wl_resource* resource) {
+  GetUserDataAs<AuraSurface>(resource)->DrawAttention();
+}
+
 const struct zaura_surface_interface aura_surface_implementation = {
     aura_surface_set_frame,
     aura_surface_set_parent,
@@ -131,7 +145,9 @@ const struct zaura_surface_interface aura_surface_implementation = {
     aura_surface_set_application_id,
     aura_surface_set_client_surface_id,
     aura_surface_set_occlusion_tracking,
-    aura_surface_unset_occlusion_tracking};
+    aura_surface_unset_occlusion_tracking,
+    aura_surface_activate,
+    aura_surface_draw_attention};
 
 }  // namespace
 
@@ -142,11 +158,11 @@ AuraSurface::AuraSurface(Surface* surface, wl_resource* resource)
     : surface_(surface), resource_(resource) {
   surface_->AddSurfaceObserver(this);
   surface_->SetProperty(kSurfaceHasAuraSurfaceKey, true);
-  ash::Shell::Get()->activation_client()->AddObserver(this);
+  WMHelper::GetInstance()->AddActivationObserver(this);
 }
 
 AuraSurface::~AuraSurface() {
-  ash::Shell::Get()->activation_client()->RemoveObserver(this);
+  WMHelper::GetInstance()->RemoveActivationObserver(this);
   if (surface_) {
     surface_->RemoveSurfaceObserver(this);
     surface_->SetProperty(kSurfaceHasAuraSurfaceKey, false);
@@ -189,6 +205,18 @@ void AuraSurface::SetOcclusionTracking(bool tracking) {
     surface_->SetOcclusionTracking(tracking);
 }
 
+void AuraSurface::Activate() {
+  if (surface_)
+    surface_->RequestActivation();
+}
+
+void AuraSurface::DrawAttention() {
+  if (!surface_)
+    return;
+  // TODO(hollingum): implement me.
+  LOG(WARNING) << "Surface requested attention, but that is not implemented";
+}
+
 // Overridden from SurfaceObserver:
 void AuraSurface::OnSurfaceDestroying(Surface* surface) {
   surface->RemoveSurfaceObserver(this);
@@ -196,7 +224,7 @@ void AuraSurface::OnSurfaceDestroying(Surface* surface) {
 }
 
 void AuraSurface::OnWindowOcclusionChanged(Surface* surface) {
-  if (!surface_)
+  if (!surface_ || !surface_->is_tracking_occlusion())
     return;
   auto* window = surface_->window();
   ComputeAndSendOcclusionFraction(window->occlusion_state(),
@@ -235,7 +263,8 @@ void AuraSurface::OnWindowActivating(ActivationReason reason,
   //   window. To support overview, we would need to have it keep the original
   //   window activated and also do this inside OnWindowStackingChanged.
   //   See crbug.com/948492.
-  auto* occlusion_tracker = window->env()->GetWindowOcclusionTracker();
+  auto* occlusion_tracker =
+      aura::Env::GetInstance()->GetWindowOcclusionTracker();
   if (occlusion_tracker->HasIgnoredAnimatingWindows()) {
     const auto& occlusion_data =
         occlusion_tracker->ComputeTargetOcclusionForWindow(window);
@@ -258,6 +287,7 @@ void AuraSurface::SendOcclusionFraction(float occlusion_fraction) {
 void AuraSurface::ComputeAndSendOcclusionFraction(
     const aura::Window::OcclusionState occlusion_state,
     const SkRegion& occluded_region) {
+#if defined(OS_CHROMEOS)
   // Should re-write in locked case - we don't want to trigger PIP upon
   // locking the screen.
   // TODO(afakhry): We may also want to have special behaviour here for virtual
@@ -266,24 +296,37 @@ void AuraSurface::ComputeAndSendOcclusionFraction(
     SendOcclusionFraction(0.0f);
     return;
   }
+#endif  // defined(OS_CHROMEOS)
 
   auto* window = surface_->window();
   float fraction_occluded = 0.0f;
   switch (occlusion_state) {
     case aura::Window::OcclusionState::VISIBLE: {
+      const gfx::Rect display_bounds_in_screen =
+          display::Screen::GetScreen()
+              ->GetDisplayNearestWindow(window)
+              .bounds();
       const gfx::Rect bounds_in_screen = GetTransformedBoundsInScreen(window);
       const int tracked_area =
           bounds_in_screen.width() * bounds_in_screen.height();
-      int occluded_area = 0;
       SkRegion tracked_and_occluded_region = occluded_region;
       tracked_and_occluded_region.op(gfx::RectToSkIRect(bounds_in_screen),
                                      SkRegion::Op::kIntersect_Op);
+
+      // Clip the area outside of the display.
+      gfx::Rect area_inside_display = bounds_in_screen;
+      area_inside_display.Intersect(display_bounds_in_screen);
+      int occluded_area = tracked_area - area_inside_display.width() *
+                                             area_inside_display.height();
+
       for (SkRegion::Iterator i(tracked_and_occluded_region); !i.done();
            i.next()) {
         occluded_area += i.rect().width() * i.rect().height();
       }
-      fraction_occluded =
-          static_cast<float>(occluded_area) / static_cast<float>(tracked_area);
+      if (tracked_area) {
+        fraction_occluded = static_cast<float>(occluded_area) /
+                            static_cast<float>(tracked_area);
+      }
       break;
     }
     case aura::Window::OcclusionState::OCCLUDED:
@@ -294,7 +337,6 @@ void AuraSurface::ComputeAndSendOcclusionFraction(
     case aura::Window::OcclusionState::UNKNOWN:
       return;  // Window is not tracked.
   }
-
   SendOcclusionFraction(fraction_occluded);
 }
 
@@ -309,16 +351,15 @@ class AuraOutput : public WaylandDisplayObserver::ScaleObserver {
 
   // Overridden from WaylandDisplayObserver::ScaleObserver:
   void OnDisplayScalesChanged(const display::Display& display) override {
-    display::DisplayManager* display_manager =
-        ash::Shell::Get()->display_manager();
+    const WMHelper* wm_helper = WMHelper::GetInstance();
     const display::ManagedDisplayInfo& display_info =
-        display_manager->GetDisplayInfo(display.id());
+        wm_helper->GetDisplayInfo(display.id());
 
     if (wl_resource_get_version(resource_) >=
         ZAURA_OUTPUT_SCALE_SINCE_VERSION) {
       display::ManagedDisplayMode active_mode;
-      bool rv = display_manager->GetActiveModeForDisplayId(display.id(),
-                                                           &active_mode);
+      bool rv =
+          wm_helper->GetActiveModeForDisplayId(display.id(), &active_mode);
       DCHECK(rv);
       const int32_t current_output_scale =
           std::round(display_info.zoom_factor() * 1000.f);

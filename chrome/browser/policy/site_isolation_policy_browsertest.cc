@@ -81,18 +81,16 @@ class SitePerProcessPolicyBrowserTest : public SiteIsolationPolicyBrowserTest {
     policy::BrowserPolicyConnector::SetPolicyProviderForTesting(&provider_);
 
     policy::PolicyMap values;
-    values.Set(policy::key::kSitePerProcess, policy::POLICY_LEVEL_MANDATORY,
+
+#if defined(OS_ANDROID)
+    const char* kPolicyName = policy::key::kSitePerProcessAndroid;
+#else
+    const char* kPolicyName = policy::key::kSitePerProcess;
+#endif
+    values.Set(kPolicyName, policy::POLICY_LEVEL_MANDATORY,
                policy::POLICY_SCOPE_USER, policy::POLICY_SOURCE_CLOUD,
                std::make_unique<base::Value>(policy_value), nullptr);
     provider_.UpdateChromePolicy(values);
-
-    // Append the automation switch which should disable Site Isolation when the
-    // "WebDriverOverridesIncompatiblePolicies" is set. This is tested in the
-    // WebDriverSitePerProcessPolicyBrowserTest class below.
-    // NOTE: This flag is on for some tests per default but we still force it
-    // it here to make sure to avoid possible regressions being missed
-    base::CommandLine::ForCurrentProcess()->AppendSwitch(
-        switches::kEnableAutomation);
   }
 
  private:
@@ -131,31 +129,6 @@ class IsolateOriginsPolicyBrowserTest : public SiteIsolationPolicyBrowserTest {
   DISALLOW_COPY_AND_ASSIGN(IsolateOriginsPolicyBrowserTest);
 };
 
-class WebDriverSitePerProcessPolicyBrowserTest
-    : public SitePerProcessPolicyBrowserTestEnabled {
- protected:
-  WebDriverSitePerProcessPolicyBrowserTest() = default;
-
-  void SetUpInProcessBrowserTestFixture() override {
-    // We setup the policy here, because the policy must be 'live' before the
-    // renderer is created, since the value for this policy is passed to the
-    // renderer via a command-line. Setting the policy in the test itself or in
-    // SetUpOnMainThread works for update-able policies, but is too late for
-    // this one.
-    SitePerProcessPolicyBrowserTest::SetUpInProcessBrowserTestFixture();
-
-    policy::PolicyMap values;
-    values.Set(policy::key::kWebDriverOverridesIncompatiblePolicies,
-               policy::POLICY_LEVEL_MANDATORY, policy::POLICY_SCOPE_USER,
-               policy::POLICY_SOURCE_CLOUD, std::make_unique<base::Value>(true),
-               nullptr);
-    provider_.UpdateChromePolicy(values);
-  }
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(WebDriverSitePerProcessPolicyBrowserTest);
-};
-
 // Ensure that --disable-site-isolation-trials and/or
 // --disable-site-isolation-for-enterprise-policy do not override policies.
 class NoOverrideSitePerProcessPolicyBrowserTest
@@ -164,7 +137,9 @@ class NoOverrideSitePerProcessPolicyBrowserTest
   NoOverrideSitePerProcessPolicyBrowserTest() {}
   void SetUpCommandLine(base::CommandLine* command_line) override {
     command_line->AppendSwitch(switches::kDisableSiteIsolation);
+#if defined(OS_ANDROID)
     command_line->AppendSwitch(switches::kDisableSiteIsolationForPolicy);
+#endif
   }
 
  private:
@@ -215,14 +190,6 @@ IN_PROC_BROWSER_TEST_F(IsolateOriginsPolicyBrowserTest, Simple) {
   CheckIsolatedOriginExpectations(expectations2, base::size(expectations2));
 }
 
-IN_PROC_BROWSER_TEST_F(WebDriverSitePerProcessPolicyBrowserTest, Simple) {
-  Expectations expectations[] = {
-      {"https://foo.com/noodles.html", true},
-      {"http://example.org/pumpkins.html", true},
-  };
-  CheckExpectations(expectations, base::size(expectations));
-}
-
 IN_PROC_BROWSER_TEST_F(NoOverrideSitePerProcessPolicyBrowserTest, Simple) {
   Expectations expectations[] = {
       {"https://foo.com/noodles.html", true},
@@ -231,6 +198,12 @@ IN_PROC_BROWSER_TEST_F(NoOverrideSitePerProcessPolicyBrowserTest, Simple) {
   CheckExpectations(expectations, base::size(expectations));
 }
 
+// After https://crbug.com/910273 was fixed, enterprise policy can only be used
+// to disable Site Isolation on Android - the
+// SitePerProcessPolicyBrowserTestFieldTrialTest tests should not be run on any
+// other platform.  Note that browser_tests won't run on Android until
+// https://crbug.com/611756 is fixed.
+#if defined(OS_ANDROID)
 class SitePerProcessPolicyBrowserTestFieldTrialTest
     : public SitePerProcessPolicyBrowserTestDisabled {
  public:
@@ -246,9 +219,14 @@ class SitePerProcessPolicyBrowserTestFieldTrialTest
 };
 
 IN_PROC_BROWSER_TEST_F(SitePerProcessPolicyBrowserTestFieldTrialTest, Simple) {
-  // Skip this test if all sites are isolated.
-  if (content::AreAllSitesIsolatedForTesting())
+  // Skip this test if the --site-per-process switch is present (e.g. on Site
+  // Isolation Android chromium.fyi bot).  The test is still valid if
+  // SitePerProcess is the default (e.g. via ContentBrowserClient's
+  // ShouldEnableStrictSiteIsolation method) - don't skip the test in such case.
+  if (base::CommandLine::ForCurrentProcess()->HasSwitch(
+          switches::kSitePerProcess)) {
     return;
+  }
 
   // Policy should inject kDisableSiteIsolationForPolicy rather than
   // kDisableSiteIsolation switch.
@@ -265,13 +243,16 @@ IN_PROC_BROWSER_TEST_F(SitePerProcessPolicyBrowserTestFieldTrialTest, Simple) {
   };
   CheckExpectations(expectations, base::size(expectations));
 }
+#endif
 
 IN_PROC_BROWSER_TEST_F(SiteIsolationPolicyBrowserTest, NoPolicyNoTrialsFlags) {
   // The switch to disable Site Isolation should be missing by default (i.e.
   // without an explicit enterprise policy).
   EXPECT_FALSE(base::CommandLine::ForCurrentProcess()->HasSwitch(
       switches::kDisableSiteIsolation));
+#if defined(OS_ANDROID)
   EXPECT_FALSE(base::CommandLine::ForCurrentProcess()->HasSwitch(
       switches::kDisableSiteIsolationForPolicy));
+#endif
   EXPECT_TRUE(content::SiteIsolationPolicy::UseDedicatedProcessesForAllSites());
 }

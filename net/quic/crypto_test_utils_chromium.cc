@@ -5,7 +5,7 @@
 #include <utility>
 
 #include "base/callback_helpers.h"
-#include "base/logging.h"
+#include "base/check.h"
 #include "base/macros.h"
 #include "base/memory/ref_counted.h"
 #include "base/stl_util.h"
@@ -51,7 +51,8 @@ class TestProofVerifierChromium : public ProofVerifierChromium {
       : ProofVerifierChromium(cert_verifier.get(),
                               ct_policy_enforcer.get(),
                               transport_security_state.get(),
-                              cert_transparency_verifier.get()),
+                              cert_transparency_verifier.get(),
+                              {"test.example.com"}),
         cert_verifier_(std::move(cert_verifier)),
         transport_security_state_(std::move(transport_security_state)),
         cert_transparency_verifier_(std::move(cert_transparency_verifier)),
@@ -59,7 +60,7 @@ class TestProofVerifierChromium : public ProofVerifierChromium {
     // Load and install the root for the validated chain.
     scoped_refptr<X509Certificate> root_cert =
         ImportCertFromFile(GetTestCertsDirectory(), cert_file);
-    scoped_root_.Reset(root_cert.get());
+    scoped_root_.Reset({root_cert});
   }
 
   ~TestProofVerifierChromium() override {}

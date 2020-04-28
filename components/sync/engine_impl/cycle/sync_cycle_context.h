@@ -47,8 +47,9 @@ class SyncCycleContext {
                    const std::vector<SyncEngineEventListener*>& listeners,
                    DebugInfoGetter* debug_info_getter,
                    ModelTypeRegistry* model_type_registry,
-                   bool keystore_encryption_enabled,
                    const std::string& invalidator_client_id,
+                   const std::string& birthday,
+                   const std::string& bag_of_chips,
                    base::TimeDelta poll_interval);
 
   ~SyncCycleContext();
@@ -70,7 +71,12 @@ class SyncCycleContext {
   }
   bool notifications_enabled() { return notifications_enabled_; }
 
-  // Account name, set once a directory has been opened.
+  void set_birthday(const std::string& birthday);
+  const std::string& birthday() const { return birthday_; }
+
+  void set_bag_of_chips(const std::string& bag_of_chips);
+  const std::string& bag_of_chips() const { return bag_of_chips_; }
+
   void set_account_name(const std::string& name) { account_name_ = name; }
   const std::string& account_name() const { return account_name_; }
 
@@ -81,10 +87,6 @@ class SyncCycleContext {
 
   base::ObserverList<SyncEngineEventListener>::Unchecked* listeners() {
     return &listeners_;
-  }
-
-  bool keystore_encryption_enabled() const {
-    return keystore_encryption_enabled_;
   }
 
   void set_hierarchy_conflict_detected(bool value) {
@@ -137,6 +139,10 @@ class SyncCycleContext {
   // enabled. True only if the notification channel is authorized and open.
   bool notifications_enabled_;
 
+  std::string birthday_;
+
+  std::string bag_of_chips_;
+
   // The name of the account being synced.
   std::string account_name_;
 
@@ -151,11 +157,6 @@ class SyncCycleContext {
 
   // Satus information to be sent up to the server.
   sync_pb::ClientStatus client_status_;
-
-  // Temporary variable while keystore encryption is behind a flag. True if
-  // we should attempt performing keystore encryption related work, false if
-  // the experiment is not enabled.
-  bool keystore_encryption_enabled_;
 
   // This is a copy of the identifier the that the invalidations client used to
   // register itself with the invalidations server during startup.  We need to

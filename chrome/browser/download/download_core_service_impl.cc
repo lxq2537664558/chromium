@@ -10,14 +10,15 @@
 #include "chrome/browser/download/chrome_download_manager_delegate.h"
 #include "chrome/browser/download/download_history.h"
 #include "chrome/browser/download/download_offline_content_provider.h"
+#include "chrome/browser/download/download_offline_content_provider_factory.h"
 #include "chrome/browser/download/download_status_updater.h"
 #include "chrome/browser/download/download_ui_controller.h"
-#include "chrome/browser/download/offline_item_utils.h"
+#include "chrome/browser/download/simple_download_manager_coordinator_factory.h"
 #include "chrome/browser/history/history_service_factory.h"
-#include "chrome/browser/offline_items_collection/offline_content_aggregator_factory.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/profiles/profile_key.h"
+#include "components/download/public/common/simple_download_manager_coordinator.h"
 #include "components/history/core/browser/history_service.h"
-#include "components/offline_items_collection/core/offline_content_aggregator.h"
 #include "content/public/browser/download_manager.h"
 #include "extensions/buildflags/buildflags.h"
 
@@ -26,7 +27,7 @@
 #endif
 
 #if defined(OS_ANDROID)
-#include "chrome/browser/android/download/download_utils.h"
+#include "chrome/browser/download/android/download_utils.h"
 #endif
 
 using content::BrowserContext;
@@ -45,6 +46,10 @@ DownloadCoreServiceImpl::GetDownloadManagerDelegate() {
   if (download_manager_created_)
     return manager_delegate_.get();
   download_manager_created_ = true;
+  download::SimpleDownloadManagerCoordinator* coordinator =
+      SimpleDownloadManagerCoordinatorFactory::GetForKey(
+          profile_->GetProfileKey());
+  coordinator->SetSimpleDownloadManager(manager, true);
 
   // In case the delegate has already been set by
   // SetDownloadManagerDelegateForTesting.
@@ -68,14 +73,10 @@ DownloadCoreServiceImpl::GetDownloadManagerDelegate() {
                      new DownloadHistory::HistoryAdapter(history))));
   }
 
-  auto* download_provider = CreateDownloadOfflineContentProvider();
-  download_provider->SetDownloadManager(manager);
-
   // Pass an empty delegate when constructing the DownloadUIController. The
   // default delegate does all the notifications we need.
   download_ui_.reset(new DownloadUIController(
-      manager, std::unique_ptr<DownloadUIController::Delegate>(),
-      download_provider));
+      manager, std::unique_ptr<DownloadUIController::Delegate>()));
 
 #if !defined(OS_ANDROID)
   download_shelf_controller_.reset(new DownloadShelfController(profile_));
@@ -87,22 +88,6 @@ DownloadCoreServiceImpl::GetDownloadManagerDelegate() {
   g_browser_process->download_status_updater()->AddManager(manager);
 
   return manager_delegate_.get();
-}
-
-DownloadOfflineContentProvider*
-DownloadCoreServiceImpl::CreateDownloadOfflineContentProvider() {
-#if defined(OS_ANDROID)
-  return DownloadUtils::GetDownloadOfflineContentProvider(profile_);
-#else
-  download_provider_.reset(new DownloadOfflineContentProvider(
-      OfflineContentAggregatorFactory::GetForBrowserContext(
-          profile_->GetOriginalProfile()),
-      offline_items_collection::OfflineContentAggregator::CreateUniqueNameSpace(
-          OfflineItemUtils::GetDownloadNamespacePrefix(
-              profile_->IsOffTheRecord()),
-          profile_->IsOffTheRecord())));
-  return download_provider_.get();
-#endif
 }
 
 DownloadHistory* DownloadCoreServiceImpl::GetDownloadHistory() {
@@ -155,6 +140,11 @@ void DownloadCoreServiceImpl::SetDownloadManagerDelegateForTesting(
   download_manager_created_ = !!manager_delegate_;
   if (new_delegate)
     new_delegate->Shutdown();
+}
+
+void DownloadCoreServiceImpl::SetDownloadHistoryForTesting(
+    std::unique_ptr<DownloadHistory> download_history) {
+  download_history_ = std::move(download_history);
 }
 
 bool DownloadCoreServiceImpl::IsShelfEnabled() {

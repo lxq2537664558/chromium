@@ -5,6 +5,7 @@
 #ifndef CHROME_COMMON_EXTENSIONS_EXTENSION_TEST_UTIL_H_
 #define CHROME_COMMON_EXTENSIONS_EXTENSION_TEST_UTIL_H_
 
+#include <memory>
 #include <string>
 
 #include "base/memory/ref_counted.h"
@@ -52,7 +53,6 @@ scoped_refptr<extensions::Extension> LoadManifestStrict(
 scoped_refptr<extensions::Extension> LoadManifest(const std::string& dir,
                                                   const std::string& test_file);
 
-void SetGalleryURL(const GURL& new_url);
 void SetGalleryUpdateURL(const GURL& new_url);
 
 }  // namespace extension_test_util

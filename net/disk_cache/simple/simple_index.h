@@ -20,8 +20,8 @@
 #include "base/memory/ref_counted.h"
 #include "base/memory/weak_ptr.h"
 #include "base/numerics/safe_conversions.h"
-#include "base/single_thread_task_runner.h"
-#include "base/threading/thread_checker.h"
+#include "base/sequence_checker.h"
+#include "base/sequenced_task_runner.h"
 #include "base/time/time.h"
 #include "base/timer/timer.h"
 #include "build/build_config.h"
@@ -45,8 +45,6 @@ class BackendCleanupTracker;
 class SimpleIndexDelegate;
 class SimpleIndexFile;
 struct SimpleIndexLoadResult;
-
-NET_EXPORT_PRIVATE extern const base::Feature kSimpleCacheEvictionWithSize;
 
 class NET_EXPORT_PRIVATE EntryMetadata {
  public:
@@ -134,7 +132,7 @@ class NET_EXPORT_PRIVATE SimpleIndex
 
   typedef std::vector<uint64_t> HashList;
 
-  SimpleIndex(const scoped_refptr<base::SingleThreadTaskRunner>& io_thread,
+  SimpleIndex(const scoped_refptr<base::SequencedTaskRunner>& task_runner,
               scoped_refptr<BackendCleanupTracker> cleanup_tracker,
               SimpleIndexDelegate* delegate,
               net::CacheType cache_type,
@@ -185,7 +183,8 @@ class NET_EXPORT_PRIVATE SimpleIndex
                              const EntryMetadata& entry_metadata);
 
   // Executes the |callback| when the index is ready. Allows multiple callbacks.
-  net::Error ExecuteWhenReady(net::CompletionOnceCallback callback);
+  // Never synchronous.
+  void ExecuteWhenReady(net::CompletionOnceCallback callback);
 
   // Returns entries from the index that have last accessed time matching the
   // range between |initial_time| and |end_time| where open intervals are
@@ -244,6 +243,8 @@ class NET_EXPORT_PRIVATE SimpleIndex
   FRIEND_TEST_ALL_PREFIXES(SimpleIndexTest, DiskWriteExecuted);
   FRIEND_TEST_ALL_PREFIXES(SimpleIndexTest, DiskWritePostponed);
   FRIEND_TEST_ALL_PREFIXES(SimpleIndexAppCacheTest, DiskWriteQueued);
+  FRIEND_TEST_ALL_PREFIXES(SimpleIndexCodeCacheTest, DisableEvictBySize);
+  FRIEND_TEST_ALL_PREFIXES(SimpleIndexCodeCacheTest, EnableEvictBySize);
 
   void StartEvictionIfNeeded();
   void EvictionDone(int result);
@@ -289,11 +290,12 @@ class NET_EXPORT_PRIVATE SimpleIndex
 
   std::unique_ptr<SimpleIndexFile> index_file_;
 
-  scoped_refptr<base::SingleThreadTaskRunner> io_thread_;
+  scoped_refptr<base::SequencedTaskRunner> task_runner_;
 
-  // All nonstatic SimpleEntryImpl methods should always be called on the IO
-  // thread, in all cases. |io_thread_checker_| documents and enforces this.
-  base::ThreadChecker io_thread_checker_;
+  // All nonstatic SimpleEntryImpl methods should always be called on its
+  // creation sequance, in all cases. |sequence_checker_| documents and
+  // enforces this.
+  SEQUENCE_CHECKER(sequence_checker_);
 
   // Timestamp of the last time we wrote the index to disk.
   // PostponeWritingToDisk() may give up postponing and allow the write if it
@@ -301,7 +303,7 @@ class NET_EXPORT_PRIVATE SimpleIndex
   base::TimeTicks last_write_to_disk_;
 
   base::OneShotTimer write_to_disk_timer_;
-  base::Closure write_to_disk_cb_;
+  base::RepeatingClosure write_to_disk_cb_;
 
   typedef std::list<net::CompletionOnceCallback> CallbackList;
   CallbackList to_run_when_initialized_;
@@ -310,6 +312,9 @@ class NET_EXPORT_PRIVATE SimpleIndex
   // background we can write the index much more frequently, to insure fresh
   // index on next startup.
   bool app_on_background_ = false;
+
+  static const base::Feature
+      kSimpleCacheDisableEvictionSizeHeuristicForCodeCache;
 };
 
 }  // namespace disk_cache

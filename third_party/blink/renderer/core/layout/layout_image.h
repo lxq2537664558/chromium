@@ -112,10 +112,10 @@ class CORE_EXPORT LayoutImage : public LayoutReplaced {
   bool IsImage() const override { return true; }
 
   void PaintReplaced(const PaintInfo&,
-                     const LayoutPoint& paint_offset) const override;
+                     const PhysicalOffset& paint_offset) const override;
 
   bool ForegroundIsKnownToBeOpaqueInRect(
-      const LayoutRect& local_rect,
+      const PhysicalRect& local_rect,
       unsigned max_depth_to_test) const final;
   bool ComputeBackgroundIsKnownToBeObscured() const final;
 
@@ -125,18 +125,18 @@ class CORE_EXPORT LayoutImage : public LayoutReplaced {
 
   void ImageNotifyFinished(ImageResourceContent*) final;
   bool NodeAtPoint(HitTestResult&,
-                   const HitTestLocation& location_in_container,
-                   const LayoutPoint& accumulated_offset,
+                   const HitTestLocation&,
+                   const PhysicalOffset& accumulated_offset,
                    HitTestAction) final;
 
   void InvalidatePaintAndMarkForLayoutIfNeeded(CanDeferInvalidation);
   void UpdateIntrinsicSizeIfNeeded(const LayoutSize&);
   bool NeedsLayoutOnIntrinsicSizeChange() const;
-  // Override intrinsic sizing info by HTMLImageElement "intrinsicsize"
-  // attribute if enabled and exists.
+  // Override intrinsic sizing info to default if "unsized-media"
+  // is disabled and the element has no sizing info.
   bool OverrideIntrinsicSizingInfo(IntrinsicSizingInfo&) const;
+  bool HasOverriddenIntrinsicSize() const;
   FloatSize ImageSizeOverriddenByIntrinsicSize(float multiplier) const;
-  IntSize GetOverriddenIntrinsicSize() const;
 
   // This member wraps the associated decoded image.
   //

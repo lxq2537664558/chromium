@@ -10,33 +10,33 @@
 #include "base/macros.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_promise.h"
 #include "third_party/blink/renderer/core/dom/events/event_target.h"
-#include "third_party/blink/renderer/core/execution_context/context_lifecycle_observer.h"
+#include "third_party/blink/renderer/core/execution_context/execution_context_lifecycle_observer.h"
 #include "third_party/blink/renderer/core/fileapi/blob.h"
+#include "third_party/blink/renderer/modules/clipboard/clipboard_item.h"
 
 namespace blink {
 
 class ScriptState;
 
 class Clipboard : public EventTargetWithInlineData,
-                  public ContextLifecycleObserver {
+                  public ExecutionContextClient {
   USING_GARBAGE_COLLECTED_MIXIN(Clipboard);
   DEFINE_WRAPPERTYPEINFO();
 
  public:
-  explicit Clipboard(ExecutionContext*);
+  explicit Clipboard(ExecutionContext* execution_context);
 
   ScriptPromise read(ScriptState*);
   ScriptPromise readText(ScriptState*);
 
-  ScriptPromise write(ScriptState*,
-                      HeapVector<std::pair<String, Member<Blob>>>);
+  ScriptPromise write(ScriptState*, const HeapVector<Member<ClipboardItem>>&);
   ScriptPromise writeText(ScriptState*, const String&);
 
   // EventTarget
   const AtomicString& InterfaceName() const override;
   ExecutionContext* GetExecutionContext() const override;
 
-  void Trace(blink::Visitor*) override;
+  void Trace(Visitor*) override;
 
  private:
   DISALLOW_COPY_AND_ASSIGN(Clipboard);

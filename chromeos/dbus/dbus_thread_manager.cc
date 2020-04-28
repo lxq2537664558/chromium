@@ -8,9 +8,11 @@
 
 #include "base/command_line.h"
 #include "base/memory/ptr_util.h"
-#include "base/message_loop/message_loop.h"
+#include "base/message_loop/message_pump_type.h"
 #include "base/system/sys_info.h"
 #include "base/threading/thread.h"
+#include "chromeos/dbus/anomaly_detector_client.h"
+#include "chromeos/dbus/arc_keymaster_client.h"
 #include "chromeos/dbus/arc_midis_client.h"
 #include "chromeos/dbus/arc_obb_mounter_client.h"
 #include "chromeos/dbus/arc_oemcrypto_client.h"
@@ -21,14 +23,14 @@
 #include "chromeos/dbus/cros_disks_client.h"
 #include "chromeos/dbus/dbus_client.h"
 #include "chromeos/dbus/dbus_clients_browser.h"
-#include "chromeos/dbus/debug_daemon_client.h"
+#include "chromeos/dbus/debug_daemon/debug_daemon_client.h"
 #include "chromeos/dbus/easy_unlock_client.h"
+#include "chromeos/dbus/gnubby_client.h"
 #include "chromeos/dbus/image_burner_client.h"
 #include "chromeos/dbus/image_loader_client.h"
 #include "chromeos/dbus/lorgnette_manager_client.h"
 #include "chromeos/dbus/runtime_probe_client.h"
 #include "chromeos/dbus/seneschal_client.h"
-#include "chromeos/dbus/shill/gsm_sms_client.h"
 #include "chromeos/dbus/shill/modem_messaging_client.h"
 #include "chromeos/dbus/shill/shill_clients.h"
 #include "chromeos/dbus/shill/shill_device_client.h"
@@ -60,7 +62,7 @@ DBusThreadManager::DBusThreadManager(ClientSet client_set,
   if (use_real_clients) {
     // Create the D-Bus thread.
     base::Thread::Options thread_options;
-    thread_options.message_loop_type = base::MessageLoop::TYPE_IO;
+    thread_options.message_pump_type = base::MessagePumpType::IO;
     dbus_thread_.reset(new base::Thread("D-Bus thread"));
     dbus_thread_->StartWithOptions(thread_options);
 
@@ -106,8 +108,18 @@ dbus::Bus* DBusThreadManager::GetSystemBus() {
   return system_bus_.get();
 }
 
+AnomalyDetectorClient* DBusThreadManager::GetAnomalyDetectorClient() {
+  return clients_browser_ ? clients_browser_->anomaly_detector_client_.get()
+                          : nullptr;
+}
+
 ArcAppfuseProviderClient* DBusThreadManager::GetArcAppfuseProviderClient() {
   return clients_browser_ ? clients_browser_->arc_appfuse_provider_client_.get()
+                          : nullptr;
+}
+
+ArcKeymasterClient* DBusThreadManager::GetArcKeymasterClient() {
+  return clients_browser_ ? clients_browser_->arc_keymaster_client_.get()
                           : nullptr;
 }
 
@@ -148,14 +160,13 @@ DebugDaemonClient* DBusThreadManager::GetDebugDaemonClient() {
                           : nullptr;
 }
 
-DiagnosticsdClient* DBusThreadManager::GetDiagnosticsdClient() {
-  return clients_browser_ ? clients_browser_->diagnosticsd_client_.get()
-                          : nullptr;
-}
-
 EasyUnlockClient* DBusThreadManager::GetEasyUnlockClient() {
   return clients_browser_ ? clients_browser_->easy_unlock_client_.get()
                           : nullptr;
+}
+
+GnubbyClient* DBusThreadManager::GetGnubbyClient() {
+  return clients_browser_ ? clients_browser_->gnubby_client_.get() : nullptr;
 }
 
 ShillDeviceClient* DBusThreadManager::GetShillDeviceClient() {
@@ -181,10 +192,6 @@ ShillProfileClient* DBusThreadManager::GetShillProfileClient() {
 ShillThirdPartyVpnDriverClient*
 DBusThreadManager::GetShillThirdPartyVpnDriverClient() {
   return ShillThirdPartyVpnDriverClient::Get();
-}
-
-GsmSMSClient* DBusThreadManager::GetGsmSMSClient() {
-  return GsmSMSClient::Get();
 }
 
 ImageBurnerClient* DBusThreadManager::GetImageBurnerClient() {
@@ -239,16 +246,18 @@ VirtualFileProviderClient* DBusThreadManager::GetVirtualFileProviderClient() {
              : nullptr;
 }
 
+VmPluginDispatcherClient* DBusThreadManager::GetVmPluginDispatcherClient() {
+  return clients_browser_ ? clients_browser_->vm_plugin_dispatcher_client_.get()
+                          : nullptr;
+}
+
 void DBusThreadManager::InitializeClients() {
   // Some clients call DBusThreadManager::Get() during initialization.
   DCHECK(g_dbus_thread_manager);
 
   // TODO(stevenjb): Move these to dbus_helper.cc in src/chrome and any tests
   // that require Shill clients. https://crbug.com/948390.
-  if (use_real_clients_)
-    shill_clients::Initialize(GetSystemBus());
-  else
-    shill_clients::InitializeFakes();
+  shill_clients::Initialize(GetSystemBus());
 
   if (clients_browser_)
     clients_browser_->Initialize(GetSystemBus());
@@ -271,9 +280,15 @@ void DBusThreadManager::Initialize(ClientSet client_set) {
     return;
 
   CHECK(!g_dbus_thread_manager);
+#if defined(USE_REAL_DBUS_CLIENTS)
+  bool use_real_clients = true;
+#else
+  // TODO(hashimoto): Always use fakes after adding
+  // use_real_dbus_clients=true to where needed. crbug.com/952745
   bool use_real_clients = base::SysInfo::IsRunningOnChromeOS() &&
                           !base::CommandLine::ForCurrentProcess()->HasSwitch(
                               chromeos::switches::kDbusStub);
+#endif
   g_dbus_thread_manager = new DBusThreadManager(client_set, use_real_clients);
   g_dbus_thread_manager->InitializeClients();
 }
@@ -351,6 +366,12 @@ void DBusThreadManagerSetter::SetCrosDisksClient(
 void DBusThreadManagerSetter::SetDebugDaemonClient(
     std::unique_ptr<DebugDaemonClient> client) {
   DBusThreadManager::Get()->clients_browser_->debug_daemon_client_ =
+      std::move(client);
+}
+
+void DBusThreadManagerSetter::SetGnubbyClient(
+    std::unique_ptr<GnubbyClient> client) {
+  DBusThreadManager::Get()->clients_browser_->gnubby_client_ =
       std::move(client);
 }
 

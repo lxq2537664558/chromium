@@ -7,7 +7,7 @@
 
 #include "third_party/blink/renderer/core/animation/keyframe.h"
 #include "third_party/blink/renderer/core/css/css_property_value_set.h"
-
+#include "third_party/blink/renderer/platform/heap/heap.h"
 #include "third_party/blink/renderer/platform/wtf/hash_map.h"
 
 namespace blink {
@@ -27,20 +27,17 @@ class StyleSheetContents;
 // expand shorthand properties; that is done for computed keyframes.
 class CORE_EXPORT StringKeyframe : public Keyframe {
  public:
-  static StringKeyframe* Create() {
-    return MakeGarbageCollected<StringKeyframe>();
-  }
-
   StringKeyframe()
-      : css_property_map_(
-            MutableCSSPropertyValueSet::Create(kHTMLStandardMode)),
+      : css_property_map_(MakeGarbageCollected<MutableCSSPropertyValueSet>(
+            kHTMLStandardMode)),
         presentation_attribute_map_(
-            MutableCSSPropertyValueSet::Create(kHTMLStandardMode)) {}
+            MakeGarbageCollected<MutableCSSPropertyValueSet>(
+                kHTMLStandardMode)),
+        has_missing_properties_(false) {}
   StringKeyframe(const StringKeyframe& copy_from);
 
   MutableCSSPropertyValueSet::SetResult SetCSSPropertyValue(
       const AtomicString& property_name,
-      const PropertyRegistry*,
       const String& value,
       SecureContextMode,
       StyleSheetContents*);
@@ -85,22 +82,17 @@ class CORE_EXPORT StringKeyframe : public Keyframe {
 
   bool HasCssProperty() const;
 
-  void AddKeyframePropertiesToV8Object(V8ObjectBuilder&) const override;
+  void AddKeyframePropertiesToV8Object(V8ObjectBuilder&,
+                                       Element*) const override;
+
+  bool HasMissingProperties() override { return has_missing_properties_; }
+  void SetHasMissingProperties() override { has_missing_properties_ = true; }
 
   void Trace(Visitor*) override;
 
   class CSSPropertySpecificKeyframe
       : public Keyframe::PropertySpecificKeyframe {
    public:
-    static CSSPropertySpecificKeyframe* Create(
-        double offset,
-        scoped_refptr<TimingFunction> easing,
-        const CSSValue* value,
-        EffectModel::CompositeOperation composite) {
-      return MakeGarbageCollected<CSSPropertySpecificKeyframe>(
-          offset, std::move(easing), value, composite);
-    }
-
     CSSPropertySpecificKeyframe(double offset,
                                 scoped_refptr<TimingFunction> easing,
                                 const CSSValue* value,
@@ -112,15 +104,17 @@ class CORE_EXPORT StringKeyframe : public Keyframe {
 
     const CSSValue* Value() const { return value_.Get(); }
 
-    bool PopulateAnimatableValue(const PropertyHandle&,
-                                 Element&,
-                                 const ComputedStyle& base_style,
-                                 const ComputedStyle* parent_style) const final;
-    const AnimatableValue* GetAnimatableValue() const final {
-      return animatable_value_cache_;
+    bool PopulateCompositorKeyframeValue(
+        const PropertyHandle&,
+        Element&,
+        const ComputedStyle& base_style,
+        const ComputedStyle* parent_style) const final;
+    const CompositorKeyframeValue* GetCompositorKeyframeValue() const final {
+      return compositor_keyframe_value_cache_;
     }
 
     bool IsNeutral() const final { return !value_; }
+    bool IsRevert() const final;
     Keyframe::PropertySpecificKeyframe* NeutralKeyframe(
         double offset,
         scoped_refptr<TimingFunction> easing) const final;
@@ -133,21 +127,12 @@ class CORE_EXPORT StringKeyframe : public Keyframe {
     bool IsCSSPropertySpecificKeyframe() const override { return true; }
 
     Member<const CSSValue> value_;
-    mutable Member<AnimatableValue> animatable_value_cache_;
+    mutable Member<CompositorKeyframeValue> compositor_keyframe_value_cache_;
   };
 
   class SVGPropertySpecificKeyframe
       : public Keyframe::PropertySpecificKeyframe {
    public:
-    static SVGPropertySpecificKeyframe* Create(
-        double offset,
-        scoped_refptr<TimingFunction> easing,
-        const String& value,
-        EffectModel::CompositeOperation composite) {
-      return MakeGarbageCollected<SVGPropertySpecificKeyframe>(
-          offset, std::move(easing), value, composite);
-    }
-
     SVGPropertySpecificKeyframe(double offset,
                                 scoped_refptr<TimingFunction> easing,
                                 const String& value,
@@ -161,9 +146,12 @@ class CORE_EXPORT StringKeyframe : public Keyframe {
 
     PropertySpecificKeyframe* CloneWithOffset(double offset) const final;
 
-    const AnimatableValue* GetAnimatableValue() const final { return nullptr; }
+    const CompositorKeyframeValue* GetCompositorKeyframeValue() const final {
+      return nullptr;
+    }
 
     bool IsNeutral() const final { return value_.IsNull(); }
+    bool IsRevert() const final { return false; }
     PropertySpecificKeyframe* NeutralKeyframe(
         double offset,
         scoped_refptr<TimingFunction> easing) const final;
@@ -183,29 +171,58 @@ class CORE_EXPORT StringKeyframe : public Keyframe {
 
   bool IsStringKeyframe() const override { return true; }
 
+  // The unresolved property and their values. This is needed for correct
+  // implementation of KeyframeEffect.getKeyframes(). We use a single list for
+  // CSS, SVG properties. The only requirement for a property value to be
+  // in this list is that it parses correctly.
+  //
+  // See: https://drafts.csswg.org/web-animations/#keyframes-section
+  HeapHashMap<PropertyHandle, Member<const CSSValue>> input_properties_;
+
+  // The resolved properties are computed from unresolved ones applying these
+  // steps:
+  //  1. Resolve conflicts when multiple properties map to same underlying
+  //      one (e.g., margin, margin-top)
+  //  2. Expand shorthands to longhands
+  //  3. Expand logical properties to physical ones
+  //
+  // See:
+  // https://drafts.csswg.org/web-animations/#calculating-computed-keyframes
+  //
+  // TODO(816956): AFAICT we don't do (1) at the moment rather we parse and feed
+  // values into the MutableCSSPropertyValueSet which keeps replacing values as
+  // they come in. I am not sure if it leads to the same conflict resolution
+  // that web-animation expects. This needs more investigation.
   Member<MutableCSSPropertyValueSet> css_property_map_;
   Member<MutableCSSPropertyValueSet> presentation_attribute_map_;
   HashMap<const QualifiedName*, String> svg_attribute_map_;
+  // If set, getKeyframes will include property-value pairs for missing
+  // properties based on the underlying style. The set of missing properties is
+  // computed based on the full set of animated properties across all keyframes.
+  bool has_missing_properties_;
 };
 
 using CSSPropertySpecificKeyframe = StringKeyframe::CSSPropertySpecificKeyframe;
 using SVGPropertySpecificKeyframe = StringKeyframe::SVGPropertySpecificKeyframe;
 
-DEFINE_TYPE_CASTS(StringKeyframe,
-                  Keyframe,
-                  value,
-                  value->IsStringKeyframe(),
-                  value.IsStringKeyframe());
-DEFINE_TYPE_CASTS(CSSPropertySpecificKeyframe,
-                  Keyframe::PropertySpecificKeyframe,
-                  value,
-                  value->IsCSSPropertySpecificKeyframe(),
-                  value.IsCSSPropertySpecificKeyframe());
-DEFINE_TYPE_CASTS(SVGPropertySpecificKeyframe,
-                  Keyframe::PropertySpecificKeyframe,
-                  value,
-                  value->IsSVGPropertySpecificKeyframe(),
-                  value.IsSVGPropertySpecificKeyframe());
+template <>
+struct DowncastTraits<StringKeyframe> {
+  static bool AllowFrom(const Keyframe& value) {
+    return value.IsStringKeyframe();
+  }
+};
+template <>
+struct DowncastTraits<CSSPropertySpecificKeyframe> {
+  static bool AllowFrom(const Keyframe::PropertySpecificKeyframe& value) {
+    return value.IsCSSPropertySpecificKeyframe();
+  }
+};
+template <>
+struct DowncastTraits<SVGPropertySpecificKeyframe> {
+  static bool AllowFrom(const Keyframe::PropertySpecificKeyframe& value) {
+    return value.IsSVGPropertySpecificKeyframe();
+  }
+};
 
 }  // namespace blink
 

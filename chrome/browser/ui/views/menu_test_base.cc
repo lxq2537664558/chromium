@@ -15,11 +15,7 @@
 #include "ui/views/widget/widget.h"
 
 MenuTestBase::MenuTestBase()
-    : ViewEventTestBase(),
-      button_(NULL),
-      menu_(NULL),
-      last_command_(0) {
-}
+    : ViewEventTestBase(), button_(nullptr), menu_(nullptr), last_command_(0) {}
 
 MenuTestBase::~MenuTestBase() {
 }
@@ -32,8 +28,8 @@ void MenuTestBase::Click(views::View* view, base::OnceClosure next) {
 }
 
 void MenuTestBase::KeyPress(ui::KeyboardCode keycode, base::OnceClosure next) {
-  ui_controls::SendKeyPressNotifyWhenDone(GetWidget()->GetNativeWindow(),
-                                          keycode, false, false, false, false,
+  ui_controls::SendKeyPressNotifyWhenDone(window()->GetNativeWindow(), keycode,
+                                          false, false, false, false,
                                           std::move(next));
 }
 
@@ -42,14 +38,14 @@ int MenuTestBase::GetMenuRunnerFlags() {
 }
 
 void MenuTestBase::SetUp() {
+  ViewEventTestBase::SetUp();
+
   views::test::DisableMenuClosureAnimations();
 
-  button_ = new views::MenuButton(base::ASCIIToUTF16("Menu Test"), this);
   menu_ = new views::MenuItemView(this);
   BuildMenu(menu_);
-  menu_runner_.reset(new views::MenuRunner(menu_, GetMenuRunnerFlags()));
-
-  ViewEventTestBase::SetUp();
+  menu_runner_ =
+      std::make_unique<views::MenuRunner>(menu_, GetMenuRunnerFlags());
 }
 
 void MenuTestBase::TearDown() {
@@ -57,14 +53,16 @@ void MenuTestBase::TearDown() {
   // with views::MenuRunner::FOR_DROP) don't take kindly to simply pulling the
   // runner out from under them.
   menu_runner_->Cancel();
-
   menu_runner_.reset();
-  menu_ = NULL;
+
   ViewEventTestBase::TearDown();
 }
 
-views::View* MenuTestBase::CreateContentsView() {
-  return button_;
+std::unique_ptr<views::View> MenuTestBase::CreateContentsView() {
+  auto button = std::make_unique<views::MenuButton>(
+      base::ASCIIToUTF16("Menu Test"), this);
+  button_ = button.get();
+  return button;
 }
 
 void MenuTestBase::DoTestOnMessageLoop() {
@@ -75,14 +73,13 @@ gfx::Size MenuTestBase::GetPreferredSizeForContents() const {
   return button_->GetPreferredSize();
 }
 
-void MenuTestBase::OnMenuButtonClicked(views::Button* source,
-                                       const gfx::Point& point,
-                                       const ui::Event* event) {
+void MenuTestBase::ButtonPressed(views::Button* source,
+                                 const ui::Event& event) {
   gfx::Point screen_location;
   views::View::ConvertPointToScreen(source, &screen_location);
   gfx::Rect bounds(screen_location, source->size());
-  menu_runner_->RunMenuAt(source->GetWidget(), button_, bounds,
-                          views::MenuAnchorPosition::kTopLeft,
+  menu_runner_->RunMenuAt(source->GetWidget(), button_->button_controller(),
+                          bounds, views::MenuAnchorPosition::kTopLeft,
                           ui::MENU_SOURCE_NONE);
 }
 

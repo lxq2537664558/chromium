@@ -4,13 +4,15 @@
 
 #include "third_party/blink/renderer/core/inspector/inspect_tools.h"
 
-#include "third_party/blink/public/platform/web_gesture_event.h"
-#include "third_party/blink/public/platform/web_input_event.h"
+#include "third_party/blink/public/common/input/web_gesture_event.h"
+#include "third_party/blink/public/common/input/web_input_event.h"
+#include "third_party/blink/public/common/input/web_keyboard_event.h"
+#include "third_party/blink/public/common/input/web_pointer_event.h"
 #include "third_party/blink/public/platform/web_input_event_result.h"
-#include "third_party/blink/public/platform/web_keyboard_event.h"
-#include "third_party/blink/public/platform/web_pointer_event.h"
+#include "third_party/blink/public/resources/grit/blink_resources.h"
 #include "third_party/blink/renderer/core/css/css_color_value.h"
 #include "third_party/blink/renderer/core/css/css_computed_style_declaration.h"
+#include "third_party/blink/renderer/core/display_lock/display_lock_utilities.h"
 #include "third_party/blink/renderer/core/dom/element.h"
 #include "third_party/blink/renderer/core/dom/shadow_root.h"
 #include "third_party/blink/renderer/core/dom/static_node_list.h"
@@ -24,7 +26,9 @@
 #include "third_party/blink/renderer/core/layout/layout_view.h"
 #include "third_party/blink/renderer/core/page/chrome_client.h"
 #include "third_party/blink/renderer/core/page/page.h"
+#include "third_party/blink/renderer/platform/cursors.h"
 #include "third_party/blink/renderer/platform/keyboard_codes.h"
+#include "third_party/inspector_protocol/crdtp/json.h"
 
 namespace blink {
 
@@ -32,13 +36,14 @@ namespace {
 
 InspectorHighlightContrastInfo FetchContrast(Node* node) {
   InspectorHighlightContrastInfo result;
-  if (!node->IsElementNode())
+  auto* element = DynamicTo<Element>(node);
+  if (!element)
     return result;
 
   Vector<Color> bgcolors;
   String font_size;
   String font_weight;
-  InspectorCSSAgent::GetBackgroundColors(ToElement(node), &bgcolors, &font_size,
+  InspectorCSSAgent::GetBackgroundColors(element, &bgcolors, &font_size,
                                          &font_weight);
   if (bgcolors.size() == 1) {
     result.font_size = font_size;
@@ -70,17 +75,17 @@ Node* HoveredNodeForPoint(LocalFrame* frame,
 Node* HoveredNodeForEvent(LocalFrame* frame,
                           const WebGestureEvent& event,
                           bool ignore_pointer_events_none) {
-  return HoveredNodeForPoint(frame,
-                             RoundedIntPoint(event.PositionInRootFrame()),
-                             ignore_pointer_events_none);
+  return HoveredNodeForPoint(
+      frame, RoundedIntPoint(FloatPoint(event.PositionInRootFrame())),
+      ignore_pointer_events_none);
 }
 
 Node* HoveredNodeForEvent(LocalFrame* frame,
                           const WebMouseEvent& event,
                           bool ignore_pointer_events_none) {
-  return HoveredNodeForPoint(frame,
-                             RoundedIntPoint(event.PositionInRootFrame()),
-                             ignore_pointer_events_none);
+  return HoveredNodeForPoint(
+      frame, RoundedIntPoint(FloatPoint(event.PositionInRootFrame())),
+      ignore_pointer_events_none);
 }
 
 Node* HoveredNodeForEvent(LocalFrame* frame,
@@ -88,7 +93,7 @@ Node* HoveredNodeForEvent(LocalFrame* frame,
                           bool ignore_pointer_events_none) {
   WebPointerEvent transformed_point = event.WebPointerEventInRootFrame();
   return HoveredNodeForPoint(
-      frame, RoundedIntPoint(transformed_point.PositionInWidget()),
+      frame, RoundedIntPoint(FloatPoint(transformed_point.PositionInWidget())),
       ignore_pointer_events_none);
 }
 
@@ -98,10 +103,9 @@ Node* HoveredNodeForEvent(LocalFrame* frame,
 
 SearchingForNodeTool::SearchingForNodeTool(InspectorDOMAgent* dom_agent,
                                            bool ua_shadow,
-                                           const String& config)
+                                           const std::vector<uint8_t>& config)
     : dom_agent_(dom_agent), ua_shadow_(ua_shadow) {
-  std::unique_ptr<protocol::Value> value =
-      protocol::StringUtil::parseJSON(config);
+  auto value = protocol::Value::parseBinary(config.data(), config.size());
   if (!value)
     return;
   protocol::ErrorSupport errors;
@@ -111,7 +115,7 @@ SearchingForNodeTool::SearchingForNodeTool(InspectorDOMAgent* dom_agent,
       InspectorOverlayAgent::ToHighlightConfig(highlight_config.get());
 }
 
-void SearchingForNodeTool::Trace(blink::Visitor* visitor) {
+void SearchingForNodeTool::Trace(Visitor* visitor) {
   InspectTool::Trace(visitor);
   visitor->Trace(dom_agent_);
   visitor->Trace(hovered_node_);
@@ -127,7 +131,7 @@ void SearchingForNodeTool::Draw(float scale) {
                              node->GetLayoutObject() &&
                              node->GetDocument().GetFrame();
   InspectorHighlight highlight(node, *highlight_config_, contrast_info_,
-                               append_element_info);
+                               append_element_info, false, is_locked_ancestor_);
   if (event_target_node_) {
     highlight.AppendEventTargetQuads(event_target_node_.Get(),
                                      *highlight_config_);
@@ -138,8 +142,8 @@ void SearchingForNodeTool::Draw(float scale) {
 bool SearchingForNodeTool::HandleInputEvent(LocalFrameView* frame_view,
                                             const WebInputEvent& input_event,
                                             bool* swallow_next_mouse_up) {
-  if (input_event.GetType() == WebInputEvent::kGestureScrollBegin ||
-      input_event.GetType() == WebInputEvent::kGestureScrollUpdate) {
+  if (input_event.GetType() == WebInputEvent::Type::kGestureScrollBegin ||
+      input_event.GetType() == WebInputEvent::Type::kGestureScrollUpdate) {
     hovered_node_.Clear();
     event_target_node_.Clear();
     overlay_->ScheduleUpdate();
@@ -169,6 +173,16 @@ bool SearchingForNodeTool::HandleMouseMove(const WebMouseEvent& event) {
 
   if (!node)
     return true;
+
+  // If |node| is in a display locked subtree, highlight the highest locked
+  // element instead.
+  if (Node* locked_ancestor =
+          DisplayLockUtilities::HighestLockedExclusiveAncestor(*node)) {
+    node = locked_ancestor;
+    is_locked_ancestor_ = true;
+  } else {
+    is_locked_ancestor_ = false;
+  }
 
   if (auto* frame_owner = DynamicTo<HTMLFrameOwnerElement>(node)) {
     if (!IsA<LocalFrame>(frame_owner->ContentFrame())) {
@@ -263,9 +277,15 @@ NodeHighlightTool::NodeHighlightTool(
     Member<Node> node,
     String selector_list,
     std::unique_ptr<InspectorHighlightConfig> highlight_config)
-    : node_(node),
-      selector_list_(selector_list),
+    : selector_list_(selector_list),
       highlight_config_(std::move(highlight_config)) {
+  if (Node* locked_ancestor =
+          DisplayLockUtilities::HighestLockedExclusiveAncestor(*node)) {
+    is_locked_ancestor_ = true;
+    node_ = locked_ancestor;
+  } else {
+    node_ = node;
+  }
   contrast_info_ = FetchContrast(node);
 }
 
@@ -274,6 +294,10 @@ bool NodeHighlightTool::ForwardEventsToOverlay() {
 }
 
 bool NodeHighlightTool::HideOnHideHighlight() {
+  return true;
+}
+
+bool NodeHighlightTool::HideOnMouseMove() {
   return true;
 }
 
@@ -288,7 +312,7 @@ void NodeHighlightTool::DrawNode() {
                              node_->GetLayoutObject() &&
                              node_->GetDocument().GetFrame();
   InspectorHighlight highlight(node_.Get(), *highlight_config_, contrast_info_,
-                               append_element_info);
+                               append_element_info, false, is_locked_ancestor_);
   std::unique_ptr<protocol::DictionaryValue> highlight_json =
       highlight.AsProtocolValue();
   overlay_->EvaluateInOverlay("drawHighlight", std::move(highlight_json));
@@ -308,21 +332,26 @@ void NodeHighlightTool::DrawMatchingSelector() {
 
   for (unsigned i = 0; i < elements->length(); ++i) {
     Element* element = elements->item(i);
+    // Skip elements in locked subtrees.
+    if (DisplayLockUtilities::NearestLockedExclusiveAncestor(*element))
+      continue;
     InspectorHighlight highlight(element, *highlight_config_, contrast_info_,
-                                 false);
+                                 false /* append_element_info */,
+                                 false /* append_distance_info */,
+                                 false /* is_locked_ancestor */);
     overlay_->EvaluateInOverlay("drawHighlight", highlight.AsProtocolValue());
   }
 }
 
-void NodeHighlightTool::Trace(blink::Visitor* visitor) {
+void NodeHighlightTool::Trace(Visitor* visitor) {
   InspectTool::Trace(visitor);
   visitor->Trace(node_);
 }
 
 // NearbyDistanceTool ----------------------------------------------------------
 
-CString NearbyDistanceTool::GetDataResourceName() {
-  return "inspect_tool_distances.html";
+int NearbyDistanceTool::GetDataResourceId() {
+  return IDR_INSPECT_TOOL_DISTANCES_HTML;
 }
 
 bool NearbyDistanceTool::HandleMouseDown(const WebMouseEvent& event,
@@ -354,6 +383,12 @@ bool NearbyDistanceTool::HandleMouseMove(const WebMouseEvent& event) {
     }
   }
 
+  // If |node| is in a display locked subtree, highlight the highest locked
+  // element instead.
+  if (Node* locked_ancestor =
+          DisplayLockUtilities::HighestLockedExclusiveAncestor(*node))
+    node = locked_ancestor;
+
   // Store values for the highlight.
   hovered_node_ = node;
   return true;
@@ -367,43 +402,14 @@ void NearbyDistanceTool::Draw(float scale) {
   Node* node = hovered_node_.Get();
   if (!node)
     return;
-  node->GetDocument().EnsurePaintLocationDataValidForNode(node);
-  LayoutObject* layout_object = node->GetLayoutObject();
-  if (!layout_object)
-    return;
-
-  CSSStyleDeclaration* style =
-      MakeGarbageCollected<CSSComputedStyleDeclaration>(node, true);
-  std::unique_ptr<protocol::DictionaryValue> computed_style =
-      protocol::DictionaryValue::create();
-  for (size_t i = 0; i < style->length(); ++i) {
-    AtomicString name(style->item(i));
-    const CSSValue* value = style->GetPropertyCSSValueInternal(name);
-    if (!value)
-      continue;
-    if (value->IsColorValue()) {
-      Color color = static_cast<const cssvalue::CSSColorValue*>(value)->Value();
-      String hex_color =
-          String::Format("#%02X%02X%02X%02X", color.Red(), color.Green(),
-                         color.Blue(), color.Alpha());
-      computed_style->setString(name, hex_color);
-    } else {
-      computed_style->setString(name, value->CssText());
-    }
-  }
-
-  std::unique_ptr<protocol::DOM::BoxModel> model;
-  InspectorHighlight::GetBoxModel(node, &model);
-  std::unique_ptr<protocol::DictionaryValue> object =
-      protocol::DictionaryValue::create();
-  object->setArray("content", model->getContent()->toValue());
-  object->setArray("padding", model->getPadding()->toValue());
-  object->setArray("border", model->getBorder()->toValue());
-  object->setObject("style", std::move(computed_style));
-  overlay_->EvaluateInOverlay("drawDistances", std::move(object));
+  InspectorHighlight highlight(
+      node, InspectorHighlight::DefaultConfig(),
+      InspectorHighlightContrastInfo(), false /* append_element_info */,
+      true /* append_distance_info */, false /* is_locked_ancestor */);
+  overlay_->EvaluateInOverlay("drawDistances", highlight.AsProtocolValue());
 }
 
-void NearbyDistanceTool::Trace(blink::Visitor* visitor) {
+void NearbyDistanceTool::Trace(Visitor* visitor) {
   InspectTool::Trace(visitor);
   visitor->Trace(hovered_node_);
 }
@@ -414,8 +420,8 @@ void ShowViewSizeTool::Draw(float scale) {
   overlay_->EvaluateInOverlay("drawViewSize", "");
 }
 
-CString ShowViewSizeTool::GetDataResourceName() {
-  return "inspect_tool_viewport_size.html";
+int ShowViewSizeTool::GetDataResourceId() {
+  return IDR_INSPECT_TOOL_VIEWPORT_SIZE_HTML;
 }
 
 bool ShowViewSizeTool::ForwardEventsToOverlay() {
@@ -431,19 +437,32 @@ void ScreenshotTool::DoInit() {
   client.SetCursorOverridden(true);
 }
 
-CString ScreenshotTool::GetDataResourceName() {
-  return "inspect_tool_screenshot.html";
+int ScreenshotTool::GetDataResourceId() {
+  return IDR_INSPECT_TOOL_SCREENSHOT_HTML;
 }
 
 void ScreenshotTool::Dispatch(const String& message) {
+  if (message.IsEmpty())
+    return;
+  std::vector<uint8_t> cbor;
+  if (message.Is8Bit()) {
+    crdtp::json::ConvertJSONToCBOR(
+        crdtp::span<uint8_t>(message.Characters8(), message.length()), &cbor);
+  } else {
+    crdtp::json::ConvertJSONToCBOR(
+        crdtp::span<uint16_t>(
+            reinterpret_cast<const uint16_t*>(message.Characters16()),
+            message.length()),
+        &cbor);
+  }
   std::unique_ptr<protocol::Value> value =
-      protocol::StringUtil::parseJSON(message);
+      protocol::Value::parseBinary(cbor.data(), cbor.size());
   if (!value)
     return;
   protocol::ErrorSupport errors;
   std::unique_ptr<protocol::DOM::Rect> box =
       protocol::DOM::Rect::fromValue(value.get(), &errors);
-  if (errors.hasErrors())
+  if (!errors.Errors().empty())
     return;
 
   float scale = 1.0f;
@@ -501,8 +520,8 @@ void ScreenshotTool::Dispatch(const String& message) {
 
 // PausedInDebuggerTool --------------------------------------------------------
 
-CString PausedInDebuggerTool::GetDataResourceName() {
-  return "inspect_tool_paused.html";
+int PausedInDebuggerTool::GetDataResourceId() {
+  return IDR_INSPECT_TOOL_PAUSED_HTML;
 }
 
 void PausedInDebuggerTool::Draw(float scale) {

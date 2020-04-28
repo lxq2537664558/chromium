@@ -20,7 +20,7 @@
 #include "base/memory/weak_ptr.h"
 #include "base/observer_list.h"
 #include "base/time/default_clock.h"
-#include "components/google/core/browser/google_url_tracker.h"
+#include "build/build_config.h"
 #include "components/keyed_service/core/keyed_service.h"
 #include "components/prefs/pref_change_registrar.h"
 #include "components/search_engines/default_search_manager.h"
@@ -31,16 +31,18 @@
 #include "components/sync/model/sync_change.h"
 #include "components/sync/model/syncable_service.h"
 #include "components/webdata/common/web_data_service_consumer.h"
+#if defined(OS_ANDROID)
+#include "base/android/scoped_java_ref.h"
+#endif
 
 class GURL;
 class PrefService;
 class TemplateURLServiceClient;
 class TemplateURLServiceObserver;
 struct TemplateURLData;
-
-namespace rappor {
-class RapporServiceImpl;
-}
+#if defined(OS_ANDROID)
+class TemplateUrlServiceAndroid;
+#endif
 
 namespace syncer {
 class SyncData;
@@ -106,8 +108,6 @@ class TemplateURLService : public WebDataServiceConsumer,
       std::unique_ptr<SearchTermsData> search_terms_data,
       const scoped_refptr<KeywordWebDataService>& web_data_service,
       std::unique_ptr<TemplateURLServiceClient> client,
-      GoogleURLTracker* google_url_tracker,
-      rappor::RapporServiceImpl* rappor_service,
       const base::RepeatingClosure& dsp_change_callback);
   // The following is for testing.
   TemplateURLService(const Initializer* initializers, const int count);
@@ -115,6 +115,10 @@ class TemplateURLService : public WebDataServiceConsumer,
 
   // Register Profile preferences in |registry|.
   static void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry);
+
+#if defined(OS_ANDROID)
+  base::android::ScopedJavaLocalRef<jobject> GetJavaObject();
+#endif
 
   // Returns true if there is no TemplateURL that conflicts with the
   // keyword/url pair, or there is one but it can be replaced. If there is an
@@ -245,6 +249,16 @@ class TemplateURLService : public WebDataServiceConsumer,
                         const base::string16& keyword,
                         const std::string& search_url);
 
+  // Creates TemplateURL, populating it with data from Play API. If TemplateURL
+  // with matching keyword already exists then merges Play API data into it.
+  // Sets |created_from_play_api| flag.
+  TemplateURL* CreateOrUpdateTemplateURLFromPlayAPIData(
+      const base::string16& title,
+      const base::string16& keyword,
+      const std::string& search_url,
+      const std::string& suggestions_url,
+      const std::string& favicon_url);
+
   // Updates any search providers matching |potential_search_url| with the new
   // favicon location |favicon_url|.
   void UpdateProviderFavicons(const GURL& potential_search_url,
@@ -351,17 +365,17 @@ class TemplateURLService : public WebDataServiceConsumer,
 
   // Returns all syncable TemplateURLs from this model as SyncData. This should
   // include every search engine and no Extension keywords.
-  syncer::SyncDataList GetAllSyncData(syncer::ModelType type) const override;
+  syncer::SyncDataList GetAllSyncData(syncer::ModelType type) const;
   // Process new search engine changes from Sync, merging them into our local
   // data. This may send notifications if local search engines are added,
   // updated or removed.
-  syncer::SyncError ProcessSyncChanges(
+  base::Optional<syncer::ModelError> ProcessSyncChanges(
       const base::Location& from_here,
       const syncer::SyncChangeList& change_list) override;
   // Merge initial search engine data from Sync and push any local changes up
   // to Sync. This may send notifications if local search engines are added,
   // updated or removed.
-  syncer::SyncMergeResult MergeDataAndStartSyncing(
+  base::Optional<syncer::ModelError> MergeDataAndStartSyncing(
       syncer::ModelType type,
       const syncer::SyncDataList& initial_sync_data,
       std::unique_ptr<syncer::SyncChangeProcessor> sync_processor,
@@ -594,14 +608,6 @@ class TemplateURLService : public WebDataServiceConsumer,
   // If necessary, generates a visit for the site http:// + t_url.keyword().
   void AddTabToSearchVisit(const TemplateURL& t_url);
 
-  // Requests the Google URL tracker to check the server if necessary.
-  void RequestGoogleURLTrackerServerCheckIfNecessary();
-
-  // Invoked when the Google base URL has changed. Updates the mapping for all
-  // TemplateURLs that have a replacement term of {google:baseURL} or
-  // {google:baseSuggestURL}.
-  void GoogleBaseURLChanged();
-
   // Adds a new TemplateURL to this model.
   //
   // If |newly_adding| is false, we assume that this TemplateURL was already
@@ -681,8 +687,7 @@ class TemplateURLService : public WebDataServiceConsumer,
   void MergeInSyncTemplateURL(TemplateURL* sync_turl,
                               const SyncDataMap& sync_data,
                               syncer::SyncChangeList* change_list,
-                              SyncDataMap* local_data,
-                              syncer::SyncMergeResult* merge_result);
+                              SyncDataMap* local_data);
 
   // Goes through a vector of TemplateURLs and ensure that both the in-memory
   // and database copies have valid sync_guids. This is to fix crbug.com/102038,
@@ -731,11 +736,6 @@ class TemplateURLService : public WebDataServiceConsumer,
 
   std::unique_ptr<TemplateURLServiceClient> client_;
 
-  GoogleURLTracker* google_url_tracker_ = nullptr;
-
-  // ---------- Metrics related members ---------------------------------------
-  rappor::RapporServiceImpl* rappor_service_ = nullptr;
-
   // This closure is run when the default search provider is set to Google.
   base::RepeatingClosure dsp_change_callback_;
 
@@ -760,7 +760,7 @@ class TemplateURLService : public WebDataServiceConsumer,
 
   OwnedTemplateURLVector template_urls_;
 
-  base::ObserverList<TemplateURLServiceObserver>::Unchecked model_observers_;
+  base::ObserverList<TemplateURLServiceObserver> model_observers_;
 
   // Maps from host to set of TemplateURLs whose search url host is host.
   std::unique_ptr<SearchHostToURLsMap> provider_map_ =
@@ -812,6 +812,10 @@ class TemplateURLService : public WebDataServiceConsumer,
   // true, we ignore any local search engine changes, since we triggered them.
   bool processing_syncer_changes_ = false;
 
+  // We never want reentrancy while applying a default search engine change.
+  // This can happen when deleting keyword conflicts. crbug.com/1031506
+  bool applying_default_search_engine_change_ = false;
+
   // Sync's syncer::SyncChange handler. We push all our changes through this.
   std::unique_ptr<syncer::SyncChangeProcessor> sync_processor_;
 
@@ -839,9 +843,6 @@ class TemplateURLService : public WebDataServiceConsumer,
   // Helper class to manage the default search engine.
   DefaultSearchManager default_search_manager_;
 
-  std::unique_ptr<GoogleURLTracker::Subscription>
-      google_url_updated_subscription_;
-
   // This tracks how many Scoper handles exist. When the number of handles drops
   // to zero, a notification is made to observers if
   // |model_mutated_notification_pending_| is true.
@@ -851,6 +852,12 @@ class TemplateURLService : public WebDataServiceConsumer,
   // mutated. The outermost Scoper handles, can be used to defer notifications,
   // but if no model mutation occurs, the deferred notification can be skipped.
   bool model_mutated_notification_pending_ = false;
+
+#if defined(OS_ANDROID)
+  // Manage and fetch the java object that wraps this TemplateURLService on
+  // android.
+  std::unique_ptr<TemplateUrlServiceAndroid> template_url_service_android_;
+#endif
 
   DISALLOW_COPY_AND_ASSIGN(TemplateURLService);
 };

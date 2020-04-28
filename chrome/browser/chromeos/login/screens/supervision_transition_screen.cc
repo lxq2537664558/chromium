@@ -4,14 +4,15 @@
 
 #include "chrome/browser/chromeos/login/screens/supervision_transition_screen.h"
 
-#include "chrome/browser/chromeos/login/screens/supervision_transition_screen_view.h"
+#include "chrome/browser/ui/webui/chromeos/login/supervision_transition_screen_handler.h"
 
 namespace chromeos {
 
 SupervisionTransitionScreen::SupervisionTransitionScreen(
     SupervisionTransitionScreenView* view,
     const base::RepeatingClosure& exit_callback)
-    : BaseScreen(OobeScreen::SCREEN_SUPERVISION_TRANSITION),
+    : BaseScreen(SupervisionTransitionScreenView::kScreenId,
+                 OobeScreenPriority::DEFAULT),
       view_(view),
       exit_callback_(exit_callback) {
   if (view_)
@@ -23,12 +24,12 @@ SupervisionTransitionScreen::~SupervisionTransitionScreen() {
     view_->Unbind();
 }
 
-void SupervisionTransitionScreen::Show() {
+void SupervisionTransitionScreen::ShowImpl() {
   if (view_)
     view_->Show();
 }
 
-void SupervisionTransitionScreen::Hide() {
+void SupervisionTransitionScreen::HideImpl() {
   if (view_)
     view_->Hide();
 }

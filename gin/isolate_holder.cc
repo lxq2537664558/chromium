@@ -11,7 +11,7 @@
 #include <memory>
 #include <utility>
 
-#include "base/logging.h"
+#include "base/check_op.h"
 #include "base/message_loop/message_loop_current.h"
 #include "base/single_thread_task_runner.h"
 #include "base/system/sys_info.h"
@@ -22,6 +22,7 @@
 #include "gin/per_isolate_data.h"
 #include "gin/v8_initializer.h"
 #include "gin/v8_isolate_memory_dump_provider.h"
+#include "gin/v8_shared_memory_dump_provider.h"
 
 namespace gin {
 
@@ -83,6 +84,10 @@ IsolateHolder::IsolateHolder(
 
     v8::Isolate::Initialize(isolate_, params);
   }
+
+  // This will attempt register the shared memory dump provider for every
+  // IsolateHolder, but only the first registration will have any effect.
+  gin::V8SharedMemoryDumpProvider::Register();
 
   isolate_memory_dump_provider_.reset(
       new V8IsolateMemoryDumpProvider(this, task_runner));

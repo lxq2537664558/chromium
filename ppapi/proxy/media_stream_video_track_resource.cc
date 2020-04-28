@@ -5,7 +5,7 @@
 #include "ppapi/proxy/media_stream_video_track_resource.h"
 
 #include "base/bind.h"
-#include "base/logging.h"
+#include "base/check_op.h"
 #include "ppapi/proxy/ppapi_messages.h"
 #include "ppapi/proxy/video_frame_resource.h"
 #include "ppapi/shared_impl/media_stream_buffer.h"
@@ -151,7 +151,7 @@ void MediaStreamVideoTrackResource::Close() {
   if (TrackedCallback::IsPending(get_frame_callback_)) {
     *get_frame_output_ = 0;
     get_frame_callback_->PostAbort();
-    get_frame_callback_ = NULL;
+    get_frame_callback_.reset();
     get_frame_output_ = 0;
   }
 
@@ -203,7 +203,7 @@ void MediaStreamVideoTrackResource::ReleaseFrames() {
     // Just invalidate and release VideoFrameResorce, but keep PP_Resource.
     // So plugin can still use |RecycleFrame()|.
     it->second->Invalidate();
-    it->second = NULL;
+    it->second.reset();
   }
 }
 

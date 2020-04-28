@@ -13,8 +13,8 @@ extern const char kSyncEnableGetUpdatesBeforeCommit[];
 
 extern const base::Feature kSyncResetPollIntervalOnStart;
 extern const base::Feature kSyncUseScryptForNewCustomPassphrases;
-
-extern const base::Feature kSyncUSSNigori;
+extern const base::Feature kSyncSupportTrustedVaultPassphrase;
+extern const base::Feature kSyncPreventCommitsBypassingNudgeDelay;
 
 }  // namespace switches
 

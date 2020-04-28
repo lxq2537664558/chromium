@@ -2,12 +2,14 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "ash/public/cpp/window_pin_type.h"
 #include "ash/public/cpp/window_properties.h"
-#include "ash/public/interfaces/window_pin_type.mojom.h"
 #include "base/command_line.h"
+#include "base/test/scoped_feature_list.h"
 #include "chrome/browser/chromeos/login/chrome_restart_request.h"
 #include "chrome/browser/ui/ash/multi_user/multi_user_util.h"
-#include "chrome/browser/ui/ash/multi_user/test_multi_user_window_manager_client.h"
+#include "chrome/browser/ui/ash/multi_user/multi_user_window_manager_helper.h"
+#include "chrome/browser/ui/ash/multi_user/test_multi_user_window_manager.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/browser_navigator.h"
@@ -16,6 +18,8 @@
 #include "chrome/browser/ui/chrome_pages.h"
 #include "chrome/browser/ui/settings_window_manager_chromeos.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
+#include "chrome/browser/web_applications/system_web_app_manager.h"
+#include "chrome/browser/web_applications/web_app_provider.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/webui_url_constants.h"
 #include "chrome/test/base/ui_test_utils.h"
@@ -25,7 +29,6 @@
 #include "content/public/browser/notification_types.h"
 #include "content/public/browser/web_contents.h"
 #include "ui/aura/window.h"
-#include "ui/base/ui_base_features.h"
 
 namespace {
 
@@ -35,14 +38,62 @@ GURL GetGoogleURL() {
 
 using BrowserNavigatorTestChromeOS = BrowserNavigatorTest;
 
+// Verifies that the OS settings page opens in a standalone surface when
+// accessed via link or url.
+IN_PROC_BROWSER_TEST_F(BrowserNavigatorTestChromeOS, NavigateToOSSettings) {
+  // By default, browsertests open settings in a browser tab. For this test, we
+  // verify that if this flag is not set, settings opens in the settings app.
+  // This simulates the default case users see.
+  SetAllowOsSettingsInTabForTesting(false);
+  // Install the Settings App.
+  web_app::WebAppProvider::Get(browser()->profile())
+      ->system_web_app_manager()
+      .InstallSystemAppsForTesting();
+
+  // Verify that only one window is upon before navigating to OS settings.
+  EXPECT_EQ(1u, chrome::GetTotalBrowserCount());
+
+  // Navigate to OS Settings page via typing URL into URL bar.
+  NavigateParams params(MakeNavigateParams(browser()));
+  params.url = GURL("chrome://os-settings/");
+  params.transition = ui::PageTransition::PAGE_TRANSITION_TYPED;
+  Navigate(&params);
+
+  // Verify that navigating to chrome://os-settings/ via typing does not cause
+  // the browser itself to navigate to the OS Settings page.
+  EXPECT_NE(1u, chrome::GetTotalBrowserCount());
+  EXPECT_NE(GURL("chrome://os-settings/"),
+            browser()->tab_strip_model()->GetActiveWebContents()->GetURL());
+
+  // Navigate to OS Settings page via clicking a link on another page.
+  params.transition = ui::PageTransition::PAGE_TRANSITION_LINK;
+  Navigate(&params);
+  Browser* os_settings_browser =
+      chrome::SettingsWindowManager::GetInstance()->FindBrowserForProfile(
+          browser()->profile());
+
+  // Verify that navigating to chrome://os-settings/ via a link from another
+  // page opens a standalone surface.
+  EXPECT_EQ(2u, chrome::GetTotalBrowserCount());
+  EXPECT_EQ(
+      GURL("chrome://os-settings/"),
+      os_settings_browser->tab_strip_model()->GetActiveWebContents()->GetURL());
+  EXPECT_NE(browser(), os_settings_browser);
+}
+
 // This test verifies that the settings page is opened in a new browser window.
 IN_PROC_BROWSER_TEST_F(BrowserNavigatorTestChromeOS, NavigateToSettings) {
+  // Install the Settings App.
+  web_app::WebAppProvider::Get(browser()->profile())
+      ->system_web_app_manager()
+      .InstallSystemAppsForTesting();
   GURL old_url = browser()->tab_strip_model()->GetActiveWebContents()->GetURL();
   {
     content::WindowedNotificationObserver observer(
         content::NOTIFICATION_LOAD_STOP,
         content::NotificationService::AllSources());
-    chrome::ShowSettings(browser());
+    chrome::SettingsWindowManager::GetInstance()->ShowOSSettings(
+        browser()->profile());
     observer.Wait();
   }
   // browser() tab contents should be unaffected.
@@ -56,7 +107,7 @@ IN_PROC_BROWSER_TEST_F(BrowserNavigatorTestChromeOS, NavigateToSettings) {
           browser()->profile());
   EXPECT_NE(browser(), settings_browser);
   EXPECT_EQ(
-      GURL("chrome://settings"),
+      GURL(chrome::GetOSSettingsUrl(std::string())),
       settings_browser->tab_strip_model()->GetActiveWebContents()->GetURL());
 }
 
@@ -65,10 +116,8 @@ IN_PROC_BROWSER_TEST_F(BrowserNavigatorTestChromeOS,
                        NavigationBlockedInLockedFullscreen) {
   // Set locked fullscreen state.
   aura::Window* window = browser()->window()->GetNativeWindow();
-  if (features::IsUsingWindowService())
-    window = window->GetRootWindow();
   window->SetProperty(ash::kWindowPinTypeKey,
-                      ash::mojom::WindowPinType::TRUSTED_PINNED);
+                      ash::WindowPinType::kTrustedPinned);
 
   // Navigate to a page.
   auto url = GURL(chrome::kChromeUIVersionURL);
@@ -88,7 +137,7 @@ IN_PROC_BROWSER_TEST_F(BrowserNavigatorTestChromeOS,
   // As a sanity check unset the locked fullscreen state and make sure that the
   // navigation happens (the following EXPECTs fail if the next line isn't
   // executed).
-  window->SetProperty(ash::kWindowPinTypeKey, ash::mojom::WindowPinType::NONE);
+  window->SetProperty(ash::kWindowPinTypeKey, ash::WindowPinType::kNone);
 
   Navigate(&params);
 
@@ -130,7 +179,7 @@ IN_PROC_BROWSER_TEST_F(BrowserGuestSessionNavigatorTest,
   // Navigate to the settings page.
   NavigateParams params(MakeNavigateParams(incognito_browser));
   params.disposition = WindowOpenDisposition::SINGLETON_TAB;
-  params.url = GURL("chrome://chrome/settings");
+  params.url = GURL("chrome://settings");
   params.window_action = NavigateParams::SHOW_WINDOW;
   params.path_behavior = NavigateParams::IGNORE_AND_NAVIGATE;
   Navigate(&params);
@@ -140,7 +189,7 @@ IN_PROC_BROWSER_TEST_F(BrowserGuestSessionNavigatorTest,
   EXPECT_EQ(incognito_browser, params.browser);
   EXPECT_EQ(2, incognito_browser->tab_strip_model()->count());
   EXPECT_EQ(
-      GURL("chrome://chrome/settings"),
+      GURL("chrome://settings"),
       incognito_browser->tab_strip_model()->GetActiveWebContents()->GetURL());
 }
 
@@ -153,15 +202,15 @@ IN_PROC_BROWSER_TEST_F(BrowserGuestSessionNavigatorTest,
   {
     const AccountId desktop_account_id(
         AccountId::FromUserEmail("desktop_user_id@fake.com"));
-    TestMultiUserWindowManagerClient* client =
-        new TestMultiUserWindowManagerClient(browser(), desktop_account_id);
+    TestMultiUserWindowManager* window_manager =
+        TestMultiUserWindowManager::Create(browser(), desktop_account_id);
 
     EXPECT_EQ(1u, chrome::GetTotalBrowserCount());
 
     // Navigate to the settings page.
     NavigateParams params(MakeNavigateParams(browser()));
     params.disposition = WindowOpenDisposition::NEW_POPUP;
-    params.url = GURL("chrome://chrome/settings");
+    params.url = GURL("chrome://settings");
     params.window_action = NavigateParams::SHOW_WINDOW;
     params.path_behavior = NavigateParams::IGNORE_AND_NAVIGATE;
     params.browser = browser();
@@ -169,23 +218,24 @@ IN_PROC_BROWSER_TEST_F(BrowserGuestSessionNavigatorTest,
 
     EXPECT_EQ(2u, chrome::GetTotalBrowserCount());
 
-    aura::Window* created_window = client->created_window();
+    aura::Window* created_window = window_manager->created_window();
     ASSERT_TRUE(created_window);
     EXPECT_TRUE(
-        client->IsWindowOnDesktopOfUser(created_window, desktop_account_id));
+        MultiUserWindowManagerHelper::GetInstance()->IsWindowOnDesktopOfUser(
+            created_window, desktop_account_id));
   }
   // Test 2: Test that a window which is not visiting does not cause an owner
   // assignment of a newly created browser.
   {
     const AccountId browser_owner =
         multi_user_util::GetAccountIdFromProfile(browser()->profile());
-    TestMultiUserWindowManagerClient* client =
-        new TestMultiUserWindowManagerClient(browser(), browser_owner);
+    TestMultiUserWindowManager* window_manager =
+        TestMultiUserWindowManager::Create(browser(), browser_owner);
 
     // Navigate to the settings page.
     NavigateParams params(MakeNavigateParams(browser()));
     params.disposition = WindowOpenDisposition::NEW_POPUP;
-    params.url = GURL("chrome://chrome/settings");
+    params.url = GURL("chrome://settings");
     params.window_action = NavigateParams::SHOW_WINDOW;
     params.path_behavior = NavigateParams::IGNORE_AND_NAVIGATE;
     params.browser = browser();
@@ -195,7 +245,7 @@ IN_PROC_BROWSER_TEST_F(BrowserGuestSessionNavigatorTest,
 
     // The ShowWindowForUser should not have been called since the window is
     // already on the correct desktop.
-    ASSERT_FALSE(client->created_window());
+    ASSERT_FALSE(window_manager->created_window());
   }
 }
 

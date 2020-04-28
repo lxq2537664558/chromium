@@ -27,14 +27,17 @@ class Separator;
 class HoverButton;
 
 // View that shows a list of items. Each item is rendered as a HoverButton with
-// an icon, name, and chevron, like so:
+// an icon, name, optional description, and chevron, like so:
 //
 //  +----------------------------------+
 //  | ICON1 | Item 1 name          | > |
+//  |       | Item 1 description   | > |
 //  +----------------------------------+
 //  | ICON2 | Item 2 name          | > |
+//  |       | Item 2 description   | > |
 //  +----------------------------------+
 //  | ICON3 | Item 3 name          | > |
+//  |       | Item 3 description   | > |
 //  +----------------------------------+
 //
 class HoverListView : public views::View,
@@ -50,8 +53,9 @@ class HoverListView : public views::View,
     views::Separator* separator_view;
   };
 
-  void AppendListItemView(const gfx::VectorIcon& icon,
+  void AppendListItemView(const gfx::VectorIcon* icon,
                           base::string16 item_text,
+                          base::string16 item_description,
                           int item_tag);
   void CreateAndAppendPlaceholderItem();
   void AddListItemView(int item_tag);
@@ -74,9 +78,14 @@ class HoverListView : public views::View,
 
   std::unique_ptr<HoverListModel> model_;
   std::map<int, ListItemViews> tags_to_list_item_views_;
+  std::vector<HoverButton*> throbber_views_;
   base::Optional<ListItemViews> placeholder_list_item_view_;
   views::ScrollView* scroll_view_;
   views::View* item_container_;
+  // is_two_line_list_, if true, indicates that list items should be sized so
+  // that entries with only a single line of text are as tall as entries with
+  // two lines.
+  const bool is_two_line_list_;
 
   DISALLOW_COPY_AND_ASSIGN(HoverListView);
 };

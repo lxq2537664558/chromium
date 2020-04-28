@@ -9,8 +9,11 @@
 
 #include "base/macros.h"
 #include "base/memory/weak_ptr.h"
+#include "base/task/task_traits.h"
 #include "base/threading/sequence_bound.h"
-#include "mojo/public/cpp/bindings/binding.h"
+#include "content/common/content_export.h"
+#include "mojo/public/cpp/bindings/receiver.h"
+#include "mojo/public/cpp/bindings/remote.h"
 #include "services/tracing/public/mojom/perfetto_service.mojom.h"
 
 namespace content {
@@ -23,15 +26,18 @@ class BackgroundDrainer;
 // as the backend, rather than TraceLog. It will directly stream
 // protos to a file specified with the '--perfetto-output-file'
 // switch.
-class PerfettoFileTracer : public tracing::mojom::TracingSession {
+class PerfettoFileTracer : public tracing::mojom::TracingSessionClient {
  public:
   PerfettoFileTracer();
   ~PerfettoFileTracer() override;
 
   static bool ShouldEnable();
 
-  // tracing::mojom::TracingSession implementation:
+  // tracing::mojom::TracingSessionClient implementation:
   void OnTracingEnabled() override;
+  void OnTracingDisabled() override;
+
+  bool is_finished_for_testing() const { return !background_drainer_; }
 
  private:
   void OnNoMorePackets(bool queued_after_disable);
@@ -39,13 +45,13 @@ class PerfettoFileTracer : public tracing::mojom::TracingSession {
 
   void OnTracingSessionEnded();
 
-  const scoped_refptr<base::SequencedTaskRunner> background_task_runner_;
   base::SequenceBound<BackgroundDrainer> background_drainer_;
-  mojo::Binding<tracing::mojom::TracingSession> binding_;
-  tracing::mojom::ConsumerHostPtr consumer_host_;
+  mojo::Receiver<tracing::mojom::TracingSessionClient> receiver_{this};
+  mojo::Remote<tracing::mojom::TracingSessionHost> tracing_session_host_;
+  mojo::Remote<tracing::mojom::ConsumerHost> consumer_host_;
   bool has_been_disabled_ = false;
 
-  base::WeakPtrFactory<PerfettoFileTracer> weak_factory_;
+  base::WeakPtrFactory<PerfettoFileTracer> weak_factory_{this};
   DISALLOW_COPY_AND_ASSIGN(PerfettoFileTracer);
 };
 

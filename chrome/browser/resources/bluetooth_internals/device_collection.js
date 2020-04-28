@@ -9,13 +9,10 @@
 
 cr.define('device_collection', function() {
   /**
-   * Enum of connection status for a device. Used for
-   * DeviceCollection.updateConnectionStatus which sets the connectionStatus
-   * on the DeviceInfo object. New DeviceInfo objects have a DISCONNECTED status
-   * by default.
+   * Enum of connection status for a device.
    * @enum {number}
    */
-  var ConnectionStatus = {
+  const ConnectionStatus = {
     DISCONNECTED: 0,
     CONNECTING: 1,
     CONNECTED: 2,
@@ -32,6 +29,11 @@ cr.define('device_collection', function() {
      */
     constructor(array) {
       super(array);
+
+      // Keep track of MAC addresses which were previously found via scan, but
+      // are no longer being advertised or nearby. Used to inform isRemoved().
+      /** @private {!Object<string, boolean>} */
+      this.removedDevices_ = {};
     }
 
     /**
@@ -39,8 +41,8 @@ cr.define('device_collection', function() {
      * @param {string} address
      */
     getByAddress(address) {
-      for (var i = 0; i < this.length; i++) {
-        var device = this.item(i);
+      for (let i = 0; i < this.length; i++) {
+        const device = this.item(i);
         if (address == device.address) {
           return device;
         }
@@ -53,22 +55,19 @@ cr.define('device_collection', function() {
      * @param {!bluetooth.mojom.DeviceInfo} deviceInfo
      */
     addOrUpdate(deviceInfo) {
-      deviceInfo.removed = false;
-      var oldDeviceInfo = this.getByAddress(deviceInfo.address);
+      this.removedDevices_[deviceInfo.address] = false;
+      const oldDeviceInfo = this.getByAddress(deviceInfo.address);
 
       if (oldDeviceInfo) {
         // Update rssi if it's valid
-        var rssi = (deviceInfo.rssi && deviceInfo.rssi.value) ||
+        const rssi = (deviceInfo.rssi && deviceInfo.rssi.value) ||
             (oldDeviceInfo.rssi && oldDeviceInfo.rssi.value);
 
-        // The connectionStatus and connectionMessage properties may not exist
-        // on |deviceInfo|. The rssi property may be null, so it must be
-        // re-assigned.
+        // The rssi property may be null, so it must be re-assigned.
         Object.assign(oldDeviceInfo, deviceInfo);
         oldDeviceInfo.rssi = {value: rssi};
         this.updateIndex(this.indexOf(oldDeviceInfo));
       } else {
-        deviceInfo.connectionStatus = ConnectionStatus.DISCONNECTED;
         this.push(deviceInfo);
       }
     }
@@ -78,21 +77,19 @@ cr.define('device_collection', function() {
      * @param {!bluetooth.mojom.DeviceInfo} deviceInfo
      */
     remove(deviceInfo) {
-      var device = this.getByAddress(deviceInfo.address);
+      const device = this.getByAddress(deviceInfo.address);
       assert(device, 'Device does not exist.');
-      device.removed = true;
+      this.removedDevices_[deviceInfo.address] = true;
       this.updateIndex(this.indexOf(device));
     }
 
     /**
-     * Updates the device connection status.
-     * @param {string} address The address of the device.
-     * @param {number} status The new connection status.
+     * Return true if device was "removed" -- previously found via scan but
+     * either no longer advertising or no longer nearby.
+     * @param {!bluetooth.mojom.DeviceInfo} deviceInfo
      */
-    updateConnectionStatus(address, status) {
-      var device = assert(this.getByAddress(address), 'Device does not exist');
-      device.connectionStatus = status;
-      this.updateIndex(this.indexOf(device));
+    isRemoved(deviceInfo) {
+      return !!this.removedDevices_[deviceInfo.address];
     }
   }
 

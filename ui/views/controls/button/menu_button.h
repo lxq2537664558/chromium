@@ -11,8 +11,8 @@
 
 namespace views {
 
+class ButtonListener;
 class MenuButtonController;
-class MenuButtonListener;
 
 ////////////////////////////////////////////////////////////////////////////////
 //
@@ -23,15 +23,11 @@ class MenuButtonListener;
 ////////////////////////////////////////////////////////////////////////////////
 class VIEWS_EXPORT MenuButton : public LabelButton {
  public:
-  static const char kViewClassName[];
-
-  // How much padding to put on the left and right of the menu marker.
-  static constexpr int kMenuMarkerPaddingLeft = 3;
-  static constexpr int kMenuMarkerPaddingRight = -1;
+  METADATA_HEADER(MenuButton);
 
   // Create a Button.
   MenuButton(const base::string16& text,
-             MenuButtonListener* menu_button_listener,
+             ButtonListener* button_listener,
              int button_context = style::CONTEXT_BUTTON);
   ~MenuButton() override;
 
@@ -40,15 +36,6 @@ class VIEWS_EXPORT MenuButton : public LabelButton {
   }
 
   bool Activate(const ui::Event* event);
-
-  // TODO(cyan): Remove this method and move into MenuButtonController.
-  virtual bool IsTriggerableEventType(const ui::Event& event);
-
-  // View:
-  const char* GetClassName() const override;
-
-  // ui::EventHandler:
-  void OnGestureEvent(ui::GestureEvent* event) override;
 
  protected:
   // Button:

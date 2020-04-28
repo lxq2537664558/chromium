@@ -39,18 +39,16 @@
 #include "chromeos/dbus/cryptohome/rpc.pb.h"
 #include "chromeos/login/auth/key.h"
 #include "chromeos/login/auth/mock_auth_status_consumer.h"
-#include "chromeos/login/auth/mock_url_fetchers.h"
 #include "chromeos/login/auth/test_attempt_state.h"
 #include "chromeos/login/auth/user_context.h"
 #include "chromeos/login/login_state/login_state.h"
 #include "components/ownership/mock_owner_key_util.h"
 #include "components/user_manager/scoped_user_manager.h"
-#include "content/public/test/test_browser_thread_bundle.h"
+#include "content/public/test/browser_task_environment.h"
 #include "content/public/test/test_utils.h"
 #include "crypto/nss_key_util.h"
 #include "crypto/nss_util_internal.h"
 #include "crypto/scoped_test_nss_chromeos_user.h"
-#include "google_apis/gaia/mock_url_fetcher_factory.h"
 #include "net/base/net_errors.h"
 #include "net/url_request/url_request_status.h"
 #include "testing/gmock/include/gmock/gmock.h"
@@ -273,7 +271,9 @@ class CryptohomeAuthenticatorTest : public testing::Test {
     profile_.reset(new TestingProfile);
     OwnerSettingsServiceChromeOSFactory::GetInstance()
         ->SetOwnerKeyUtilForTesting(owner_key_util_);
-    user_context_.SetKey(Key("fakepass"));
+    Key key("fakepass");
+    key.SetLabel(kCryptohomeGAIAKeyLabel);
+    user_context_.SetKey(key);
     user_context_.SetUserIDHash("me_nowhere_com_hash");
     const user_manager::User* user =
         user_manager_->AddUser(user_context_.GetAccountId());
@@ -458,7 +458,7 @@ class CryptohomeAuthenticatorTest : public testing::Test {
     auth_->SetOwnerState(owner_check_finished, check_result);
   }
 
-  content::TestBrowserThreadBundle thread_bundle_;
+  content::BrowserTaskEnvironment task_environment_;
 
   UserContext user_context_;
   UserContext user_context_with_transformed_key_;

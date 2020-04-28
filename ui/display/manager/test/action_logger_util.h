@@ -43,8 +43,7 @@ std::string GetCrtcAction(const DisplaySnapshot& output,
                           const gfx::Point& origin);
 
 // Returns a string describing a TestNativeDisplayDelegate::SetHDCPState() call.
-std::string GetSetHDCPStateAction(const DisplaySnapshot& output,
-                                  HDCPState state);
+std::string GetSetHDCPStateAction(int64_t display_id, HDCPState state);
 
 // Returns a string describing a TestNativeDisplayDelegate::SetColorMatrix()
 // call.
@@ -57,6 +56,10 @@ std::string SetGammaCorrectionAction(
     int64_t display_id,
     const std::vector<display::GammaRampRGBEntry>& degamma_lut,
     const std::vector<display::GammaRampRGBEntry>& gamma_lut);
+
+// Returns a string describing a TestNativedisplaydelegate::SetPrivacyScreen()
+// call.
+std::string SetPrivacyScreenAction(int64_t display_id, bool enabled);
 
 // Joins a sequence of strings describing actions (e.g. kScreenDim) such
 // that they can be compared against a string returned by

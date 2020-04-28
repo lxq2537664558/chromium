@@ -323,6 +323,40 @@ TEST_F(ColorAnalysisTest, CalculateKMeanColorOfBitmap) {
   EXPECT_TRUE(ChannelApproximatelyEqual(200, SkColorGetB(color)));
 }
 
+// Regression test for heap-buffer-underflow. https://crbug.com/970343
+TEST_F(ColorAnalysisTest, CalculateKMeanColorOfSmallImage) {
+  SkBitmap bitmap;
+
+  // Create a 1x41 bitmap, so it is not wide enough to have 1 pixel of padding
+  // on both sides.
+  bitmap.allocN32Pixels(1, 41);
+  bitmap.eraseARGB(255, 100, 150, 200);
+
+  SkColor color = CalculateKMeanColorOfBitmap(bitmap);
+  EXPECT_EQ(255u, SkColorGetA(color));
+  EXPECT_TRUE(ChannelApproximatelyEqual(100, SkColorGetR(color)));
+  EXPECT_TRUE(ChannelApproximatelyEqual(150, SkColorGetG(color)));
+  EXPECT_TRUE(ChannelApproximatelyEqual(200, SkColorGetB(color)));
+
+  // Test a wide but narrow bitmap.
+  bitmap.allocN32Pixels(41, 1);
+  bitmap.eraseARGB(255, 100, 150, 200);
+  color = CalculateKMeanColorOfBitmap(bitmap);
+  EXPECT_EQ(255u, SkColorGetA(color));
+  EXPECT_TRUE(ChannelApproximatelyEqual(100, SkColorGetR(color)));
+  EXPECT_TRUE(ChannelApproximatelyEqual(150, SkColorGetG(color)));
+  EXPECT_TRUE(ChannelApproximatelyEqual(200, SkColorGetB(color)));
+
+  // Test a tiny bitmap.
+  bitmap.allocN32Pixels(1, 1);
+  bitmap.eraseARGB(255, 100, 150, 200);
+  color = CalculateKMeanColorOfBitmap(bitmap);
+  EXPECT_EQ(255u, SkColorGetA(color));
+  EXPECT_TRUE(ChannelApproximatelyEqual(100, SkColorGetR(color)));
+  EXPECT_TRUE(ChannelApproximatelyEqual(150, SkColorGetG(color)));
+  EXPECT_TRUE(ChannelApproximatelyEqual(200, SkColorGetB(color)));
+}
+
 TEST_F(ColorAnalysisTest, ComputeColorCovarianceTrivial) {
   SkBitmap bitmap;
   bitmap.setInfo(SkImageInfo::MakeN32Premul(100, 200));
@@ -461,42 +495,6 @@ TEST_F(ColorAnalysisTest, ApplyColorReductionMultiColor) {
   EXPECT_EQ(min_gl, SkColorGetA(result.getColor(299, 199)));
   EXPECT_EQ(max_gl, SkColorGetA(result.getColor(150, 0)));
   EXPECT_EQ(193U, SkColorGetA(result.getColor(0, 0)));
-}
-
-TEST_F(ColorAnalysisTest, ComputePrincipalComponentImageNotComputable) {
-  SkBitmap source, result;
-  source.allocN32Pixels(300, 200);
-  result.allocPixels(SkImageInfo::MakeA8(300, 200));
-
-  source.eraseARGB(255, 50, 150, 200);
-
-  // This computation should fail since all colors always vary together.
-  EXPECT_FALSE(ComputePrincipalComponentImage(source, &result));
-}
-
-TEST_F(ColorAnalysisTest, ComputePrincipalComponentImage) {
-  gfx::Canvas canvas(gfx::Size(300, 200), 1.0f, true);
-
-  // The image consists of vertical non-overlapping stripes 100 pixels wide.
-  canvas.FillRect(gfx::Rect(0, 0, 100, 200), SkColorSetRGB(10, 10, 10));
-  canvas.FillRect(gfx::Rect(100, 0, 100, 200), SkColorSetRGB(100, 100, 100));
-  canvas.FillRect(gfx::Rect(200, 0, 100, 200), SkColorSetRGB(255, 255, 255));
-  SkBitmap source = canvas.GetBitmap();
-  SkBitmap result;
-  result.allocPixels(SkImageInfo::MakeA8(300, 200));
-
-  // This computation should fail since all colors always vary together.
-  EXPECT_TRUE(ComputePrincipalComponentImage(source, &result));
-
-  uint8_t min_gl = 0;
-  uint8_t max_gl = 0;
-  Calculate8bitBitmapMinMax(result, &min_gl, &max_gl);
-
-  EXPECT_EQ(0, min_gl);
-  EXPECT_EQ(255, max_gl);
-  EXPECT_EQ(min_gl, SkColorGetA(result.getColor(0, 0)));
-  EXPECT_EQ(max_gl, SkColorGetA(result.getColor(299, 199)));
-  EXPECT_EQ(93U, SkColorGetA(result.getColor(150, 0)));
 }
 
 TEST_F(ColorAnalysisTest, ComputeProminentColors) {

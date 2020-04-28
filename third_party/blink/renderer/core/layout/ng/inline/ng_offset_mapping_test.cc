@@ -13,7 +13,7 @@
 #include "third_party/blink/renderer/core/layout/ng/layout_ng_block_flow.h"
 #include "third_party/blink/renderer/core/layout/ng/ng_layout_test.h"
 #include "third_party/blink/renderer/core/style/computed_style.h"
-#include "third_party/blink/renderer/platform/wtf/allocator.h"
+#include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
 
 namespace blink {
 
@@ -22,9 +22,9 @@ namespace blink {
 // https://github.com/w3c/csswg-drafts/issues/337
 #define SEGMENT_BREAK_TRANSFORMATION_FOR_EAST_ASIAN_WIDTH 0
 
-// Helper functions to use |EXPECT_EQ()| for |NGOffsetMappingUnit| and
-// |NGMappingUnitRange|.
-Vector<NGOffsetMappingUnit> ToVector(const NGMappingUnitRange& range) {
+// Helper functions to use |EXPECT_EQ()| for |NGOffsetMappingUnit| and its span.
+Vector<NGOffsetMappingUnit> ToVector(
+    const base::span<const NGOffsetMappingUnit>& range) {
   Vector<NGOffsetMappingUnit> units;
   for (const auto& unit : range)
     units.push_back(unit);
@@ -68,7 +68,7 @@ bool operator==(const Vector<NGOffsetMappingUnit>& units1,
 }
 
 bool operator==(const Vector<NGOffsetMappingUnit>& units,
-                const NGMappingUnitRange& range) {
+                const base::span<const NGOffsetMappingUnit>& range) {
   return units == ToVector(range);
 }
 
@@ -83,7 +83,8 @@ void PrintTo(const Vector<NGOffsetMappingUnit>& units, std::ostream& ostream) {
   ostream << "]";
 }
 
-void PrintTo(const NGMappingUnitRange& range, std::ostream& ostream) {
+void PrintTo(const base::span<const NGOffsetMappingUnit>& range,
+             std::ostream& ostream) {
   PrintTo(ToVector(range), ostream);
 }
 
@@ -91,17 +92,15 @@ class NGOffsetMappingTest : public NGLayoutTest {
  protected:
   static const auto kCollapsed = NGOffsetMappingUnitType::kCollapsed;
   static const auto kIdentity = NGOffsetMappingUnitType::kIdentity;
-  static const auto kExpanded = NGOffsetMappingUnitType::kExpanded;
 
   void SetUp() override {
     NGLayoutTest::SetUp();
     style_ = ComputedStyle::Create();
-    style_->GetFont().Update(nullptr);
   }
 
   void SetupHtml(const char* id, String html) {
     SetBodyInnerHTML(html);
-    layout_block_flow_ = ToLayoutBlockFlow(GetLayoutObjectByElementId(id));
+    layout_block_flow_ = To<LayoutBlockFlow>(GetLayoutObjectByElementId(id));
     DCHECK(layout_block_flow_->IsLayoutNGMixin());
     layout_object_ = layout_block_flow_->FirstChild();
     style_ = layout_object_->Style();
@@ -1225,6 +1224,181 @@ TEST_F(NGOffsetMappingTest, SoftHyphen) {
   TEST_RANGE(mapping.GetRanges(), text, 0u, 1u);
 }
 
+// For http://crbug.com/965353
+TEST_F(NGOffsetMappingTest, PreWrapAndReusing) {
+  // Note: "white-space: break-space" yields same result.
+  SetupHtml("t", "<p id='t' style='white-space: pre-wrap'>abc</p>");
+  Element& target = *GetDocument().getElementById("t");
+
+  // Change to <p id=t>abc xyz</p>
+  Text& text = *Text::Create(GetDocument(), " xyz");
+  target.appendChild(&text);
+  UpdateAllLifecyclePhasesForTest();
+
+  // Change to <p id=t> xyz</p>. We attempt to reuse " xyz".
+  target.firstChild()->remove();
+  UpdateAllLifecyclePhasesForTest();
+
+  const NGOffsetMapping& mapping = GetOffsetMapping();
+  EXPECT_EQ(String(u" \u200Bxyz"), mapping.GetText())
+      << "We have ZWS after leading preserved space.";
+  EXPECT_EQ((Vector<NGOffsetMappingUnit>{
+                NGOffsetMappingUnit(kIdentity, *text.GetLayoutObject(), 0u, 1u,
+                                    0u, 1u),
+                NGOffsetMappingUnit(kIdentity, *text.GetLayoutObject(), 1u, 4u,
+                                    2u, 5u),
+            }),
+            mapping.GetUnits());
+}
+
+TEST_F(NGOffsetMappingTest, RestoreTrailingCollapsibleSpaceReplace) {
+  // A space inside <b> is collapsed by during handling "\n" then it is restored
+  // by handling a newline. Restored space is removed at end of block.
+  // When RestoreTrailingCollapsibleSpace(), units are:
+  //  0: kIdentity text in <a>, dom=0,1 content=0,1
+  //  1: kCollapsed text in <b>, dom=0,1, content=2,2
+  //  2: kCollapsed "\n", dom=0,1, content=2,2
+  // layout_text is a child of <b> and offset is 2
+  SetupHtml("t",
+            "<div id=t>"
+            "<a style='white-space: pre-wrap;'> </a><b> </b>\n<i> </i>"
+            "</div>");
+  const NGOffsetMapping& result = GetOffsetMapping();
+  const LayoutObject& layout_object_a = *layout_object_;
+  const LayoutObject& layout_object_b = *layout_object_a.NextSibling();
+  const LayoutObject& newline = *layout_object_b.NextSibling();
+  const LayoutObject& layout_object_i = *newline.NextSibling();
+  EXPECT_EQ(
+      (Vector<NGOffsetMappingUnit>{
+          NGOffsetMappingUnit(kIdentity, *layout_object_a.SlowFirstChild(), 0u,
+                              1u, 0u, 1u),
+          NGOffsetMappingUnit(kCollapsed, *layout_object_b.SlowFirstChild(), 0u,
+                              1u, 2u, 2u),
+          NGOffsetMappingUnit(kCollapsed, newline, 0u, 1u, 2u, 2u),
+          NGOffsetMappingUnit(kCollapsed, *layout_object_i.SlowFirstChild(), 0u,
+                              1u, 2u, 2u),
+      }),
+      result.GetUnits());
+}
+
+TEST_F(NGOffsetMappingTest, RestoreTrailingCollapsibleSpaceReplaceKeep) {
+  // A space inside <b> is collapsed by during handling "\n" then it is restored
+  // by handling a newline.
+  // When RestoreTrailingCollapsibleSpace(), units are:
+  //  0: kIdentity text in <a>, dom=0,1 content=0,1
+  //  1: kCollapsed text in <b>, dom=0,1, content=2,2
+  //  2: kCollapsed "\n", dom=0,1, content=2,2
+  // layout_text is a child of <b> and offset is 2
+  SetupHtml("t",
+            "<div id=t>"
+            "<a style='white-space: pre-wrap;'> </a><b> </b>\n<i>x</i>"
+            "</div>");
+  const NGOffsetMapping& result = GetOffsetMapping();
+  const LayoutObject& layout_object_a = *layout_object_;
+  const LayoutObject& layout_object_b = *layout_object_a.NextSibling();
+  const LayoutObject& newline = *layout_object_b.NextSibling();
+  const LayoutObject& layout_object_i = *newline.NextSibling();
+  EXPECT_EQ(
+      (Vector<NGOffsetMappingUnit>{
+          NGOffsetMappingUnit(kIdentity, *layout_object_a.SlowFirstChild(), 0u,
+                              1u, 0u, 1u),
+          NGOffsetMappingUnit(kIdentity, *layout_object_b.SlowFirstChild(), 0u,
+                              1u, 2u, 3u),
+          NGOffsetMappingUnit(kCollapsed, newline, 0u, 1u, 3u, 3u),
+          NGOffsetMappingUnit(kIdentity, *layout_object_i.SlowFirstChild(), 0u,
+                              1u, 3u, 4u),
+      }),
+      result.GetUnits());
+}
+
+TEST_F(NGOffsetMappingTest, RestoreTrailingCollapsibleSpaceNone) {
+  SetupHtml("t",
+            "<div id=t>"
+            "<a>x</a><b>   </b>\n<i>y</i>"
+            "</div>");
+  const NGOffsetMapping& result = GetOffsetMapping();
+  const LayoutObject& layout_object_a = *layout_object_;
+  const LayoutObject& layout_object_b = *layout_object_a.NextSibling();
+  const LayoutObject& newline = *layout_object_b.NextSibling();
+  const LayoutObject& layout_object_i = *newline.NextSibling();
+  EXPECT_EQ(
+      (Vector<NGOffsetMappingUnit>{
+          NGOffsetMappingUnit(kIdentity, *layout_object_a.SlowFirstChild(), 0u,
+                              1u, 0u, 1u),
+          // We take the first space character.
+          NGOffsetMappingUnit(kIdentity, *layout_object_b.SlowFirstChild(), 0u,
+                              1u, 1u, 2u),
+          NGOffsetMappingUnit(kCollapsed, *layout_object_b.SlowFirstChild(), 1u,
+                              3u, 2u, 2u),
+          NGOffsetMappingUnit(kCollapsed, newline, 0u, 1u, 2u, 2u),
+          NGOffsetMappingUnit(kIdentity, *layout_object_i.SlowFirstChild(), 0u,
+                              1u, 2u, 3u),
+      }),
+      result.GetUnits());
+}
+
+TEST_F(NGOffsetMappingTest, RestoreTrailingCollapsibleSpaceSplit) {
+  // Spaces inside <b> is collapsed by during handling "\n" then it is restored
+  // by handling a newline. Restored space is removed at end of block.
+  // When RestoreTrailingCollapsibleSpace(), units are:
+  //  0: kIdentity text in <a>, dom=0,1 content=0,1
+  //  1: kCollapsed text in <b>, dom=0,3, content=2,2
+  //  2: kCollapsed "\n", dom=0,1 content=3,3
+  // layout_text is a child of <b> and offset is 2
+  SetupHtml("t",
+            "<div id=t>"
+            "<a style='white-space: pre-wrap;'> </a><b>   </b>\n<i> </i>"
+            "</div>");
+  const NGOffsetMapping& result = GetOffsetMapping();
+  const LayoutObject& layout_object_a = *layout_object_;
+  const LayoutObject& layout_object_b = *layout_object_a.NextSibling();
+  const LayoutObject& newline = *layout_object_b.NextSibling();
+  const LayoutObject& layout_object_i = *newline.NextSibling();
+  EXPECT_EQ(
+      (Vector<NGOffsetMappingUnit>{
+          NGOffsetMappingUnit(kIdentity, *layout_object_a.SlowFirstChild(), 0u,
+                              1u, 0u, 1u),
+          NGOffsetMappingUnit(kCollapsed, *layout_object_b.SlowFirstChild(), 0u,
+                              3u, 2u, 2u),
+          NGOffsetMappingUnit(kCollapsed, newline, 0u, 1u, 2u, 2u),
+          NGOffsetMappingUnit(kCollapsed, *layout_object_i.SlowFirstChild(), 0u,
+                              1u, 2u, 2u),
+      }),
+      result.GetUnits());
+}
+
+TEST_F(NGOffsetMappingTest, RestoreTrailingCollapsibleSpaceSplitKeep) {
+  // Spaces inside <b> is collapsed by during handling "\n" then it is restored
+  // by handling a space in <i>.
+  // When RestoreTrailingCollapsibleSpace(), units are:
+  //  0: kIdentity text in <a>, dom=0,1 content=0,1
+  //  1: kCollapsed text in <b>, dom=0,3, content=2,2
+  //  2: kCollapsed "\n", dom=0,1 content=3,3
+  // layout_text is a child of <b> and offset is 2
+  SetupHtml("t",
+            "<div id=t>"
+            "<a style='white-space: pre-wrap;'> </a><b>   </b>\n<i>x</i>"
+            "</div>");
+  const NGOffsetMapping& result = GetOffsetMapping();
+  const LayoutObject& layout_object_a = *layout_object_;
+  const LayoutObject& layout_object_b = *layout_object_a.NextSibling();
+  const LayoutObject& newline = *layout_object_b.NextSibling();
+  const LayoutObject& layout_object_i = *newline.NextSibling();
+  EXPECT_EQ(
+      (Vector<NGOffsetMappingUnit>{
+          NGOffsetMappingUnit(kIdentity, *layout_object_a.SlowFirstChild(), 0u,
+                              1u, 0u, 1u),
+          NGOffsetMappingUnit(kIdentity, *layout_object_b.SlowFirstChild(), 0u,
+                              1u, 2u, 3u),
+          NGOffsetMappingUnit(kCollapsed, *layout_object_b.SlowFirstChild(), 1u,
+                              3u, 3u, 3u),
+          NGOffsetMappingUnit(kCollapsed, newline, 0u, 1u, 3u, 3u),
+          NGOffsetMappingUnit(kIdentity, *layout_object_i.SlowFirstChild(), 0u,
+                              1u, 3u, 4u),
+      }),
+      result.GetUnits());
+}
+
 TEST_F(NGOffsetMappingTest, TextOverflowEllipsis) {
   LoadAhem();
   SetupHtml("t",
@@ -1239,6 +1413,61 @@ TEST_F(NGOffsetMappingTest, TextOverflowEllipsis) {
   TEST_UNIT(mapping.GetUnits()[0], NGOffsetMappingUnitType::kIdentity, text, 0u,
             6u, 0u, 6u);
   TEST_RANGE(mapping.GetRanges(), text, 0u, 1u);
+}
+
+// https://crbug.com/967106
+TEST_F(NGOffsetMappingTest, StartOfNextNonCollapsedContentWithPseudo) {
+  // The white spaces are necessary for bug repro. Do not remove them.
+  SetupHtml("t", R"HTML(
+    <style>span#quote::before { content: '"'}</style>
+    <div id=t>
+      <span>foo </span>
+      <span id=quote>bar</span>
+    </div>)HTML");
+
+  const Element* quote = GetElementById("quote");
+  const Node* text = quote->previousSibling();
+  const Position position = Position::FirstPositionInNode(*text);
+
+  EXPECT_EQ(Position(),
+            GetOffsetMapping().StartOfNextNonCollapsedContent(position));
+}
+
+// https://crbug.com/967106
+TEST_F(NGOffsetMappingTest, EndOfLastNonCollapsedContentWithPseudo) {
+  // The white spaces are necessary for bug repro. Do not remove them.
+  SetupHtml("t", R"HTML(
+    <style>span#quote::after { content: '" '}</style>
+    <div id=t>
+      <span id=quote>foo</span>
+      <span>bar</span>
+    </div>)HTML");
+
+  const Element* quote = GetElementById("quote");
+  const Node* text = quote->nextSibling();
+  const Position position = Position::LastPositionInNode(*text);
+
+  EXPECT_EQ(Position(),
+            GetOffsetMapping().EndOfLastNonCollapsedContent(position));
+}
+
+TEST_F(NGOffsetMappingTest, WordBreak) {
+  SetupHtml("t", "<div id=t>a<wbr>b</div>");
+
+  const LayoutObject& text_a = *layout_object_;
+  const LayoutObject& wbr = *text_a.NextSibling();
+  const LayoutObject& text_b = *wbr.NextSibling();
+  const NGOffsetMapping& result = GetOffsetMapping();
+
+  EXPECT_EQ((Vector<NGOffsetMappingUnit>{
+                NGOffsetMappingUnit(kIdentity, text_a, 0u, 1u, 0u, 1u),
+                NGOffsetMappingUnit(kIdentity, wbr, 0u, 1u, 1u, 2u),
+                NGOffsetMappingUnit(kIdentity, text_b, 0u, 1u, 2u, 3u)}),
+            result.GetUnits());
+
+  EXPECT_EQ((Vector<NGOffsetMappingUnit>{
+                NGOffsetMappingUnit(kIdentity, wbr, 0u, 1u, 1u, 2u)}),
+            result.GetMappingUnitsForLayoutObject(wbr));
 }
 
 // Test |GetOffsetMapping| which is available both for LayoutNG and for legacy.
@@ -1259,13 +1488,14 @@ TEST_P(NGOffsetMappingGetterTest, Get) {
       Whitespaces   in this text   should be   collapsed.
     </div>
   )HTML");
-  LayoutBlockFlow* layout_block_flow =
-      ToLayoutBlockFlow(GetLayoutObjectByElementId("container"));
+  auto* layout_block_flow =
+      To<LayoutBlockFlow>(GetLayoutObjectByElementId("container"));
   DCHECK(layout_block_flow->ChildrenInline());
 
   // For the purpose of this test, ensure this is laid out by each layout
   // engine.
-  DCHECK_EQ(layout_block_flow->IsLayoutNGMixin(), GetParam());
+  DCHECK_EQ(layout_block_flow->IsLayoutNGMixin(),
+            RuntimeEnabledFeatures::LayoutNGEnabled());
 
   const NGOffsetMapping* mapping =
       NGInlineNode::GetOffsetMapping(layout_block_flow);

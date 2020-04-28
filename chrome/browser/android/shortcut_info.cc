@@ -6,6 +6,16 @@
 
 #include "base/feature_list.h"
 #include "base/strings/utf_string_conversions.h"
+#include "chrome/browser/android/shortcut_helper.h"
+#include "third_party/blink/public/common/manifest/manifest_icon_selector.h"
+
+namespace {
+
+// The maximum number of shortcuts an Android launcher supports.
+// https://developer.android.com/guide/topics/ui/shortcuts#shortcut-limitations
+constexpr size_t kMaxShortcuts = 4;
+
+}  // namespace
 
 ShareTargetParamsFile::ShareTargetParamsFile() {}
 
@@ -26,7 +36,7 @@ ShareTarget::~ShareTarget() {}
 
 ShortcutInfo::ShortcutInfo(const GURL& shortcut_url)
     : url(shortcut_url),
-      display(blink::kWebDisplayModeBrowser),
+      display(blink::mojom::DisplayMode::kBrowser),
       orientation(blink::kWebScreenOrientationLockDefault),
       source(SOURCE_ADD_TO_HOMESCREEN_SHORTCUT),
       ideal_splash_image_size_in_px(0),
@@ -56,12 +66,12 @@ void ShortcutInfo::UpdateFromManifest(const blink::Manifest& manifest) {
   scope = manifest.scope;
 
   // Set the display based on the manifest value, if any.
-  if (manifest.display != blink::kWebDisplayModeUndefined)
+  if (manifest.display != blink::mojom::DisplayMode::kUndefined)
     display = manifest.display;
 
-  if (display == blink::kWebDisplayModeStandalone ||
-      display == blink::kWebDisplayModeFullscreen ||
-      display == blink::kWebDisplayModeMinimalUi) {
+  if (display == blink::mojom::DisplayMode::kStandalone ||
+      display == blink::mojom::DisplayMode::kFullscreen ||
+      display == blink::mojom::DisplayMode::kMinimalUi) {
     source = SOURCE_ADD_TO_HOMESCREEN_STANDALONE;
     // Set the orientation based on the manifest value, or ignore if the display
     // mode is different from 'standalone', 'fullscreen' or 'minimal-ui'.
@@ -80,10 +90,6 @@ void ShortcutInfo::UpdateFromManifest(const blink::Manifest& manifest) {
   if (manifest.background_color)
     background_color = manifest.background_color;
 
-  // Sets the URL of the HTML splash screen, if any.
-  if (manifest.splash_screen_url.is_valid())
-    splash_screen_url = manifest.splash_screen_url;
-
   // Set the icon urls based on the icons in the manifest, if any.
   icon_urls.clear();
   for (const auto& icon : manifest.icons)
@@ -92,18 +98,8 @@ void ShortcutInfo::UpdateFromManifest(const blink::Manifest& manifest) {
   if (manifest.share_target) {
     share_target = ShareTarget();
     share_target->action = manifest.share_target->action;
-    if (manifest.share_target->method ==
-        blink::Manifest::ShareTarget::Method::kPost) {
-      share_target->method = ShareTarget::Method::kPost;
-    } else {
-      share_target->method = ShareTarget::Method::kGet;
-    }
-    if (manifest.share_target->enctype ==
-        blink::Manifest::ShareTarget::Enctype::kMultipart) {
-      share_target->enctype = ShareTarget::Enctype::kMultipart;
-    } else {
-      share_target->enctype = ShareTarget::Enctype::kApplication;
-    }
+    share_target->method = manifest.share_target->method;
+    share_target->enctype = manifest.share_target->enctype;
     if (!manifest.share_target->params.text.is_null())
       share_target->params.text = manifest.share_target->params.text.string();
     if (!manifest.share_target->params.title.is_null())
@@ -118,6 +114,27 @@ void ShortcutInfo::UpdateFromManifest(const blink::Manifest& manifest) {
       share_target_params_file.accept = manifest_share_target_file.accept;
       share_target->params.files.push_back(share_target_params_file);
     }
+  }
+
+  shortcut_items = manifest.shortcuts;
+  if (shortcut_items.size() > kMaxShortcuts)
+    shortcut_items.resize(kMaxShortcuts);
+
+  for (auto& shortcut_item : shortcut_items) {
+    if (shortcut_item.short_name.string().empty()) {
+      shortcut_item.short_name =
+          base::NullableString16(shortcut_item.name, /* is_null= */ false);
+    }
+  }
+
+  int ideal_shortcut_icons_size_px =
+      ShortcutHelper::GetIdealShortcutIconSizeInPx();
+  for (const auto& manifest_shortcut : shortcut_items) {
+    GURL best_url = blink::ManifestIconSelector::FindBestMatchingSquareIcon(
+        manifest_shortcut.icons, ideal_shortcut_icons_size_px,
+        /* minimum_icon_size_in_px= */ ideal_shortcut_icons_size_px / 2,
+        blink::Manifest::ImageResource::Purpose::ANY);
+    best_shortcut_icon_urls.push_back(std::move(best_url));
   }
 }
 

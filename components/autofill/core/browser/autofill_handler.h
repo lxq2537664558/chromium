@@ -8,14 +8,15 @@
 #include <map>
 #include <memory>
 #include <string>
+#include <vector>
 
 #include "base/compiler_specific.h"
 #include "base/time/time.h"
 #include "build/build_config.h"
 #include "components/autofill/core/browser/autofill_driver.h"
 #include "components/autofill/core/common/form_data.h"
+#include "components/autofill/core/common/mojom/autofill_types.mojom.h"
 #include "components/autofill/core/common/signatures_util.h"
-#include "components/autofill/core/common/submission_source.h"
 
 namespace gfx {
 class RectF;
@@ -27,6 +28,7 @@ class AutofillField;
 struct FormData;
 struct FormFieldData;
 class FormStructure;
+class LogManager;
 
 // This class defines the interface should be implemented by autofill
 // implementation in browser side to interact with AutofillDriver.
@@ -83,7 +85,7 @@ class AutofillHandler {
   // personal profile.
   void OnFormSubmitted(const FormData& form,
                        bool known_success,
-                       SubmissionSource source);
+                       mojom::SubmissionSource source);
 
   // Invoked when |forms| has been detected.
   void OnFormsSeen(const std::vector<FormData>& forms,
@@ -140,12 +142,22 @@ class AutofillHandler {
   // Returns the present form structures seen by Autofill handler.
   const FormStructureMap& form_structures() const { return form_structures_; }
 
+  AutofillDriver* driver() { return driver_; }
+
+#if defined(UNIT_TEST)
+  // A public wrapper that calls |mutable_form_structures| for testing purposes
+  // only.
+  FormStructureMap* mutable_form_structures_for_test() {
+    return mutable_form_structures();
+  }
+#endif
+
  protected:
-  AutofillHandler(AutofillDriver* driver);
+  AutofillHandler(AutofillDriver* driver, LogManager* log_manager);
 
   virtual void OnFormSubmittedImpl(const FormData& form,
                                    bool known_success,
-                                   SubmissionSource source) = 0;
+                                   mojom::SubmissionSource source) = 0;
 
   virtual void OnTextFieldDidChangeImpl(const FormData& form,
                                         const FormFieldData& field,
@@ -203,14 +215,14 @@ class AutofillHandler {
 
   bool value_from_dynamic_change_form_ = false;
 
-  AutofillDriver* driver() { return driver_; }
-
   FormStructureMap* mutable_form_structures() { return &form_structures_; }
 
  private:
   // Provides driver-level context to the shared code of the component. Must
   // outlive this object.
   AutofillDriver* const driver_;
+
+  LogManager* const log_manager_;
 
   // Our copy of the form data.
   FormStructureMap form_structures_;

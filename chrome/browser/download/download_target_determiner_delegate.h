@@ -11,20 +11,22 @@
 #include "chrome/browser/download/download_confirmation_reason.h"
 #include "chrome/browser/download/download_confirmation_result.h"
 #include "components/download/public/common/download_danger_type.h"
+#include "components/download/public/common/download_item.h"
 #include "components/download/public/common/download_path_reservation_tracker.h"
 
 namespace base {
 class FilePath;
 }
 
-namespace download {
-class DownloadItem;
-}
-
 // Delegate for DownloadTargetDeterminer. The delegate isn't owned by
 // DownloadTargetDeterminer and is expected to outlive it.
 class DownloadTargetDeterminerDelegate {
  public:
+  // Callback to be invoked after GetMixedContentStatus() completes. The
+  // |should_block| bool represents whether the download should be aborted.
+  using GetMixedContentStatusCallback =
+      base::Callback<void(download::DownloadItem::MixedContentStatus status)>;
+
   // Callback to be invoked after NotifyExtensions() completes. The
   // |new_virtual_path| should be set to a new path if an extension wishes to
   // override the download path. |conflict_action| should be set to the action
@@ -67,6 +69,13 @@ class DownloadTargetDeterminerDelegate {
   // determined, it should be set to the empty string.
   typedef base::Callback<void(const std::string&)> GetFileMimeTypeCallback;
 
+  // Returns whether the download should be warned/blocked based on its mixed
+  // content status, and if so, what kind of warning/blocking should be used.
+  virtual void GetMixedContentStatus(
+      download::DownloadItem* download,
+      const base::FilePath& virtual_path,
+      const GetMixedContentStatusCallback& callback) = 0;
+
   // Notifies extensions of the impending filename determination. |virtual_path|
   // is the current suggested virtual path. The |callback| should be invoked to
   // indicate whether any extensions wish to override the path.
@@ -93,7 +102,7 @@ class DownloadTargetDeterminerDelegate {
       bool create_directory,
       download::DownloadPathReservationTracker::FilenameConflictAction
           conflict_action,
-      const ReservedPathCallback& callback) = 0;
+      ReservedPathCallback callback) = 0;
 
   // Display a prompt to the user requesting that a download target be chosen.
   // Should invoke |callback| upon completion.

@@ -11,8 +11,8 @@
 #include <limits>
 #include <set>
 
+#include "base/check_op.h"
 #include "base/containers/flat_map.h"
-#include "base/logging.h"
 #include "base/numerics/safe_conversions.h"
 #include "base/stl_util.h"
 #include "base/trace_event/trace_event.h"
@@ -626,12 +626,11 @@ void PictureLayerTiling::SetTilePriorityRects(
   // since skewport.Contains(visible_rect) is always true.
   max_skewport_extent_in_screen_space_ =
       current_content_to_screen_scale_ *
-      std::max(std::max(current_visible_rect_.x() - current_skewport_rect_.x(),
-                        current_skewport_rect_.right() -
-                            current_visible_rect_.right()),
-               std::max(current_visible_rect_.y() - current_skewport_rect_.y(),
-                        current_skewport_rect_.bottom() -
-                            current_visible_rect_.bottom()));
+      std::max(
+          {current_visible_rect_.x() - current_skewport_rect_.x(),
+           current_skewport_rect_.right() - current_visible_rect_.right(),
+           current_visible_rect_.y() - current_skewport_rect_.y(),
+           current_skewport_rect_.bottom() - current_visible_rect_.bottom()});
 }
 
 void PictureLayerTiling::SetLiveTilesRect(

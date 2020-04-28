@@ -36,14 +36,15 @@
 
 #include "base/memory/ptr_util.h"
 #include "base/memory/scoped_refptr.h"
+#include "services/network/public/mojom/load_timing_info.mojom.h"
 #include "third_party/blink/public/platform/web_http_header_visitor.h"
 #include "third_party/blink/public/platform/web_http_load_info.h"
 #include "third_party/blink/public/platform/web_string.h"
 #include "third_party/blink/public/platform/web_url.h"
-#include "third_party/blink/public/platform/web_url_load_timing.h"
+#include "third_party/blink/renderer/platform/loader/fetch/resource_load_info.h"
 #include "third_party/blink/renderer/platform/loader/fetch/resource_load_timing.h"
 #include "third_party/blink/renderer/platform/loader/fetch/resource_response.h"
-#include "third_party/blink/renderer/platform/wtf/allocator.h"
+#include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
 #include "third_party/blink/renderer/platform/wtf/assertions.h"
 
 namespace blink {
@@ -98,10 +99,27 @@ void WebURLResponse::SetConnectionReused(bool connection_reused) {
   resource_response_->SetConnectionReused(connection_reused);
 }
 
-void WebURLResponse::SetLoadTiming(const WebURLLoadTiming& timing) {
-  scoped_refptr<ResourceLoadTiming> load_timing =
-      scoped_refptr<ResourceLoadTiming>(timing);
-  resource_response_->SetResourceLoadTiming(std::move(load_timing));
+void WebURLResponse::SetLoadTiming(
+    const network::mojom::LoadTimingInfo& mojo_timing) {
+  auto timing = ResourceLoadTiming::Create();
+  timing->SetRequestTime(mojo_timing.request_start);
+  timing->SetProxyStart(mojo_timing.proxy_resolve_start);
+  timing->SetProxyEnd(mojo_timing.proxy_resolve_end);
+  timing->SetDnsStart(mojo_timing.connect_timing.dns_start);
+  timing->SetDnsEnd(mojo_timing.connect_timing.dns_end);
+  timing->SetConnectStart(mojo_timing.connect_timing.connect_start);
+  timing->SetConnectEnd(mojo_timing.connect_timing.connect_end);
+  timing->SetWorkerStart(mojo_timing.service_worker_start_time);
+  timing->SetWorkerReady(mojo_timing.service_worker_ready_time);
+  timing->SetSendStart(mojo_timing.send_start);
+  timing->SetSendEnd(mojo_timing.send_end);
+  timing->SetReceiveHeadersStart(mojo_timing.receive_headers_start);
+  timing->SetReceiveHeadersEnd(mojo_timing.receive_headers_end);
+  timing->SetSslStart(mojo_timing.connect_timing.ssl_start);
+  timing->SetSslEnd(mojo_timing.connect_timing.ssl_end);
+  timing->SetPushStart(mojo_timing.push_start);
+  timing->SetPushEnd(mojo_timing.push_end);
+  resource_response_->SetResourceLoadTiming(std::move(timing));
 }
 
 void WebURLResponse::SetHTTPLoadInfo(const WebHTTPLoadInfo& value) {
@@ -243,9 +261,12 @@ void WebURLResponse::SetIsLegacyTLSVersion(bool value) {
   resource_response_->SetIsLegacyTLSVersion(value);
 }
 
-void WebURLResponse::SetSecurityStyle(WebSecurityStyle security_style) {
-  resource_response_->SetSecurityStyle(
-      static_cast<ResourceResponse::SecurityStyle>(security_style));
+void WebURLResponse::SetTimingAllowPassed(bool value) {
+  resource_response_->SetTimingAllowPassed(value);
+}
+
+void WebURLResponse::SetSecurityStyle(SecurityStyle security_style) {
+  resource_response_->SetSecurityStyle(security_style);
 }
 
 void WebURLResponse::SetSecurityDetails(
@@ -273,12 +294,15 @@ void WebURLResponse::SetSecurityDetails(
       sct_list);
 }
 
-WebURLResponse::WebSecurityDetails WebURLResponse::SecurityDetailsForTesting() {
-  const blink::ResourceResponse::SecurityDetails* security_details =
+base::Optional<WebURLResponse::WebSecurityDetails>
+WebURLResponse::SecurityDetailsForTesting() {
+  const base::Optional<ResourceResponse::SecurityDetails>& security_details =
       resource_response_->GetSecurityDetails();
-  std::vector<SignedCertificateTimestamp> sct_list;
+  if (!security_details.has_value())
+    return base::nullopt;
+  SignedCertificateTimestampList sct_list;
   for (const auto& iter : security_details->sct_list) {
-    sct_list.push_back(SignedCertificateTimestamp(
+    sct_list.emplace_back(SignedCertificateTimestamp(
         iter.status_, iter.origin_, iter.log_description_, iter.log_id_,
         iter.timestamp_, iter.hash_algorithm_, iter.signature_algorithm_,
         iter.signature_data_));
@@ -289,7 +313,7 @@ WebURLResponse::WebSecurityDetails WebURLResponse::SecurityDetailsForTesting() {
       security_details->mac, security_details->subject_name,
       security_details->san_list, security_details->issuer,
       security_details->valid_from, security_details->valid_to,
-      security_details->certificate, SignedCertificateTimestampList(sct_list));
+      security_details->certificate, sct_list);
 }
 
 const ResourceResponse& WebURLResponse::ToResourceResponse() const {
@@ -298,6 +322,10 @@ const ResourceResponse& WebURLResponse::ToResourceResponse() const {
 
 void WebURLResponse::SetWasCached(bool value) {
   resource_response_->SetWasCached(value);
+}
+
+bool WebURLResponse::WasFetchedViaSPDY() const {
+  return resource_response_->WasFetchedViaSPDY();
 }
 
 void WebURLResponse::SetWasFetchedViaSPDY(bool value) {
@@ -379,10 +407,35 @@ void WebURLResponse::SetEncodedDataLength(int64_t length) {
   resource_response_->SetEncodedDataLength(length);
 }
 
+int64_t WebURLResponse::EncodedBodyLength() const {
+  return resource_response_->EncodedBodyLength();
+}
+
+void WebURLResponse::SetEncodedBodyLength(int64_t length) {
+  resource_response_->SetEncodedBodyLength(length);
+}
+
 void WebURLResponse::SetIsSignedExchangeInnerResponse(
     bool is_signed_exchange_inner_response) {
   resource_response_->SetIsSignedExchangeInnerResponse(
       is_signed_exchange_inner_response);
+}
+
+void WebURLResponse::SetWasInPrefetchCache(bool was_in_prefetch_cache) {
+  resource_response_->SetWasInPrefetchCache(was_in_prefetch_cache);
+}
+
+void WebURLResponse::SetRecursivePrefetchToken(
+    const base::Optional<base::UnguessableToken>& token) {
+  resource_response_->SetRecursivePrefetchToken(token);
+}
+
+bool WebURLResponse::WasAlpnNegotiated() const {
+  return resource_response_->WasAlpnNegotiated();
+}
+
+void WebURLResponse::SetWasAlpnNegotiated(bool was_alpn_negotiated) {
+  resource_response_->SetWasAlpnNegotiated(was_alpn_negotiated);
 }
 
 WebString WebURLResponse::AlpnNegotiatedProtocol() const {
@@ -392,6 +445,16 @@ WebString WebURLResponse::AlpnNegotiatedProtocol() const {
 void WebURLResponse::SetAlpnNegotiatedProtocol(
     const WebString& alpn_negotiated_protocol) {
   resource_response_->SetAlpnNegotiatedProtocol(alpn_negotiated_protocol);
+}
+
+bool WebURLResponse::WasAlternateProtocolAvailable() const {
+  return resource_response_->WasAlternateProtocolAvailable();
+}
+
+void WebURLResponse::SetWasAlternateProtocolAvailable(
+    bool was_alternate_protocol_available) {
+  resource_response_->SetWasAlternateProtocolAvailable(
+      was_alternate_protocol_available);
 }
 
 net::HttpResponseInfo::ConnectionInfo WebURLResponse::ConnectionInfo() const {
@@ -409,6 +472,10 @@ void WebURLResponse::SetAsyncRevalidationRequested(bool requested) {
 
 void WebURLResponse::SetNetworkAccessed(bool network_accessed) {
   resource_response_->SetNetworkAccessed(network_accessed);
+}
+
+bool WebURLResponse::FromArchive() const {
+  return resource_response_->FromArchive();
 }
 
 WebURLResponse::WebURLResponse(ResourceResponse& r) : resource_response_(&r) {}

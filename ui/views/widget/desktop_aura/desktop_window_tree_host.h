@@ -6,6 +6,7 @@
 #define UI_VIEWS_WIDGET_DESKTOP_AURA_DESKTOP_WINDOW_TREE_HOST_H_
 
 #include <memory>
+#include <string>
 
 #include "ui/aura/window_event_dispatcher.h"
 #include "ui/base/ui_base_types.h"
@@ -19,13 +20,13 @@ class Window;
 namespace client {
 class DragDropClient;
 class ScreenPositionClient;
-}
+}  // namespace client
 }  // namespace aura
 
 namespace gfx {
 class ImageSkia;
 class Rect;
-}
+}  // namespace gfx
 
 namespace views {
 namespace corewm {
@@ -130,8 +131,8 @@ class VIEWS_EXPORT DesktopWindowTreeHost {
 
   virtual bool HasCapture() const = 0;
 
-  virtual void SetAlwaysOnTop(bool always_on_top) = 0;
-  virtual bool IsAlwaysOnTop() const = 0;
+  virtual void SetZOrderLevel(ui::ZOrderLevel order) = 0;
+  virtual ui::ZOrderLevel GetZOrderLevel() const = 0;
 
   virtual void SetVisibleOnAllWorkspaces(bool always_visible) = 0;
   virtual bool IsVisibleOnAllWorkspaces() const = 0;
@@ -197,9 +198,6 @@ class VIEWS_EXPORT DesktopWindowTreeHost {
   // Sets the bounds in screen coordinate DIPs (WindowTreeHost generally
   // operates in pixels). This function is implemented in terms of Screen.
   virtual void SetBoundsInDIP(const gfx::Rect& bounds);
-
-  // See description in Widget::OnCanActivateChanged().
-  virtual void OnCanActivateChanged() {}
 };
 
 }  // namespace views

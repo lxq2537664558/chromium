@@ -22,18 +22,20 @@ import org.chromium.base.test.util.CommandLineFlags;
 import org.chromium.base.test.util.Feature;
 import org.chromium.base.test.util.RetryOnFailure;
 import org.chromium.chrome.browser.ChromeActivity;
-import org.chromium.chrome.browser.ChromeSwitches;
-import org.chromium.chrome.browser.UrlConstants;
+import org.chromium.chrome.browser.background_task_scheduler.ChromeNativeBackgroundTaskDelegate;
+import org.chromium.chrome.browser.firstrun.FirstRunUtils;
+import org.chromium.chrome.browser.flags.ChromeFeatureList;
+import org.chromium.chrome.browser.flags.ChromeSwitches;
 import org.chromium.chrome.browser.offlinepages.OfflinePageBridge;
 import org.chromium.chrome.browser.offlinepages.OfflinePageItem;
 import org.chromium.chrome.browser.offlinepages.OfflineTestUtil;
-import org.chromium.chrome.browser.preferences.PrefServiceBridge;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.test.ChromeActivityTestRule;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
 import org.chromium.components.background_task_scheduler.TaskIds;
 import org.chromium.components.background_task_scheduler.TaskParameters;
 import org.chromium.components.download.NetworkStatusListenerAndroid;
+import org.chromium.components.embedder_support.util.UrlConstants;
 import org.chromium.components.gcm_driver.instance_id.FakeInstanceIDWithSubtype;
 import org.chromium.components.offline_pages.core.prefetch.proto.StatusOuterClass;
 import org.chromium.content_public.browser.test.util.TestThreadUtils;
@@ -59,7 +61,6 @@ import java.util.concurrent.TimeoutException;
 @CommandLineFlags.Add({ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE})
 public class PrefetchFlowTest implements WebServer.RequestHandler {
     private static final String TAG = "PrefetchFlowTest";
-    private static final String GCM_TOKEN = "dummy_gcm_token";
     private TestOfflinePageService mOPS = new TestOfflinePageService();
     private TestSuggestionsService mSuggestionsService = new TestSuggestionsService();
     private WebServer mServer;
@@ -75,7 +76,7 @@ public class PrefetchFlowTest implements WebServer.RequestHandler {
         }
         @Override
         public NetworkState getCurrentNetworkState() {
-            return new NetworkState(true, ConnectivityManager.TYPE_WIFI, 0, null, false);
+            return new NetworkState(true, ConnectivityManager.TYPE_WIFI, 0, null, false, "");
         }
     }
 
@@ -109,6 +110,8 @@ public class PrefetchFlowTest implements WebServer.RequestHandler {
         final String suggestionsBackend = Uri.encode(mServer.getBaseUrl() + "suggestions/");
         CommandLine.getInstance().appendSwitchWithValue("enable-features",
                 "OfflinePagesPrefetching<Trial,DownloadService<Trial,NTPArticleSuggestions<Trial");
+        CommandLine.getInstance().appendSwitchWithValue(
+                "disable-features", ChromeFeatureList.INTEREST_FEED_CONTENT_SUGGESTIONS + "<Trial");
         CommandLine.getInstance().appendSwitchWithValue("force-fieldtrials", "Trial/Group");
         CommandLine.getInstance().appendSwitchWithValue("force-fieldtrial-params",
                 "Trial.Group:start_up_delay_ms/100/offline_pages_backend/" + offlinePagesBackend
@@ -122,7 +125,8 @@ public class PrefetchFlowTest implements WebServer.RequestHandler {
 
         // Register Offline Page observer and enable limitless prefetching.
         TestThreadUtils.runOnUiThreadBlocking(() -> {
-            mProfile = mActivityTestRule.getActivity().getActivityTab().getProfile();
+            mProfile = Profile.fromWebContents(
+                    mActivityTestRule.getActivity().getActivityTab().getWebContents());
             OfflinePageBridge.getForProfile(mProfile).addObserver(
                     new OfflinePageBridge.OfflinePageModelObserver() {
                         @Override
@@ -135,10 +139,11 @@ public class PrefetchFlowTest implements WebServer.RequestHandler {
             PrefetchTestBridge.skipNTPSuggestionsAPIKeyCheck();
         });
         OfflineTestUtil.setPrefetchingEnabledByServer(true);
+        OfflineTestUtil.setGCMTokenForTesting("dummy_gcm_token");
     }
 
     @After
-    public void tearDown() throws Exception {
+    public void tearDown() {
         FakeInstanceIDWithSubtype.clearDataAndSetEnabled(false);
         mServer.shutdown();
     }
@@ -163,11 +168,10 @@ public class PrefetchFlowTest implements WebServer.RequestHandler {
     private void runAndWaitForBackgroundTask() throws Throwable {
         CallbackHelper finished = new CallbackHelper();
         PrefetchBackgroundTask task = new PrefetchBackgroundTask();
+        task.setDelegate(new ChromeNativeBackgroundTaskDelegate());
         TestThreadUtils.runOnUiThreadBlocking(() -> {
             TaskParameters.Builder builder =
-                    TaskParameters.create(TaskIds.OFFLINE_PAGES_PREFETCH_JOB_ID)
-                            .addExtras(PrefetchBackgroundTaskScheduler.createGCMTokenBundle(
-                                    GCM_TOKEN));
+                    TaskParameters.create(TaskIds.OFFLINE_PAGES_PREFETCH_JOB_ID);
             PrefetchBackgroundTask.skipConditionCheckingForTesting();
             task.onStartTask(ContextUtils.getApplicationContext(), builder.build(),
                     (boolean needsReschedule) -> { finished.notifyCalled(); });
@@ -202,11 +206,11 @@ public class PrefetchFlowTest implements WebServer.RequestHandler {
     }
 
     /** Trigger conditions required to load NTP snippets. */
-    private void forceLoadSnippets() throws Throwable {
+    private void forceLoadSnippets() {
         // NTP suggestions require a connection and an accepted EULA.
         TestThreadUtils.runOnUiThreadBlocking(() -> {
             NetworkChangeNotifier.forceConnectivityState(true);
-            PrefServiceBridge.getInstance().setEulaAccepted();
+            FirstRunUtils.setEulaAccepted();
         });
 
         // Loading the NTP triggers loading suggestions.

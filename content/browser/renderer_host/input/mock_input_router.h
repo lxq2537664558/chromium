@@ -42,15 +42,17 @@ class MockInputRouter : public InputRouter {
   void SetDeviceScaleFactor(float device_scale_factor) override {}
   void SetFrameTreeNodeId(int frameTreeNodeId) override {}
   base::Optional<cc::TouchAction> AllowedTouchAction() override;
+  base::Optional<cc::TouchAction> ActiveTouchAction() override;
   void SetForceEnableZoom(bool enabled) override {}
-  void BindHost(mojom::WidgetInputHandlerHostRequest request,
-                bool frame_handler) override {}
+  mojo::PendingRemote<mojom::WidgetInputHandlerHost> BindNewHost() override;
+  mojo::PendingRemote<mojom::WidgetInputHandlerHost> BindNewFrameHost()
+      override;
   void StopFling() override {}
-  bool FlingCancellationIsDeferred() override;
   void OnSetTouchAction(cc::TouchAction touch_action) override {}
   void ForceSetTouchActionAuto() override {}
   void OnHasTouchEventHandlers(bool has_handlers) override;
   void WaitForInputProcessed(base::OnceClosure callback) override {}
+  void FlushTouchEventQueue() override {}
 
   bool sent_mouse_event_;
   bool sent_wheel_event_;

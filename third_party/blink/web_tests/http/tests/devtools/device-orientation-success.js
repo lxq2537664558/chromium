@@ -21,7 +21,7 @@
           sensorProvider = sensorMocks();
           let mockDataPromise = setMockSensorDataForType(
               sensorProvider,
-              device.mojom.SensorType.RELATIVE_ORIENTATION_EULER_ANGLES,
+              "RelativeOrientationEulerAngles",
               [mockBeta, mockGamma, mockAlpha]);
           window.addEventListener("deviceorientation", handler);
           return mockDataPromise;
@@ -75,7 +75,7 @@
     async function clearOverride(next) {
       await TestRunner.DeviceOrientationAgent.clearDeviceOrientationOverride();
       await TestRunner.evaluateInPageAsync('cleanUpDeviceOrientation()');
-      ConsoleTestRunner.dumpConsoleMessages();
+      await ConsoleTestRunner.dumpConsoleMessages();
       next();
     },
 
@@ -92,7 +92,7 @@
       // The console message from the call to setDeviceOrientationOverride()
       // above is lost with the reload, but we do not care.
       await TestRunner.reloadPagePromise();
-      ConsoleTestRunner.dumpConsoleMessages();
+      await ConsoleTestRunner.dumpConsoleMessages();
 
       await TestRunner.DeviceOrientationAgent.clearDeviceOrientationOverride();
       next();

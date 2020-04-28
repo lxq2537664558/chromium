@@ -6,7 +6,7 @@
 #define COMPONENTS_PASSWORD_MANAGER_IOS_JS_PASSWORD_MANAGER_H_
 
 #include "base/ios/block_types.h"
-#import "ios/web/public/web_state/js/crw_js_injection_receiver.h"
+#import "ios/web/public/deprecated/crw_js_injection_receiver.h"
 
 namespace autofill {
 struct PasswordFormFillData;
@@ -74,6 +74,9 @@ NSString* SerializePasswordFormFillData(
     confirmPasswordIdentifier:(NSString*)confirmPasswordIdentifier
             generatedPassword:(NSString*)generatedPassword
             completionHandler:(void (^)(BOOL))completionHandler;
+
+// Sets up the next available unique ID value in a document.
+- (void)setUpForUniqueIDsWithInitialState:(uint32_t)nextAvailableID;
 
 // Designated initializer. |receiver| should not be nil.
 - (instancetype)initWithReceiver:(CRWJSInjectionReceiver*)receiver

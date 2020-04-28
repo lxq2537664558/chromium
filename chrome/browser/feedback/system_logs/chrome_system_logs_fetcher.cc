@@ -4,10 +4,13 @@
 
 #include "chrome/browser/feedback/system_logs/chrome_system_logs_fetcher.h"
 
+#include <memory>
+
 #include "build/build_config.h"
 #include "chrome/browser/feedback/system_logs/log_sources/chrome_internal_log_source.h"
 #include "chrome/browser/feedback/system_logs/log_sources/crash_ids_source.h"
 #include "chrome/browser/feedback/system_logs/log_sources/memory_details_log_source.h"
+#include "chrome/common/extensions/extension_constants.h"
 #include "components/feedback/system_logs/system_logs_fetcher.h"
 
 #if defined(OS_CHROMEOS)
@@ -17,13 +20,15 @@
 #include "chrome/browser/chromeos/system_logs/device_event_log_source.h"
 #include "chrome/browser/chromeos/system_logs/iwlwifi_dump_log_source.h"
 #include "chrome/browser/chromeos/system_logs/touch_log_source.h"
+#include "chrome/browser/chromeos/system_logs/ui_hierarchy_log_source.h"
 #endif
 
 namespace system_logs {
 
 SystemLogsFetcher* BuildChromeSystemLogsFetcher() {
   const bool scrub_data = true;
-  SystemLogsFetcher* fetcher = new SystemLogsFetcher(scrub_data);
+  SystemLogsFetcher* fetcher = new SystemLogsFetcher(
+      scrub_data, extension_misc::kBuiltInFirstPartyExtensionIds);
 
   fetcher->AddSource(std::make_unique<ChromeInternalLogSource>());
   fetcher->AddSource(std::make_unique<CrashIdsSource>());
@@ -35,6 +40,7 @@ SystemLogsFetcher* BuildChromeSystemLogsFetcher() {
   fetcher->AddSource(std::make_unique<DeviceEventLogSource>());
   fetcher->AddSource(std::make_unique<IwlwifiDumpChecker>());
   fetcher->AddSource(std::make_unique<TouchLogSource>());
+  fetcher->AddSource(std::make_unique<UiHierarchyLogSource>());
 
   // Debug Daemon data source - currently only this data source supports
   // the scrub_data parameter, but the others still get scrubbed by

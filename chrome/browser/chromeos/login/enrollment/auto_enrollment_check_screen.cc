@@ -8,7 +8,7 @@
 #include "base/bind_helpers.h"
 #include "base/command_line.h"
 #include "base/location.h"
-#include "base/logging.h"
+#include "base/notreached.h"
 #include "base/single_thread_task_runner.h"
 #include "base/threading/thread_task_runner_handle.h"
 #include "chrome/browser/chromeos/login/error_screens_histogram_helper.h"
@@ -39,14 +39,15 @@ NetworkPortalDetector::CaptivePortalStatus GetCaptivePortalStatus() {
 AutoEnrollmentCheckScreen* AutoEnrollmentCheckScreen::Get(
     ScreenManager* manager) {
   return static_cast<AutoEnrollmentCheckScreen*>(
-      manager->GetScreen(OobeScreen::SCREEN_AUTO_ENROLLMENT_CHECK));
+      manager->GetScreen(AutoEnrollmentCheckScreenView::kScreenId));
 }
 
 AutoEnrollmentCheckScreen::AutoEnrollmentCheckScreen(
     AutoEnrollmentCheckScreenView* view,
     ErrorScreen* error_screen,
     const base::RepeatingClosure& exit_callback)
-    : BaseScreen(OobeScreen::SCREEN_AUTO_ENROLLMENT_CHECK),
+    : BaseScreen(AutoEnrollmentCheckScreenView::kScreenId,
+                 OobeScreenPriority::DEFAULT),
       view_(view),
       error_screen_(error_screen),
       exit_callback_(exit_callback),
@@ -54,8 +55,7 @@ AutoEnrollmentCheckScreen::AutoEnrollmentCheckScreen(
       captive_portal_status_(
           NetworkPortalDetector::CAPTIVE_PORTAL_STATUS_UNKNOWN),
       auto_enrollment_state_(policy::AUTO_ENROLLMENT_STATE_IDLE),
-      histogram_helper_(new ErrorScreensHistogramHelper("Enrollment")),
-      weak_ptr_factory_(this) {
+      histogram_helper_(new ErrorScreensHistogramHelper("Enrollment")) {
   if (view_)
     view_->SetDelegate(this);
 }
@@ -75,7 +75,7 @@ void AutoEnrollmentCheckScreen::ClearState() {
   captive_portal_status_ = NetworkPortalDetector::CAPTIVE_PORTAL_STATUS_UNKNOWN;
 }
 
-void AutoEnrollmentCheckScreen::Show() {
+void AutoEnrollmentCheckScreen::ShowImpl() {
   // If the decision got made already, don't show the screen at all.
   if (!AutoEnrollmentController::IsEnabled() || IsCompleted()) {
     SignalCompletion();
@@ -111,12 +111,22 @@ void AutoEnrollmentCheckScreen::Show() {
   auto_enrollment_state_ = new_auto_enrollment_state;
 
   // Make sure gears are in motion in the background.
-  auto_enrollment_controller_->Start();
+  // Note that if a previous auto-enrollment check ended with a failure,
+  // IsCompleted() would still return false, and Show would not report result
+  // early. In that case auto-enrollment check should be retried.
+  if (auto_enrollment_controller_->state() ==
+          policy::AUTO_ENROLLMENT_STATE_CONNECTION_ERROR ||
+      auto_enrollment_controller_->state() ==
+          policy::AUTO_ENROLLMENT_STATE_SERVER_ERROR) {
+    auto_enrollment_controller_->Retry();
+  } else {
+    auto_enrollment_controller_->Start();
+  }
   network_portal_detector::GetInstance()->StartPortalDetection(
       false /* force */);
 }
 
-void AutoEnrollmentCheckScreen::Hide() {}
+void AutoEnrollmentCheckScreen::HideImpl() {}
 
 void AutoEnrollmentCheckScreen::OnViewDestroyed(
     AutoEnrollmentCheckScreenView* view) {
@@ -205,6 +215,7 @@ bool AutoEnrollmentCheckScreen::UpdateAutoEnrollmentState(
     case policy::AUTO_ENROLLMENT_STATE_TRIGGER_ENROLLMENT:
     case policy::AUTO_ENROLLMENT_STATE_TRIGGER_ZERO_TOUCH:
     case policy::AUTO_ENROLLMENT_STATE_NO_ENROLLMENT:
+    case policy::AUTO_ENROLLMENT_STATE_DISABLED:
       return false;
     case policy::AUTO_ENROLLMENT_STATE_SERVER_ERROR:
       if (!ShouldBlockOnServerError())
@@ -237,9 +248,9 @@ void AutoEnrollmentCheckScreen::ShowErrorScreen(
       base::Bind(&AutoEnrollmentCheckScreen::OnConnectRequested,
                  base::Unretained(this)));
   error_screen_->SetHideCallback(
-      base::BindRepeating(&AutoEnrollmentCheckScreen::OnErrorScreenHidden,
-                          weak_ptr_factory_.GetWeakPtr()));
-  error_screen_->SetParentScreen(OobeScreen::SCREEN_AUTO_ENROLLMENT_CHECK);
+      base::BindOnce(&AutoEnrollmentCheckScreen::OnErrorScreenHidden,
+                     weak_ptr_factory_.GetWeakPtr()));
+  error_screen_->SetParentScreen(AutoEnrollmentCheckScreenView::kScreenId);
   error_screen_->Show();
   histogram_helper_->OnErrorShow(error_state);
 }
@@ -273,6 +284,7 @@ bool AutoEnrollmentCheckScreen::IsCompleted() const {
     case policy::AUTO_ENROLLMENT_STATE_TRIGGER_ENROLLMENT:
     case policy::AUTO_ENROLLMENT_STATE_TRIGGER_ZERO_TOUCH:
     case policy::AUTO_ENROLLMENT_STATE_NO_ENROLLMENT:
+    case policy::AUTO_ENROLLMENT_STATE_DISABLED:
       // Decision made, ready to proceed.
       return true;
   }

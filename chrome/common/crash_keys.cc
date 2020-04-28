@@ -6,7 +6,6 @@
 
 #include "base/base_switches.h"
 #include "base/command_line.h"
-#include "base/logging.h"
 #include "base/stl_util.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_split.h"
@@ -20,12 +19,14 @@
 
 #if defined(OS_CHROMEOS)
 #include "chrome/common/chrome_switches.h"
+#include "components/crash/core/app/crash_switches.h"
 #include "gpu/command_buffer/service/gpu_switches.h"
 #include "ui/gl/gl_switches.h"
 #endif
 
 namespace crash_keys {
 
+// Return true if we DON'T want to upload this flag to the crash server.
 static bool IsBoringSwitch(const std::string& flag) {
   static const char* const kIgnoreSwitches[] = {
     switches::kEnableLogging,
@@ -38,6 +39,10 @@ static bool IsBoringSwitch(const std::string& flag) {
 #if defined(OS_MACOSX)
     switches::kMetricsClientID,
 #elif defined(OS_CHROMEOS)
+    // --crash-loop-before is a "boring" switch because it is redundant;
+    // crash_reporter separately informs the crash server if it is doing
+    // crash-loop handling.
+    crash_reporter::switches::kCrashLoopBefore,
     switches::kPpapiFlashArgs,
     switches::kPpapiFlashPath,
     switches::kRegisterPepperPlugins,

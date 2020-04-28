@@ -34,8 +34,6 @@ function updateConnectionStatus(connStatus) {
   $('connection-status').textContent = connStatus['status'];
   $('push-notification-enabled').textContent =
       connStatus['push-notification-enabled'];
-  $('has-refresh-token').textContent = connStatus['has-refresh-token'];
-  $('has-access-token').textContent = connStatus['has-access-token'];
 }
 
 /**
@@ -75,17 +73,6 @@ function updateGCacheContents(gcacheContents, gcacheSummary) {
 
   $('gcache-summary-total-size').textContent =
       toMegaByteString(gcacheSummary['total_size']);
-}
-
-/**
- * Updates the File System Contents section. The function is called from the
- * C++ side repeatedly with contents of a directory.
- * @param {string} directoryContentsAsText Pre-formatted string representation
- * of contents a directory in the file system.
- */
-function updateFileSystemContents(directoryContentsAsText) {
-  var div = $('file-system-contents');
-  div.appendChild(createElementFromText('pre', directoryContentsAsText));
 }
 
 /**
@@ -293,28 +280,31 @@ function setSectionEnabled(section, enable) {
   }
 }
 
+function onZipDone(success) {
+  $('button-export-logs').removeAttribute('disabled');
+}
+
 document.addEventListener('DOMContentLoaded', function() {
   chrome.send('pageLoaded');
 
   updateToc();
 
-  $('button-clear-access-token').addEventListener('click', function() {
-    chrome.send('clearAccessToken');
-  });
-
-  $('button-clear-refresh-token').addEventListener('click', function() {
-    chrome.send('clearRefreshToken');
+  $('button-restart-drive').addEventListener('click', function() {
+    chrome.send('restartDrive');
   });
 
   $('button-reset-drive-filesystem').addEventListener('click', function() {
-    $('reset-status-text').textContent = 'resetting...';
-    chrome.send('resetDriveFileSystem');
+    if (window.confirm(
+            'Warning: Any local changes not yet uploaded to the Drive server ' +
+            'will be lost, continue?')) {
+      $('reset-status-text').textContent = 'resetting...';
+      chrome.send('resetDriveFileSystem');
+    }
   });
 
-  $('button-show-file-entries').addEventListener('click', function() {
-    var button = $('button-show-file-entries');
-    button.parentNode.removeChild(button);
-    chrome.send('listFileEntries');
+  $('button-export-logs').addEventListener('click', function() {
+    $('button-export-logs').setAttribute('disabled', 'true');
+    chrome.send('zipLogs');
   });
 
   window.setInterval(function() {

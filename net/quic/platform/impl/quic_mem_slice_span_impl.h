@@ -7,9 +7,9 @@
 
 #include "base/memory/ref_counted.h"
 #include "net/base/io_buffer.h"
+#include "net/third_party/quiche/src/common/platform/api/quiche_string_piece.h"
 #include "net/third_party/quiche/src/quic/core/quic_types.h"
 #include "net/third_party/quiche/src/quic/platform/api/quic_mem_slice.h"
-#include "net/third_party/quiche/src/quic/platform/api/quic_string_piece.h"
 
 namespace quic {
 
@@ -17,8 +17,9 @@ namespace quic {
 class QUIC_EXPORT_PRIVATE QuicMemSliceSpanImpl {
  public:
   QuicMemSliceSpanImpl(const scoped_refptr<net::IOBuffer>* buffers,
-                       const int* lengths,
+                       const size_t* lengths,
                        size_t num_buffers);
+  explicit QuicMemSliceSpanImpl(QuicMemSliceImpl* slice);
 
   QuicMemSliceSpanImpl(const QuicMemSliceSpanImpl& other);
   QuicMemSliceSpanImpl& operator=(const QuicMemSliceSpanImpl& other);
@@ -27,8 +28,8 @@ class QUIC_EXPORT_PRIVATE QuicMemSliceSpanImpl {
 
   ~QuicMemSliceSpanImpl();
 
-  QuicStringPiece GetData(size_t index) {
-    return QuicStringPiece(buffers_[index]->data(), lengths_[index]);
+  quiche::QuicheStringPiece GetData(size_t index) {
+    return quiche::QuicheStringPiece(buffers_[index]->data(), lengths_[index]);
   }
 
   template <typename ConsumeFunction>
@@ -54,7 +55,7 @@ class QUIC_EXPORT_PRIVATE QuicMemSliceSpanImpl {
 
  private:
   const scoped_refptr<net::IOBuffer>* buffers_;
-  const int* lengths_;
+  const size_t* lengths_;
   // Not const so that the move operator can work properly.
   size_t num_buffers_;
 };

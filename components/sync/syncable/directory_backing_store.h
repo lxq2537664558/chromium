@@ -53,7 +53,8 @@ extern const int32_t kCurrentPageSizeKB;
 // OnDiskDirectoryBackingStore.
 class DirectoryBackingStore {
  public:
-  explicit DirectoryBackingStore(const std::string& dir_name);
+  DirectoryBackingStore(const std::string& dir_name,
+                        const std::string& cache_guid);
   virtual ~DirectoryBackingStore();
 
   // Loads and drops all currently persisted meta entries into |handles_map|
@@ -67,7 +68,6 @@ class DirectoryBackingStore {
   // NOTE: On success (return value of OPENED), the buckets are populated with
   // newly allocated items, meaning ownership is bestowed upon the caller.
   virtual DirOpenResult Load(Directory::MetahandlesMap* handles_map,
-                             JournalIndex* delete_journals,
                              MetahandleSet* metahandles_to_purge,
                              Directory::KernelLoadInfo* kernel_load_info) = 0;
 
@@ -99,13 +99,15 @@ class DirectoryBackingStore {
   // already a handler, the existing handler is overwritten with
   // |catastrophic_error_handler|.
   virtual void SetCatastrophicErrorHandler(
-      const base::Closure& catastrophic_error_handler);
+      const base::RepeatingClosure& catastrophic_error_handler);
 
   // Returns true on success, false on error.
   bool GetDatabasePageSize(int* page_size);
 
   bool ReportMemoryUsage(base::trace_event::ProcessMemoryDump* pmd,
                          const std::string& dump_name);
+
+  const std::string& cache_guid() const { return cache_guid_; }
 
  protected:
   // For test classes.
@@ -136,12 +138,10 @@ class DirectoryBackingStore {
   // error.
   bool LoadEntries(Directory::MetahandlesMap* handles_map,
                    MetahandleSet* metahandles_to_purge);
-  bool LoadDeleteJournals(JournalIndex* delete_journals);
   bool LoadInfo(Directory::KernelLoadInfo* info);
 
   enum EntryTable {
     METAS_TABLE,
-    DELETE_JOURNAL_TABLE,
   };
   // Removes each entry whose metahandle is in |handles| from the table
   // specified by |from| table. Does synchronous I/O.  Returns false on error.
@@ -153,8 +153,6 @@ class DirectoryBackingStore {
   // ID, rather than the enum value.
   static ModelType ModelIdToModelTypeEnum(const void* data, int length);
   static std::string ModelTypeEnumToModelId(ModelType model_type);
-
-  static std::string GenerateCacheGUID();
 
   // Checks that the references between sync nodes is consistent.
   static bool VerifyReferenceIntegrity(
@@ -259,11 +257,11 @@ class DirectoryBackingStore {
                                  sql::Statement* save_statement);
 
   const std::string dir_name_;
+  const std::string cache_guid_;
   const int database_page_size_;
 
   std::unique_ptr<sql::Database> db_;
   sql::Statement save_meta_statement_;
-  sql::Statement save_delete_journal_statement_;
 
   // Set to true if migration left some old columns around that need to be
   // discarded.
@@ -272,7 +270,7 @@ class DirectoryBackingStore {
 
   // We keep a copy of the Closure so we reinstall it when the underlying
   // sql::Database is destroyed/recreated.
-  base::Closure catastrophic_error_handler_;
+  base::RepeatingClosure catastrophic_error_handler_;
 
   DISALLOW_COPY_AND_ASSIGN(DirectoryBackingStore);
 };

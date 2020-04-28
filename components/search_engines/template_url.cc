@@ -128,7 +128,7 @@ class SearchTermLocation {
               TryMatchSearchParam(value_string,
                                   kGoogleUnescapedSearchTermsParameterFull)) {
             found_ = true;
-            url_component.substr(key.begin, key.len).CopyToString(&key_);
+            key_ = std::string(url_component.substr(key.begin, key.len));
             break;
           }
         }
@@ -149,8 +149,8 @@ class SearchTermLocation {
     size_t pos = value.find(pattern);
     if (pos == base::StringPiece::npos)
       return false;
-    value.substr(0, pos).CopyToString(&value_prefix_);
-    value.substr(pos + pattern.length()).CopyToString(&value_suffix_);
+    value_prefix_ = std::string(value.substr(0, pos));
+    value_suffix_ = std::string(value.substr(pos + pattern.size()));
     return true;
   }
 
@@ -185,16 +185,11 @@ std::string YandexSearchPathFromDeviceFormFactor() {
 
 // TemplateURLRef::SearchTermsArgs --------------------------------------------
 
+TemplateURLRef::SearchTermsArgs::SearchTermsArgs() = default;
+
 TemplateURLRef::SearchTermsArgs::SearchTermsArgs(
     const base::string16& search_terms)
-    : search_terms(search_terms),
-      input_type(metrics::OmniboxInputType::INVALID),
-      accepted_suggestion(NO_SUGGESTIONS_AVAILABLE),
-      cursor_position(base::string16::npos),
-      page_classification(metrics::OmniboxEventProto::INVALID_SPEC),
-      append_extra_query_params_from_command_line(false),
-      from_app_list(false),
-      contextual_search_params(ContextualSearchParams()) {}
+    : search_terms(search_terms) {}
 
 TemplateURLRef::SearchTermsArgs::SearchTermsArgs(const SearchTermsArgs& other) =
     default;
@@ -221,23 +216,25 @@ size_t TemplateURLRef::SearchTermsArgs::EstimateMemoryUsage() const {
 }
 
 TemplateURLRef::SearchTermsArgs::ContextualSearchParams::
-    ContextualSearchParams()
-    : version(-1),
-      contextual_cards_version(0),
-      previous_event_id(0),
-      previous_event_results(0) {}
+    ContextualSearchParams() = default;
 
 TemplateURLRef::SearchTermsArgs::ContextualSearchParams::ContextualSearchParams(
     int version,
     int contextual_cards_version,
-    const std::string& home_country,
+    std::string home_country,
     int64_t previous_event_id,
-    int previous_event_results)
+    int previous_event_results,
+    bool is_exact_search,
+    std::string source_lang,
+    std::string target_lang)
     : version(version),
       contextual_cards_version(contextual_cards_version),
       home_country(home_country),
       previous_event_id(previous_event_id),
-      previous_event_results(previous_event_results) {}
+      previous_event_results(previous_event_results),
+      is_exact_search(is_exact_search),
+      source_lang(source_lang),
+      target_lang(target_lang) {}
 
 TemplateURLRef::SearchTermsArgs::ContextualSearchParams::ContextualSearchParams(
     const ContextualSearchParams& other) = default;
@@ -391,6 +388,11 @@ std::string TemplateURLRef::ReplaceSearchTerms(
     query_params.push_back(search_terms_args.additional_query_params);
   if (!gurl.query().empty())
     query_params.push_back(gurl.query());
+  if (owner_->created_from_play_api()) {
+    // Append attribution parameter to query originating from Play API search
+    // engine.
+    query_params.push_back("chrome_dse_attribution=1");
+  }
 
   if (query_params.empty())
     return url;
@@ -672,6 +674,9 @@ bool TemplateURLRef::ParseParameter(size_t start,
   } else if (parameter == "google:inputType") {
     replacements->push_back(Replacement(TemplateURLRef::GOOGLE_INPUT_TYPE,
                                         start));
+  } else if (parameter == "google:omniboxFocusType") {
+    replacements->push_back(
+        Replacement(TemplateURLRef::GOOGLE_OMNIBOX_FOCUS_TYPE, start));
   } else if (parameter == "google:iOSSearchLanguage") {
     replacements->push_back(Replacement(GOOGLE_IOS_SEARCH_LANGUAGE, start));
   } else if (parameter == "google:contextualSearchVersion") {
@@ -961,6 +966,48 @@ std::string TemplateURLRef::HandleReplacements(
         HandleReplacement(std::string(), input_encoding, *i, &url);
         break;
 
+      case GOOGLE_CONTEXTUAL_SEARCH_VERSION:
+        if (search_terms_args.contextual_search_params.version >= 0) {
+          HandleReplacement(
+              "ctxs",
+              base::NumberToString(
+                  search_terms_args.contextual_search_params.version),
+              *i, &url);
+        }
+        break;
+
+      case GOOGLE_CONTEXTUAL_SEARCH_CONTEXT_DATA: {
+        DCHECK(!i->is_post_param);
+
+        const SearchTermsArgs::ContextualSearchParams& params =
+            search_terms_args.contextual_search_params;
+        std::vector<std::string> args;
+
+        if (params.contextual_cards_version > 0) {
+          args.push_back("ctxsl_coca=" +
+                         base::NumberToString(params.contextual_cards_version));
+        }
+        if (!params.home_country.empty())
+          args.push_back("ctxs_hc=" + params.home_country);
+        if (params.previous_event_id != 0) {
+          args.push_back("ctxsl_pid=" +
+                         base::NumberToString(params.previous_event_id));
+        }
+        if (params.previous_event_results != 0) {
+          args.push_back("ctxsl_per=" +
+                         base::NumberToString(params.previous_event_results));
+        }
+        if (params.is_exact_search)
+          args.push_back("ctxsl_exact=1");
+        if (!params.source_lang.empty())
+          args.push_back("tlitesl=" + params.source_lang);
+        if (!params.target_lang.empty())
+          args.push_back("tlitetl=" + params.target_lang);
+
+        HandleReplacement(std::string(), base::JoinString(args, "&"), *i, &url);
+        break;
+      }
+
       case GOOGLE_ASSISTED_QUERY_STATS:
         DCHECK(!i->is_post_param);
         if (!search_terms_args.assisted_query_stats.empty()) {
@@ -1019,41 +1066,16 @@ std::string TemplateURLRef::HandleReplacements(
                           *i, &url);
         break;
 
-      case GOOGLE_CONTEXTUAL_SEARCH_VERSION:
-        if (search_terms_args.contextual_search_params.version >= 0) {
-          HandleReplacement(
-              "ctxs",
-              base::NumberToString(
-                  search_terms_args.contextual_search_params.version),
-              *i, &url);
-        }
-        break;
-
-      case GOOGLE_CONTEXTUAL_SEARCH_CONTEXT_DATA: {
+      case GOOGLE_OMNIBOX_FOCUS_TYPE:
         DCHECK(!i->is_post_param);
-
-        const SearchTermsArgs::ContextualSearchParams& params =
-            search_terms_args.contextual_search_params;
-        std::vector<std::string> args;
-
-        if (params.contextual_cards_version > 0) {
-          args.push_back("ctxsl_coca=" +
-                         base::NumberToString(params.contextual_cards_version));
+        if (search_terms_args.omnibox_focus_type !=
+            SearchTermsArgs::OmniboxFocusType::DEFAULT) {
+          HandleReplacement("oft",
+                            base::NumberToString(static_cast<int>(
+                                search_terms_args.omnibox_focus_type)),
+                            *i, &url);
         }
-        if (!params.home_country.empty())
-          args.push_back("ctxs_hc=" + params.home_country);
-        if (params.previous_event_id != 0) {
-          args.push_back("ctxsl_pid=" +
-                         base::NumberToString(params.previous_event_id));
-        }
-        if (params.previous_event_results != 0) {
-          args.push_back("ctxsl_per=" +
-                         base::NumberToString(params.previous_event_results));
-        }
-
-        HandleReplacement(std::string(), base::JoinString(args, "&"), *i, &url);
         break;
-      }
 
       case GOOGLE_ORIGINAL_QUERY_FOR_SUGGESTION:
         DCHECK(!i->is_post_param);
@@ -1469,7 +1491,7 @@ void TemplateURL::EncodeSearchTerms(
     base::string16* encoded_original_query) const {
 
   std::vector<std::string> encodings(input_encodings());
-  if (!base::ContainsValue(encodings, "UTF-8"))
+  if (!base::Contains(encodings, "UTF-8"))
     encodings.push_back("UTF-8");
   for (auto i = encodings.begin(); i != encodings.end(); ++i) {
     if (TryEncoding(search_terms_args.search_terms,

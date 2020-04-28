@@ -55,7 +55,7 @@ class DeviceSettingsProvider
 
   // CrosSettingsProvider implementation.
   const base::Value* Get(const std::string& path) const override;
-  TrustedStatus PrepareTrustedValues(const base::Closure& callback) override;
+  TrustedStatus PrepareTrustedValues(base::OnceClosure* callback) override;
   bool HandlesSetting(const std::string& path) const override;
 
   // Helper function that decodes policies from provided proto into the pref
@@ -64,9 +64,13 @@ class DeviceSettingsProvider
       const enterprise_management::ChromeDeviceSettingsProto& policy,
       PrefValueMap* new_values_cache);
 
+  void DoSetForTesting(const std::string& path, const base::Value& value) {
+    DoSet(path, value);
+  }
+
  private:
   // TODO(https://crbug.com/433840): There are no longer any actual callers of
-  // DeviceSettingsProvider::DoSet, but it is still called in the unit test.
+  // DeviceSettingsProvider::DoSet, but it is still called in the tests.
   // Still TODO: remove the calls from the test, and remove the extra state
   // that this class will no longer need (ie, cached written values).
   void DoSet(const std::string& path, const base::Value& value);
@@ -111,7 +115,7 @@ class DeviceSettingsProvider
   bool UpdateFromService();
 
   // Pending callbacks that need to be invoked after settings verification.
-  std::vector<base::Closure> callbacks_;
+  std::vector<base::OnceClosure> callbacks_;
 
   DeviceSettingsService* device_settings_service_;
   PrefService* local_state_;
@@ -135,7 +139,7 @@ class DeviceSettingsProvider
   PrefValueMap values_cache_;
 
   // Weak pointer factory for creating store operation callbacks.
-  base::WeakPtrFactory<DeviceSettingsProvider> store_callback_factory_;
+  base::WeakPtrFactory<DeviceSettingsProvider> store_callback_factory_{this};
 
   friend class DeviceSettingsProviderTest;
   FRIEND_TEST_ALL_PREFIXES(DeviceSettingsProviderTest,

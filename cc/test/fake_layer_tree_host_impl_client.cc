@@ -11,8 +11,9 @@ bool FakeLayerTreeHostImplClient::IsInsideDraw() {
   return false;
 }
 
-void FakeLayerTreeHostImplClient::PostAnimationEventsToMainThreadOnImplThread(
-    std::unique_ptr<MutatorEvents> events) {}
+bool FakeLayerTreeHostImplClient::IsBeginMainFrameExpected() {
+  return true;
+}
 
 void FakeLayerTreeHostImplClient::NeedsImplSideInvalidation(
     bool needs_first_draw_on_activation) {

@@ -5,10 +5,11 @@
 #include "ui/views/controls/textfield/textfield_model.h"
 
 #include <algorithm>
+#include <utility>
 
 #include "base/logging.h"
 #include "base/macros.h"
-#include "base/message_loop/message_loop.h"
+#include "base/message_loop/message_loop_current.h"
 #include "base/no_destructor.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
@@ -255,8 +256,7 @@ namespace {
 // representing the target clause (on Windows). Returns an invalid range if
 // there is no such a range.
 gfx::Range GetFirstEmphasizedRange(const ui::CompositionText& composition) {
-  for (size_t i = 0; i < composition.ime_text_spans.size(); ++i) {
-    const ui::ImeTextSpan& underline = composition.ime_text_spans[i];
+  for (const auto& underline : composition.ime_text_spans) {
     if (underline.thickness == ui::ImeTextSpan::Thickness::kThick)
       return gfx::Range(underline.start_offset, underline.end_offset);
   }
@@ -307,7 +307,7 @@ TextfieldModel::Delegate::~Delegate() = default;
 
 TextfieldModel::TextfieldModel(Delegate* delegate)
     : delegate_(delegate),
-      render_text_(gfx::RenderText::CreateHarfBuzzInstance()),
+      render_text_(gfx::RenderText::CreateRenderText()),
       current_edit_(edit_history_.end()) {}
 
 TextfieldModel::~TextfieldModel() {
@@ -365,8 +365,8 @@ bool TextfieldModel::Delete(bool add_to_kill_buffer) {
     DeleteSelection();
     return true;
   }
-  if (text().length() > GetCursorPosition()) {
-    size_t cursor_position = GetCursorPosition();
+  const size_t cursor_position = GetCursorPosition();
+  if (cursor_position < text().length()) {
     size_t next_grapheme_index = render_text_->IndexOfAdjacentGrapheme(
         cursor_position, gfx::CURSOR_FORWARD);
     gfx::Range range_to_delete(cursor_position, next_grapheme_index);
@@ -394,7 +394,7 @@ bool TextfieldModel::Backspace(bool add_to_kill_buffer) {
     DeleteSelection();
     return true;
   }
-  size_t cursor_position = GetCursorPosition();
+  const size_t cursor_position = GetCursorPosition();
   if (cursor_position > 0) {
     gfx::Range range_to_delete(
         PlatformStyle::RangeToDeleteBackwards(text(), cursor_position));
@@ -430,6 +430,10 @@ bool TextfieldModel::MoveCursorTo(const gfx::SelectionModel& cursor) {
         gfx::SelectionModel(cursor.caret_pos(), cursor.caret_affinity()));
   }
   return render_text_->SetSelection(cursor);
+}
+
+bool TextfieldModel::MoveCursorTo(size_t pos) {
+  return MoveCursorTo(gfx::SelectionModel(pos, gfx::CURSOR_FORWARD));
 }
 
 bool TextfieldModel::MoveCursorTo(const gfx::Point& point, bool select) {
@@ -481,8 +485,8 @@ bool TextfieldModel::CanRedo() {
     return false;
   // There is no redo iff the current edit is the last element in the history.
   auto iter = current_edit_;
-  return iter == edit_history_.end() || // at the top.
-      ++iter != edit_history_.end();
+  return iter == edit_history_.end() ||  // at the top.
+         ++iter != edit_history_.end();
 }
 
 bool TextfieldModel::Undo() {
@@ -523,15 +527,8 @@ bool TextfieldModel::Redo() {
 
 bool TextfieldModel::Cut() {
   if (!HasCompositionText() && HasSelection() && !render_text_->obscured()) {
-    ui::ScopedClipboardWriter(
-        ui::CLIPBOARD_TYPE_COPY_PASTE).WriteText(GetSelectedText());
-    // A trick to let undo/redo handle cursor correctly.
-    // Undoing CUT moves the cursor to the end of the change rather
-    // than beginning, unlike Delete/Backspace.
-    // TODO(oshima): Change Delete/Backspace to use DeleteSelection,
-    // update DeleteEdit and remove this trick.
-    const gfx::Range& selection = render_text_->selection();
-    render_text_->SelectRange(gfx::Range(selection.end(), selection.start()));
+    ui::ScopedClipboardWriter(ui::ClipboardBuffer::kCopyPaste)
+        .WriteText(GetSelectedText());
     DeleteSelection();
     return true;
   }
@@ -540,8 +537,8 @@ bool TextfieldModel::Cut() {
 
 bool TextfieldModel::Copy() {
   if (!HasCompositionText() && HasSelection() && !render_text_->obscured()) {
-    ui::ScopedClipboardWriter(
-        ui::CLIPBOARD_TYPE_COPY_PASTE).WriteText(GetSelectedText());
+    ui::ScopedClipboardWriter(ui::ClipboardBuffer::kCopyPaste)
+        .WriteText(GetSelectedText());
     return true;
   }
   return false;
@@ -549,17 +546,23 @@ bool TextfieldModel::Copy() {
 
 bool TextfieldModel::Paste() {
   base::string16 text;
-  ui::Clipboard::GetForCurrentThread()->ReadText(ui::CLIPBOARD_TYPE_COPY_PASTE,
-                                                 &text);
+  ui::Clipboard::GetForCurrentThread()->ReadText(
+      ui::ClipboardBuffer::kCopyPaste, &text);
   if (text.empty())
     return false;
 
-  base::string16 actual_text = base::CollapseWhitespace(text, false);
-  // If the clipboard contains all whitespaces then paste a single space.
-  if (actual_text.empty())
-    actual_text = base::ASCIIToUTF16(" ");
+  // Leading/trailing whitespace is often selected accidentally, and is rarely
+  // critical to include (e.g. when pasting into a find bar).  Trim it.  By
+  // contrast, whitespace in the middle of the string may need exact
+  // preservation to avoid changing the effect (e.g. converting a full-width
+  // space to a regular space), so don't call a more aggressive function like
+  // CollapseWhitespace().
+  base::TrimWhitespace(text, base::TRIM_ALL, &text);
+  // If the clipboard contains all whitespace then paste a single space.
+  if (text.empty())
+    text = base::ASCIIToUTF16(" ");
 
-  InsertTextInternal(actual_text, false);
+  InsertTextInternal(text, false);
   return true;
 }
 
@@ -642,7 +645,7 @@ void TextfieldModel::SetCompositionText(
 
   size_t cursor = GetCursorPosition();
   base::string16 new_text = text();
-  render_text_->SetText(new_text.insert(cursor, composition.text));
+  SetRenderTextText(new_text.insert(cursor, composition.text));
   composition_range_ = gfx::Range(cursor, cursor + composition.text.length());
   // Don't render IME spans with thickness "kNone".
   if (composition.ime_text_spans.size() > 0 &&
@@ -669,10 +672,20 @@ void TextfieldModel::SetCompositionText(
   }
 }
 
+void TextfieldModel::SetCompositionFromExistingText(const gfx::Range& range) {
+  if (range.is_empty() || !gfx::Range(0, text().length()).Contains(range)) {
+    ClearComposition();
+    return;
+  }
+
+  composition_range_ = range;
+  render_text_->SetCompositionRange(range);
+}
+
 void TextfieldModel::ConfirmCompositionText() {
   DCHECK(HasCompositionText());
-  base::string16 composition = text().substr(
-      composition_range_.start(), composition_range_.length());
+  base::string16 composition =
+      text().substr(composition_range_.start(), composition_range_.length());
   // TODO(oshima): current behavior on ChromeOS is a bit weird and not
   // sure exactly how this should work. Find out and fix if necessary.
   AddOrMergeEditHistory(std::make_unique<internal::InsertEdit>(
@@ -688,7 +701,7 @@ void TextfieldModel::CancelCompositionText() {
   gfx::Range range = composition_range_;
   ClearComposition();
   base::string16 new_text = text();
-  render_text_->SetText(new_text.erase(range.start(), range.length()));
+  SetRenderTextText(new_text.erase(range.start(), range.length()));
   render_text_->SetCursorPosition(range.start());
   if (delegate_)
     delegate_->OnCompositionTextConfirmedOrCleared();
@@ -834,14 +847,20 @@ void TextfieldModel::ModifyText(size_t delete_from,
   base::string16 old_text = text();
   ClearComposition();
   if (delete_from != delete_to)
-    render_text_->SetText(old_text.erase(delete_from, delete_to - delete_from));
+    SetRenderTextText(old_text.erase(delete_from, delete_to - delete_from));
   if (!new_text.empty())
-    render_text_->SetText(old_text.insert(new_text_insert_at, new_text));
+    SetRenderTextText(old_text.insert(new_text_insert_at, new_text));
   if (selection.start() == selection.end()) {
     render_text_->SetCursorPosition(selection.start());
   } else {
     render_text_->SelectRange(selection);
   }
+}
+
+void TextfieldModel::SetRenderTextText(const base::string16& text) {
+  render_text_->SetText(text);
+  if (delegate_)
+    delegate_->OnTextChanged();
 }
 
 // static

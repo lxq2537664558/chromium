@@ -17,7 +17,6 @@ import org.junit.Assert;
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
-import org.junit.rules.RuleChain;
 import org.junit.runner.RunWith;
 
 import org.chromium.base.test.BaseJUnit4ClassRunner;
@@ -25,8 +24,7 @@ import org.chromium.base.test.util.Feature;
 import org.chromium.base.test.util.RetryOnFailure;
 import org.chromium.chrome.browser.sync.FakeProfileSyncService;
 import org.chromium.chrome.browser.sync.ProfileSyncService;
-import org.chromium.chrome.browser.test.ChromeBrowserTestRule;
-import org.chromium.chrome.browser.test.ClearAppDataTestRule;
+import org.chromium.chrome.test.ChromeBrowserTestRule;
 import org.chromium.chrome.test.util.browser.signin.SigninTestUtil;
 import org.chromium.components.signin.ChromeSigninController;
 import org.chromium.content_public.browser.test.util.TestThreadUtils;
@@ -37,19 +35,17 @@ import org.chromium.content_public.browser.test.util.TestThreadUtils;
 @RunWith(BaseJUnit4ClassRunner.class)
 public class PassphraseActivityTest {
     @Rule
-    public final RuleChain mChain =
-            RuleChain.outerRule(new ClearAppDataTestRule()).around(new ChromeBrowserTestRule());
+    public final ChromeBrowserTestRule mChromeBrowserTestRule = new ChromeBrowserTestRule();
 
     private Context mContext;
 
     @Before
-    public void setUp() throws Exception {
+    public void setUp() {
         mContext = InstrumentationRegistry.getTargetContext();
     }
 
     @After
-    public void tearDown() throws Exception {
-        // Clear ProfileSyncService in case it was mocked.
+    public void tearDown() {
         TestThreadUtils.runOnUiThreadBlocking(() -> ProfileSyncService.resetForTests());
     }
 
@@ -60,12 +56,11 @@ public class PassphraseActivityTest {
     @SmallTest
     @Feature({"Sync"})
     @RetryOnFailure
-    public void testCallbackAfterBackgrounded() throws Exception {
+    public void testCallbackAfterBackgrounded() {
         InstrumentationRegistry.getInstrumentation().waitForIdleSync();
-        SigninTestUtil.addAndSignInTestAccount();
-
-        // Override before creating the activity so we know initialized is false.
+        // Override before signing in, otherwise regular ProfileSyncService will be created.
         overrideProfileSyncService();
+        SigninTestUtil.addAndSignInTestAccount();
 
         // PassphraseActivity won't start if an account isn't set.
         Assert.assertNotNull(ChromeSigninController.get().getSignedInAccountName());
@@ -82,9 +77,12 @@ public class PassphraseActivityTest {
             // Fake sync's backend finishing its initialization.
             FakeProfileSyncService pss = (FakeProfileSyncService) ProfileSyncService.get();
             pss.setEngineInitialized(true);
-            pss.syncStateChanged();
         });
         // Nothing crashed; success!
+
+        // Finish the activity before resetting the state.
+        activity.finish();
+        InstrumentationRegistry.getInstrumentation().waitForIdleSync();
     }
 
     private PassphraseActivity launchPassphraseActivity() {

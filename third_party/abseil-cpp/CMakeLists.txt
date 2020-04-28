@@ -22,14 +22,21 @@
 cmake_minimum_required(VERSION 3.5)
 
 # Compiler id for Apple Clang is now AppleClang.
-if (POLICY CMP0025)
-  cmake_policy(SET CMP0025 NEW)
-endif()
+cmake_policy(SET CMP0025 NEW)
 
 # if command can use IN_LIST
 cmake_policy(SET CMP0057 NEW)
 
-project(absl)
+# Project version variables are the empty string if version is unspecified
+cmake_policy(SET CMP0048 NEW)
+
+project(absl CXX)
+
+# Output directory is correct by default for most build setups. However, when
+# building Abseil as a DLL, it is important to have the DLL in the same
+# directory as the executable using it. Thus, we put all executables in a single
+# /bin directory.
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 
 # when absl is included as subproject (i.e. using add_subdirectory(abseil-cpp))
 # in the source tree of a project that uses it, install rules are disabled.
@@ -44,8 +51,9 @@ list(APPEND CMAKE_MODULE_PATH
   ${CMAKE_CURRENT_LIST_DIR}/absl/copts
 )
 
-include(GNUInstallDirs)
+include(AbseilInstallDirs)
 include(CMakePackageConfigHelpers)
+include(AbseilDll)
 include(AbseilHelpers)
 
 
@@ -73,8 +81,16 @@ endif()
 ## pthread
 find_package(Threads REQUIRED)
 
+option(ABSL_USE_EXTERNAL_GOOGLETEST
+  "If ON, Abseil will assume that the targets for GoogleTest are already provided by the including project. This makes sense when Abseil is used with add_subproject." OFF)
+
+
 option(ABSL_USE_GOOGLETEST_HEAD
   "If ON, abseil will download HEAD from googletest at config time." OFF)
+
+set(ABSL_LOCAL_GOOGLETEST_DIR "/usr/src/googletest" CACHE PATH
+  "If ABSL_USE_GOOGLETEST_HEAD is OFF, specifies the directory of a local googletest checkout."
+  )
 
 option(ABSL_RUN_TESTS "If ON, Abseil tests will be run." OFF)
 
@@ -85,23 +101,16 @@ if(${ABSL_RUN_TESTS})
   enable_testing()
 endif()
 
-# We don't support system-wide installation
-list(APPEND SYSTEM_INSTALL_DIRS "/usr/local" "/usr" "/opt/" "/opt/local" "c:/Program Files/${PROJECT_NAME}")
-if(NOT DEFINED CMAKE_INSTALL_PREFIX OR CMAKE_INSTALL_PREFIX IN_LIST SYSTEM_INSTALL_DIRS)
-  message(WARNING "\
-The default and system-level install directories are unsupported except in LTS \
-releases of Abseil.  Please set CMAKE_INSTALL_PREFIX to install Abseil in your \
-source or build tree directly.\
-  ")
-endif()
-
 ## check targets
 if(BUILD_TESTING)
-
-  if(${ABSL_USE_GOOGLETEST_HEAD})
-    include(CMake/DownloadGTest.cmake)
-    set(absl_gtest_src_dir ${CMAKE_BINARY_DIR}/googletest-src)
+  if (NOT ABSL_USE_EXTERNAL_GOOGLETEST)
     set(absl_gtest_build_dir ${CMAKE_BINARY_DIR}/googletest-build)
+    if(${ABSL_USE_GOOGLETEST_HEAD})
+      set(absl_gtest_src_dir ${CMAKE_BINARY_DIR}/googletest-src)
+    else()
+      set(absl_gtest_src_dir ${ABSL_LOCAL_GOOGLETEST_DIR})
+    endif()
+    include(CMake/Googletest/DownloadGTest.cmake)
   endif()
 
   check_target(gtest)
@@ -118,25 +127,52 @@ endif()
 
 add_subdirectory(absl)
 
-# install as a subdirectory only
-install(EXPORT ${PROJECT_NAME}Targets
-  NAMESPACE absl::
-  DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/${PROJECT_NAME}"
-)
+if(ABSL_ENABLE_INSTALL)
+  # absl:lts-remove-begin(system installation is supported for LTS releases)
+  # We don't support system-wide installation
+  list(APPEND SYSTEM_INSTALL_DIRS "/usr/local" "/usr" "/opt/" "/opt/local" "c:/Program Files/${PROJECT_NAME}")
+  if(NOT DEFINED CMAKE_INSTALL_PREFIX OR CMAKE_INSTALL_PREFIX IN_LIST SYSTEM_INSTALL_DIRS)
+    message(WARNING "\
+  The default and system-level install directories are unsupported except in LTS \
+  releases of Abseil.  Please set CMAKE_INSTALL_PREFIX to install Abseil in your \
+  source or build tree directly.\
+    ")
+  endif()
+  # absl:lts-remove-end
 
-configure_package_config_file(
-  CMake/abslConfig.cmake.in
-  "${PROJECT_BINARY_DIR}/${PROJECT_NAME}Config.cmake"
-  INSTALL_DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/${PROJECT_NAME}"
-)
+  # install as a subdirectory only
+  install(EXPORT ${PROJECT_NAME}Targets
+    NAMESPACE absl::
+    DESTINATION "${ABSL_INSTALL_CONFIGDIR}"
+  )
 
-install(FILES "${PROJECT_BINARY_DIR}/${PROJECT_NAME}Config.cmake"
-  DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/${PROJECT_NAME}"
-)
+  configure_package_config_file(
+    CMake/abslConfig.cmake.in
+    "${PROJECT_BINARY_DIR}/${PROJECT_NAME}Config.cmake"
+    INSTALL_DESTINATION "${ABSL_INSTALL_CONFIGDIR}"
+  )
+  install(FILES "${PROJECT_BINARY_DIR}/${PROJECT_NAME}Config.cmake"
+    DESTINATION "${ABSL_INSTALL_CONFIGDIR}"
+  )
 
-install(DIRECTORY absl
-  DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
-  FILES_MATCHING
-    PATTERN "*.inc"
-    PATTERN "*.h"
-)
+  # Abseil only has a version in LTS releases.  This mechanism is accomplished
+  # Abseil's internal Copybara (https://github.com/google/copybara) workflows and
+  # isn't visible in the CMake buildsystem itself.
+  if(absl_VERSION)
+    write_basic_package_version_file(
+      "${PROJECT_BINARY_DIR}/${PROJECT_NAME}ConfigVersion.cmake"
+      COMPATIBILITY ExactVersion
+    )
+
+    install(FILES "${PROJECT_BINARY_DIR}/${PROJECT_NAME}ConfigVersion.cmake"
+      DESTINATION ${ABSL_INSTALL_CONFIGDIR}
+    )
+  endif()  # absl_VERSION
+
+  install(DIRECTORY absl
+    DESTINATION ${ABSL_INSTALL_INCLUDEDIR}
+    FILES_MATCHING
+      PATTERN "*.inc"
+      PATTERN "*.h"
+  )
+endif()  # ABSL_ENABLE_INSTALL

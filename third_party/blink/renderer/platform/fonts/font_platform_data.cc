@@ -20,8 +20,6 @@
 
 #include "third_party/blink/renderer/platform/fonts/font_platform_data.h"
 
-#include "SkFont.h"
-#include "SkTypeface.h"
 #include "build/build_config.h"
 #include "hb-ot.h"
 #include "hb.h"
@@ -35,6 +33,8 @@
 #include "third_party/blink/renderer/platform/wtf/text/character_names.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_hash.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
+#include "third_party/skia/include/core/SkFont.h"
+#include "third_party/skia/include/core/SkTypeface.h"
 
 #if defined(OS_MACOSX)
 #include "third_party/skia/include/ports/SkTypeface_mac.h"
@@ -114,7 +114,7 @@ FontPlatformData::FontPlatformData(const FontPlatformData& src, float text_size)
 #if !defined(OS_WIN) && !defined(OS_MACOSX)
                        src.family_.data(),
 #else
-                       CString(),
+                       std::string(),
 #endif
                        text_size,
                        src.synthetic_bold_,
@@ -123,7 +123,7 @@ FontPlatformData::FontPlatformData(const FontPlatformData& src, float text_size)
 }
 
 FontPlatformData::FontPlatformData(sk_sp<SkTypeface> typeface,
-                                   const CString& family,
+                                   const std::string& family,
                                    float text_size,
                                    bool synthetic_bold,
                                    bool synthetic_italic,
@@ -233,7 +233,8 @@ String FontPlatformData::FontFamilyName() const {
          !localized_string.fString.size()) {
   }
   font_family_iterator->unref();
-  return String::FromUTF8(localized_string.fString.c_str());
+  return String::FromUTF8(localized_string.fString.c_str(),
+                          localized_string.fString.size());
 }
 
 SkTypeface* FontPlatformData::Typeface() const {
@@ -285,7 +286,7 @@ bool FontPlatformData::FontContainsCharacter(UChar32 character) {
 #if !defined(OS_MACOSX) && !defined(OS_WIN)
 // static
 WebFontRenderStyle FontPlatformData::QuerySystemRenderStyle(
-    const CString& family,
+    const std::string& family,
     float text_size,
     SkFontStyle font_style) {
   WebFontRenderStyle result;

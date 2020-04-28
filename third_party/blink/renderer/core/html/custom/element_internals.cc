@@ -4,11 +4,13 @@
 
 #include "third_party/blink/renderer/core/html/custom/element_internals.h"
 
+#include "third_party/blink/renderer/bindings/core/v8/v8_validity_state_flags.h"
+#include "third_party/blink/renderer/core/accessibility/ax_object_cache.h"
+#include "third_party/blink/renderer/core/dom/dom_token_list.h"
 #include "third_party/blink/renderer/core/dom/node_lists_node_data.h"
 #include "third_party/blink/renderer/core/fileapi/file.h"
 #include "third_party/blink/renderer/core/html/custom/custom_element.h"
 #include "third_party/blink/renderer/core/html/custom/custom_element_registry.h"
-#include "third_party/blink/renderer/core/html/custom/validity_state_flags.h"
 #include "third_party/blink/renderer/core/html/forms/form_controller.h"
 #include "third_party/blink/renderer/core/html/forms/form_data.h"
 #include "third_party/blink/renderer/core/html/forms/html_form_element.h"
@@ -30,8 +32,21 @@ bool IsValidityStateFlagsValid(const ValidityStateFlags* flags) {
 }
 }  // anonymous namespace
 
+class CustomStatesTokenList : public DOMTokenList {
+ public:
+  CustomStatesTokenList(Element& element)
+      : DOMTokenList(element, g_null_name) {}
+
+  AtomicString value() const override { return TokenSet().SerializeToString(); }
+
+  void setValue(const AtomicString& new_value) override {
+    DidUpdateAttributeValue(value(), new_value);
+    // Should we have invalidation set for each of state tokens?
+    GetElement().PseudoStateChanged(CSSSelector::kPseudoState);
+  }
+};
+
 ElementInternals::ElementInternals(HTMLElement& target) : target_(target) {
-  value_.SetUSVString(String());
 }
 
 void ElementInternals::Trace(Visitor* visitor) {
@@ -39,6 +54,9 @@ void ElementInternals::Trace(Visitor* visitor) {
   visitor->Trace(value_);
   visitor->Trace(state_);
   visitor->Trace(validity_flags_);
+  visitor->Trace(validation_anchor_);
+  visitor->Trace(custom_states_);
+  visitor->Trace(explicitly_set_attr_elements_map_);
   ListedElement::Trace(visitor);
   ScriptWrappable::Trace(visitor);
 }
@@ -88,11 +106,18 @@ HTMLFormElement* ElementInternals::form(ExceptionState& exception_state) const {
 
 void ElementInternals::setValidity(ValidityStateFlags* flags,
                                    ExceptionState& exception_state) {
-  setValidity(flags, String(), exception_state);
+  setValidity(flags, String(), nullptr, exception_state);
 }
 
 void ElementInternals::setValidity(ValidityStateFlags* flags,
                                    const String& message,
+                                   ExceptionState& exception_state) {
+  setValidity(flags, message, nullptr, exception_state);
+}
+
+void ElementInternals::setValidity(ValidityStateFlags* flags,
+                                   const String& message,
+                                   Element* anchor,
                                    ExceptionState& exception_state) {
   if (!IsTargetFormAssociated()) {
     exception_state.ThrowDOMException(
@@ -109,7 +134,19 @@ void ElementInternals::setValidity(ValidityStateFlags* flags,
         "first argument are true.");
     return;
   }
+  if (anchor && !Target().IsShadowIncludingAncestorOf(*anchor)) {
+    exception_state.ThrowDOMException(
+        DOMExceptionCode::kNotFoundError,
+        "The Element argument should be a shadow-including descendant of the "
+        "target element.");
+    return;
+  }
+
+  if (validation_anchor_ && validation_anchor_ != anchor) {
+    HideVisibleValidationMessage();
+  }
   validity_flags_ = flags;
+  validation_anchor_ = anchor;
   SetCustomValidationMessage(message);
   SetNeedsValidityCheck();
 }
@@ -157,6 +194,10 @@ String ElementInternals::ValidationSubMessage() const {
   return String();
 }
 
+Element& ElementInternals::ValidationAnchor() const {
+  return validation_anchor_ ? *validation_anchor_ : Target();
+}
+
 bool ElementInternals::checkValidity(ExceptionState& exception_state) {
   if (!IsTargetFormAssociated()) {
     exception_state.ThrowDOMException(
@@ -187,6 +228,37 @@ LabelsNodeList* ElementInternals::labels(ExceptionState& exception_state) {
   return Target().labels();
 }
 
+DOMTokenList* ElementInternals::states() {
+  if (!custom_states_)
+    custom_states_ = MakeGarbageCollected<CustomStatesTokenList>(Target());
+  return custom_states_;
+}
+
+bool ElementInternals::HasState(const AtomicString& state) const {
+  return custom_states_ && custom_states_->contains(state);
+}
+
+const AtomicString& ElementInternals::FastGetAttribute(
+    const QualifiedName& attribute) const {
+  return accessibility_semantics_map_.at(attribute);
+}
+
+const HashMap<QualifiedName, AtomicString>& ElementInternals::GetAttributes()
+    const {
+  return accessibility_semantics_map_;
+}
+
+void ElementInternals::setAttribute(const QualifiedName& attribute,
+                                    const AtomicString& value) {
+  accessibility_semantics_map_.Set(attribute, value);
+  if (AXObjectCache* cache = Target().GetDocument().ExistingAXObjectCache())
+    cache->HandleAttributeChanged(attribute, &Target());
+}
+
+bool ElementInternals::HasAttribute(const QualifiedName& attribute) const {
+  return accessibility_semantics_map_.Contains(attribute);
+}
+
 void ElementInternals::DidUpgrade() {
   ContainerNode* parent = Target().parentNode();
   if (!parent)
@@ -197,7 +269,7 @@ void ElementInternals::DidUpgrade() {
       lists->InvalidateCaches(nullptr);
   }
   for (ContainerNode* node = parent; node; node = node->parentNode()) {
-    if (IsHTMLFieldSetElement(node)) {
+    if (IsA<HTMLFieldSetElement>(node)) {
       // TODO(tkent): Invalidate only HTMLFormControlsCollections.
       if (auto* lists = node->NodeLists())
         lists->InvalidateCaches(nullptr);
@@ -207,11 +279,58 @@ void ElementInternals::DidUpgrade() {
       *this);
 }
 
+void ElementInternals::SetElementAttribute(const QualifiedName& name,
+                                           Element* element) {
+  auto result = explicitly_set_attr_elements_map_.insert(name, nullptr);
+  if (result.is_new_entry) {
+    result.stored_value->value =
+        MakeGarbageCollected<HeapVector<Member<Element>>>();
+  } else {
+    result.stored_value->value->clear();
+  }
+  result.stored_value->value->push_back(element);
+}
+
+Element* ElementInternals::GetElementAttribute(const QualifiedName& name) {
+  HeapVector<Member<Element>>* element_vector =
+      explicitly_set_attr_elements_map_.at(name);
+  if (!element_vector)
+    return nullptr;
+  DCHECK_EQ(element_vector->size(), 1u);
+  return element_vector->at(0);
+}
+
+base::Optional<HeapVector<Member<Element>>>
+ElementInternals::GetElementArrayAttribute(const QualifiedName& name) const {
+  const auto& iter = explicitly_set_attr_elements_map_.find(name);
+  if (iter != explicitly_set_attr_elements_map_.end()) {
+    return *(iter->value);
+  }
+  return base::nullopt;
+}
+
+void ElementInternals::SetElementArrayAttribute(
+    const QualifiedName& name,
+    const base::Optional<HeapVector<Member<Element>>>& elements) {
+  if (elements) {
+    explicitly_set_attr_elements_map_.Set(
+        name,
+        MakeGarbageCollected<HeapVector<Member<Element>>>(elements.value()));
+  } else {
+    explicitly_set_attr_elements_map_.erase(name);
+  }
+}
+
 bool ElementInternals::IsTargetFormAssociated() const {
   if (Target().IsFormAssociatedCustomElement())
     return true;
-  if (Target().GetCustomElementState() != CustomElementState::kUndefined)
+  // Custom element could be in the process of upgrading here, during which
+  // it will have state kFailed according to:
+  // https://html.spec.whatwg.org/multipage/custom-elements.html#upgrades
+  if (Target().GetCustomElementState() != CustomElementState::kUndefined &&
+      Target().GetCustomElementState() != CustomElementState::kFailed) {
     return false;
+  }
   // An element is in "undefined" state in its constructor JavaScript code.
   // ElementInternals needs to handle elements to be form-associated same as
   // form-associated custom elements because web authors want to call

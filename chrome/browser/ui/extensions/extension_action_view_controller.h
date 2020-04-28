@@ -11,6 +11,7 @@
 #include "chrome/browser/extensions/extension_action_icon_factory.h"
 #include "chrome/browser/extensions/extension_context_menu_model.h"
 #include "chrome/browser/ui/toolbar/toolbar_action_view_controller.h"
+#include "extensions/browser/extension_host.h"
 #include "extensions/browser/extension_host_observer.h"
 #include "ui/gfx/image/image.h"
 
@@ -19,7 +20,7 @@ class ExtensionAction;
 class ExtensionActionPlatformDelegate;
 class GURL;
 class IconWithBadgeImageSource;
-class ToolbarActionsBar;
+class ExtensionsContainer;
 
 namespace extensions {
 class Command;
@@ -45,7 +46,7 @@ class ExtensionActionViewController
   ExtensionActionViewController(const extensions::Extension* extension,
                                 Browser* browser,
                                 ExtensionAction* extension_action,
-                                ToolbarActionsBar* main_bar,
+                                ExtensionsContainer* extensions_container,
                                 bool in_overflow_mode);
   ~ExtensionActionViewController() override;
 
@@ -58,15 +59,17 @@ class ExtensionActionViewController
   base::string16 GetAccessibleName(content::WebContents* web_contents) const
       override;
   base::string16 GetTooltip(content::WebContents* web_contents) const override;
+  PageInteractionStatus GetPageInteractionStatus(
+      content::WebContents* web_contents) const override;
   bool IsEnabled(content::WebContents* web_contents) const override;
-  bool WantsToRun(content::WebContents* web_contents) const override;
   bool HasPopup(content::WebContents* web_contents) const override;
   bool IsShowingPopup() const override;
   void HidePopup() override;
   gfx::NativeView GetPopupNativeView() override;
   ui::MenuModel* GetContextMenu() override;
+  void OnContextMenuShown() override;
   void OnContextMenuClosed() override;
-  bool ExecuteAction(bool by_user) override;
+  bool ExecuteAction(bool by_user, InvocationSource source) override;
   void UpdateState() override;
   void RegisterCommand() override;
   bool DisabledClickOpensMenu() const override;
@@ -76,7 +79,14 @@ class ExtensionActionViewController
 
   // Populates |command| with the command associated with |extension|, if one
   // exists. Returns true if |command| was populated.
-  bool GetExtensionCommand(extensions::Command* command);
+  bool GetExtensionCommand(extensions::Command* command) const;
+
+  // Returns true if this controller can handle accelerators (i.e., keyboard
+  // commands) on the currently-active WebContents.
+  // This must only be called if the extension has an associated command.
+  // TODO(devlin): Move accelerator logic out of the platform delegate and into
+  // this class.
+  bool CanHandleAccelerators() const;
 
   const extensions::Extension* extension() const { return extension_.get(); }
   Browser* browser() { return browser_; }
@@ -87,6 +97,7 @@ class ExtensionActionViewController
   std::unique_ptr<IconWithBadgeImageSource> GetIconImageSourceForTesting(
       content::WebContents* web_contents,
       const gfx::Size& size);
+  bool HasBeenBlockedForTesting(content::WebContents* web_contents) const;
 
  private:
   // ExtensionActionIconFactory::Observer:
@@ -94,21 +105,6 @@ class ExtensionActionViewController
 
   // ExtensionHostObserver:
   void OnExtensionHostDestroyed(const extensions::ExtensionHost* host) override;
-
-  // The status of the extension's interaction for the page. This is independent
-  // of the action's clickability.
-  enum class PageInteractionStatus {
-    // The extension cannot run on the page.
-    kNone,
-    // The extension tried to access the page, but is pending user approval.
-    kPending,
-    // The extension has permission to run on the page.
-    kActive,
-  };
-
-  // Returns the PageInteractionStatus for the current page.
-  PageInteractionStatus GetPageInteractionStatus(
-      content::WebContents* web_contents) const;
 
   // Checks if the associated |extension| is still valid by checking its
   // status in the registry. Since the OnExtensionUnloaded() notifications are
@@ -171,16 +167,10 @@ class ExtensionActionViewController
 
   // The browser action this view represents. The ExtensionAction is not owned
   // by this class.
-  ExtensionAction* extension_action_;
+  ExtensionAction* const extension_action_;
 
-  // The main ToolbarActionsBar on the toolbar (not in 3-dot menu).
-  // TODO(pbos): Rename this toolbar_actions_bar_ and update comment when
-  // there's only one ToolbarActionsBar (ToolbarActionsBar disappears from the
-  // 3-dot menu).
-  // TODO(devlin): Would this be better behind a delegate interface? On the one
-  // hand, it's odd for this class to know about ToolbarActionsBar, but on the
-  // other, yet-another-delegate-class might just confuse things.
-  ToolbarActionsBar* const main_bar_;
+  // The corresponding ExtensionsContainer on the toolbar.
+  ExtensionsContainer* const extensions_container_;
 
   // The extension popup's host if the popup is visible; null otherwise.
   extensions::ExtensionViewHost* popup_host_;
@@ -204,9 +194,9 @@ class ExtensionActionViewController
   extensions::ExtensionRegistry* extension_registry_;
 
   ScopedObserver<extensions::ExtensionHost, extensions::ExtensionHostObserver>
-      popup_host_observer_;
+      popup_host_observer_{this};
 
-  base::WeakPtrFactory<ExtensionActionViewController> weak_factory_;
+  base::WeakPtrFactory<ExtensionActionViewController> weak_factory_{this};
 
   DISALLOW_COPY_AND_ASSIGN(ExtensionActionViewController);
 };

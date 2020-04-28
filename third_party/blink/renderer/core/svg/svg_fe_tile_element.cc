@@ -27,18 +27,16 @@
 
 namespace blink {
 
-inline SVGFETileElement::SVGFETileElement(Document& document)
+SVGFETileElement::SVGFETileElement(Document& document)
     : SVGFilterPrimitiveStandardAttributes(svg_names::kFETileTag, document),
       in1_(MakeGarbageCollected<SVGAnimatedString>(this, svg_names::kInAttr)) {
   AddToPropertyMap(in1_);
 }
 
-void SVGFETileElement::Trace(blink::Visitor* visitor) {
+void SVGFETileElement::Trace(Visitor* visitor) {
   visitor->Trace(in1_);
   SVGFilterPrimitiveStandardAttributes::Trace(visitor);
 }
-
-DEFINE_NODE_FACTORY(SVGFETileElement)
 
 void SVGFETileElement::SvgAttributeChanged(const QualifiedName& attr_name) {
   if (attr_name == svg_names::kInAttr) {

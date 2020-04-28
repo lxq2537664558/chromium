@@ -45,9 +45,7 @@ std::unique_ptr<std::vector<ChildProcessData>> CollectChildProcessData() {
 
 }  // namespace
 
-ChildProcessTaskProvider::ChildProcessTaskProvider()
-    : weak_ptr_factory_(this) {
-}
+ChildProcessTaskProvider::ChildProcessTaskProvider() {}
 
 ChildProcessTaskProvider::~ChildProcessTaskProvider() {
 }
@@ -83,10 +81,10 @@ void ChildProcessTaskProvider::StartUpdating() {
   DCHECK(tasks_by_child_id_.empty());
 
   // First, get the pre-existing child processes data.
-  base::PostTaskWithTraitsAndReplyWithResult(
-      FROM_HERE, {BrowserThread::IO}, base::Bind(&CollectChildProcessData),
-      base::Bind(&ChildProcessTaskProvider::ChildProcessDataCollected,
-                 weak_ptr_factory_.GetWeakPtr()));
+  base::PostTaskAndReplyWithResult(
+      FROM_HERE, {BrowserThread::IO}, base::BindOnce(&CollectChildProcessData),
+      base::BindOnce(&ChildProcessTaskProvider::ChildProcessDataCollected,
+                     weak_ptr_factory_.GetWeakPtr()));
 }
 
 void ChildProcessTaskProvider::StopUpdating() {

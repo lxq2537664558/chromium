@@ -11,6 +11,7 @@
 #include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/dom/scriptable_document_parser.h"
 #include "third_party/blink/renderer/core/execution_context/execution_context.h"
+#include "third_party/blink/renderer/core/frame/local_dom_window.h"
 #include "third_party/blink/renderer/core/html/html_frame_owner_element.h"
 #include "third_party/blink/renderer/core/inspector/thread_debugger.h"
 #include "third_party/blink/renderer/core/inspector/v8_inspector_string.h"
@@ -56,7 +57,8 @@ std::unique_ptr<SourceLocation> SourceLocation::Capture(
     return SourceLocation::CreateFromNonEmptyV8StackTrace(
         std::move(stack_trace), 0);
 
-  if (Document* document = DynamicTo<Document>(execution_context)) {
+  if (LocalDOMWindow* window = DynamicTo<LocalDOMWindow>(execution_context)) {
+    Document* document = window->document();
     unsigned line_number = 0;
     if (document->GetScriptableDocumentParser() &&
         !document->IsInDocumentWrite()) {
@@ -181,7 +183,13 @@ std::unique_ptr<SourceLocation> SourceLocation::Clone() const {
 
 std::unique_ptr<v8_inspector::protocol::Runtime::API::StackTrace>
 SourceLocation::BuildInspectorObject() const {
-  return stack_trace_ ? stack_trace_->buildInspectorObject() : nullptr;
+  return BuildInspectorObject(std::numeric_limits<int>::max());
+}
+
+std::unique_ptr<v8_inspector::protocol::Runtime::API::StackTrace>
+SourceLocation::BuildInspectorObject(int max_async_depth) const {
+  return stack_trace_ ? stack_trace_->buildInspectorObject(max_async_depth)
+                      : nullptr;
 }
 
 String SourceLocation::ToString() const {

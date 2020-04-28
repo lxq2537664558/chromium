@@ -4,8 +4,6 @@
 
 // https://www.khronos.org/registry/webgl/extensions/proposals/WEBGL_video_texture/
 
-typedef unsigned long GLenum;
-
 [
     RuntimeEnabled=WebGLDraftExtensions,
     DoNotCheckConstants,
@@ -14,5 +12,5 @@ typedef unsigned long GLenum;
     const GLenum TEXTURE_VIDEO_IMAGE = 0x9248;
     const GLenum SAMPLER_VIDEO_IMAGE = 0x9249;
 
-    [CallWith=ExecutionContext, RaisesException] WebGLVideoFrameInfo VideoElementTargetVideoTexture(GLenum target, HTMLVideoElement video);
+    [CallWith=ExecutionContext, RaisesException] VideoFrameMetadata VideoElementTargetVideoTexture(GLenum target, HTMLVideoElement video);
 };

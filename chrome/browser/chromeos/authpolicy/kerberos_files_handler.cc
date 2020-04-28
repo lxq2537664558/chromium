@@ -16,6 +16,7 @@
 #include "base/path_service.h"
 #include "base/strings/stringprintf.h"
 #include "base/task/post_task.h"
+#include "base/task/thread_pool.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/common/pref_names.h"
 #include "content/public/browser/network_service_instance.h"
@@ -103,7 +104,7 @@ KerberosFilesHandler::KerberosFilesHandler(
   // Set environment variables for GSSAPI library.
   std::unique_ptr<base::Environment> env(base::Environment::Create());
   base::FilePath path;
-  base::PathService::Get(base::DIR_HOME, &path);
+  CHECK(base::PathService::Get(base::DIR_HOME, &path));
   path = path.Append(kKrb5Directory);
   std::string krb5cc_env_value =
       kKrb5CCFilePrefix + path.Append(kKrb5CCFile).value();
@@ -137,7 +138,7 @@ void KerberosFilesHandler::SetFiles(base::Optional<std::string> krb5cc,
                                     base::Optional<std::string> krb5conf) {
   krb5conf =
       MaybeAdjustConfig(krb5conf, !negotiate_disable_cname_lookup_.GetValue());
-  base::PostTaskWithTraitsAndReply(
+  base::ThreadPool::PostTaskAndReply(
       FROM_HERE,
       {base::MayBlock(), base::TaskPriority::BEST_EFFORT,
        base::TaskShutdownBehavior::SKIP_ON_SHUTDOWN},
@@ -149,7 +150,7 @@ void KerberosFilesHandler::SetFiles(base::Optional<std::string> krb5cc,
 void KerberosFilesHandler::DeleteFiles() {
   // These files contain user credentials, so use BLOCK_SHUTDOWN here to make
   // sure they do get deleted.
-  base::PostTaskWithTraitsAndReply(
+  base::ThreadPool::PostTaskAndReply(
       FROM_HERE,
       {base::MayBlock(), base::TaskPriority::BEST_EFFORT,
        base::TaskShutdownBehavior::BLOCK_SHUTDOWN},
@@ -162,6 +163,7 @@ void KerberosFilesHandler::SetFilesChangedForTesting(
     base::OnceClosure callback) {
   files_changed_for_testing_ = std::move(callback);
 }
+
 void KerberosFilesHandler::OnDisabledAuthNegotiateCnameLookupChanged() {
   // Refresh kerberos files to adjust config for changed pref.
   get_kerberos_files_.Run();

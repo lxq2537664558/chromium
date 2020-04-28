@@ -7,22 +7,29 @@
  */
 cr.define('usb_internals', function() {
   class UsbInternals {
-    constructor() {
-      const pageHandler = mojom.UsbInternalsPageHandler.getProxy();
+    constructor() {}
+
+    async initializeViews() {
+      // window.setupFn() provides a hook for the test suite to perform setup
+      // actions after the page is loaded but before any script is run.
+      await window.setupFn();
+
+      const pageHandler = mojom.UsbInternalsPageHandler.getRemote();
 
       // Connection to the UsbInternalsPageHandler instance running in the
       // browser process.
-      /** @private {device.mojom.UsbDeviceManagerProxy} */
-      this.usbManager_ = new device.mojom.UsbDeviceManagerProxy;
-      pageHandler.bindUsbDeviceManagerInterface(
-          this.usbManager_.$.createRequest());
-
-      /** @private {device.mojom.UsbDeviceManagerTestProxy} */
-      this.usbManagerTest_ = new device.mojom.UsbDeviceManagerTestProxy;
-      pageHandler.bindTestInterface(this.usbManagerTest_.$.createRequest());
+      /** @type {device.mojom.UsbDeviceManagerRemote} */
+      const usbManager = new device.mojom.UsbDeviceManagerRemote;
+      await pageHandler.bindUsbDeviceManagerInterface(
+          usbManager.$.bindNewPipeAndPassReceiver());
 
       /** @private {devices_page.DevicesPage} */
-      this.devicesPage_ = new devices_page.DevicesPage(this.usbManager_);
+      this.devicesPage_ = new devices_page.DevicesPage(usbManager);
+
+      /** @private {device.mojom.UsbDeviceManagerTestRemote} */
+      this.usbManagerTest_ = new device.mojom.UsbDeviceManagerTestRemote;
+      await pageHandler.bindTestInterface(
+          this.usbManagerTest_.$.bindNewPipeAndPassReceiver());
 
       $('add-test-device-form').addEventListener('submit', (event) => {
         this.addTestDevice(event);
@@ -79,6 +86,11 @@ cr.define('usb_internals', function() {
   };
 });
 
+window.setupFn = window.setupFn || function() {
+  return Promise.resolve();
+};
+
 document.addEventListener('DOMContentLoaded', () => {
-  new usb_internals.UsbInternals();
+  const usbInternalsPage = new usb_internals.UsbInternals();
+  usbInternalsPage.initializeViews();
 });

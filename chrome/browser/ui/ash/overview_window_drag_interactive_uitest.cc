@@ -2,171 +2,28 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "ash/public/cpp/test/shell_test_api.h"
 #include "ash/public/cpp/window_properties.h"
-#include "ash/public/interfaces/window_state_type.mojom.h"
+#include "ash/public/cpp/window_state_type.h"
 #include "base/macros.h"
 #include "base/run_loop.h"
-#include "base/task/post_task.h"
+#include "base/threading/thread_task_runner_handle.h"
 #include "chrome/browser/chrome_notification_types.h"
-#include "chrome/browser/ui/ash/ash_test_util.h"
-#include "chrome/browser/ui/ash/tablet_mode_client_test_util.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
-#include "chrome/test/base/interactive_test_utils.h"
+#include "chrome/test/base/perf/drag_event_generator.h"
 #include "chrome/test/base/perf/performance_test.h"
+#include "chrome/test/base/ui_test_utils.h"
 #include "content/public/browser/notification_service.h"
 #include "ui/aura/window.h"
 #include "ui/aura/window_observer.h"
 #include "ui/base/test/ui_controls.h"
-#include "ui/base/ui_base_features.h"
 #include "ui/display/display.h"
 #include "ui/display/screen.h"
 #include "ui/gfx/animation/tween.h"
 
 namespace {
-
-// The frame duration for 60fps.
-constexpr base::TimeDelta kFrameDuration =
-    base::TimeDelta::FromMicroseconds(16666);
-
-// TODO(oshima): Move this to utility lib.
-// Producer produces the point for given progress value.
-class PointProducer {
- public:
-  virtual ~PointProducer() = default;
-  virtual gfx::Point GetPosition(float progress) = 0;
-};
-
-// InterporateProducer produces the interpolated location between two points
-// based on tween type.
-class InterporateProducer : public PointProducer {
- public:
-  InterporateProducer(const gfx::Point& start,
-                      const gfx::Point& end,
-                      gfx::Tween::Type type = gfx::Tween::LINEAR)
-      : start_(start), end_(end), type_(type) {}
-  ~InterporateProducer() override = default;
-
-  // PointProducer:
-  gfx::Point GetPosition(float progress) override {
-    float value = gfx::Tween::CalculateValue(type_, progress);
-    return gfx::Point(
-        gfx::Tween::LinearIntValueBetween(value, start_.x(), end_.x()),
-        gfx::Tween::LinearIntValueBetween(value, start_.y(), end_.y()));
-  }
-
- private:
-  gfx::Point start_, end_;
-  gfx::Tween::Type type_;
-
-  DISALLOW_COPY_AND_ASSIGN(InterporateProducer);
-};
-
-// A utility class that generates drag events using |producer| logic.
-class DragEventGenerator {
- public:
-  DragEventGenerator(std::unique_ptr<PointProducer> producer,
-                     const base::TimeDelta duration,
-                     bool touch = true)
-      : producer_(std::move(producer)),
-        start_(base::TimeTicks::Now()),
-        expected_next_time_(start_ + kFrameDuration),
-        duration_(duration),
-        touch_(touch) {
-    gfx::Point initial_position = producer_->GetPosition(0.f);
-    if (touch_) {
-      ui_controls::SendTouchEvents(ui_controls::PRESS, 0, initial_position.x(),
-                                   initial_position.y());
-    } else {
-      ui_controls::SendMouseMove(initial_position.x(), initial_position.y());
-      ui_controls::SendMouseEvents(ui_controls::LEFT, ui_controls::DOWN);
-    }
-    base::ThreadTaskRunnerHandle::Get()->PostDelayedTask(
-        FROM_HERE,
-        base::BindOnce(&DragEventGenerator::GenerateNext,
-                       base::Unretained(this)),
-        kFrameDuration);
-  }
-
-  ~DragEventGenerator() {
-    VLOG(1) << "Effective Event per seconds="
-            << (count_ * 1000) / duration_.InMilliseconds();
-  }
-
-  void GenerateNext() {
-    auto now = base::TimeTicks::Now();
-    auto elapsed = now - start_;
-
-    expected_next_time_ += kFrameDuration;
-    count_++;
-
-    if (elapsed >= duration_) {
-      gfx::Point position = producer_->GetPosition(1.0f);
-      if (touch_) {
-        ui_controls::SendTouchEventsNotifyWhenDone(
-            ui_controls::MOVE, 0, position.x(), position.y(),
-            base::BindOnce(&DragEventGenerator::Done, base::Unretained(this),
-                           position));
-      } else {
-        ui_controls::SendMouseMoveNotifyWhenDone(
-            position.x(), position.y(),
-            base::BindOnce(&DragEventGenerator::Done, base::Unretained(this),
-                           position));
-      }
-      return;
-    }
-
-    float progress = static_cast<float>(elapsed.InMilliseconds()) /
-                     duration_.InMilliseconds();
-    gfx::Point position = producer_->GetPosition(progress);
-    if (touch_) {
-      ui_controls::SendTouchEvents(ui_controls::MOVE, 0, position.x(),
-                                   position.y());
-    } else {
-      ui_controls::SendMouseMove(position.x(), position.y());
-    }
-
-    auto delta = expected_next_time_ - now;
-    if (delta.InMilliseconds() > 0) {
-      base::ThreadTaskRunnerHandle::Get()->PostDelayedTask(
-          FROM_HERE,
-          base::BindOnce(&DragEventGenerator::GenerateNext,
-                         base::Unretained(this)),
-          delta);
-    } else {
-      base::ThreadTaskRunnerHandle::Get()->PostTask(
-          FROM_HERE, base::BindOnce(&DragEventGenerator::GenerateNext,
-                                    base::Unretained(this)));
-    }
-  }
-
-  void Done(const gfx::Point position) {
-    if (touch_) {
-      ui_controls::SendTouchEventsNotifyWhenDone(ui_controls::RELEASE, 0,
-                                                 position.x(), position.y(),
-                                                 run_loop_.QuitClosure());
-    } else {
-      ui_controls::SendMouseEventsNotifyWhenDone(
-          ui_controls::LEFT, ui_controls::UP, run_loop_.QuitClosure());
-    }
-  }
-
-  void Wait() { run_loop_.Run(); }
-
- private:
-  std::unique_ptr<PointProducer> producer_;
-  int count_ = 0;
-
-  base::TimeTicks start_;
-  base::TimeTicks expected_next_time_;
-  base::TimeDelta duration_;
-  bool touch_;
-
-  base::RunLoop run_loop_;
-
-  DISALLOW_COPY_AND_ASSIGN(DragEventGenerator);
-};
 
 // Wait until the window's state changed to left snapped.
 // The window should stay alive, so no need to observer destroying.
@@ -192,7 +49,7 @@ class LeftSnapWaiter : public aura::WindowObserver {
 
   bool IsLeftSnapped() {
     return window_->GetProperty(ash::kWindowStateTypeKey) ==
-           ash::mojom::WindowStateType::LEFT_SNAPPED;
+           ash::WindowStateType::kLeftSnapped;
   }
 
  private:
@@ -218,7 +75,7 @@ class OverviewWindowDragTest
   // UIPerformanceTest:
   void SetUpOnMainThread() override {
     UIPerformanceTest::SetUpOnMainThread();
-    test::SetAndWaitForTabletMode(true);
+    ash::ShellTestApi().SetTabletModeEnabledForTest(true);
 
     int additional_browsers = std::get<0>(GetParam()) - 1;
     bool blank_page = std::get<1>(GetParam());
@@ -238,8 +95,9 @@ class OverviewWindowDragTest
     int wait_seconds = (base::SysInfo::IsRunningOnChromeOS() ? 5 : 0) +
                        additional_browsers * cost_per_browser;
     base::RunLoop run_loop;
-    base::PostDelayedTask(FROM_HERE, run_loop.QuitClosure(),
-                          base::TimeDelta::FromSeconds(wait_seconds));
+    base::ThreadTaskRunnerHandle::Get()->PostDelayedTask(
+        FROM_HERE, run_loop.QuitClosure(),
+        base::TimeDelta::FromSeconds(wait_seconds));
     run_loop.Run();
   }
 
@@ -247,7 +105,6 @@ class OverviewWindowDragTest
   std::vector<std::string> GetUMAHistogramNames() const override {
     return {
         "Ash.Overview.WindowDrag.PresentationTime.TabletMode",
-        "Ash.Overview.WindowDrag.PresentationTime.MaxLatency.TabletMode",
     };
   }
 
@@ -274,19 +131,26 @@ IN_PROC_BROWSER_TEST_P(OverviewWindowDragTest, NormalDrag) {
                             /*shift=*/false,
                             /*alt=*/false,
                             /*command=*/false);
-  test::WaitForOverviewAnimationState(
-      ash::mojom::OverviewAnimationState::kEnterAnimationComplete);
+  ash::ShellTestApi().WaitForOverviewAnimationState(
+      ash::OverviewAnimationState::kEnterAnimationComplete);
   gfx::Size display_size = GetDisplaySize(browser_window);
   gfx::Point start_point = GetStartLocation(display_size);
   gfx::Point end_point(start_point);
   end_point.set_x(end_point.x() + display_size.width() / 2);
-  DragEventGenerator generator(
-      std::make_unique<InterporateProducer>(start_point, end_point),
-      base::TimeDelta::FromMilliseconds(1000));
-  generator.Wait();
+  auto generator = ui_test_utils::DragEventGenerator::CreateForTouch(
+      std::make_unique<ui_test_utils::InterpolatedProducer>(
+          start_point, end_point, base::TimeDelta::FromMilliseconds(1000)),
+      /*long_press=*/true);
+  generator->Wait();
 }
 
-IN_PROC_BROWSER_TEST_P(OverviewWindowDragTest, DragToClose) {
+// TODO(crbug/1065345): This test is flaky on dbg builds.
+#if !defined(NDEBUG)
+#define MAYBE_DragToClose DISABLED_DragToClose
+#else
+#define MAYBE_DragToClose DragToClose
+#endif
+IN_PROC_BROWSER_TEST_P(OverviewWindowDragTest, MAYBE_DragToClose) {
   BrowserView* browser_view = BrowserView::GetBrowserViewForBrowser(browser());
   aura::Window* browser_window = browser_view->GetWidget()->GetNativeWindow();
   ui_controls::SendKeyPress(browser_window, ui::VKEY_MEDIA_LAUNCH_APP1,
@@ -294,24 +158,20 @@ IN_PROC_BROWSER_TEST_P(OverviewWindowDragTest, DragToClose) {
                             /*shift=*/false,
                             /*alt=*/false,
                             /*command=*/false);
-  test::WaitForOverviewAnimationState(
-      ash::mojom::OverviewAnimationState::kEnterAnimationComplete);
-
-  content::WindowedNotificationObserver waiter(
-      chrome::NOTIFICATION_BROWSER_CLOSED,
-      content::NotificationService::AllSources());
+  ash::ShellTestApi().WaitForOverviewAnimationState(
+      ash::OverviewAnimationState::kEnterAnimationComplete);
 
   gfx::Point start_point = GetStartLocation(GetDisplaySize(browser_window));
   gfx::Point end_point(start_point);
   end_point.set_y(0);
   end_point.set_x(end_point.x() + 10);
-  DragEventGenerator generator(
-      std::make_unique<InterporateProducer>(start_point, end_point),
-      base::TimeDelta::FromMilliseconds(500), gfx::Tween::EASE_IN_2);
-  generator.Wait();
+  auto generator = ui_test_utils::DragEventGenerator::CreateForTouch(
+      std::make_unique<ui_test_utils::InterpolatedProducer>(
+          start_point, end_point, base::TimeDelta::FromMilliseconds(500),
+          gfx::Tween::FAST_OUT_LINEAR_IN));
+  generator->Wait();
 
-  // Wait for the window to close.
-  waiter.Wait();
+  ui_test_utils::WaitForBrowserToClose(chrome::FindLastActive());
 }
 
 IN_PROC_BROWSER_TEST_P(OverviewWindowDragTest, DragToSnap) {
@@ -322,28 +182,24 @@ IN_PROC_BROWSER_TEST_P(OverviewWindowDragTest, DragToSnap) {
                             /*shift=*/false,
                             /*alt=*/false,
                             /*command=*/false);
-  test::WaitForOverviewAnimationState(
-      ash::mojom::OverviewAnimationState::kEnterAnimationComplete);
+  ash::ShellTestApi().WaitForOverviewAnimationState(
+      ash::OverviewAnimationState::kEnterAnimationComplete);
 
   gfx::Point start_point = GetStartLocation(GetDisplaySize(browser_window));
   gfx::Point end_point(start_point);
   end_point.set_x(0);
-  DragEventGenerator generator(
-      std::make_unique<InterporateProducer>(start_point, end_point),
-      base::TimeDelta::FromMilliseconds(1000));
-  generator.Wait();
+  auto generator = ui_test_utils::DragEventGenerator::CreateForTouch(
+      std::make_unique<ui_test_utils::InterpolatedProducer>(
+          start_point, end_point, base::TimeDelta::FromMilliseconds(1000)),
+      /*long_press=*/true);
+  generator->Wait();
 
   Browser* active = chrome::FindLastActive();
-  LeftSnapWaiter waiter(
-      features::IsUsingWindowService()
-          ? active->window()->GetNativeWindow()->GetRootWindow()
-          : active->window()->GetNativeWindow());
-
   // Wait for the window to be snapped.
-  waiter.Wait();
+  LeftSnapWaiter(active->window()->GetNativeWindow()).Wait();
 }
 
-INSTANTIATE_TEST_SUITE_P(,
+INSTANTIATE_TEST_SUITE_P(All,
                          OverviewWindowDragTest,
                          ::testing::Combine(::testing::Values(2, 8),
                                             /*blank=*/testing::Bool()));

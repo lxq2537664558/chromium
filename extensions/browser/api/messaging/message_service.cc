@@ -123,6 +123,7 @@ struct MessageService::OpenChannelParams {
   std::unique_ptr<MessagePort> opener_port;
   std::string target_extension_id;
   GURL source_url;
+  base::Optional<url::Origin> source_origin;
   std::string channel_name;
   bool include_guest_process_info;
 
@@ -136,6 +137,7 @@ struct MessageService::OpenChannelParams {
                     std::unique_ptr<MessagePort> opener_port,
                     const std::string& target_extension_id,
                     const GURL& source_url,
+                    base::Optional<url::Origin> source_origin,
                     const std::string& channel_name,
                     bool include_guest_process_info)
       : source(source),
@@ -147,6 +149,7 @@ struct MessageService::OpenChannelParams {
         opener_port(std::move(opener_port)),
         target_extension_id(target_extension_id),
         source_url(source_url),
+        source_origin(source_origin),
         channel_name(channel_name),
         include_guest_process_info(include_guest_process_info) {}
 
@@ -169,8 +172,7 @@ static content::RenderProcessHost* GetExtensionProcess(
 
 MessageService::MessageService(BrowserContext* context)
     : context_(context),
-      messaging_delegate_(ExtensionsAPIClient::Get()->GetMessagingDelegate()),
-      weak_factory_(this) {
+      messaging_delegate_(ExtensionsAPIClient::Get()->GetMessagingDelegate()) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
   DCHECK_NE(nullptr, messaging_delegate_);
 }
@@ -263,10 +265,12 @@ void MessageService::OpenChannelToExtension(
         is_externally_connectable =
             externally_connectable->IdCanConnect(*source_endpoint.extension_id);
       } else {
+        DCHECK(source_render_frame_host);
+
         // Check that the web page URL matches.
         is_web_connection = true;
-        is_externally_connectable =
-            externally_connectable->matches.MatchesURL(source_url);
+        is_externally_connectable = externally_connectable->matches.MatchesURL(
+            source_render_frame_host->GetLastCommittedURL());
       }
     } else {
       // Default behaviour. Any extension or content script, no webpages.
@@ -295,6 +299,10 @@ void MessageService::OpenChannelToExtension(
   std::unique_ptr<base::DictionaryValue> source_tab =
       messaging_delegate_->MaybeGetTabInfo(source_contents);
 
+  base::Optional<url::Origin> source_origin;
+  if (source_render_frame_host)
+    source_origin = source_render_frame_host->GetLastCommittedOrigin();
+
   if (source_tab.get()) {
     DCHECK(source_render_frame_host);
     source_frame_id =
@@ -313,8 +321,8 @@ void MessageService::OpenChannelToExtension(
   std::unique_ptr<OpenChannelParams> params(new OpenChannelParams(
       source, std::move(source_tab), source_frame_id, nullptr,
       source_port_id.GetOppositePortId(), source_endpoint,
-      std::move(opener_port), target_extension_id, source_url, channel_name,
-      include_guest_process_info));
+      std::move(opener_port), target_extension_id, source_url,
+      std::move(source_origin), channel_name, include_guest_process_info));
 
   pending_incognito_channels_[params->receiver_port_id.GetChannelId()] =
       PendingMessagesQueue();
@@ -416,7 +424,7 @@ void MessageService::OpenChannelToNativeApp(
   // any issues arise from it.
   std::unique_ptr<MessagePort> receiver(
       messaging_delegate_->CreateReceiverForNativeApp(
-          weak_factory_.GetWeakPtr(), source_rfh, extension->id(),
+          context_, weak_factory_.GetWeakPtr(), source_rfh, extension->id(),
           receiver_port_id, native_app_name,
           policy_permission == MessagingDelegate::PolicyPermission::ALLOW_ALL,
           &error));
@@ -504,7 +512,8 @@ void MessageService::OpenChannelToTab(const ChannelEndpoint& source,
       receiver.release(), receiver_port_id,
       MessagingEndpoint::ForExtension(extension_id), std::move(opener_port),
       extension_id,
-      GURL(),  // Source URL doesn't make sense for opening to tabs.
+      GURL(),         // Source URL doesn't make sense for opening to tabs.
+      url::Origin(),  // Origin URL doesn't make sense for opening to tabs.
       channel_name,
       false));  // Connections to tabs aren't webview guests.
   OpenChannelImpl(receiver_context, std::move(params), extension,
@@ -567,7 +576,8 @@ void MessageService::OpenChannelImpl(BrowserContext* browser_context,
   channel->receiver->DispatchOnConnect(
       params->channel_name, std::move(params->source_tab),
       params->source_frame_id, guest_process_id, guest_render_frame_routing_id,
-      params->source_endpoint, params->target_extension_id, params->source_url);
+      params->source_endpoint, params->target_extension_id, params->source_url,
+      params->source_origin);
 
   // Report the event to the event router, if the target is an extension.
   //
@@ -735,7 +745,7 @@ void MessageService::EnqueuePendingMessage(const PortId& source_port_id,
         PendingMessage(source_port_id, message));
     // A channel should only be holding pending messages because it is in one
     // of these states.
-    DCHECK(!base::ContainsKey(pending_lazy_context_channels_, channel_id));
+    DCHECK(!base::Contains(pending_lazy_context_channels_, channel_id));
     return;
   }
   EnqueuePendingMessageForLazyBackgroundLoad(source_port_id,

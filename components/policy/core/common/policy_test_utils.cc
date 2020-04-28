@@ -28,7 +28,7 @@ PolicyDetailsMap::PolicyDetailsMap() {}
 PolicyDetailsMap::~PolicyDetailsMap() {}
 
 GetChromePolicyDetailsCallback PolicyDetailsMap::GetCallback() const {
-  return base::Bind(&PolicyDetailsMap::Lookup, base::Unretained(this));
+  return base::BindRepeating(&PolicyDetailsMap::Lookup, base::Unretained(this));
 }
 
 void PolicyDetailsMap::SetDetails(const std::string& policy,
@@ -164,8 +164,6 @@ std::ostream& operator<<(std::ostream& os, policy::PolicyScope scope) {
       return os << "POLICY_SCOPE_USER";
     case policy::POLICY_SCOPE_MACHINE:
       return os << "POLICY_SCOPE_MACHINE";
-    case policy::POLICY_SCOPE_MERGED:
-      return os << "POLICY_SCOPE_MERGED";
   }
   return os << "POLICY_SCOPE_UNKNOWN(" << int(scope) << ")";
 }

@@ -8,7 +8,6 @@
 
 #include <memory>
 
-#import "base/mac/scoped_nsautorelease_pool.h"
 #import "base/mac/scoped_nsobject.h"
 #include "base/macros.h"
 #import "testing/gtest_mac.h"
@@ -47,7 +46,7 @@ class TestViewsHostable : public ui::ViewsHostableView {
 @property(nonatomic, assign) ui::ViewsHostableView* viewsHostableView;
 @end
 @implementation TestViewsHostableView
-@synthesize viewsHostableView = viewsHostableView_;
+@synthesize viewsHostableView = _viewsHostableView;
 @end
 
 namespace views {
@@ -126,6 +125,8 @@ TEST_F(NativeViewHostMacTest, Attach) {
   EXPECT_TRUE([native_view_ superview]);
   EXPECT_TRUE([native_view_ window]);
 
+  // Layout() is normally async, call it now to ensure bounds have been applied.
+  host()->Layout();
   // Expect the top-left to be 10 pixels below the titlebar.
   int bottom = toplevel()->GetClientAreaBoundsInScreen().height() - 10 - 60;
   EXPECT_NSEQ(NSMakeRect(10, bottom, 80, 60), [native_view_ frame]);
@@ -198,6 +199,9 @@ TEST_F(NativeViewHostMacTest, NativeViewHidden) {
   host()->SetVisible(true);
   EXPECT_TRUE([native_view_ isHidden]);  // Stays hidden.
   host()->Attach(native_view_.get());
+  // Layout() updates visibility, and is normally async, call it now to ensure
+  // visibility updated.
+  host()->Layout();
   EXPECT_FALSE([native_view_ isHidden]);  // Made visible when attached.
 
   EXPECT_TRUE([native_view_ superview]);
@@ -215,8 +219,7 @@ TEST_F(NativeViewHostMacTest, NativeViewHidden) {
 // Check that we can destroy cleanly even if the native view has already been
 // released.
 TEST_F(NativeViewHostMacTest, NativeViewReleased) {
-  {
-    base::mac::ScopedNSAutoreleasePool pool;
+  @autoreleasepool {
     CreateHost();
     // In practice the native view is a WebContentsViewCocoa which is retained
     // by its superview (a TabContentsContainerView) and by WebContentsViewMac.

@@ -6,22 +6,24 @@
 
 /**
  * Fake task.
- *
- * @param {boolean} isDefault Whether the task is default or not.
- * @param {string} taskId Task ID.
- * @param {string} title Title of the task.
- * @param {boolean=} opt_isGenericFileHandler Whether the task is a generic
- *     file handler.
- * @constructor
  */
-function FakeTask(isDefault, taskId, title, opt_isGenericFileHandler) {
-  this.driveApp = false;
-  this.iconUrl = 'chrome://theme/IDR_DEFAULT_FAVICON';  // Dummy icon
-  this.isDefault = isDefault;
-  this.taskId = taskId;
-  this.title = title;
-  this.isGenericFileHandler = opt_isGenericFileHandler || false;
-  Object.freeze(this);
+class FakeTask {
+  /**
+   * @param {boolean} isDefault Whether the task is default or not.
+   * @param {string} taskId Task ID.
+   * @param {string} title Title of the task.
+   * @param {boolean=} opt_isGenericFileHandler Whether the task is a generic
+   *     file handler.
+   */
+  constructor(isDefault, taskId, title, opt_isGenericFileHandler) {
+    this.driveApp = false;
+    this.iconUrl = 'chrome://theme/IDR_DEFAULT_FAVICON';  // Dummy icon
+    this.isDefault = isDefault;
+    this.taskId = taskId;
+    this.title = title;
+    this.isGenericFileHandler = opt_isGenericFileHandler || false;
+    Object.freeze(this);
+  }
 }
 
 /**
@@ -33,6 +35,26 @@ function FakeTask(isDefault, taskId, title, opt_isGenericFileHandler) {
 const DOWNLOADS_FAKE_TASKS = [
   new FakeTask(true, 'dummytaskid|open-with', 'DummyTask1'),
   new FakeTask(false, 'dummytaskid-2|open-with', 'DummyTask2')
+];
+
+/**
+ * Fake tasks for a local volume opening in browser.
+ *
+ * @type {Array<FakeTask>}
+ * @const
+ */
+const DOWNLOADS_FAKE_TEXT = [
+  new FakeTask(true, FILE_MANAGER_EXTENSIONS_ID + '|file|view-in-browser'),
+];
+
+/**
+ * Fake tasks for a PDF file opening in browser.
+ *
+ * @type {Array<FakeTask>}
+ * @const
+ */
+const DOWNLOADS_FAKE_PDF = [
+  new FakeTask(true, FILE_MANAGER_EXTENSIONS_ID + '|file|view-as-pdf'),
 ];
 
 /**
@@ -166,6 +188,18 @@ testcase.executeDefaultTaskDrive = async () => {
 testcase.executeDefaultTaskDownloads = async () => {
   const appId = await setupTaskTest(RootPath.DOWNLOADS, DOWNLOADS_FAKE_TASKS);
   await executeDefaultTask(appId, 'dummytaskid|open-with');
+};
+
+testcase.defaultTaskForTextPlain = async () => {
+  const appId = await setupTaskTest(RootPath.DOWNLOADS, DOWNLOADS_FAKE_TEXT);
+  await executeDefaultTask(
+      appId, FILE_MANAGER_EXTENSIONS_ID + '|file|view-in-browser');
+};
+
+testcase.defaultTaskForPdf = async () => {
+  const appId = await setupTaskTest(RootPath.DOWNLOADS, DOWNLOADS_FAKE_PDF);
+  await executeDefaultTask(
+      appId, FILE_MANAGER_EXTENSIONS_ID + '|file|view-as-pdf');
 };
 
 testcase.defaultTaskDialogDrive = async () => {

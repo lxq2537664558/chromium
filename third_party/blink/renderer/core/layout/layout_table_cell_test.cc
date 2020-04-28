@@ -80,12 +80,9 @@ class LayoutTableCellTest : public RenderingTest {
   bool IsInEndColumn(const LayoutTableCell* cell) {
     return cell->IsInEndColumn();
   }
-  LayoutRect LocalVisualRect(const LayoutTableCell* cell) {
-    return cell->LocalVisualRect();
-  }
-
+  // TODO(958381) Make this code TableNG compatible.
   LayoutTableCell* GetCellByElementId(const char* id) {
-    return ToLayoutTableCell(GetLayoutObjectByElementId(id));
+    return To<LayoutTableCell>(GetLayoutObjectByElementId(id));
   }
 };
 
@@ -119,7 +116,7 @@ TEST_F(LayoutTableCellTest,
     </table>
   )HTML");
   EXPECT_FALSE(GetCellByElementId("cell")->BackgroundIsKnownToBeOpaqueInRect(
-      LayoutRect(0, 0, 1, 1)));
+      PhysicalRect(0, 0, 1, 1)));
 }
 
 TEST_F(LayoutTableCellTest, RepaintContentInTableCell) {
@@ -143,8 +140,7 @@ TEST_F(LayoutTableCellTest, RepaintContentInTableCell) {
 
   // Check that overflow was calculated on the cell.
   auto* input_block = To<LayoutBlock>(cell->GetLayoutObject());
-  LayoutRect rect = input_block->LocalVisualRect();
-  EXPECT_EQ(LayoutRect(-1, -1, 24, 24), rect);
+  EXPECT_EQ(PhysicalRect(-1, -1, 24, 24), input_block->LocalVisualRect());
 }
 
 TEST_F(LayoutTableCellTest, IsInStartAndEndColumn) {
@@ -296,7 +292,7 @@ TEST_F(LayoutTableCellTest, BorderWidthsWithCollapsedBorders) {
   EXPECT_EQ(1u, cell2->CollapsedOuterBorderBefore());
   EXPECT_EQ(2u, cell2->CollapsedOuterBorderAfter());
 
-  ToElement(cell1->Table()->GetNode())
+  To<Element>(cell1->Table()->GetNode())
       ->setAttribute(html_names::kStyleAttr,
                      "writing-mode: vertical-rl; direction: rtl");
   UpdateAllLifecyclePhasesForTest();
@@ -338,23 +334,28 @@ TEST_F(LayoutTableCellTest, HasNonCollapsedBorderDecoration) {
   auto* cell = GetCellByElementId("cell");
   EXPECT_FALSE(cell->HasNonCollapsedBorderDecoration());
 
-  ToElement(cell->GetNode())
+  To<Element>(cell->GetNode())
       ->setAttribute(html_names::kStyleAttr, "border: 1px solid black");
-  GetDocument().View()->UpdateAllLifecyclePhasesExceptPaint();
+  GetDocument().View()->UpdateAllLifecyclePhasesExceptPaint(
+      DocumentUpdateReason::kTest);
   EXPECT_TRUE(cell->HasNonCollapsedBorderDecoration());
 
-  ToElement(cell->Table()->GetNode())
+  To<Element>(cell->Table()->GetNode())
       ->setAttribute(html_names::kStyleAttr, "border-collapse: collapse");
-  GetDocument().View()->UpdateAllLifecyclePhasesExceptPaint();
+  GetDocument().View()->UpdateAllLifecyclePhasesExceptPaint(
+      DocumentUpdateReason::kTest);
   EXPECT_FALSE(cell->HasNonCollapsedBorderDecoration());
 
-  ToElement(cell->GetNode())
+  To<Element>(cell->GetNode())
       ->setAttribute(html_names::kStyleAttr, "border: 2px solid black");
-  GetDocument().View()->UpdateAllLifecyclePhasesExceptPaint();
+  GetDocument().View()->UpdateAllLifecyclePhasesExceptPaint(
+      DocumentUpdateReason::kTest);
   EXPECT_FALSE(cell->HasNonCollapsedBorderDecoration());
 
-  ToElement(cell->Table()->GetNode())->setAttribute(html_names::kStyleAttr, "");
-  GetDocument().View()->UpdateAllLifecyclePhasesExceptPaint();
+  To<Element>(cell->Table()->GetNode())
+      ->setAttribute(html_names::kStyleAttr, "");
+  GetDocument().View()->UpdateAllLifecyclePhasesExceptPaint(
+      DocumentUpdateReason::kTest);
   EXPECT_TRUE(cell->HasNonCollapsedBorderDecoration());
 }
 

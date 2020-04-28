@@ -10,9 +10,14 @@
 #include "chrome/browser/chromeos/login/oobe_screen.h"
 #include "chrome/browser/chromeos/login/screens/demo_setup_screen.h"
 #include "chrome/grit/generated_resources.h"
+#include "chromeos/constants/chromeos_features.h"
 #include "components/login/localized_values_builder.h"
 
 namespace chromeos {
+
+constexpr StaticOobeScreenId DemoSetupScreenView::kScreenId;
+
+DemoSetupScreenView::~DemoSetupScreenView() = default;
 
 DemoSetupScreenHandler::DemoSetupScreenHandler(
     JSCallsContainer* js_calls_container)
@@ -47,6 +52,12 @@ void DemoSetupScreenHandler::OnSetupFailed(
              DemoSetupController::DemoSetupError::RecoveryMethod::kPowerwash);
 }
 
+void DemoSetupScreenHandler::SetCurrentSetupStep(
+    DemoSetupController::DemoSetupStep current_step) {
+  CallJS("login.DemoSetupScreen.setCurrentSetupStep",
+         DemoSetupController::GetDemoSetupStepString(current_step));
+}
+
 void DemoSetupScreenHandler::OnSetupSucceeded() {
   CallJS("login.DemoSetupScreen.onSetupSucceeded");
 }
@@ -63,6 +74,21 @@ void DemoSetupScreenHandler::DeclareLocalizedValues(
                IDS_OOBE_DEMO_SETUP_ERROR_SCREEN_RETRY_BUTTON_LABEL);
   builder->Add("demoSetupErrorScreenPowerwashButtonLabel",
                IDS_LOCAL_STATE_ERROR_POWERWASH_BUTTON);
+
+  builder->Add("demoSetupProgressStepDownload",
+               IDS_OOBE_DEMO_SETUP_PROGRESS_STEP_DOWNLOAD);
+  builder->Add("demoSetupProgressStepEnroll",
+               IDS_OOBE_DEMO_SETUP_PROGRESS_STEP_ENROLL);
+}
+
+void DemoSetupScreenHandler::GetAdditionalParameters(
+    base::DictionaryValue* parameters) {
+  parameters->SetBoolKey(
+      "showStepsInDemoModeSetup",
+      base::FeatureList::IsEnabled(features::kShowStepsInDemoModeSetup));
+
+  parameters->SetPath("demoSetupSteps",
+                      DemoSetupController::GetDemoSetupSteps());
 }
 
 }  // namespace chromeos

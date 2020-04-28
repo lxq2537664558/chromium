@@ -10,16 +10,17 @@
 #include "base/strings/string_util.h"
 #include "build/build_config.h"
 #include "chrome/browser/autofill/mock_autofill_popup_controller.h"
-#include "chrome/browser/ui/autofill/autofill_popup_layout_model.h"
 #include "chrome/test/views/chrome_views_test_base.h"
-#include "components/autofill/core/browser/popup_item_ids.h"
-#include "components/autofill/core/browser/suggestion.h"
+#include "components/autofill/core/browser/ui/popup_item_ids.h"
+#include "components/autofill/core/browser/ui/suggestion.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "ui/accessibility/ax_enums.mojom.h"
 #include "ui/accessibility/ax_node_data.h"
-#include "ui/aura/test/aura_test_base.h"
 #include "ui/events/base_event_utils.h"
 #include "ui/events/test/event_generator.h"
+#include "ui/views/accessibility/ax_event_manager.h"
+#include "ui/views/accessibility/ax_event_observer.h"
 #include "ui/views/widget/widget_utils.h"
 
 namespace {
@@ -43,6 +44,32 @@ const struct TypeClicks kClickTestCase[] = {
     {autofill::POPUP_ITEM_ID_USERNAME_ENTRY, 1},
     {autofill::POPUP_ITEM_ID_CREATE_HINT, 1},
     {autofill::POPUP_ITEM_ID_ALL_SAVED_PASSWORDS_ENTRY, 1},
+    {autofill::POPUP_ITEM_ID_PASSWORD_ACCOUNT_STORAGE_OPT_IN, 1},
+    {autofill::POPUP_ITEM_ID_PASSWORD_ACCOUNT_STORAGE_RE_SIGNIN, 1},
+    {autofill::POPUP_ITEM_ID_PASSWORD_ACCOUNT_STORAGE_OPT_IN_AND_GENERATE, 1},
+    {autofill::POPUP_ITEM_ID_PASSWORD_ACCOUNT_STORAGE_EMPTY, 1},
+};
+
+class TestAXEventObserver : public views::AXEventObserver {
+ public:
+  TestAXEventObserver() : selection_event_count_(0) {
+    views::AXEventManager::Get()->AddObserver(this);
+  }
+  ~TestAXEventObserver() override {
+    views::AXEventManager::Get()->RemoveObserver(this);
+  }
+
+  void OnViewEvent(views::View*, ax::mojom::Event event_type) override {
+    if (event_type == ax::mojom::Event::kSelection)
+      ++selection_event_count_;
+  }
+
+  size_t GetSelectionEventCount() { return selection_event_count_; }
+  void ResetSelectionEventCount() { selection_event_count_ = 0; }
+
+ private:
+  size_t selection_event_count_;
+  DISALLOW_COPY_AND_ASSIGN(TestAXEventObserver);
 };
 
 class AutofillPopupViewNativeViewsTest : public ChromeViewsTestBase {
@@ -53,42 +80,33 @@ class AutofillPopupViewNativeViewsTest : public ChromeViewsTestBase {
   void SetUp() override {
     ChromeViewsTestBase::SetUp();
 
-    CreateWidget();
-    generator_ =
-        std::make_unique<ui::test::EventGenerator>(GetRootWindow(&widget_));
+    widget_ = CreateTestWidget();
+    generator_ = std::make_unique<ui::test::EventGenerator>(
+        GetRootWindow(widget_.get()));
   }
 
   void TearDown() override {
     generator_.reset();
-    if (!widget_.IsClosed())
-      widget_.Close();
     view_.reset();
+    widget_.reset();
     ChromeViewsTestBase::TearDown();
   }
 
   void CreateAndShowView(const std::vector<int>& ids) {
     autofill_popup_controller_.set_suggestions(ids);
     view_ = std::make_unique<autofill::AutofillPopupViewNativeViews>(
-        &autofill_popup_controller_, &widget_);
-    widget_.SetContentsView(view_.get());
+        &autofill_popup_controller_, widget_.get());
+    widget_->SetContentsView(view_.get());
 
-    widget_.Show();
+    widget_->Show();
   }
 
   autofill::AutofillPopupViewNativeViews* view() { return view_.get(); }
 
  protected:
-  void CreateWidget() {
-    views::Widget::InitParams params =
-        CreateParams(views::Widget::InitParams::TYPE_WINDOW_FRAMELESS);
-    params.bounds = gfx::Rect(0, 0, 200, 200);
-    params.ownership = views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET;
-    widget_.Init(params);
-  }
-
   std::unique_ptr<autofill::AutofillPopupViewNativeViews> view_;
   autofill::MockAutofillPopupController autofill_popup_controller_;
-  views::Widget widget_;
+  std::unique_ptr<views::Widget> widget_;
   std::unique_ptr<ui::test::EventGenerator> generator_;
 
  private:
@@ -104,6 +122,36 @@ TEST_F(AutofillPopupViewNativeViewsTest, ShowHideTest) {
   EXPECT_CALL(autofill_popup_controller_, AcceptSuggestion(testing::_))
       .Times(0);
   view()->Hide();
+}
+
+TEST_F(AutofillPopupViewNativeViewsTest, AccessibilitySelectedEvent) {
+  TestAXEventObserver observer;
+  CreateAndShowView({autofill::POPUP_ITEM_ID_AUTOCOMPLETE_ENTRY,
+                     autofill::POPUP_ITEM_ID_SEPARATOR,
+                     autofill::POPUP_ITEM_ID_AUTOFILL_OPTIONS});
+
+  // Checks that a selection event is not sent when the view's |is_selected_|
+  // member does not change.
+  view()->GetRowsForTesting()[0]->SetSelected(false);
+  EXPECT_EQ(0U, observer.GetSelectionEventCount());
+  observer.ResetSelectionEventCount();
+
+  // Checks that a selection event is sent when an unselected view becomes
+  // selected.
+  view()->GetRowsForTesting()[0]->SetSelected(true);
+  EXPECT_EQ(1U, observer.GetSelectionEventCount());
+  observer.ResetSelectionEventCount();
+
+  // Checks that a selection event is not sent when the view's |is_selected_|
+  // member does not change.
+  view()->GetRowsForTesting()[0]->SetSelected(true);
+  EXPECT_EQ(0U, observer.GetSelectionEventCount());
+  observer.ResetSelectionEventCount();
+
+  // Checks that a selection event is not sent when a selected view becomes
+  // unselected.
+  view()->GetRowsForTesting()[0]->SetSelected(false);
+  EXPECT_EQ(0U, observer.GetSelectionEventCount());
 }
 
 TEST_F(AutofillPopupViewNativeViewsTest, AccessibilityTest) {
@@ -154,11 +202,57 @@ TEST_F(AutofillPopupViewNativeViewsTest, AccessibilityTest) {
       node_data_3.GetBoolAttribute(ax::mojom::BoolAttribute::kSelected));
 }
 
+TEST_F(AutofillPopupViewNativeViewsTest, Gestures) {
+  CreateAndShowView({autofill::POPUP_ITEM_ID_PASSWORD_ENTRY,
+                     autofill::POPUP_ITEM_ID_SEPARATOR,
+                     autofill::POPUP_ITEM_ID_ALL_SAVED_PASSWORDS_ENTRY});
+
+  // Tap down will select an element.
+  ui::GestureEvent tap_down_event(
+      /*x=*/0, /*y=*/0, /*flags=*/0, ui::EventTimeForNow(),
+      ui::GestureEventDetails(ui::ET_GESTURE_TAP_DOWN));
+  EXPECT_CALL(autofill_popup_controller_, SetSelectedLine(testing::Eq(0)));
+  view()->GetRowsForTesting()[0]->OnGestureEvent(&tap_down_event);
+
+  // Tapping will accept the selection.
+  ui::GestureEvent tap_event(/*x=*/0, /*y=*/0, /*flags=*/0,
+                             ui::EventTimeForNow(),
+                             ui::GestureEventDetails(ui::ET_GESTURE_TAP));
+  EXPECT_CALL(autofill_popup_controller_, AcceptSuggestion(0));
+  view()->GetRowsForTesting()[0]->OnGestureEvent(&tap_event);
+
+  // Canceling gesture clears any selection.
+  ui::GestureEvent tap_cancel(
+      /*x=*/0, /*y=*/0, /*flags=*/0, ui::EventTimeForNow(),
+      ui::GestureEventDetails(ui::ET_GESTURE_TAP_CANCEL));
+  EXPECT_CALL(autofill_popup_controller_, SelectionCleared());
+  view()->GetRowsForTesting()[2]->OnGestureEvent(&tap_cancel);
+}
+
+TEST_F(AutofillPopupViewNativeViewsTest, ClickDisabledEntry) {
+  autofill::Suggestion opt_int_suggestion(
+      "", "", "", autofill::POPUP_ITEM_ID_PASSWORD_ACCOUNT_STORAGE_OPT_IN);
+  opt_int_suggestion.is_loading = autofill::Suggestion::IsLoading(true);
+  autofill_popup_controller_.set_suggestions({opt_int_suggestion});
+  view_ = std::make_unique<autofill::AutofillPopupViewNativeViews>(
+      &autofill_popup_controller_, widget_.get());
+  widget_->SetContentsView(view_.get());
+  widget_->Show();
+
+  EXPECT_CALL(autofill_popup_controller_, AcceptSuggestion).Times(0);
+
+  gfx::Point inside_point(view()->GetRowsForTesting()[0]->x() + 1,
+                          view()->GetRowsForTesting()[0]->y() + 1);
+  ui::MouseEvent click_mouse_event(
+      ui::ET_MOUSE_PRESSED, inside_point, inside_point, ui::EventTimeForNow(),
+      ui::EF_RIGHT_MOUSE_BUTTON, ui::EF_RIGHT_MOUSE_BUTTON);
+  widget_->OnMouseEvent(&click_mouse_event);
+}
+
 TEST_P(AutofillPopupViewNativeViewsForEveryTypeTest, ShowClickTest) {
   const TypeClicks& click = GetParam();
   CreateAndShowView({click.id});
-  EXPECT_CALL(autofill_popup_controller_, AcceptSuggestion(::testing::_))
-      .Times(click.click);
+  EXPECT_CALL(autofill_popup_controller_, AcceptSuggestion).Times(click.click);
   gfx::Point center =
       view()->GetRowsForTesting()[0]->GetBoundsInScreen().CenterPoint();
 
@@ -171,9 +265,8 @@ TEST_P(AutofillPopupViewNativeViewsForEveryTypeTest, ShowClickTest) {
   view()->RemoveAllChildViews(true /* delete_children */);
 }
 
-INSTANTIATE_TEST_SUITE_P(
-    /* no prefix */,
-    AutofillPopupViewNativeViewsForEveryTypeTest,
-    ::testing::ValuesIn(kClickTestCase));
+INSTANTIATE_TEST_SUITE_P(All,
+                         AutofillPopupViewNativeViewsForEveryTypeTest,
+                         ::testing::ValuesIn(kClickTestCase));
 
 }  // namespace

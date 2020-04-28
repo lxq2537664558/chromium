@@ -11,6 +11,7 @@
 #include "base/sequenced_task_runner.h"
 #include "base/time/time.h"
 #include "chrome/browser/chromeos/login/users/chrome_user_manager.h"
+#include "chrome/browser/chromeos/power/ml/boot_clock.h"
 #include "chrome/browser/chromeos/power/ml/idle_event_notifier.h"
 #include "chrome/browser/chromeos/power/ml/smart_dim/model.h"
 #include "chrome/browser/chromeos/power/ml/user_activity_event.pb.h"
@@ -22,8 +23,10 @@
 #include "chromeos/dbus/power_manager/suspend.pb.h"
 #include "components/session_manager/core/session_manager.h"
 #include "components/session_manager/core/session_manager_observer.h"
+#include "mojo/public/cpp/bindings/pending_receiver.h"
+#include "mojo/public/cpp/bindings/receiver.h"
 #include "services/metrics/public/cpp/ukm_source_id.h"
-#include "services/viz/public/interfaces/compositing/video_detector_observer.mojom.h"
+#include "services/viz/public/mojom/compositing/video_detector_observer.mojom-forward.h"
 #include "ui/aura/window.h"
 #include "ui/base/user_activity/user_activity_detector.h"
 #include "ui/base/user_activity/user_activity_observer.h"
@@ -31,8 +34,6 @@
 namespace chromeos {
 namespace power {
 namespace ml {
-
-class BootClock;
 
 // These values are persisted to logs. Entries should not be renumbered and
 // numeric values should never be reused.
@@ -74,19 +75,18 @@ enum class FinalResult { kReactivation = 0, kOff = 1, kMaxValue = kOff };
 // Logs user activity after an idle event is observed.
 // TODO(renjieliu): Add power-related activity as well.
 class UserActivityManager : public ui::UserActivityObserver,
-                            public IdleEventNotifier::Observer,
                             public PowerManagerClient::Observer,
                             public viz::mojom::VideoDetectorObserver,
                             public session_manager::SessionManagerObserver {
  public:
-  UserActivityManager(UserActivityUkmLogger* ukm_logger,
-                      IdleEventNotifier* idle_event_notifier,
-                      ui::UserActivityDetector* detector,
-                      chromeos::PowerManagerClient* power_manager_client,
-                      session_manager::SessionManager* session_manager,
-                      viz::mojom::VideoDetectorObserverRequest request,
-                      const chromeos::ChromeUserManager* user_manager,
-                      SmartDimModel* smart_dim_model);
+  UserActivityManager(
+      UserActivityUkmLogger* ukm_logger,
+      ui::UserActivityDetector* detector,
+      chromeos::PowerManagerClient* power_manager_client,
+      session_manager::SessionManager* session_manager,
+      mojo::PendingReceiver<viz::mojom::VideoDetectorObserver> receiver,
+      const chromeos::ChromeUserManager* user_manager,
+      SmartDimModel* smart_dim_model);
   ~UserActivityManager() override;
 
   // ui::UserActivityObserver overrides.
@@ -108,13 +108,15 @@ class UserActivityManager : public ui::UserActivityObserver,
   void OnVideoActivityStarted() override;
   void OnVideoActivityEnded() override {}
 
-  // IdleEventNotifier::Observer overrides.
-  void OnIdleEventObserved(
-      const IdleEventNotifier::ActivityData& data) override;
+  // Called in UserActivityController::ShouldDeferScreenDim to make smart dim
+  // decision and response via |callback|.
+  void UpdateAndGetSmartDimDecision(const IdleEventNotifier::ActivityData& data,
+                                    base::OnceCallback<void(bool)> callback);
 
-  // Decides whether or not to instruct the power manager to dim the screen
-  // given a |prediction| from the Smart Dim predictor.
-  void ApplyDimDecision(UserActivityEvent::ModelPrediction prediction);
+  // Converts a Smart Dim model |prediction| into a yes/no decision about
+  // whether to defer the screen dim and provides the result via |callback|.
+  void HandleSmartDimDecision(base::OnceCallback<void(bool)> callback,
+                              UserActivityEvent::ModelPrediction prediction);
 
   // session_manager::SessionManagerObserver overrides:
   void OnSessionStateChanged() override;
@@ -143,11 +145,6 @@ class UserActivityManager : public ui::UserActivityObserver,
   void MaybeLogEvent(UserActivityEvent::Event::Type type,
                      UserActivityEvent::Event::Reason reason);
 
-  // Set the task runner for testing purpose.
-  void SetTaskRunnerForTesting(
-      scoped_refptr<base::SequencedTaskRunner> task_runner,
-      std::unique_ptr<BootClock> test_boot_clock);
-
   // We could have two consecutive idle events (i.e. two ScreenDimImminent)
   // without a final event logged in between. This could happen when the 1st
   // screen dim is deferred and after another idle period, powerd decides to
@@ -160,6 +157,9 @@ class UserActivityManager : public ui::UserActivityObserver,
 
   // Cancel any pending request to |smart_dim_model_| to get a dim decision.
   void CancelDimDecisionRequest();
+
+  // If old smart dim model or new SmartDimMlAgent is ready, based on Finch.
+  bool SmartDimModelReady();
 
   // Time when an idle event is received and we start logging. Null if an idle
   // event hasn't been observed.
@@ -186,15 +186,12 @@ class UserActivityManager : public ui::UserActivityObserver,
   // Features extracted when receives an idle event.
   UserActivityEvent::Features features_;
 
-  // It is RealBootClock, but will be set to FakeBootClock for tests.
-  std::unique_ptr<BootClock> boot_clock_;
+  BootClock boot_clock_;
 
   UserActivityUkmLogger* const ukm_logger_;
 
   SmartDimModel* const smart_dim_model_;
 
-  ScopedObserver<IdleEventNotifier, IdleEventNotifier::Observer>
-      idle_event_observer_;
   ScopedObserver<ui::UserActivityDetector, ui::UserActivityObserver>
       user_activity_observer_;
   ScopedObserver<chromeos::PowerManagerClient,
@@ -206,7 +203,7 @@ class UserActivityManager : public ui::UserActivityObserver,
 
   session_manager::SessionManager* const session_manager_;
 
-  mojo::Binding<viz::mojom::VideoDetectorObserver> binding_;
+  mojo::Receiver<viz::mojom::VideoDetectorObserver> receiver_;
 
   const chromeos::ChromeUserManager* const user_manager_;
 
@@ -255,7 +252,7 @@ class UserActivityManager : public ui::UserActivityObserver,
 
   SEQUENCE_CHECKER(sequence_checker_);
 
-  base::WeakPtrFactory<UserActivityManager> weak_ptr_factory_;
+  base::WeakPtrFactory<UserActivityManager> weak_ptr_factory_{this};
 
   DISALLOW_COPY_AND_ASSIGN(UserActivityManager);
 };

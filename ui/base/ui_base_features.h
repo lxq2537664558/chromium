@@ -15,13 +15,21 @@ namespace features {
 // Keep sorted!
 
 COMPONENT_EXPORT(UI_BASE_FEATURES)
+extern const base::Feature kColorProviderRedirection;
+COMPONENT_EXPORT(UI_BASE_FEATURES)
 extern const base::Feature kCompositorThreadedScrollbarScrolling;
+COMPONENT_EXPORT(UI_BASE_FEATURES)
+extern const base::Feature kExperimentalFlingAnimation;
 #if defined(OS_CHROMEOS)
 COMPONENT_EXPORT(UI_BASE_FEATURES)
 extern const base::Feature kSettingsShowsPerKeyboardSettings;
 #endif  // defined(OS_CHROMEOS)
 COMPONENT_EXPORT(UI_BASE_FEATURES)
 extern const base::Feature kInputMethodSettingsUiUpdate;
+COMPONENT_EXPORT(UI_BASE_FEATURES)
+extern const base::Feature kPercentBasedScrolling;
+COMPONENT_EXPORT(UI_BASE_FEATURES)
+extern const base::Feature kPointerLockOptions;
 COMPONENT_EXPORT(UI_BASE_FEATURES)
 extern const base::Feature kSystemCaptionStyle;
 COMPONENT_EXPORT(UI_BASE_FEATURES)
@@ -39,101 +47,64 @@ COMPONENT_EXPORT(UI_BASE_FEATURES) bool IsUiGpuRasterizationEnabled();
 COMPONENT_EXPORT(UI_BASE_FEATURES)
 extern const base::Feature kCalculateNativeWinOcclusion;
 COMPONENT_EXPORT(UI_BASE_FEATURES)
+extern const base::Feature kElasticOverscrollWin;
+COMPONENT_EXPORT(UI_BASE_FEATURES)
 extern const base::Feature kInputPaneOnScreenKeyboard;
 COMPONENT_EXPORT(UI_BASE_FEATURES)
 extern const base::Feature kPointerEventsForTouch;
 COMPONENT_EXPORT(UI_BASE_FEATURES)
-extern const base::Feature kPrecisionTouchpad;
-COMPONENT_EXPORT(UI_BASE_FEATURES)
 extern const base::Feature kPrecisionTouchpadLogging;
-COMPONENT_EXPORT(UI_BASE_FEATURES)
-extern const base::Feature kPrecisionTouchpadScrollPhase;
 COMPONENT_EXPORT(UI_BASE_FEATURES) extern const base::Feature kTSFImeSupport;
 
 // Returns true if the system should use WM_POINTER events for touch events.
 COMPONENT_EXPORT(UI_BASE_FEATURES) bool IsUsingWMPointerForTouch();
 #endif  // defined(OS_WIN)
 
-#if defined(OS_WIN) || defined(OS_CHROMEOS)
-COMPONENT_EXPORT(UI_BASE_FEATURES)
-extern const base::Feature kEnableAutomaticUiAdjustmentsForTouch;
-#endif  // defined(OS_WIN) || defined(OS_CHROMEOS)
-
 #if defined(OS_WIN) || defined(OS_MACOSX) || defined(OS_LINUX)
 COMPONENT_EXPORT(UI_BASE_FEATURES)
 extern const base::Feature kDirectManipulationStylus;
 #endif  // defined(OS_WIN) || defined(OS_MACOSX) || defined(OS_LINUX)
 
-// Used to have ash (Chrome OS system UI) run in its own process.
-// TODO(jamescook): Make flag only available in Chrome OS.
-COMPONENT_EXPORT(UI_BASE_FEATURES) extern const base::Feature kMash;
+// Used to enable forced colors mode for web content.
+COMPONENT_EXPORT(UI_BASE_FEATURES) extern const base::Feature kForcedColors;
+COMPONENT_EXPORT(UI_BASE_FEATURES) bool IsForcedColorsEnabled();
 
-// Used to run Viz in its own process when kMash is enabled. Viz is run in Ash
-// process by default.
-// TODO(mohsen): Remove this when Viz can run fully in a separate process. Then
-// make it the default kMash behavior.
-COMPONENT_EXPORT(UI_BASE_FEATURES) extern const base::Feature kMashOopViz;
+// Used to enable the eye-dropper in the refresh color-picker.
+COMPONENT_EXPORT(UI_BASE_FEATURES) extern const base::Feature kEyeDropper;
+COMPONENT_EXPORT(UI_BASE_FEATURES) bool IsEyeDropperEnabled();
 
-// NOTE: Do not access directly outside of tests. Use IsSingleProcessMash()
-// to avoid problems when Mash and SingleProcessMash are both enabled.
+// Used to enable the new controls UI.
 COMPONENT_EXPORT(UI_BASE_FEATURES)
-extern const base::Feature kSingleProcessMash;
+extern const base::Feature kFormControlsRefresh;
+COMPONENT_EXPORT(UI_BASE_FEATURES) bool IsFormControlsRefreshEnabled();
 
-#if defined(OS_CHROMEOS)
-COMPONENT_EXPORT(UI_BASE_FEATURES) extern const base::Feature kMojoIMF;
-#endif
-
-// Returns true if Chrome's aura usage is backed by the WindowService.
-COMPONENT_EXPORT(UI_BASE_FEATURES) bool IsUsingWindowService();
-
-// Returns true if ash in running in a separate process (and is hosting the UI
-// service and Viz graphics). See //ash/README.md.
-COMPONENT_EXPORT(UI_BASE_FEATURES) bool IsMultiProcessMash();
-
-COMPONENT_EXPORT(UI_BASE_FEATURES) bool IsMashOopVizEnabled();
-
-// Returns true if code outside of ash is using the WindowService. In this mode
-// there are two aura::Envs. Ash uses one with Env::Mode::LOCAL. Non-ash code
-// uses an aura::Env with a mode of MUS. The non-ash code using mus targets the
-// WindowService that ash is running. This exercises the WindowService mojo APIs
-// similar to kMash, but leaves ash and browser running in the same process.
-// See //ash/README.md.
-COMPONENT_EXPORT(UI_BASE_FEATURES) bool IsSingleProcessMash();
-
-// Returns true if the client connects the active ime engine through mojo IPCs.
-// This can only return true on Chrome OS, and it can only take effect when
-// IsSingleProcessMash() returns true.
-COMPONENT_EXPORT(UI_BASE_FEATURES) bool IsMojoImfEnabled();
-
-// Whether the UI may accommodate touch input in response to hardware changes.
+// Used to enable the common select popup.
 COMPONENT_EXPORT(UI_BASE_FEATURES)
-bool IsAutomaticUiAdjustmentsForTouchEnabled();
-
-#if defined(OS_MACOSX)
-COMPONENT_EXPORT(UI_BASE_FEATURES)
-extern const base::Feature kHostWindowsInAppShimProcess;
-
-// Returns true if the NSWindows for apps will be created in the app's process,
-// and will forward input to the browser process.
-COMPONENT_EXPORT(UI_BASE_FEATURES) bool HostWindowsInAppShimProcess();
-#endif  //  defined(OS_MACOSX)
-
-// Use mojo communication in the drm platform instead of paramtraits. Remove
-// this switch (and associated code) when the drm platform always uses mojo
-// communication.
-// TODO(rjkroege): Remove in http://crbug.com/806092.
-COMPONENT_EXPORT(UI_BASE_FEATURES)
-extern const base::Feature kEnableOzoneDrmMojo;
-COMPONENT_EXPORT(UI_BASE_FEATURES) bool IsOzoneDrmMojo();
-
-// Whether default UI should use a dark mode color scheme, if enabled on
-// macOS Mojave/Windows 10.
-COMPONENT_EXPORT(UI_BASE_FEATURES) extern const base::Feature kDarkMode;
+extern const base::Feature kUseCommonSelectPopup;
+COMPONENT_EXPORT(UI_BASE_FEATURES) bool IsUseCommonSelectPopupEnabled();
 
 #if defined(OS_CHROMEOS)
 COMPONENT_EXPORT(UI_BASE_FEATURES)
 extern const base::Feature kHandwritingGesture;
+
+COMPONENT_EXPORT(UI_BASE_FEATURES)
+extern const base::Feature kNewShortcutMapping;
+
+COMPONENT_EXPORT(UI_BASE_FEATURES)
+bool IsNewShortcutMappingEnabled();
 #endif
+
+COMPONENT_EXPORT(UI_BASE_FEATURES)
+extern const base::Feature kWebUIA11yEnhancements;
+
+// Indicates whether DrmOverlayManager should used the synchronous API to
+// perform pageflip tests.
+COMPONENT_EXPORT(UI_BASE_FEATURES)
+extern const base::Feature kSynchronousPageFlipTesting;
+
+COMPONENT_EXPORT(UI_BASE_FEATURES)
+bool IsSynchronousPageFlipTestingEnabled();
+
 }  // namespace features
 
 #endif  // UI_BASE_UI_BASE_FEATURES_H_

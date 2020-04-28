@@ -16,6 +16,8 @@
 
 namespace send_tab_to_self {
 
+struct TargetDeviceInfo;
+
 // The send tab to self model contains a list of entries of shared urls.
 // This object should only be accessed from one thread, which is usually the
 // main thread.
@@ -48,9 +50,13 @@ class SendTabToSelfModel {
   // of the model as driven by user behaviors.
   virtual void DeleteEntry(const std::string& guid) = 0;
 
-  // Dismiss entry with |guid| from entries. Allows clients to modify the state
+  // Dismiss entry with key |guid|. Allows clients to modify the state
   // of the model as driven by user behaviors.
   virtual void DismissEntry(const std::string& guid) = 0;
+
+  // Mark entry with key |guid| as opened. Allows clients to modify the state
+  // of the model as driven by user behaviors.
+  virtual void MarkEntryOpened(const std::string& guid) = 0;
 
   // Guarantee that the model is operational and syncing, i.e., the local
   // database is started and the initial data has been downloaded.
@@ -65,6 +71,14 @@ class SendTabToSelfModel {
   // destruction automatically.
   void AddObserver(SendTabToSelfModelObserver* observer);
   void RemoveObserver(SendTabToSelfModelObserver* observer);
+
+  // Returns true if the user has valid target device.
+  virtual bool HasValidTargetDevice() = 0;
+
+  // Returns a vector of information about possible target devices, ordered by
+  // the last updated time stamp of the device with the most recently used
+  // device listed first. This is a thin layer on top of DeviceInfoTracker.
+  virtual std::vector<TargetDeviceInfo> GetTargetDeviceInfoSortedList() = 0;
 
  protected:
   // The observers.

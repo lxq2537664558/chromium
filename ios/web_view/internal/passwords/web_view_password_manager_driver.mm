@@ -17,11 +17,15 @@ using password_manager::PasswordAutofillManager;
 using password_manager::PasswordManager;
 
 namespace ios_web_view {
-WebViewPasswordManagerDriver::WebViewPasswordManagerDriver(
-    id<CWVPasswordManagerDriverDelegate> delegate)
-    : delegate_(delegate) {}
+
+WebViewPasswordManagerDriver::WebViewPasswordManagerDriver() {}
 
 WebViewPasswordManagerDriver::~WebViewPasswordManagerDriver() = default;
+
+int WebViewPasswordManagerDriver::GetId() const {
+  // There is only one driver per tab on iOS so returning 0 is fine.
+  return 0;
+}
 
 void WebViewPasswordManagerDriver::FillPasswordForm(
     const autofill::PasswordFormFillData& form_data) {
@@ -30,11 +34,6 @@ void WebViewPasswordManagerDriver::FillPasswordForm(
 
 void WebViewPasswordManagerDriver::InformNoSavedCredentials() {
   [delegate_ informNoSavedCredentials];
-}
-
-void WebViewPasswordManagerDriver::FormsEligibleForGenerationFound(
-    const std::vector<autofill::PasswordFormGenerationData>& forms) {
-  // Password generation is not supported.
 }
 
 void WebViewPasswordManagerDriver::GeneratedPasswordAccepted(
@@ -54,9 +53,6 @@ void WebViewPasswordManagerDriver::PreviewSuggestion(
   NOTIMPLEMENTED();
 }
 
-void WebViewPasswordManagerDriver::ShowInitialPasswordAccountSuggestions(
-    const autofill::PasswordFormFillData& form_data) {}
-
 void WebViewPasswordManagerDriver::ClearPreviewedForm() {
   NOTIMPLEMENTED();
 }
@@ -67,11 +63,8 @@ WebViewPasswordManagerDriver::GetPasswordGenerationHelper() {
 }
 
 PasswordManager* WebViewPasswordManagerDriver::GetPasswordManager() {
-  return [delegate_ passwordManager];
+  return delegate_.passwordManager;
 }
-
-void WebViewPasswordManagerDriver::AllowPasswordGenerationForForm(
-    const autofill::PasswordForm& form) {}
 
 PasswordAutofillManager*
 WebViewPasswordManagerDriver::GetPasswordAutofillManager() {
@@ -88,7 +81,11 @@ bool WebViewPasswordManagerDriver::IsMainFrame() const {
   return true;
 }
 
-GURL WebViewPasswordManagerDriver::GetLastCommittedURL() const {
+bool WebViewPasswordManagerDriver::CanShowAutofillUi() const {
+  return true;
+}
+
+const GURL& WebViewPasswordManagerDriver::GetLastCommittedURL() const {
   return delegate_.lastCommittedURL;
 }
 }  // namespace ios_web_view

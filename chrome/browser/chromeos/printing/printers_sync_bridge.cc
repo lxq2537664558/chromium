@@ -4,20 +4,17 @@
 
 #include "chrome/browser/chromeos/printing/printers_sync_bridge.h"
 
-#include <memory>
 #include <set>
-#include <string>
 #include <utility>
-#include <vector>
 
 #include "base/bind.h"
-#include "base/optional.h"
+#include "base/metrics/histogram_functions.h"
 #include "base/stl_util.h"
 #include "base/task/post_task.h"
 #include "chrome/browser/chromeos/printing/specifics_translation.h"
+#include "chromeos/printing/printer_configuration.h"
 #include "components/sync/base/report_unrecoverable_error.h"
 #include "components/sync/model/model_type_change_processor.h"
-#include "components/sync/model/model_type_store.h"
 #include "components/sync/model/mutable_data_batch.h"
 #include "components/sync/model_impl/client_tag_based_model_type_processor.h"
 #include "components/sync/protocol/model_type_state.pb.h"
@@ -40,9 +37,45 @@ std::unique_ptr<EntityData> CopyToEntityData(
     const sync_pb::PrinterSpecifics& specifics) {
   auto entity_data = std::make_unique<EntityData>();
   *entity_data->specifics.mutable_printer() = specifics;
-  entity_data->non_unique_name =
+  entity_data->name =
       specifics.display_name().empty() ? "PRINTER" : specifics.display_name();
   return entity_data;
+}
+
+// Computes the make_and_model field for old |specifics| where it is missing.
+// Returns true if an update was made.  make_and_model is computed from the
+// manufacturer and model strings.
+bool MigrateMakeAndModel(sync_pb::PrinterSpecifics* specifics) {
+  if (specifics->has_make_and_model()) {
+    base::UmaHistogramBoolean("Printing.CUPS.MigratedMakeAndModel", false);
+    return false;
+  }
+
+  specifics->set_make_and_model(
+      chromeos::MakeAndModel(specifics->manufacturer(), specifics->model()));
+  base::UmaHistogramBoolean("Printing.CUPS.MigratedMakeAndModel", true);
+  return true;
+}
+
+// If |specifics|'s PPD reference has both autoconf and another option selected,
+// we strip the autoconf flag and return true, false otherwise.
+bool ResolveInvalidPpdReference(sync_pb::PrinterSpecifics* specifics) {
+  auto* ppd_ref = specifics->mutable_ppd_reference();
+
+  if (!ppd_ref->autoconf()) {
+    base::UmaHistogramBoolean("Printing.CUPS.InvalidPpdResolved", false);
+    return false;
+  }
+
+  if (!ppd_ref->has_user_supplied_ppd_url() &&
+      !ppd_ref->has_effective_make_and_model()) {
+    base::UmaHistogramBoolean("Printing.CUPS.InvalidPpdResolved", false);
+    return false;
+  }
+
+  ppd_ref->clear_autoconf();
+  base::UmaHistogramBoolean("Printing.CUPS.InvalidPpdResolved", true);
+  return true;
 }
 
 }  // namespace
@@ -52,7 +85,7 @@ class PrintersSyncBridge::StoreProxy {
  public:
   StoreProxy(PrintersSyncBridge* owner,
              syncer::OnceModelTypeStoreFactory callback)
-      : owner_(owner), weak_ptr_factory_(this) {
+      : owner_(owner) {
     std::move(callback).Run(syncer::PRINTERS,
                             base::BindOnce(&StoreProxy::OnStoreCreated,
                                            weak_ptr_factory_.GetWeakPtr()));
@@ -146,19 +179,19 @@ class PrintersSyncBridge::StoreProxy {
   PrintersSyncBridge* owner_;
 
   std::unique_ptr<ModelTypeStore> store_;
-  base::WeakPtrFactory<StoreProxy> weak_ptr_factory_;
+  base::WeakPtrFactory<StoreProxy> weak_ptr_factory_{this};
 };
 
 PrintersSyncBridge::PrintersSyncBridge(
     syncer::OnceModelTypeStoreFactory callback,
-    const base::RepeatingClosure& error_callback)
-    : ModelTypeSyncBridge(
-          std::make_unique<ClientTagBasedModelTypeProcessor>(syncer::PRINTERS,
-                                                             error_callback)),
+    base::RepeatingClosure error_callback)
+    : ModelTypeSyncBridge(std::make_unique<ClientTagBasedModelTypeProcessor>(
+          syncer::PRINTERS,
+          std::move(error_callback))),
       store_delegate_(std::make_unique<StoreProxy>(this, std::move(callback))),
       observers_(new base::ObserverListThreadSafe<Observer>()) {}
 
-PrintersSyncBridge::~PrintersSyncBridge() {}
+PrintersSyncBridge::~PrintersSyncBridge() = default;
 
 std::unique_ptr<MetadataChangeList>
 PrintersSyncBridge::CreateMetadataChangeList() {
@@ -192,7 +225,17 @@ base::Optional<syncer::ModelError> PrintersSyncBridge::MergeSyncData(
     // appropriate metadata.
     for (const auto& entry : all_data_) {
       const std::string& local_entity_id = entry.first;
-      if (!base::ContainsKey(sync_entity_ids, local_entity_id)) {
+
+      // TODO(crbug.com/737809): Remove when all data is expected to have been
+      // migrated.
+      bool migrated = MigrateMakeAndModel(entry.second.get());
+
+      // TODO(crbug.com/987869): Remove when all data is expected to have been
+      // resolved.
+      bool resolved = ResolveInvalidPpdReference(entry.second.get());
+
+      if (migrated || resolved ||
+          !base::Contains(sync_entity_ids, local_entity_id)) {
         // Only local objects which were not updated are uploaded.  Objects for
         // which there was a remote copy are overwritten.
         change_processor()->Put(local_entity_id,
@@ -281,21 +324,26 @@ std::string PrintersSyncBridge::GetStorageKey(const EntityData& entity_data) {
 
 // Picks the entity with the most recent updated time as the canonical version.
 ConflictResolution PrintersSyncBridge::ResolveConflict(
-    const EntityData& local_data,
+    const std::string& storage_key,
     const EntityData& remote_data) const {
-  DCHECK(local_data.specifics.has_printer());
   DCHECK(remote_data.specifics.has_printer());
 
-  const sync_pb::PrinterSpecifics& local_printer =
-      local_data.specifics.printer();
+  auto iter = all_data_.find(storage_key);
+  // If the local printer doesn't exist, it must have been deleted. In this
+  // case, use the remote one.
+  if (iter == all_data_.end()) {
+    return ConflictResolution::kUseRemote;
+  }
+  const sync_pb::PrinterSpecifics& local_printer = *iter->second;
+
   const sync_pb::PrinterSpecifics& remote_printer =
       remote_data.specifics.printer();
 
   if (local_printer.updated_timestamp() > remote_printer.updated_timestamp()) {
-    return ConflictResolution::UseLocal();
+    return ConflictResolution::kUseLocal;
   }
 
-  return ConflictResolution::UseRemote();
+  return ConflictResolution::kUseRemote;
 }
 
 void PrintersSyncBridge::AddPrinter(

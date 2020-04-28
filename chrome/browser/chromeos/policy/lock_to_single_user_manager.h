@@ -9,27 +9,48 @@
 #include "base/memory/weak_ptr.h"
 #include "base/optional.h"
 #include "base/scoped_observer.h"
-#include "chrome/browser/chromeos/arc/arc_session_manager.h"
+#include "chrome/browser/chromeos/arc/session/arc_session_manager.h"
+#include "chrome/browser/chromeos/vm_starting_observer.h"
+#include "chromeos/dbus/concierge_client.h"
 #include "chromeos/dbus/cryptohome/rpc.pb.h"
-#include "chromeos/login/login_state/login_state.h"
+#include "components/user_manager/user_manager.h"
 
 namespace policy {
 
-// This class observes the LoginState and ArcSessionManager and checks if the
-// device must be locked to a single user mount, if the policy forces it.
-class LockToSingleUserManager final : public chromeos::LoginState::Observer,
-                                      public arc::ArcSessionManager::Observer {
+// This class observes the UserManager session state, ArcSessionManager,
+// CrostiniManager and PluginVmManager and checks if the device must be locked
+// to a single user mount, if the policy forces it.
+class LockToSingleUserManager final
+    : public user_manager::UserManager::UserSessionStateObserver,
+      public arc::ArcSessionManager::Observer,
+      public chromeos::ConciergeClient::VmObserver,
+      public chromeos::VmStartingObserver {
  public:
+  static LockToSingleUserManager* GetLockToSingleUserManagerInstance();
+
   LockToSingleUserManager();
   ~LockToSingleUserManager() override;
 
-  // chromeos::LoginState::Observer overrides
-  void LoggedInStateChanged() override;
-
-  // arc::ArcSessionManager::Observer overrides
-  void OnArcStarted() override;
+  // Notify that a VM is being started from outside of Chrome
+  void DbusNotifyVmStarting();
 
  private:
+  // user_manager::UserManager::UserSessionStateObserver:
+  void ActiveUserChanged(user_manager::User* user) override;
+
+  // arc::ArcSessionManager::Observer:
+  void OnArcStarted() override;
+
+  // ConciergeClient::VmObserver:
+  void OnVmStarted(const vm_tools::concierge::VmStartedSignal& signal) override;
+  void OnVmStopped(const vm_tools::concierge::VmStoppedSignal& signal) override;
+
+  // chromeos::VmStartingObserver:
+  void OnVmStarting() override;
+
+  // Add observers for VM starting events
+  void AddVmStartingObservers(user_manager::User* user);
+
   // Sends D-Bus request to lock device to single user mount.
   void LockToSingleUser();
 
@@ -37,12 +58,18 @@ class LockToSingleUserManager final : public chromeos::LoginState::Observer,
   void OnLockToSingleUserMountUntilRebootDone(
       base::Optional<cryptohome::BaseReply> reply);
 
+  // true if locking is required when DbusNotifyVmStarting() is called
+  bool lock_to_single_user_on_dbus_call_ = false;
+
+  // true if it is expected that the device is already locked to a single user
+  bool expect_to_be_locked_ = false;
+
   ScopedObserver<arc::ArcSessionManager, arc::ArcSessionManager::Observer>
       arc_session_observer_{this};
-  ScopedObserver<chromeos::LoginState, chromeos::LoginState::Observer>
-      login_state_observer_{this};
 
   base::WeakPtrFactory<LockToSingleUserManager> weak_factory_{this};
+
+  friend class LockToSingleUserManagerTest;
 
   DISALLOW_COPY_AND_ASSIGN(LockToSingleUserManager);
 };

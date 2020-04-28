@@ -4,7 +4,7 @@
 
 #include "chrome/browser/media/router/media_sinks_observer.h"
 
-#include "base/logging.h"
+#include "base/check_op.h"
 #include "base/stl_util.h"
 #include "chrome/browser/media/router/media_router.h"
 
@@ -50,7 +50,7 @@ void MediaSinksObserver::OnSinksUpdated(
   base::AutoReset<bool> reset_in_on_sinks_updated(&in_on_sinks_updated_, true);
 #endif
 
-  if (origins.empty() || base::ContainsValue(origins, origin_))
+  if (origins.empty() || base::Contains(origins, origin_))
     OnSinksReceived(sinks);
   else
     OnSinksReceived(std::vector<MediaSink>());

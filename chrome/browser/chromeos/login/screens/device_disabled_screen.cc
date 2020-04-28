@@ -6,10 +6,10 @@
 
 #include <string>
 
-#include "base/logging.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/browser_process_platform_part.h"
 #include "chrome/browser/chromeos/login/wizard_controller.h"
+#include "chrome/browser/ui/webui/chromeos/login/device_disabled_screen_handler.h"
 
 namespace chromeos {
 
@@ -20,34 +20,15 @@ system::DeviceDisablingManager* DeviceDisablingManager() {
 }  // namespace
 
 DeviceDisabledScreen::DeviceDisabledScreen(DeviceDisabledScreenView* view)
-    : BaseScreen(OobeScreen::SCREEN_DEVICE_DISABLED), view_(view) {
+    : BaseScreen(DeviceDisabledScreenView::kScreenId,
+                 OobeScreenPriority::SCREEN_DEVICE_DISABLED),
+      view_(view) {
   view_->SetDelegate(this);
 }
 
 DeviceDisabledScreen::~DeviceDisabledScreen() {
   if (view_)
     view_->SetDelegate(nullptr);
-}
-
-void DeviceDisabledScreen::Show() {
-  if (!view_ || showing_)
-    return;
-
-  showing_ = true;
-  view_->Show();
-  DeviceDisablingManager()->AddObserver(this);
-  if (!DeviceDisablingManager()->disabled_message().empty())
-    view_->UpdateMessage(DeviceDisablingManager()->disabled_message());
-}
-
-void DeviceDisabledScreen::Hide() {
-  if (!showing_)
-    return;
-  showing_ = false;
-
-  if (view_)
-    view_->Hide();
-  DeviceDisablingManager()->RemoveObserver(this);
 }
 
 void DeviceDisabledScreen::OnViewDestroyed(DeviceDisabledScreenView* view) {
@@ -65,6 +46,25 @@ const std::string& DeviceDisabledScreen::GetMessage() const {
 
 const std::string& DeviceDisabledScreen::GetSerialNumber() const {
   return DeviceDisablingManager()->serial_number();
+}
+
+void DeviceDisabledScreen::ShowImpl() {
+  if (!view_ || !is_hidden())
+    return;
+
+  view_->Show();
+  DeviceDisablingManager()->AddObserver(this);
+  if (!DeviceDisablingManager()->disabled_message().empty())
+    view_->UpdateMessage(DeviceDisablingManager()->disabled_message());
+}
+
+void DeviceDisabledScreen::HideImpl() {
+  if (is_hidden())
+    return;
+
+  if (view_)
+    view_->Hide();
+  DeviceDisablingManager()->RemoveObserver(this);
 }
 
 void DeviceDisabledScreen::OnDisabledMessageChanged(

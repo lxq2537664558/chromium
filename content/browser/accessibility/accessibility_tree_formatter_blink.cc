@@ -75,10 +75,14 @@ std::string IntAttrToString(const BrowserAccessibility& node,
       return ui::ToString(static_cast<ax::mojom::DefaultActionVerb>(value));
     case ax::mojom::IntAttribute::kDescriptionFrom:
       return ui::ToString(static_cast<ax::mojom::DescriptionFrom>(value));
+    case ax::mojom::IntAttribute::kDropeffect:
+      return node.GetData().DropeffectBitfieldToString();
     case ax::mojom::IntAttribute::kHasPopup:
       return ui::ToString(static_cast<ax::mojom::HasPopup>(value));
     case ax::mojom::IntAttribute::kInvalidState:
       return ui::ToString(static_cast<ax::mojom::InvalidState>(value));
+    case ax::mojom::IntAttribute::kListStyle:
+      return ui::ToString(static_cast<ax::mojom::ListStyle>(value));
     case ax::mojom::IntAttribute::kNameFrom:
       return ui::ToString(static_cast<ax::mojom::NameFrom>(value));
     case ax::mojom::IntAttribute::kRestriction:
@@ -100,11 +104,13 @@ std::string IntAttrToString(const BrowserAccessibility& node,
     case ax::mojom::IntAttribute::kAriaCellColumnIndex:
     case ax::mojom::IntAttribute::kAriaCellRowIndex:
     case ax::mojom::IntAttribute::kAriaColumnCount:
+    case ax::mojom::IntAttribute::kAriaCellColumnSpan:
+    case ax::mojom::IntAttribute::kAriaCellRowSpan:
     case ax::mojom::IntAttribute::kAriaRowCount:
     case ax::mojom::IntAttribute::kBackgroundColor:
     case ax::mojom::IntAttribute::kColor:
     case ax::mojom::IntAttribute::kColorValue:
-    case ax::mojom::IntAttribute::kDetailsId:
+    case ax::mojom::IntAttribute::kDOMNodeId:
     case ax::mojom::IntAttribute::kErrormessageId:
     case ax::mojom::IntAttribute::kHierarchicalLevel:
     case ax::mojom::IntAttribute::kInPageLinkTargetId:
@@ -112,6 +118,7 @@ std::string IntAttrToString(const BrowserAccessibility& node,
     case ax::mojom::IntAttribute::kNextFocusId:
     case ax::mojom::IntAttribute::kNextOnLineId:
     case ax::mojom::IntAttribute::kPosInSet:
+    case ax::mojom::IntAttribute::kPopupForId:
     case ax::mojom::IntAttribute::kPreviousFocusId:
     case ax::mojom::IntAttribute::kPreviousOnLineId:
     case ax::mojom::IntAttribute::kScrollX:
@@ -146,7 +153,7 @@ std::string IntAttrToString(const BrowserAccessibility& node,
 }  // namespace
 
 AccessibilityTreeFormatterBlink::AccessibilityTreeFormatterBlink()
-    : AccessibilityTreeFormatterBrowser() {}
+    : AccessibilityTreeFormatterBase() {}
 
 AccessibilityTreeFormatterBlink::~AccessibilityTreeFormatterBlink() {}
 
@@ -169,7 +176,6 @@ void AccessibilityTreeFormatterBlink::AddDefaultFilters(
   AddPropertyFilter(property_filters, "valueForRange*");
   AddPropertyFilter(property_filters, "minValueForRange*");
   AddPropertyFilter(property_filters, "maxValueForRange*");
-  AddPropertyFilter(property_filters, "hierarchicalLevel*");
   AddPropertyFilter(property_filters, "autoComplete*");
   AddPropertyFilter(property_filters, "restriction*");
   AddPropertyFilter(property_filters, "keyShortcuts*");
@@ -178,6 +184,7 @@ void AccessibilityTreeFormatterBlink::AddDefaultFilters(
   AddPropertyFilter(property_filters, "flowtoIds*");
   AddPropertyFilter(property_filters, "detailsIds*");
   AddPropertyFilter(property_filters, "invalidState=*");
+  AddPropertyFilter(property_filters, "ignored*");
   AddPropertyFilter(property_filters, "invalidState=false",
                     PropertyFilter::DENY);  // Don't show false value
   AddPropertyFilter(property_filters, "roleDescription=*");
@@ -195,12 +202,60 @@ const char* const TREE_DATA_ATTRIBUTES[] = {"TreeData.textSelStartOffset",
 const char* STATE_FOCUSED = "focused";
 const char* STATE_OFFSCREEN = "offscreen";
 
+std::unique_ptr<base::DictionaryValue>
+AccessibilityTreeFormatterBlink::BuildAccessibilityTree(
+    BrowserAccessibility* root) {
+  CHECK(root);
+  std::unique_ptr<base::DictionaryValue> dict(new base::DictionaryValue);
+  RecursiveBuildAccessibilityTree(*root, dict.get());
+  return dict;
+}
+
+std::unique_ptr<base::DictionaryValue>
+AccessibilityTreeFormatterBlink::BuildAccessibilityTreeForProcess(
+    base::ProcessId pid) {
+  NOTREACHED();
+  return nullptr;
+}
+
+std::unique_ptr<base::DictionaryValue>
+AccessibilityTreeFormatterBlink::BuildAccessibilityTreeForWindow(
+    gfx::AcceleratedWidget widget) {
+  NOTREACHED();
+  return nullptr;
+}
+
+std::unique_ptr<base::DictionaryValue>
+AccessibilityTreeFormatterBlink::BuildAccessibilityTreeForPattern(
+    const base::StringPiece& pattern) {
+  NOTREACHED();
+  return nullptr;
+}
+
+void AccessibilityTreeFormatterBlink::RecursiveBuildAccessibilityTree(
+    const BrowserAccessibility& node,
+    base::DictionaryValue* dict) const {
+  AddProperties(node, dict);
+
+  auto children = std::make_unique<base::ListValue>();
+
+  for (size_t i = 0; i < ChildCount(node); ++i) {
+    BrowserAccessibility* child_node = GetChild(node, i);
+    std::unique_ptr<base::DictionaryValue> child_dict(
+        new base::DictionaryValue);
+    RecursiveBuildAccessibilityTree(*child_node, child_dict.get());
+    children->Append(std::move(child_dict));
+  }
+  dict->Set(kChildrenDictAttr, std::move(children));
+}
+
 uint32_t AccessibilityTreeFormatterBlink::ChildCount(
     const BrowserAccessibility& node) const {
   if (node.HasStringAttribute(ax::mojom::StringAttribute::kChildTreeId))
     return node.PlatformChildCount();
-  else
-    return node.InternalChildCount();
+  // We don't want to use InternalGetChild as we want to include
+  // ignored nodes in the tree for tests.
+  return node.node()->children().size();
 }
 
 BrowserAccessibility* AccessibilityTreeFormatterBlink::GetChild(
@@ -208,13 +263,18 @@ BrowserAccessibility* AccessibilityTreeFormatterBlink::GetChild(
     uint32_t i) const {
   if (node.HasStringAttribute(ax::mojom::StringAttribute::kChildTreeId))
     return node.PlatformGetChild(i);
-  else
-    return node.InternalGetChild(i);
+  // We don't want to use InternalGetChild as we want to include
+  // ignored nodes in the tree for tests.
+  if (i < 0 && i >= node.node()->children().size())
+    return nullptr;
+  ui::AXNode* child_node = node.node()->children()[i];
+  DCHECK(child_node);
+  return node.manager()->GetFromAXNode(child_node);
 }
 
 void AccessibilityTreeFormatterBlink::AddProperties(
     const BrowserAccessibility& node,
-    base::DictionaryValue* dict) {
+    base::DictionaryValue* dict) const {
   int id = node.GetId();
   dict->SetInteger("id", id);
 
@@ -324,14 +384,16 @@ void AccessibilityTreeFormatterBlink::AddProperties(
   }
 
   //  Check for relevant rich text selection info in AXTreeData
-  int anchor_id = node.manager()->GetTreeData().sel_anchor_object_id;
+  ui::AXTree::Selection unignored_selection =
+      node.manager()->ax_tree()->GetUnignoredSelection();
+  int anchor_id = unignored_selection.anchor_object_id;
   if (id == anchor_id) {
-    int anchor_offset = node.manager()->GetTreeData().sel_anchor_offset;
+    int anchor_offset = unignored_selection.anchor_offset;
     dict->SetInteger("TreeData.textSelStartOffset", anchor_offset);
   }
-  int focus_id = node.manager()->GetTreeData().sel_focus_object_id;
+  int focus_id = unignored_selection.focus_object_id;
   if (id == focus_id) {
-    int focus_offset = node.manager()->GetTreeData().sel_focus_offset;
+    int focus_offset = unignored_selection.focus_offset;
     dict->SetInteger("TreeData.textSelEndOffset", focus_offset);
   }
 
@@ -365,7 +427,7 @@ base::string16 AccessibilityTreeFormatterBlink::ProcessTreeForOutput(
 
   base::string16 role_value;
   dict.GetString("internalRole", &role_value);
-  WriteAttribute(true, base::UTF16ToUTF8(role_value), &line);
+  WriteAttribute(true, role_value, &line);
 
   for (int state_index = static_cast<int32_t>(ax::mojom::State::kNone);
        state_index <= static_cast<int32_t>(ax::mojom::State::kMaxValue);
@@ -389,27 +451,32 @@ base::string16 AccessibilityTreeFormatterBlink::ProcessTreeForOutput(
     WriteAttribute(false, STATE_FOCUSED, &line);
 
   WriteAttribute(
-      false, FormatCoordinates("location", "boundsX", "boundsY", dict), &line);
+      false, FormatCoordinates(dict, "location", "boundsX", "boundsY"), &line);
   WriteAttribute(false,
-                 FormatCoordinates("size", "boundsWidth", "boundsHeight", dict),
+                 FormatCoordinates(dict, "size", "boundsWidth", "boundsHeight"),
                  &line);
 
-  WriteAttribute(
-      false,
-      FormatCoordinates("pageLocation", "pageBoundsX", "pageBoundsY", dict),
-      &line);
-  WriteAttribute(false,
-                 FormatCoordinates("pageSize", "pageBoundsWidth",
-                                   "pageBoundsHeight", dict),
-                 &line);
-  WriteAttribute(false,
-                 FormatCoordinates("unclippedLocation", "unclippedBoundsX",
-                                   "unclippedBoundsY", dict),
-                 &line);
-  WriteAttribute(false,
-                 FormatCoordinates("unclippedSize", "unclippedBoundsWidth",
-                                   "unclippedBoundsHeight", dict),
-                 &line);
+  bool ignored = false;
+  dict.GetBoolean("ignored", &ignored);
+  if (!ignored) {
+    WriteAttribute(
+        false,
+        FormatCoordinates(dict, "pageLocation", "pageBoundsX", "pageBoundsY"),
+        &line);
+    WriteAttribute(false,
+                   FormatCoordinates(dict, "pageSize", "pageBoundsWidth",
+                                     "pageBoundsHeight"),
+                   &line);
+    WriteAttribute(false,
+                   FormatCoordinates(dict, "unclippedLocation",
+                                     "unclippedBoundsX", "unclippedBoundsY"),
+                   &line);
+    WriteAttribute(
+        false,
+        FormatCoordinates(dict, "unclippedSize", "unclippedBoundsWidth",
+                          "unclippedBoundsHeight"),
+        &line);
+  }
 
   bool transform;
   if (dict.GetBoolean("transform", &transform) && transform)
@@ -541,7 +608,7 @@ base::string16 AccessibilityTreeFormatterBlink::ProcessTreeForOutput(
   return line;
 }
 
-const base::FilePath::StringType
+base::FilePath::StringType
 AccessibilityTreeFormatterBlink::GetExpectedFileSuffix() {
   return FILE_PATH_LITERAL("-expected-blink.txt");
 }

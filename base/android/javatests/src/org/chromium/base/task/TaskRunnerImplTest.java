@@ -25,13 +25,9 @@ public class TaskRunnerImplTest {
     @Test
     @SmallTest
     public void testPreNativePostTask() {
-        TaskRunner taskQueue = new TaskRunnerImpl(new TaskTraits());
+        TaskRunner taskQueue = new TaskRunnerImpl(TaskTraits.USER_BLOCKING);
 
         // This should not time out.
-        try {
-            SchedulerTestHelpers.postTaskAndBlockUntilRun(taskQueue);
-        } finally {
-            taskQueue.destroy();
-        }
+        SchedulerTestHelpers.postTaskAndBlockUntilRun(taskQueue);
     }
 }

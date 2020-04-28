@@ -9,6 +9,7 @@
 
 #include "base/base_export.h"
 #include "base/macros.h"
+#include "base/profiler/sampling_profiler_thread_token.h"
 #include "base/threading/platform_thread.h"
 
 namespace base {
@@ -16,6 +17,7 @@ namespace base {
 class Unwinder;
 class ModuleCache;
 class ProfileBuilder;
+class StackBuffer;
 class StackSamplerTestDelegate;
 
 // StackSampler is an implementation detail of StackSamplingProfiler. It
@@ -23,34 +25,16 @@ class StackSamplerTestDelegate;
 // for a given thread.
 class BASE_EXPORT StackSampler {
  public:
-  // This class contains a buffer for stack copies that can be shared across
-  // multiple instances of StackSampler.
-  class BASE_EXPORT StackBuffer {
-   public:
-    StackBuffer(size_t buffer_size);
-    ~StackBuffer();
-
-    uintptr_t* buffer() const { return buffer_.get(); }
-    size_t size() const { return size_; }
-
-   private:
-    // The word-aligned buffer.
-    const std::unique_ptr<uintptr_t[]> buffer_;
-
-    // The size of the buffer.
-    const size_t size_;
-
-    DISALLOW_COPY_AND_ASSIGN(StackBuffer);
-  };
-
   virtual ~StackSampler();
 
-  // Creates a stack sampler that records samples for thread with |thread_id|.
-  // Returns null if this platform does not support stack sampling.
+  // Creates a stack sampler that records samples for thread with
+  // |thread_token|. Returns null if this platform does not support stack
+  // sampling.
   static std::unique_ptr<StackSampler> Create(
-      PlatformThreadId thread_id,
+      SamplingProfilerThreadToken thread_token,
       ModuleCache* module_cache,
-      StackSamplerTestDelegate* test_delegate);
+      StackSamplerTestDelegate* test_delegate,
+      std::unique_ptr<Unwinder> native_unwinder = nullptr);
 
   // Gets the required size of the stack buffer.
   static size_t GetStackBufferSize();
@@ -64,7 +48,7 @@ class BASE_EXPORT StackSampler {
 
   // Adds an auxiliary unwinder to handle additional, non-native-code unwind
   // scenarios.
-  virtual void AddAuxUnwinder(Unwinder* unwinder) = 0;
+  virtual void AddAuxUnwinder(std::unique_ptr<Unwinder> unwinder) = 0;
 
   // Records a set of frames and returns them.
   virtual void RecordStackFrames(StackBuffer* stackbuffer,

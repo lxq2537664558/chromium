@@ -7,7 +7,6 @@
 #include "base/files/file_path.h"
 #include "base/logging.h"
 #include "content/public/browser/browser_context.h"
-#include "storage/browser/quota/quota_settings.h"
 
 #if defined(OS_ANDROID)
 #include "content/shell/android/shell_descriptors.h"
@@ -38,14 +37,7 @@ TestContentBrowserClient::GetGeneratedCodeCacheSettings(
   return GeneratedCodeCacheSettings(true, 0, context->GetPath());
 }
 
-void TestContentBrowserClient::GetQuotaSettings(
-    BrowserContext* context,
-    StoragePartition* partition,
-    storage::OptionalQuotaSettingsCallback callback) {
-  std::move(callback).Run(storage::GetHardCodedSettings(100 * 1024 * 1024));
-}
-
-std::string TestContentBrowserClient::GetUserAgent() const {
+std::string TestContentBrowserClient::GetUserAgent() {
   return std::string("TestContentClient");
 }
 

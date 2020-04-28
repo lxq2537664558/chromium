@@ -10,6 +10,7 @@
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/web_applications/web_app_metrics_factory.h"
+#include "chrome/browser/web_applications/components/app_registrar.h"
 #include "chrome/browser/web_applications/components/web_app_tab_helper_base.h"
 #include "chrome/browser/web_applications/web_app_provider.h"
 #include "content/public/browser/web_contents.h"
@@ -34,17 +35,10 @@ void RecordTabOrWindowHistogram(
 }
 
 void RecordUserInstalledHistogram(
-    bool from_install_button,
     bool in_window,
     SiteEngagementService::EngagementType engagement_type) {
   const std::string histogram_prefix = "WebApp.Engagement.UserInstalled";
   RecordTabOrWindowHistogram(histogram_prefix, in_window, engagement_type);
-
-  // Record it into more specific buckets:
-  RecordTabOrWindowHistogram(
-      histogram_prefix + (from_install_button ? ".FromInstallButton"
-                                              : ".FromCreateShortcutButton"),
-      in_window, engagement_type);
 }
 
 }  // namespace
@@ -60,8 +54,9 @@ WebAppMetrics::WebAppMetrics(Profile* profile)
   WebAppProvider* provider = WebAppProvider::Get(profile_);
   DCHECK(provider);
 
-  provider->SetRegistryReadyCallback(base::BindOnce(
-      &WebAppMetrics::CountUserInstalledApps, weak_ptr_factory_.GetWeakPtr()));
+  provider->on_registry_ready().Post(
+      FROM_HERE, base::BindOnce(&WebAppMetrics::CountUserInstalledApps,
+                                weak_ptr_factory_.GetWeakPtr()));
 }
 
 WebAppMetrics::~WebAppMetrics() = default;
@@ -98,20 +93,22 @@ void WebAppMetrics::OnEngagementEvent(
   // A presence of WebAppTabHelperBase with valid app_id indicates a web app.
   WebAppTabHelperBase* tab_helper =
       WebAppTabHelperBase::FromWebContents(web_contents);
-  if (!tab_helper || tab_helper->app_id().empty())
+  if (!tab_helper)
+    return;
+  AppId app_id = tab_helper->GetAppId();
+  if (app_id.empty())
     return;
 
   // No HostedAppBrowserController if app is running as a tab in common browser.
-  const bool in_window = !!browser->web_app_controller();
-  const bool from_install_button = tab_helper->IsFromInstallButton();
-  const bool user_installed = tab_helper->IsUserInstalled();
+  const bool in_window = !!browser->app_controller();
+  const bool user_installed =
+      WebAppProvider::Get(profile_)->registrar().WasInstalledByUser(app_id);
 
   // Record all web apps:
   RecordTabOrWindowHistogram("WebApp.Engagement", in_window, engagement_type);
 
   if (user_installed) {
-    RecordUserInstalledHistogram(from_install_button, in_window,
-                                 engagement_type);
+    RecordUserInstalledHistogram(in_window, engagement_type);
   } else {
     // Record this app into more specific bucket if was installed by default:
     RecordTabOrWindowHistogram("WebApp.Engagement.DefaultInstalled", in_window,
@@ -130,7 +127,7 @@ void WebAppMetrics::CountUserInstalledApps() {
 
   WebAppProvider* provider = WebAppProvider::Get(profile_);
 
-  num_user_installed_apps_ = provider->CountUserInstalledApps();
+  num_user_installed_apps_ = provider->registrar().CountUserInstalledApps();
   DCHECK_NE(kNumUserInstalledAppsNotCounted, num_user_installed_apps_);
   DCHECK_GE(num_user_installed_apps_, 0);
 }

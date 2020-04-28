@@ -63,7 +63,7 @@ struct HTMLConstructionSiteTask {
     // It's sort of ugly, but we store the |oldParent| in the |child| field of
     // the task so that we don't bloat the HTMLConstructionSiteTask object in
     // the common case of the Insert operation.
-    return ToContainerNode(child.Get());
+    return To<ContainerNode>(child.Get());
   }
 
   Operation operation;
@@ -102,6 +102,7 @@ class Document;
 class Element;
 class HTMLFormElement;
 class HTMLParserReentryPermit;
+enum class DeclarativeShadowRootType;
 
 class HTMLConstructionSite final {
   DISALLOW_NEW();
@@ -148,6 +149,9 @@ class HTMLConstructionSite final {
   void InsertCommentOnDocument(AtomicHTMLToken*);
   void InsertCommentOnHTMLHtmlElement(AtomicHTMLToken*);
   void InsertHTMLElement(AtomicHTMLToken*);
+  void InsertHTMLTemplateElement(
+      AtomicHTMLToken*,
+      DeclarativeShadowRootType declarative_shadow_root_type);
   void InsertSelfClosingHTMLElementDestroyingToken(AtomicHTMLToken*);
   void InsertFormattingElement(AtomicHTMLToken*);
   void InsertHTMLHeadElement(AtomicHTMLToken*);

@@ -31,6 +31,7 @@
 #include "net/base/registry_controlled_domains/registry_controlled_domain.h"
 #include "ui/base/accelerators/menu_label_accelerator_util.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/base/models/image_model.h"
 #include "ui/base/resource/resource_bundle.h"
 #include "ui/base/window_open_disposition.h"
 #include "ui/gfx/text_elider.h"
@@ -101,9 +102,8 @@ base::string16 BackForwardMenuModel::GetLabelAt(int index) const {
   NavigationEntry* entry = GetNavigationEntry(index);
   base::string16 menu_text(entry->GetTitleForDisplay());
   menu_text = ui::EscapeMenuLabelAmpersands(menu_text);
-  menu_text =
-      gfx::ElideText(menu_text, gfx::FontList(), kMaxBackForwardMenuWidth,
-                     gfx::ELIDE_TAIL, gfx::Typesetter::NATIVE);
+  menu_text = gfx::ElideText(menu_text, gfx::FontList(),
+                             kMaxBackForwardMenuWidth, gfx::ELIDE_TAIL);
 
   return menu_text;
 }
@@ -127,22 +127,28 @@ int BackForwardMenuModel::GetGroupIdAt(int index) const {
   return false;
 }
 
-bool BackForwardMenuModel::GetIconAt(int index, gfx::Image* icon) {
+ui::ImageModel BackForwardMenuModel::GetIconAt(int index) const {
   if (!ItemHasIcon(index))
-    return false;
+    return ui::ImageModel();
 
   if (index == GetItemCount() - 1) {
-    *icon = ui::ResourceBundle::GetSharedInstance().GetNativeImageNamed(
-        IDR_HISTORY_FAVICON);
+    return ui::ImageModel::FromImage(
+        ui::ResourceBundle::GetSharedInstance().GetNativeImageNamed(
+            IDR_HISTORY_FAVICON));
   } else {
     NavigationEntry* entry = GetNavigationEntry(index);
-    *icon = entry->GetFavicon().image;
-    if (!entry->GetFavicon().valid && menu_model_delegate()) {
-      FetchFavicon(entry);
+    content::FaviconStatus fav_icon = entry->GetFavicon();
+    if (!fav_icon.valid && menu_model_delegate()) {
+      // FetchFavicon is not const because it caches the result, but GetIconAt
+      // is const because it is not be apparent to outside observers that an
+      // internal change is taking place. Compared to spreading const in
+      // unintuitive places (e.g. making menu_model_delegate() const but
+      // returning a non-const while sprinkling virtual on member variables),
+      // this const_cast is the lesser evil.
+      const_cast<BackForwardMenuModel*>(this)->FetchFavicon(entry);
     }
+    return ui::ImageModel::FromImage(fav_icon.image);
   }
-
-  return true;
 }
 
 ui::ButtonMenuItemModel* BackForwardMenuModel::GetButtonMenuItemAt(
@@ -192,11 +198,8 @@ void BackForwardMenuModel::ActivatedAt(int index, int event_flags) {
 
   WindowOpenDisposition disposition =
       ui::DispositionFromEventFlags(event_flags);
-  if (!chrome::NavigateToIndexWithDisposition(browser_,
-                                              controller_index,
-                                              disposition)) {
-    NOTREACHED();
-  }
+  chrome::NavigateToIndexWithDisposition(browser_, controller_index,
+                                         disposition);
 }
 
 void BackForwardMenuModel::MenuWillShow() {
@@ -227,7 +230,7 @@ bool BackForwardMenuModel::IsSeparator(int index) const {
 void BackForwardMenuModel::FetchFavicon(NavigationEntry* entry) {
   // If the favicon has already been requested for this menu, don't do
   // anything.
-  if (base::ContainsKey(requested_favicons_, entry->GetUniqueID()))
+  if (base::Contains(requested_favicons_, entry->GetUniqueID()))
     return;
 
   requested_favicons_.insert(entry->GetUniqueID());
@@ -239,9 +242,8 @@ void BackForwardMenuModel::FetchFavicon(NavigationEntry* entry) {
 
   favicon_service->GetFaviconImageForPageURL(
       entry->GetURL(),
-      base::Bind(&BackForwardMenuModel::OnFavIconDataAvailable,
-                 base::Unretained(this),
-                 entry->GetUniqueID()),
+      base::BindOnce(&BackForwardMenuModel::OnFavIconDataAvailable,
+                     base::Unretained(this), entry->GetUniqueID()),
       &cancelable_task_tracker_);
 }
 
@@ -429,11 +431,11 @@ int BackForwardMenuModel::MenuIndexToNavEntryIndex(int index) const {
 NavigationEntry* BackForwardMenuModel::GetNavigationEntry(int index) const {
   int controller_index = MenuIndexToNavEntryIndex(index);
   NavigationController& controller = GetWebContents()->GetController();
-  if (controller_index >= 0 && controller_index < controller.GetEntryCount())
-    return controller.GetEntryAtIndex(controller_index);
 
-  NOTREACHED();
-  return nullptr;
+  DCHECK_GE(controller_index, 0);
+  DCHECK_LT(controller_index, controller.GetEntryCount());
+
+  return controller.GetEntryAtIndex(controller_index);
 }
 
 std::string BackForwardMenuModel::BuildActionName(

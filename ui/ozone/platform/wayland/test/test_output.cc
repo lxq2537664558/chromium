@@ -4,7 +4,7 @@
 
 #include "ui/ozone/platform/wayland/test/test_output.h"
 
-#include <wayland-server-protocol-core.h>
+#include <wayland-server-protocol.h>
 
 namespace wl {
 
@@ -28,6 +28,11 @@ void TestOutput::OnBind() {
                           kUnknownMake, kUnknownModel, 0);
   wl_output_send_mode(resource(), WL_OUTPUT_MODE_CURRENT, rect_.width(),
                       rect_.height(), 0);
+  wl_output_send_done(resource());
+}
+
+void TestOutput::SetScale(int32_t factor) {
+  wl_output_send_scale(resource(), factor);
   wl_output_send_done(resource());
 }
 

@@ -5,31 +5,95 @@
 #include "services/tracing/public/cpp/perfetto/perfetto_config.h"
 
 #include <cstdint>
+#include <string>
 
 #include "base/strings/strcat.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/trace_event/trace_config.h"
+#include "base/trace_event/trace_event.h"
 #include "build/build_config.h"
+#include "build/chromecast_buildflags.h"
 #include "services/tracing/public/mojom/perfetto_service.mojom.h"
 
 namespace tracing {
 
+namespace {
+
+perfetto::TraceConfig::DataSource* AddDataSourceConfig(
+    perfetto::TraceConfig* perfetto_config,
+    const char* name,
+    const std::string& chrome_config_string,
+    bool privacy_filtering_enabled) {
+  auto* data_source = perfetto_config->add_data_sources();
+  auto* source_config = data_source->mutable_config();
+  source_config->set_name(name);
+  source_config->set_target_buffer(0);
+  auto* chrome_config = source_config->mutable_chrome_config();
+  chrome_config->set_trace_config(chrome_config_string);
+  chrome_config->set_privacy_filtering_enabled(privacy_filtering_enabled);
+  return data_source;
+}
+
+}  // namespace
+
 perfetto::TraceConfig GetDefaultPerfettoConfig(
-    const base::trace_event::TraceConfig& chrome_config) {
+    const base::trace_event::TraceConfig& chrome_config,
+    bool privacy_filtering_enabled) {
   perfetto::TraceConfig perfetto_config;
 
   size_t size_limit = chrome_config.GetTraceBufferSizeInKb();
   if (size_limit == 0) {
-    size_limit = 100 * 1024;
+    // TODO(eseckler): Reduce the default buffer size after benchmarks set what
+    // they require. Should also invest some time to reduce the overhead of
+    // begin/end pairs further.
+    size_limit = 200 * 1024;
   }
-  perfetto_config.add_buffers()->set_size_kb(size_limit);
+  auto* buffer_config = perfetto_config.add_buffers();
+  buffer_config->set_size_kb(size_limit);
+  switch (chrome_config.GetTraceRecordMode()) {
+    case base::trace_event::RECORD_UNTIL_FULL:
+    case base::trace_event::RECORD_AS_MUCH_AS_POSSIBLE:
+      buffer_config->set_fill_policy(
+          perfetto::TraceConfig::BufferConfig::DISCARD);
+      break;
+    case base::trace_event::RECORD_CONTINUOUSLY:
+      buffer_config->set_fill_policy(
+          perfetto::TraceConfig::BufferConfig::RING_BUFFER);
+      break;
+    case base::trace_event::ECHO_TO_CONSOLE:
+      NOTREACHED();
+      break;
+  }
 
   // Perfetto uses clock_gettime for its internal snapshotting, which gets
   // blocked by the sandboxed and isn't needed for Chrome regardless.
-  perfetto_config.set_disable_clock_snapshotting(true);
+  auto* builtin_data_sources = perfetto_config.mutable_builtin_data_sources();
+  builtin_data_sources->set_disable_trace_config(privacy_filtering_enabled);
+  builtin_data_sources->set_disable_system_info(privacy_filtering_enabled);
+  builtin_data_sources->set_disable_service_events(privacy_filtering_enabled);
+
+  // Clear incremental state every 5 seconds, so that we lose at most the first
+  // 5 seconds of the trace (if we wrap around perfetto's central buffer).
+  perfetto_config.mutable_incremental_state_config()->set_clear_period_ms(5000);
+
+  // We strip the process filter from the config string we send to Perfetto, so
+  // perfetto doesn't reject it from a future TracingService::ChangeTraceConfig
+  // call due to being an unsupported update. We also strip the trace buffer
+  // size configuration to prevent chrome from rejecting an update to it after
+  // startup tracing via TraceConfig::Merge (see trace_startup.cc). For
+  // perfetto, the buffer size is configured via perfetto's buffer config and
+  // only affects the perfetto service.
+  base::trace_event::TraceConfig stripped_config(chrome_config);
+  stripped_config.SetProcessFilterConfig(
+      base::trace_event::TraceConfig::ProcessFilterConfig());
+  stripped_config.SetTraceBufferSizeInKb(0);
+  stripped_config.SetTraceBufferSizeInEvents(0);
+  std::string chrome_config_string = stripped_config.ToString();
 
   // Capture actual trace events.
-  auto* trace_event_data_source = perfetto_config.add_data_sources();
+  auto* trace_event_data_source = AddDataSourceConfig(
+      &perfetto_config, tracing::mojom::kTraceEventDataSourceName,
+      chrome_config_string, privacy_filtering_enabled);
   for (auto& enabled_pid :
        chrome_config.process_filter_config().included_process_ids()) {
     *trace_event_data_source->add_producer_name_filter() = base::StrCat(
@@ -37,48 +101,39 @@ perfetto::TraceConfig GetDefaultPerfettoConfig(
          base::NumberToString(static_cast<uint32_t>(enabled_pid))});
   }
 
-  // We strip the process filter from the config string we send to Perfetto,
-  // so perfetto doesn't reject it from a future
-  // TracingService::ChangeTraceConfig call due to being an unsupported
-  // update.
-  base::trace_event::TraceConfig processfilter_stripped_config(chrome_config);
-  processfilter_stripped_config.SetProcessFilterConfig(
-      base::trace_event::TraceConfig::ProcessFilterConfig());
-  std::string chrome_config_string = processfilter_stripped_config.ToString();
-
-  auto* trace_event_config = trace_event_data_source->mutable_config();
-  trace_event_config->set_name(tracing::mojom::kTraceEventDataSourceName);
-  trace_event_config->set_target_buffer(0);
-  auto* chrome_proto_config = trace_event_config->mutable_chrome_config();
-  chrome_proto_config->set_trace_config(chrome_config_string);
-
 // Capture system trace events if supported and enabled. The datasources will
 // only emit events if system tracing is enabled in |chrome_config|.
-#if defined(OS_CHROMEOS) || (defined(IS_CHROMECAST) && defined(OS_LINUX))
-  auto* system_trace_config =
-      perfetto_config.add_data_sources()->mutable_config();
-  system_trace_config->set_name(tracing::mojom::kSystemTraceDataSourceName);
-  system_trace_config->set_target_buffer(0);
-  auto* system_chrome_config = system_trace_config->mutable_chrome_config();
-  system_chrome_config->set_trace_config(chrome_config_string);
+  if (!privacy_filtering_enabled) {
+#if defined(OS_CHROMEOS) || (BUILDFLAG(IS_CHROMECAST) && defined(OS_LINUX))
+    AddDataSourceConfig(&perfetto_config,
+                        tracing::mojom::kSystemTraceDataSourceName,
+                        chrome_config_string, privacy_filtering_enabled);
 #endif
 
 #if defined(OS_CHROMEOS)
-  auto* arc_trace_config = perfetto_config.add_data_sources()->mutable_config();
-  arc_trace_config->set_name(tracing::mojom::kArcTraceDataSourceName);
-  arc_trace_config->set_target_buffer(0);
-  auto* arc_chrome_config = arc_trace_config->mutable_chrome_config();
-  arc_chrome_config->set_trace_config(chrome_config_string);
+    AddDataSourceConfig(&perfetto_config,
+                        tracing::mojom::kArcTraceDataSourceName,
+                        chrome_config_string, privacy_filtering_enabled);
 #endif
+  }
 
   // Also capture global metadata.
-  auto* trace_metadata_config =
-      perfetto_config.add_data_sources()->mutable_config();
-  trace_metadata_config->set_name(tracing::mojom::kMetaDataSourceName);
-  trace_metadata_config->set_target_buffer(0);
-  auto* metadata_chrome_config = trace_metadata_config->mutable_chrome_config();
-  metadata_chrome_config->set_trace_config(chrome_config_string);
-  // TODO(ssid): Also set privacy_filtering_enabled here.
+  AddDataSourceConfig(&perfetto_config, tracing::mojom::kMetaDataSourceName,
+                      chrome_config_string, privacy_filtering_enabled);
+
+  if (chrome_config.IsCategoryGroupEnabled(
+          TRACE_DISABLED_BY_DEFAULT("cpu_profiler"))) {
+    AddDataSourceConfig(&perfetto_config,
+                        tracing::mojom::kSamplerProfilerSourceName,
+                        chrome_config_string, privacy_filtering_enabled);
+  }
+
+  if (chrome_config.IsCategoryGroupEnabled(
+          TRACE_DISABLED_BY_DEFAULT("java-heap-profiler"))) {
+    AddDataSourceConfig(&perfetto_config,
+                        tracing::mojom::kJavaHeapProfilerSourceName,
+                        chrome_config_string, privacy_filtering_enabled);
+  }
 
   return perfetto_config;
 }

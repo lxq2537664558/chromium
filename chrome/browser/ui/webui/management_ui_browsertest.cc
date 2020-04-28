@@ -6,7 +6,6 @@
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/policy/chrome_browser_policy_connector.h"
 #include "chrome/browser/policy/profile_policy_connector.h"
-#include "chrome/browser/policy/profile_policy_connector_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/webui/management_ui.h"
@@ -44,8 +43,7 @@ class ManagementUITest : public InProcessBrowserTest {
   policy::MockConfigurationPolicyProvider* provider() { return &provider_; }
 
   policy::ProfilePolicyConnector* profile_policy_connector() {
-    return policy::ProfilePolicyConnectorFactory::GetForBrowserContext(
-        browser()->profile());
+    return browser()->profile()->GetProfilePolicyConnector();
   }
 
  private:
@@ -61,7 +59,7 @@ IN_PROC_BROWSER_TEST_F(ManagementUITest, ManagementStateChange) {
 
   // The browser is not managed.
   const std::string javascript =
-      "management.ManagementBrowserProxyImpl.getInstance()"
+      "window.ManagementBrowserProxyImpl.getInstance()"
       "  .getContextualManagedData()"
       "  .then(managed_result => "
       "    domAutomationController.send(JSON.stringify(managed_result)));";
@@ -83,9 +81,6 @@ IN_PROC_BROWSER_TEST_F(ManagementUITest, ManagementStateChange) {
        l10n_util::GetStringUTF16(IDS_MANAGEMENT_EXTENSIONS_INSTALLED)},
       {"pageSubtitle",
        l10n_util::GetStringUTF16(IDS_MANAGEMENT_NOT_MANAGED_SUBTITLE)},
-      {"accountManagedInfo.overview", base::string16()},
-      {"accountManagedInfo.data", base::string16()},
-      {"accountManagedInfo.setup", base::string16()},
   };
 
   VerifyTexts(unmanaged_value_ptr.get(), expected_unmanaged_values);
@@ -116,13 +111,6 @@ IN_PROC_BROWSER_TEST_F(ManagementUITest, ManagementStateChange) {
       {"extensionReportingTitle",
        l10n_util::GetStringUTF16(IDS_MANAGEMENT_EXTENSIONS_INSTALLED)},
       {"pageSubtitle", l10n_util::GetStringUTF16(IDS_MANAGEMENT_SUBTITLE)},
-      {"accountManagedInfo.overview",
-       l10n_util::GetStringUTF16(
-           IDS_MANAGEMENT_ACCOUNT_MANAGED_CLARIFICATION_UNKNOWN_DOMAIN)},
-      {"accountManagedInfo.data",
-       l10n_util::GetStringUTF16(IDS_MANAGEMENT_ACCOUNT_MANAGED_DATA)},
-      {"accountManagedInfo.setup",
-       l10n_util::GetStringUTF16(IDS_MANAGEMENT_ACCOUNT_MANAGED_SETUP)},
   };
 
   VerifyTexts(managed_value_ptr.get(), expected_managed_values);

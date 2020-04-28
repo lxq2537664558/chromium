@@ -4,18 +4,16 @@
 
 #include "chrome/browser/chromeos/accessibility/chromevox_panel.h"
 
-#include "ash/public/interfaces/accessibility_controller.mojom.h"
-#include "ash/public/interfaces/constants.mojom.h"
+#include "ash/public/cpp/accessibility_controller.h"
+#include "ash/public/cpp/accessibility_controller_enums.h"
 #include "chrome/browser/chromeos/accessibility/accessibility_manager.h"
 #include "content/public/browser/web_contents_observer.h"
-#include "content/public/common/service_manager_connection.h"
 #include "extensions/common/constants.h"
-#include "services/service_manager/public/cpp/connector.h"
 #include "ui/views/widget/widget.h"
 
 namespace {
 
-const char kChromeVoxPanelRelativeUrl[] = "/cvox2/background/panel.html";
+const char kChromeVoxPanelRelativeUrl[] = "/chromevox/panel/panel.html";
 const char kDisableSpokenFeedbackURLFragment[] = "close";
 const char kFocusURLFragment[] = "focus";
 const char kFullscreenURLFragment[] = "fullscreen";
@@ -82,9 +80,10 @@ void ChromeVoxPanel::Focus() {
 
 void ChromeVoxPanel::SetAccessibilityPanelFullscreen(bool fullscreen) {
   gfx::Rect bounds(0, 0, 0, kPanelHeight);
-  auto state = fullscreen ? ash::mojom::AccessibilityPanelState::FULLSCREEN
-                          : ash::mojom::AccessibilityPanelState::FULL_WIDTH;
-  GetAccessibilityController()->SetAccessibilityPanelBounds(bounds, state);
+  auto state = fullscreen ? ash::AccessibilityPanelState::FULLSCREEN
+                          : ash::AccessibilityPanelState::FULL_WIDTH;
+  ash::AccessibilityController::Get()->SetAccessibilityPanelBounds(bounds,
+                                                                   state);
 }
 
 std::string ChromeVoxPanel::GetUrlForContent() {

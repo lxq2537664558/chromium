@@ -8,8 +8,8 @@
 
 #include "base/bind.h"
 #include "base/debug/stack_trace.h"
-#include "base/task/thread_pool/thread_pool.h"
 #include "base/task/thread_pool/thread_pool_impl.h"
+#include "base/task/thread_pool/thread_pool_instance.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/threading/platform_thread.h"
 #include "base/time/time.h"
@@ -28,7 +28,7 @@ void VerifyHasStringOnStack(const std::string& query) {
   SCOPED_TRACE(stack);
   const bool found_on_stack = stack.find(query) != std::string::npos;
   const bool stack_has_symbols =
-      stack.find("SchedulerWorker") != std::string::npos;
+      stack.find("WorkerThread") != std::string::npos;
   EXPECT_TRUE(found_on_stack || !stack_has_symbols) << query;
 }
 
@@ -58,22 +58,16 @@ TEST(ThreadPoolServiceThreadTest, MAYBE_StackHasIdentifyingFrame) {
 TEST(ThreadPoolServiceThreadIntegrationTest, HeartbeatLatencyReport) {
   ServiceThread::SetHeartbeatIntervalForTesting(TimeDelta::FromMilliseconds(1));
 
-  ThreadPool::SetInstance(std::make_unique<internal::ThreadPoolImpl>("Test"));
-  ThreadPool::GetInstance()->StartWithDefaultParams();
+  ThreadPoolInstance::Set(std::make_unique<internal::ThreadPoolImpl>("Test"));
+  ThreadPoolInstance::Get()->StartWithDefaultParams();
 
   static constexpr const char* kExpectedMetrics[] = {
       "ThreadPool.HeartbeatLatencyMicroseconds.Test."
       "UserBlockingTaskPriority",
       "ThreadPool.HeartbeatLatencyMicroseconds.Test."
-      "UserBlockingTaskPriority_MayBlock",
-      "ThreadPool.HeartbeatLatencyMicroseconds.Test."
       "UserVisibleTaskPriority",
       "ThreadPool.HeartbeatLatencyMicroseconds.Test."
-      "UserVisibleTaskPriority_MayBlock",
-      "ThreadPool.HeartbeatLatencyMicroseconds.Test."
-      "BackgroundTaskPriority",
-      "ThreadPool.HeartbeatLatencyMicroseconds.Test."
-      "BackgroundTaskPriority_MayBlock"};
+      "BackgroundTaskPriority"};
 
   // Each report hits a single histogram above (randomly selected). But 1000
   // reports should touch all histograms at least once the vast majority of the
@@ -92,8 +86,8 @@ TEST(ThreadPoolServiceThreadIntegrationTest, HeartbeatLatencyReport) {
     }
   }
 
-  ThreadPool::GetInstance()->JoinForTesting();
-  ThreadPool::SetInstance(nullptr);
+  ThreadPoolInstance::Get()->JoinForTesting();
+  ThreadPoolInstance::Set(nullptr);
 
   ServiceThread::SetHeartbeatIntervalForTesting(TimeDelta());
 }

@@ -200,7 +200,7 @@ class SnooperNodeTest : public testing::TestWithParam<InputAndOutputParams> {
     group_member_->SetVolume(kSourceVolume);
 
     node_.emplace(input_params(), output_params());
-    group_member_->StartSnooping(node(), Snoopable::SnoopingMode::kDeferred);
+    group_member_->StartSnooping(node());
 
     consumer_.emplace(output_params().channels(),
                       output_params().sample_rate());
@@ -752,7 +752,7 @@ InputAndOutputParams MakeParams(media::ChannelLayout input_channel_layout,
 }
 
 INSTANTIATE_TEST_SUITE_P(
-    ,
+    All,
     SnooperNodeTest,
     testing::Values(MakeParams(media::CHANNEL_LAYOUT_STEREO,
                                48000,

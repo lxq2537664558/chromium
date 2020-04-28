@@ -81,7 +81,7 @@ const SVGEnumerationMap& GetEnumerationMap<SVGFEBlendElement::Mode>() {
   return entries;
 }
 
-inline SVGFEBlendElement::SVGFEBlendElement(Document& document)
+SVGFEBlendElement::SVGFEBlendElement(Document& document)
     : SVGFilterPrimitiveStandardAttributes(svg_names::kFEBlendTag, document),
       in1_(MakeGarbageCollected<SVGAnimatedString>(this, svg_names::kInAttr)),
       in2_(MakeGarbageCollected<SVGAnimatedString>(this, svg_names::kIn2Attr)),
@@ -94,14 +94,12 @@ inline SVGFEBlendElement::SVGFEBlendElement(Document& document)
   AddToPropertyMap(mode_);
 }
 
-void SVGFEBlendElement::Trace(blink::Visitor* visitor) {
+void SVGFEBlendElement::Trace(Visitor* visitor) {
   visitor->Trace(in1_);
   visitor->Trace(in2_);
   visitor->Trace(mode_);
   SVGFilterPrimitiveStandardAttributes::Trace(visitor);
 }
-
-DEFINE_NODE_FACTORY(SVGFEBlendElement)
 
 bool SVGFEBlendElement::SetFilterEffectAttribute(
     FilterEffect* effect,

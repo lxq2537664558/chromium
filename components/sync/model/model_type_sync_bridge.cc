@@ -37,13 +37,12 @@ bool ModelTypeSyncBridge::SupportsIncrementalUpdates() const {
 }
 
 ConflictResolution ModelTypeSyncBridge::ResolveConflict(
-    const EntityData& local_data,
+    const std::string& storage_key,
     const EntityData& remote_data) const {
   if (remote_data.is_deleted()) {
-    DCHECK(!local_data.is_deleted());
-    return ConflictResolution::UseLocal();
+    return ConflictResolution::kUseLocal;
   }
-  return ConflictResolution::UseRemote();
+  return ConflictResolution::kUseRemote;
 }
 
 void ModelTypeSyncBridge::ApplyStopSyncChanges(
@@ -53,6 +52,15 @@ void ModelTypeSyncBridge::ApplyStopSyncChanges(
     ApplySyncChanges(std::move(delete_metadata_change_list),
                      EntityChangeList());
   }
+}
+
+void ModelTypeSyncBridge::OnCommitAttemptErrors(
+    const syncer::FailedCommitResponseDataList& error_response_list) {
+  // By default the bridge just ignores failed commit items.
+}
+
+void ModelTypeSyncBridge::OnCommitAttemptFailed(SyncCommitError commit_error) {
+  // By default ignore any failures.
 }
 
 size_t ModelTypeSyncBridge::EstimateSyncOverheadMemoryUsage() const {

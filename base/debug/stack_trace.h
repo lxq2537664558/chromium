@@ -16,6 +16,9 @@
 #include "build/build_config.h"
 
 #if defined(OS_POSIX)
+#if !defined(OS_NACL)
+#include <signal.h>
+#endif
 #include <unistd.h>
 #endif
 
@@ -38,9 +41,16 @@ namespace debug {
 // done in official builds because it has security implications).
 BASE_EXPORT bool EnableInProcessStackDumping();
 
-#if defined(OS_POSIX)
-BASE_EXPORT void SetStackDumpFirstChanceCallback(bool (*handler)(int,
-                                                                 void*,
+#if defined(OS_POSIX) && !defined(OS_NACL)
+// Sets a first-chance callback for the stack dump signal handler. This callback
+// is called at the beginning of the signal handler to handle special kinds of
+// signals, like out-of-bounds memory accesses in WebAssembly (WebAssembly Trap
+// Handler).
+// {SetStackDumpFirstChanceCallback} returns {true} if the callback
+// has been set correctly. It returns {false} if the stack dump signal handler
+// has not been registered with the OS, e.g. because of ASAN.
+BASE_EXPORT bool SetStackDumpFirstChanceCallback(bool (*handler)(int,
+                                                                 siginfo_t*,
                                                                  void*));
 #endif
 
@@ -77,7 +87,9 @@ class BASE_EXPORT StackTrace {
   // Copying and assignment are allowed with the default functions.
 
   // Gets an array of instruction pointer values. |*count| will be set to the
-  // number of elements in the returned array.
+  // number of elements in the returned array. Addresses()[0] will contain an
+  // address from the leaf function, and Addresses()[count-1] will contain an
+  // address from the root function (i.e.; the thread's entry point).
   const void* const* Addresses(size_t* count) const;
 
   // Prints the stack trace to stderr.

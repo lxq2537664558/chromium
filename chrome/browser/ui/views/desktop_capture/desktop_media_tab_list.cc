@@ -4,6 +4,7 @@
 
 #include "chrome/browser/ui/views/desktop_capture/desktop_media_tab_list.h"
 
+#include "base/numerics/ranges.h"
 #include "base/numerics/safe_conversions.h"
 #include "ui/gfx/favicon_size.h"
 #include "ui/views/accessibility/view_accessibility.h"
@@ -155,8 +156,22 @@ const char* DesktopMediaTabList::GetClassName() const {
   return "DesktopMediaTabList";
 }
 
+gfx::Size DesktopMediaTabList::CalculatePreferredSize() const {
+  // The picker should have a fixed height of 10 rows.
+  return gfx::Size(0, child_->GetRowHeight() * 10);
+}
+
+int DesktopMediaTabList::GetHeightForWidth(int width) const {
+  // If this method isn't overridden here, the default implementation would fall
+  // back to FillLayout's GetHeightForWidth, which would ask the TableView,
+  // which would return something based on the total number of rows, since
+  // TableView expects to always be sized by its container. Avoid even asking it
+  // by using the same height as CalculatePreferredSize().
+  return CalculatePreferredSize().height();
+}
+
 base::Optional<content::DesktopMediaID> DesktopMediaTabList::GetSelection() {
-  int row = child_->FirstSelectedRow();
+  int row = child_->GetFirstSelectedRow();
   if (row == -1)
     return base::nullopt;
   return controller_->GetSource(row).id;

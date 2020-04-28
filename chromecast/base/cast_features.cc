@@ -130,8 +130,8 @@ void SetExperimentIds(const base::ListValue& list) {
 // through getUserMedia API.
 const base::Feature kAllowUserMediaAccess{"allow_user_media_access",
                                           base::FEATURE_DISABLED_BY_DEFAULT};
-// Enables the use of QUIC in Cast-specific URLRequestContextGetters. See
-// chromecast/browser/url_request_context_factory.cc for usage.
+// Enables the use of QUIC in Cast-specific NetworkContexts. See
+// chromecast/browser/cast_network_contexts.cc for usage.
 const base::Feature kEnableQuic{"enable_quic",
                                 base::FEATURE_DISABLED_BY_DEFAULT};
 // Enables triple-buffer 720p graphics (overriding default graphics buffer
@@ -143,13 +143,24 @@ const base::Feature kTripleBuffer720{"enable_triple_buffer_720",
 const base::Feature kSingleBuffer{"enable_single_buffer",
                                   base::FEATURE_DISABLED_BY_DEFAULT};
 // Disable idle sockets closing on memory pressure. See
-// chromecast/browser/url_request_context_factory.cc for usage.
+// chromecast/browser/cast_network_contexts.cc for usage.
 const base::Feature kDisableIdleSocketsCloseOnMemoryPressure{
     "disable_idle_sockets_close_on_memory_pressure",
     base::FEATURE_DISABLED_BY_DEFAULT};
 
 const base::Feature kEnableGeneralAudienceBrowsing{
     "enable_general_audience_browsing", base::FEATURE_DISABLED_BY_DEFAULT};
+
+// Uses unified IPC QueryableData bindings backend instead of v8 injection.
+const base::Feature kUseQueryableDataBackend{"use_queryable_data_backend",
+                                             base::FEATURE_ENABLED_BY_DEFAULT};
+
+const base::Feature kEnableSideGesturePassThrough{
+    "enable_side_gesture_pass_through", base::FEATURE_DISABLED_BY_DEFAULT};
+
+// Lowers frame rate for headless
+const base::Feature kReduceHeadlessFrameRate{"reduce_headless_frame_rate",
+                                             base::FEATURE_DISABLED_BY_DEFAULT};
 
 // End Chromecast Feature definitions.
 const base::Feature* kFeatures[] = {
@@ -159,6 +170,9 @@ const base::Feature* kFeatures[] = {
     &kSingleBuffer,
     &kDisableIdleSocketsCloseOnMemoryPressure,
     &kEnableGeneralAudienceBrowsing,
+    &kUseQueryableDataBackend,
+    &kEnableSideGesturePassThrough,
+    &kReduceHeadlessFrameRate,
 };
 
 // An iterator for a base::DictionaryValue. Use an alias for brevity in loops.
@@ -224,7 +238,6 @@ void InitializeFeatureList(const base::DictionaryValue& dcs_features,
     const std::string& feature_name = it.key();
     auto* field_trial = base::FieldTrialList::FactoryGetFieldTrial(
         feature_name, k100PercentProbability, kDefaultDCSFeaturesGroup,
-        base::FieldTrialList::kNoExpirationYear, 1 /* month */, 1 /* day */,
         base::FieldTrial::SESSION_RANDOMIZED, nullptr);
 
     bool enabled;
@@ -251,7 +264,7 @@ void InitializeFeatureList(const base::DictionaryValue& dcs_features,
               feature_name, base::FeatureList::OVERRIDE_DISABLE_FEATURE)) {
         // Build a map of the FieldTrial parameters and associate it to the
         // FieldTrial.
-        base::FieldTrialParamAssociator::FieldTrialParams params;
+        base::FieldTrialParams params;
         for (Iterator p(*params_dict); !p.IsAtEnd(); p.Advance()) {
           std::string val;
           if (p.value().GetAsString(&val)) {
@@ -279,7 +292,7 @@ void InitializeFeatureList(const base::DictionaryValue& dcs_features,
 }
 
 bool IsFeatureEnabled(const base::Feature& feature) {
-  DCHECK(base::ContainsValue(GetFeatures(), &feature)) << feature.name;
+  DCHECK(base::Contains(GetFeatures(), &feature)) << feature.name;
   return base::FeatureList::IsEnabled(feature);
 }
 

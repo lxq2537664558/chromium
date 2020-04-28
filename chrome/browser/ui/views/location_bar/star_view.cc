@@ -7,22 +7,26 @@
 #include <string>
 
 #include "base/metrics/histogram_macros.h"
+#include "base/scoped_observer.h"
 #include "base/strings/string_number_conversions.h"
 #include "chrome/app/chrome_command_ids.h"
-#include "chrome/browser/bookmarks/bookmark_stats.h"
+#include "chrome/browser/defaults.h"
+#include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/ui/bookmarks/bookmark_stats.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/view_ids.h"
 #include "chrome/browser/ui/views/bookmarks/bookmark_bubble_view.h"
 #include "chrome/browser/ui/views/feature_promos/feature_promo_bubble_view.h"
 #include "chrome/grit/generated_resources.h"
+#include "components/bookmarks/common/bookmark_pref_names.h"
 #include "components/omnibox/browser/vector_icons.h"
 #include "components/strings/grit/components_strings.h"
 #include "components/variations/variations_associated_data.h"
+#include "content/public/browser/web_contents.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/gfx/color_utils.h"
 #include "ui/gfx/paint_vector_icon.h"
-#include "ui/views/widget/widget_observer.h"
 
 namespace {
 
@@ -45,19 +49,23 @@ int GetBookmarkPromoStringSpecifier() {
 
 StarView::StarView(CommandUpdater* command_updater,
                    Browser* browser,
-                   PageActionIconView::Delegate* delegate)
-    : PageActionIconView(command_updater, IDC_BOOKMARK_PAGE, delegate),
-      browser_(browser),
-      bookmark_promo_observer_(this) {
-  set_id(VIEW_ID_STAR_BUTTON);
-  SetToggled(false);
+                   IconLabelBubbleView::Delegate* icon_label_bubble_delegate,
+                   PageActionIconView::Delegate* page_action_icon_delegate)
+    : PageActionIconView(command_updater,
+                         IDC_BOOKMARK_THIS_TAB,
+                         icon_label_bubble_delegate,
+                         page_action_icon_delegate),
+      browser_(browser) {
+  DCHECK(browser_);
+  edit_bookmarks_enabled_.Init(
+      bookmarks::prefs::kEditBookmarksEnabled, browser_->profile()->GetPrefs(),
+      base::BindRepeating(&StarView::EditBookmarksPrefUpdated,
+                          base::Unretained(this)));
+  SetID(VIEW_ID_STAR_BUTTON);
+  SetActive(false);
 }
 
 StarView::~StarView() {}
-
-void StarView::SetToggled(bool on) {
-  PageActionIconView::SetActiveInternal(on);
-}
 
 void StarView::ShowPromo() {
   FeaturePromoBubbleView* bookmark_promo_bubble =
@@ -68,9 +76,14 @@ void StarView::ShowPromo() {
   if (!bookmark_promo_observer_.IsObserving(
           bookmark_promo_bubble->GetWidget())) {
     bookmark_promo_observer_.Add(bookmark_promo_bubble->GetWidget());
-    SetActiveInternal(false);
+    SetActive(false);
     UpdateIconImage();
   }
+}
+
+void StarView::UpdateImpl() {
+  SetVisible(browser_defaults::bookmarks_enabled &&
+             edit_bookmarks_enabled_.GetValue());
 }
 
 void StarView::OnExecuting(PageActionIconView::ExecuteSource execute_source) {
@@ -86,18 +99,13 @@ void StarView::OnExecuting(PageActionIconView::ExecuteSource execute_source) {
       entry_point = BOOKMARK_ENTRY_POINT_STAR_GESTURE;
       break;
   }
-  UMA_HISTOGRAM_ENUMERATION("Bookmarks.EntryPoint",
-                            entry_point,
+  UMA_HISTOGRAM_ENUMERATION("Bookmarks.EntryPoint", entry_point,
                             BOOKMARK_ENTRY_POINT_LIMIT);
 }
 
 void StarView::ExecuteCommand(ExecuteSource source) {
-  if (browser_) {
-    OnExecuting(source);
-    chrome::BookmarkCurrentPageIgnoringExtensionOverrides(browser_);
-  } else {
-    PageActionIconView::ExecuteCommand(source);
-  }
+  OnExecuting(source);
+  chrome::BookmarkCurrentTab(browser_);
 }
 
 views::BubbleDialogDelegateView* StarView::GetBubble() const {
@@ -113,6 +121,10 @@ base::string16 StarView::GetTextForTooltipAndAccessibleName() const {
                                             : IDS_TOOLTIP_STAR);
 }
 
+const char* StarView::GetClassName() const {
+  return "StarView";
+}
+
 SkColor StarView::GetInkDropBaseColor() const {
   return bookmark_promo_observer_.IsObservingSources()
              ? GetNativeTheme()->GetSystemColor(
@@ -123,7 +135,11 @@ SkColor StarView::GetInkDropBaseColor() const {
 void StarView::OnWidgetDestroying(views::Widget* widget) {
   if (bookmark_promo_observer_.IsObserving(widget)) {
     bookmark_promo_observer_.Remove(widget);
-    SetActiveInternal(false);
+    SetActive(false);
     UpdateIconImage();
   }
+}
+
+void StarView::EditBookmarksPrefUpdated() {
+  Update();
 }

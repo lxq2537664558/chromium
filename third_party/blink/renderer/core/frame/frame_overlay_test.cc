@@ -8,13 +8,16 @@
 
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/blink/public/web/web_device_emulation_params.h"
 #include "third_party/blink/renderer/core/exported/web_view_impl.h"
 #include "third_party/blink/renderer/core/frame/frame_test_helpers.h"
 #include "third_party/blink/renderer/core/frame/local_frame_view.h"
 #include "third_party/blink/renderer/core/frame/visual_viewport.h"
 #include "third_party/blink/renderer/core/frame/web_local_frame_impl.h"
+#include "third_party/blink/renderer/core/layout/layout_view.h"
 #include "third_party/blink/renderer/platform/graphics/color.h"
 #include "third_party/blink/renderer/platform/graphics/graphics_context.h"
+#include "third_party/blink/renderer/platform/graphics/graphics_layer.h"
 #include "third_party/blink/renderer/platform/graphics/paint/drawing_recorder.h"
 #include "third_party/blink/renderer/platform/graphics/paint/paint_controller.h"
 #include "third_party/blink/renderer/platform/graphics/paint/paint_controller_test.h"
@@ -59,7 +62,7 @@ class FrameOverlayTest : public testing::Test, public PaintTestConfigurations {
     GetWebView()->MainFrameWidget()->Resize(
         WebSize(kViewportWidth, kViewportHeight));
     GetWebView()->MainFrameWidget()->UpdateAllLifecyclePhases(
-        WebWidget::LifecycleUpdateReason::kTest);
+        DocumentUpdateReason::kTest);
   }
 
   WebViewImpl* GetWebView() const { return helper_.GetWebView(); }
@@ -104,6 +107,7 @@ TEST_P(FrameOverlayTest, AcceleratedCompositing) {
     builder.EndRecording()->Playback(&canvas);
   } else {
     auto* graphics_layer = frame_overlay->GetGraphicsLayer();
+    EXPECT_FALSE(graphics_layer->GetHitTestable());
     EXPECT_EQ(PropertyTreeState::Root(),
               graphics_layer->GetPropertyTreeState());
     graphics_layer->Paint();
@@ -112,9 +116,11 @@ TEST_P(FrameOverlayTest, AcceleratedCompositing) {
 }
 
 TEST_P(FrameOverlayTest, DeviceEmulationScale) {
-  GetWebView()->SetDeviceEmulationTransform(TransformationMatrix().Scale(1.5));
+  WebDeviceEmulationParams params;
+  params.scale = 1.5;
+  GetWebView()->EnableDeviceEmulation(params);
   GetWebView()->MainFrameWidget()->UpdateAllLifecyclePhases(
-      WebWidget::LifecycleUpdateReason::kTest);
+      DocumentUpdateReason::kTest);
 
   std::unique_ptr<FrameOverlay> frame_overlay = CreateSolidYellowOverlay();
   frame_overlay->UpdatePrePaint();
@@ -151,17 +157,52 @@ TEST_P(FrameOverlayTest, DeviceEmulationScale) {
     check_paint_results(*paint_controller);
   } else {
     auto* graphics_layer = frame_overlay->GetGraphicsLayer();
+    EXPECT_FALSE(graphics_layer->GetHitTestable());
     EXPECT_EQ(state, graphics_layer->GetPropertyTreeState());
     graphics_layer->Paint();
     check_paint_results(graphics_layer->GetPaintController());
   }
 }
 
+TEST_P(FrameOverlayTest, LayerOrder) {
+  // This test doesn't apply in CompositeAfterPaint.
+  if (RuntimeEnabledFeatures::CompositeAfterPaintEnabled())
+    return;
+
+  auto frame_overlay1 = CreateSolidYellowOverlay();
+  auto frame_overlay2 = CreateSolidYellowOverlay();
+  frame_overlay1->UpdatePrePaint();
+  frame_overlay2->UpdatePrePaint();
+
+  auto* parent_layer = GetWebView()
+                           ->MainFrameImpl()
+                           ->GetFrameView()
+                           ->GetLayoutView()
+                           ->Compositor()
+                           ->PaintRootGraphicsLayer();
+  ASSERT_EQ(3u, parent_layer->Children().size());
+  EXPECT_EQ(parent_layer, frame_overlay1->GetGraphicsLayer()->Parent());
+  EXPECT_EQ(parent_layer->Children()[1], frame_overlay1->GetGraphicsLayer());
+  EXPECT_EQ(parent_layer, frame_overlay2->GetGraphicsLayer()->Parent());
+  EXPECT_EQ(parent_layer->Children()[2], frame_overlay2->GetGraphicsLayer());
+
+  auto extra_layer = std::make_unique<GraphicsLayer>(parent_layer->Client());
+  parent_layer->AddChild(extra_layer.get());
+
+  frame_overlay1->UpdatePrePaint();
+  frame_overlay2->UpdatePrePaint();
+  ASSERT_EQ(4u, parent_layer->Children().size());
+  EXPECT_EQ(parent_layer, frame_overlay1->GetGraphicsLayer()->Parent());
+  EXPECT_EQ(parent_layer->Children()[2], frame_overlay1->GetGraphicsLayer());
+  EXPECT_EQ(parent_layer, frame_overlay2->GetGraphicsLayer()->Parent());
+  EXPECT_EQ(parent_layer->Children()[3], frame_overlay2->GetGraphicsLayer());
+}
+
 TEST_P(FrameOverlayTest, VisualRect) {
   std::unique_ptr<FrameOverlay> frame_overlay = CreateSolidYellowOverlay();
   frame_overlay->UpdatePrePaint();
   GetWebView()->MainFrameWidget()->UpdateAllLifecyclePhases(
-      WebWidget::LifecycleUpdateReason::kTest);
+      DocumentUpdateReason::kTest);
   EXPECT_EQ(IntRect(0, 0, kViewportWidth, kViewportHeight),
             frame_overlay->VisualRect());
 }

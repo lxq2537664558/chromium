@@ -29,12 +29,18 @@
 - (void)translationController:(CWVTranslationController*)controller
     canOfferTranslationFromLanguage:(CWVTranslationLanguage*)pageLanguage
                          toLanguage:(CWVTranslationLanguage*)userLanguage {
+  NSLog(@"%@:%@:%@", NSStringFromSelector(_cmd), pageLanguage, userLanguage);
   __weak ShellTranslationDelegate* weakSelf = self;
 
   self.beforeTranslateActionSheet = [UIAlertController
       alertControllerWithTitle:nil
                        message:@"Pick Translate Action"
                 preferredStyle:UIAlertControllerStyleActionSheet];
+  _beforeTranslateActionSheet.popoverPresentationController.sourceView =
+      UIApplication.sharedApplication.keyWindow;
+  CGRect bounds = UIApplication.sharedApplication.keyWindow.bounds;
+  _beforeTranslateActionSheet.popoverPresentationController.sourceRect =
+      CGRectMake(CGRectGetWidth(bounds) / 2, 60, 1, 1);
   UIAlertAction* cancelAction =
       [UIAlertAction actionWithTitle:@"Nope."
                                style:UIAlertActionStyleCancel
@@ -95,6 +101,22 @@
       presentViewController:_beforeTranslateActionSheet
                    animated:YES
                  completion:nil];
+}
+
+- (void)translationController:(CWVTranslationController*)controller
+    didStartTranslationFromLanguage:(CWVTranslationLanguage*)sourceLanguage
+                         toLanguage:(CWVTranslationLanguage*)targetLanguage
+                      userInitiated:(BOOL)userInitiated {
+  NSLog(@"%@:%@:%@:%@", NSStringFromSelector(_cmd), sourceLanguage,
+        targetLanguage, @(userInitiated));
+}
+
+- (void)translationController:(CWVTranslationController*)controller
+    didFinishTranslationFromLanguage:(CWVTranslationLanguage*)sourceLanguage
+                          toLanguage:(CWVTranslationLanguage*)targetLanguage
+                               error:(nullable NSError*)error {
+  NSLog(@"%@:%@:%@:%@", NSStringFromSelector(_cmd), sourceLanguage,
+        targetLanguage, error);
 }
 
 @end

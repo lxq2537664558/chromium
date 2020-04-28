@@ -7,12 +7,15 @@
 
 #include "chrome/credential_provider/gaiacp/stdafx.h"
 
+#include <wrl/client.h>
+
 #include <memory>
 
 #include "base/strings/string16.h"
 #include "base/values.h"
 #include "base/win/scoped_handle.h"
 #include "base/win/scoped_process_information.h"
+#include "chrome/credential_provider/gaiacp/associated_user_validator.h"
 #include "chrome/credential_provider/gaiacp/gaia_credential_provider_i.h"
 #include "chrome/credential_provider/gaiacp/gcp_utils.h"
 #include "chrome/credential_provider/gaiacp/scoped_handle.h"
@@ -43,19 +46,21 @@ class ATL_NO_VTABLE CGaiaCredentialBase
     : public IGaiaCredential,
       public ICredentialProviderCredential2 {
  public:
-  // Size in wchar_t of string buffer to pass account information to background
-  // process to save that information into the registry.
-  static const int kAccountInfoBufferSize = 2048;
-
   // Called when the DLL is registered or unregistered.
   static HRESULT OnDllRegisterServer();
   static HRESULT OnDllUnregisterServer();
 
-  // Saves gaia information in the OS account that was just created.
-  static HRESULT SaveAccountInfo(const base::Value& properties);
+  // Perform non-critical post-sign operations after everything is setup here.
+  static HRESULT PerformPostSigninActions(const base::Value& properties,
+                                          bool com_initialized);
 
   // Allocates a BSTR from a DLL string resource given by |id|.
   static BSTR AllocErrorString(UINT id);
+
+  // Allocates a BSTR from a DLL string resource given by |id| replacing the
+  // placeholders in the string by the provided replacements.
+  static BSTR AllocErrorString(UINT id,
+                               const std::vector<base::string16>& replacements);
 
   // Gets the directory where the credential provider is installed.
   static HRESULT GetInstallDirectory(base::FilePath* path);
@@ -65,18 +70,23 @@ class ATL_NO_VTABLE CGaiaCredentialBase
     UIProcessInfo();
     ~UIProcessInfo();
 
-    CComPtr<IGaiaCredential> credential;
+    Microsoft::WRL::ComPtr<IGaiaCredential> credential;
     base::win::ScopedHandle logon_token;
     base::win::ScopedProcessInformation procinfo;
     StdParentHandles parent_handles;
   };
+
+  // Returns true if "enable_cloud_association" registry key is set to 1.
+  static bool IsCloudAssociationEnabled();
 
  protected:
   CGaiaCredentialBase();
   ~CGaiaCredentialBase();
 
   // Members to access user credentials.
-  const CComPtr<IGaiaCredentialProvider>& provider() const { return provider_; }
+  const Microsoft::WRL::ComPtr<IGaiaCredentialProvider> provider() const {
+    return provider_;
+  }
   const CComBSTR& get_username() const { return username_; }
   const CComBSTR& get_password() const { return password_; }
   const CComBSTR& get_sid() const { return user_sid_; }
@@ -86,9 +96,9 @@ class ATL_NO_VTABLE CGaiaCredentialBase
   const base::Optional<base::Value>& get_authentication_results() const {
     return authentication_results_;
   }
-  void set_current_windows_password(BSTR password) {
-    current_windows_password_ = password;
-  }
+
+  // Saves gaia information in the OS account that was just created.
+  static HRESULT SaveAccountInfo(const base::Value& properties);
 
   // Returns true if the current credentials stored in |username_| and
   // |password_| are valid and should succeed a local Windows logon. This
@@ -149,20 +159,20 @@ class ATL_NO_VTABLE CGaiaCredentialBase
   // Display error message to the user.  Virtual so that tests can override.
   virtual void DisplayErrorInUI(LONG status, LONG substatus, BSTR status_text);
 
-  // Forks a stub process to save account information for a user.
-  virtual HRESULT ForkSaveAccountInfoStub(const base::Value& dict,
-                                          BSTR* status_text);
+  // Forks a stub process to perform all post sign-in actions for a user.
+  virtual HRESULT ForkPerformPostSigninActionsStub(const base::Value& dict,
+                                                   BSTR* status_text);
 
   // Forks the logon stub process and waits for it to start.
   virtual HRESULT ForkGaiaLogonStub(OSProcessManager* process_manager,
                                     const base::CommandLine& command_line,
                                     UIProcessInfo* uiprocinfo);
 
- private:
   // Gets the full command line to run the Gaia Logon stub (GLS). This
   // function calls GetBaseGlsCommandline.
   HRESULT GetGlsCommandline(base::CommandLine* command_line);
 
+ private:
   // Called from GetSerialization() to handle auto-logon.  If the credential
   // has enough information in internal state to auto-logon, the two arguments
   // are filled in as needed and S_OK is returned.  S_FALSE is returned to
@@ -170,6 +180,11 @@ class ATL_NO_VTABLE CGaiaCredentialBase
   HRESULT HandleAutologon(
       CREDENTIAL_PROVIDER_GET_SERIALIZATION_RESPONSE* pcpgsr,
       CREDENTIAL_PROVIDER_CREDENTIAL_SERIALIZATION* pcpcs);
+
+  // Instantiates |token_update_locker_| so that user access cannot be denied
+  // during this time. This function is called when we are about to really sign
+  // in the user to Windows.
+  void PreventDenyAccessUpdate();
 
   // Writes value to omaha registry to record that GCP has been used.
   static void TellOmahaDidRun();
@@ -233,8 +248,8 @@ class ATL_NO_VTABLE CGaiaCredentialBase
   // not require direct user input to the credential (user is entering
   // credentials in  GLS) or a submit of the credential is not valid (user needs
   // to enter the old Windows password but currently nothing has been entered in
-  // the password field).
-  void UpdateSubmitButtonInteractiveState();
+  // the password field). Returns true if the submit button is enabled.
+  bool UpdateSubmitButtonInteractiveState();
 
   // Stops the GLS process in case it is still executing. Often called when user
   // switches credentials in the middle of a sign in through the GLS.
@@ -265,8 +280,24 @@ class ATL_NO_VTABLE CGaiaCredentialBase
                                BSTR* sid,
                                BSTR* error_text);
 
-  CComPtr<ICredentialProviderCredentialEvents> events_;
-  CComPtr<IGaiaCredentialProvider> provider_;
+  HRESULT RecoverWindowsPasswordIfPossible(base::string16* recovered_password);
+
+  // Sets the error message in the password field based on the HRESULT returned
+  // by NetUserChangePassword win32 function.
+  void SetErrorMessageInPasswordField(HRESULT hr);
+
+  // Determines whether given message id corresponds to a password change error
+  // which can't be worked out with manual user input in the forgot password
+  // flow.
+  bool BlockingPasswordError(UINT message_id);
+
+  // Determines whether the logon stub can be launched by checking internet
+  // connection and registry keys that should be present. |status_text| is
+  // populated with a message to show in the login UI.
+  bool CanProceedToLogonStub(wchar_t** status_text);
+
+  Microsoft::WRL::ComPtr<ICredentialProviderCredentialEvents> events_;
+  Microsoft::WRL::ComPtr<IGaiaCredentialProvider> provider_;
 
   // Handle to the logon UI process.
   HANDLE logon_ui_process_ = INVALID_HANDLE_VALUE;
@@ -283,6 +314,10 @@ class ATL_NO_VTABLE CGaiaCredentialBase
   bool needs_windows_password_ = false;
   bool request_force_password_change_ = false;
 
+  // Boolean to indicate if we should wait for ReportResult() prior to clearing
+  // internal state.
+  bool wait_for_report_result_ = false;
+
   // The password entered into the FID_CURRENT_PASSWORD_FIELD to update the
   // Windows password with the gaia password.
   CComBSTR current_windows_password_;
@@ -293,6 +328,13 @@ class ATL_NO_VTABLE CGaiaCredentialBase
 
   // Holds information about the success or failure of the sign in.
   NTSTATUS result_status_ = STATUS_SUCCESS;
+
+  // When we finally want to allow user sign in. This object is instantiated
+  // to prevent updates of token handle validity until after sign in has
+  // completed so the the user cannot be locked out while they are trying to
+  // sign in.
+  std::unique_ptr<AssociatedUserValidator::ScopedBlockDenyAccessUpdate>
+      token_update_locker_;
 };
 
 }  // namespace credential_provider

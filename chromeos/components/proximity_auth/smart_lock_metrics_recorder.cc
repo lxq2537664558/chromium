@@ -4,7 +4,6 @@
 
 #include "chromeos/components/proximity_auth/smart_lock_metrics_recorder.h"
 
-#include "base/logging.h"
 #include "base/metrics/histogram_macros.h"
 
 SmartLockMetricsRecorder::SmartLockMetricsRecorder() = default;
@@ -34,18 +33,6 @@ void SmartLockMetricsRecorder::RecordAuthResultUnlockFailure(
                             failure_reason);
 }
 
-void SmartLockMetricsRecorder::RecordGetRemoteStatusResultUnlockSuccess(
-    bool success) {
-  UMA_HISTOGRAM_BOOLEAN("SmartLock.GetRemoteStatus.Unlock", success);
-}
-
-void SmartLockMetricsRecorder::RecordGetRemoteStatusResultUnlockFailure(
-    SmartLockGetRemoteStatusResultFailureReason failure_reason) {
-  RecordGetRemoteStatusResultUnlockSuccess(false);
-  UMA_HISTOGRAM_ENUMERATION("SmartLock.GetRemoteStatus.Unlock.Failure",
-                            failure_reason);
-}
-
 void SmartLockMetricsRecorder::RecordAuthResultSignInSuccess(bool success) {
   UMA_HISTOGRAM_BOOLEAN("SmartLock.AuthResult.SignIn", success);
 }
@@ -54,18 +41,6 @@ void SmartLockMetricsRecorder::RecordAuthResultSignInFailure(
     SmartLockAuthResultFailureReason failure_reason) {
   RecordAuthResultSignInSuccess(false);
   UMA_HISTOGRAM_ENUMERATION("SmartLock.AuthResult.SignIn.Failure",
-                            failure_reason);
-}
-
-void SmartLockMetricsRecorder::RecordGetRemoteStatusResultSignInSuccess(
-    bool success) {
-  UMA_HISTOGRAM_BOOLEAN("SmartLock.GetRemoteStatus.SignIn", success);
-}
-
-void SmartLockMetricsRecorder::RecordGetRemoteStatusResultSignInFailure(
-    SmartLockGetRemoteStatusResultFailureReason failure_reason) {
-  RecordGetRemoteStatusResultSignInSuccess(false);
-  UMA_HISTOGRAM_ENUMERATION("SmartLock.GetRemoteStatus.SignIn.Failure",
                             failure_reason);
 }
 

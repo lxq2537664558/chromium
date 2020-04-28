@@ -6,16 +6,18 @@
 
 #include "base/threading/thread_task_runner_handle.h"
 #include "chromeos/network/auto_connect_handler.h"
+#include "chromeos/network/cellular_metrics_logger.h"
 #include "chromeos/network/client_cert_resolver.h"
 #include "chromeos/network/geolocation_handler.h"
 #include "chromeos/network/managed_network_configuration_handler_impl.h"
-#include "chromeos/network/network_activation_handler.h"
+#include "chromeos/network/network_activation_handler_impl.h"
 #include "chromeos/network/network_cert_loader.h"
 #include "chromeos/network/network_cert_migrator.h"
 #include "chromeos/network/network_certificate_handler.h"
 #include "chromeos/network/network_configuration_handler.h"
 #include "chromeos/network/network_connection_handler_impl.h"
 #include "chromeos/network/network_device_handler_impl.h"
+#include "chromeos/network/network_metadata_store.h"
 #include "chromeos/network/network_profile_handler.h"
 #include "chromeos/network/network_profile_observer.h"
 #include "chromeos/network/network_sms_handler.h"
@@ -43,8 +45,9 @@ NetworkHandler::NetworkHandler()
     network_certificate_handler_.reset(new NetworkCertificateHandler());
     client_cert_resolver_.reset(new ClientCertResolver());
   }
-  network_activation_handler_.reset(new NetworkActivationHandler());
+  network_activation_handler_.reset(new NetworkActivationHandlerImpl());
   network_connection_handler_.reset(new NetworkConnectionHandlerImpl());
+  cellular_metrics_logger_.reset(new CellularMetricsLogger());
   network_sms_handler_.reset(new NetworkSmsHandler());
   geolocation_handler_.reset(new GeolocationHandler());
 }
@@ -64,9 +67,10 @@ void NetworkHandler::Init() {
       network_configuration_handler_.get(), network_device_handler_.get(),
       prohibited_technologies_handler_.get());
   network_connection_handler_->Init(
-      network_state_handler_.get(),
-      network_configuration_handler_.get(),
+      network_state_handler_.get(), network_configuration_handler_.get(),
       managed_network_configuration_handler_.get());
+  cellular_metrics_logger_->Init(network_state_handler_.get(),
+                                 network_connection_handler_.get());
   if (network_cert_migrator_)
     network_cert_migrator_->Init(network_state_handler_.get());
   if (client_cert_resolver_) {
@@ -115,12 +119,19 @@ bool NetworkHandler::IsInitialized() {
 void NetworkHandler::InitializePrefServices(
     PrefService* logged_in_profile_prefs,
     PrefService* device_prefs) {
-  ui_proxy_config_service_.reset(
-      new UIProxyConfigService(logged_in_profile_prefs, device_prefs));
+  ui_proxy_config_service_.reset(new UIProxyConfigService(
+      logged_in_profile_prefs, device_prefs, network_state_handler_.get(),
+      network_profile_handler_.get()));
+  managed_network_configuration_handler_->set_ui_proxy_config_service(
+      ui_proxy_config_service_.get());
+  network_metadata_store_.reset(new NetworkMetadataStore(
+      network_configuration_handler_.get(), network_connection_handler_.get(),
+      network_state_handler_.get(), logged_in_profile_prefs, device_prefs));
 }
 
 void NetworkHandler::ShutdownPrefServices() {
   ui_proxy_config_service_.reset();
+  network_metadata_store_.reset();
 }
 
 NetworkStateHandler* NetworkHandler::network_state_handler() {
@@ -158,6 +169,10 @@ NetworkCertificateHandler* NetworkHandler::network_certificate_handler() {
 
 NetworkConnectionHandler* NetworkHandler::network_connection_handler() {
   return network_connection_handler_.get();
+}
+
+NetworkMetadataStore* NetworkHandler::network_metadata_store() {
+  return network_metadata_store_.get();
 }
 
 NetworkSmsHandler* NetworkHandler::network_sms_handler() {

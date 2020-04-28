@@ -6,6 +6,7 @@
 
 #include "build/build_config.h"
 #include "chrome/grit/generated_resources.h"
+#include "components/download/public/common/auto_resumption_handler.h"
 #include "components/download/public/common/download_utils.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/download_item_utils.h"
@@ -13,7 +14,7 @@
 #include "ui/base/l10n/l10n_util.h"
 
 #if defined(OS_ANDROID)
-#include "chrome/browser/android/download/download_utils.h"
+#include "chrome/browser/download/android/download_utils.h"
 #endif
 
 using DownloadItem = download::DownloadItem;
@@ -40,8 +41,18 @@ const char kDownloadNamespacePrefix[] = "LEGACY_DOWNLOAD";
 // The remaining time for a download item if it cannot be calculated.
 constexpr int64_t kUnknownRemainingTime = -1;
 
+base::Optional<OfflineItemFilter> FilterForSpecialMimeTypes(
+    const std::string& mime_type) {
+  if (base::EqualsCaseInsensitiveASCII(mime_type, "application/ogg"))
+    return OfflineItemFilter::FILTER_AUDIO;
+
+  return base::nullopt;
+}
+
 OfflineItemFilter MimeTypeToOfflineItemFilter(const std::string& mime_type) {
-  OfflineItemFilter filter = OfflineItemFilter::FILTER_OTHER;
+  auto filter = FilterForSpecialMimeTypes(mime_type);
+  if (filter.has_value())
+    return filter.value();
 
   if (base::StartsWith(mime_type, "audio/", base::CompareCase::SENSITIVE)) {
     filter = OfflineItemFilter::FILTER_AUDIO;
@@ -58,7 +69,17 @@ OfflineItemFilter MimeTypeToOfflineItemFilter(const std::string& mime_type) {
     filter = OfflineItemFilter::FILTER_OTHER;
   }
 
-  return filter;
+  return filter.value();
+}
+
+bool IsInterruptedDownloadAutoResumable(download::DownloadItem* item) {
+  int auto_resumption_size_limit = 0;
+#if defined(OS_ANDROID)
+  auto_resumption_size_limit = DownloadUtils::GetAutoResumptionSizeLimit();
+#endif
+
+  return download::AutoResumptionHandler::IsInterruptedDownloadAutoResumable(
+      item, auto_resumption_size_limit);
 }
 
 }  // namespace
@@ -82,6 +103,7 @@ OfflineItem OfflineItemUtils::CreateOfflineItem(const std::string& name_space,
   item.total_size_bytes = download_item->GetTotalBytes();
   item.externally_removed = download_item->GetFileExternallyRemoved();
   item.creation_time = download_item->GetStartTime();
+  item.completion_time = download_item->GetEndTime();
   item.last_accessed_time = download_item->GetLastAccessTime();
   item.is_openable = download_item->CanOpenDownload();
   item.file_path = download_item->GetTargetFilePath();
@@ -122,18 +144,29 @@ OfflineItem OfflineItemUtils::CreateOfflineItem(const std::string& name_space,
       item.state = OfflineItemState::CANCELLED;
       break;
     case DownloadItem::INTERRUPTED: {
-      item.state =
-          download_item->IsPaused()
-              ? OfflineItemState::PAUSED
-              : (download_item->CanResume() ? OfflineItemState::INTERRUPTED
-                                            : OfflineItemState::FAILED);
+      bool is_auto_resumable =
+          IsInterruptedDownloadAutoResumable(download_item);
+      bool max_retry_limit_reached =
+          download_item->GetAutoResumeCount() >=
+          download::DownloadItemImpl::kMaxAutoResumeAttempts;
+
+      if (download_item->IsDone()) {
+        item.state = OfflineItemState::FAILED;
+      } else if (download_item->IsPaused() || max_retry_limit_reached) {
+        item.state = OfflineItemState::PAUSED;
+      } else if (is_auto_resumable) {
+        item.state = OfflineItemState::PENDING;
+      } else {
+        item.state = OfflineItemState::INTERRUPTED;
+      }
+
     } break;
     default:
       NOTREACHED();
   }
 
   // TODO(crbug.com/857549): Set pending_state correctly.
-  item.pending_state = item.state == OfflineItemState::INTERRUPTED
+  item.pending_state = item.state == OfflineItemState::PENDING
                            ? PendingState::PENDING_NETWORK
                            : PendingState::NOT_PENDING;
   item.progress.value = download_item->GetReceivedBytes();

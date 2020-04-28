@@ -7,6 +7,7 @@
 
 #include <string>
 
+#include "base/macros.h"
 #include "chromeos/printing/printer_configuration.h"
 
 namespace chromeos {
@@ -14,6 +15,8 @@ namespace chromeos {
 class PpdResolutionState {
  public:
   PpdResolutionState();
+  PpdResolutionState(PpdResolutionState&& other);
+  PpdResolutionState& operator=(PpdResolutionState&& rhs);
   ~PpdResolutionState();
 
   // Marks PPD resolution was successful and stores |ppd_reference|.
